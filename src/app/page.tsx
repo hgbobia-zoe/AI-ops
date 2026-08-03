@@ -9,7 +9,7 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace(getBoundTruck() ? "/route" : "/select");
+    router.replace(getBoundTruck() ? "/kiosk" : "/select");
   }, [router]);
 
   return (

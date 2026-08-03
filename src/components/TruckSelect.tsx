@@ -37,7 +37,7 @@ export function TruckSelect() {
   function confirmBind() {
     if (!picked) return;
     bindTruck(picked.truckId, picked.name, pin || undefined);
-    router.push("/route");
+    router.push("/kiosk");
   }
 
   return (

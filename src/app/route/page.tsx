@@ -2,12 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Header } from "@/components/Header";
-import { CurrentStopView } from "@/components/CurrentStopView";
-import { RouteOverview } from "@/components/RouteOverview";
-import { RouteSummaryPanel } from "@/components/RouteSummaryPanel";
+import { RouteScreen } from "@/components/RouteScreen";
 import { getBoundTruck, clearTruck, type TruckBinding } from "@/lib/device";
-import { useRouteMachine } from "@/lib/useRouteMachine";
 
 export default function RoutePage() {
   const router = useRouter();
@@ -33,72 +29,13 @@ export default function RoutePage() {
     );
   }
 
-  return <RouteScreen truck={truck} onChangeTruck={() => {
-    clearTruck();
-    router.replace("/select");
-  }} />;
-}
-
-function RouteScreen({
-  truck,
-  onChangeTruck,
-}: {
-  truck: TruckBinding;
-  onChangeTruck: () => void;
-}) {
-  const m = useRouteMachine(truck.truckId);
-
-  const stops = m.route?.stops ?? [];
-
   return (
-    <div className="min-h-dvh bg-background">
-      <Header
-        truckName={truck.name}
-        stops={stops}
-        activeIndex={m.activeIndex}
-        online={m.online}
-        queuedCount={m.queuedCount}
-        onChangeTruck={onChangeTruck}
-        onRefresh={m.refresh}
-      />
-
-      <main className="mx-auto max-w-2xl space-y-6 p-4 pb-24">
-        {m.phase === "returned" ? (
-          <RouteSummaryPanel
-            summary={m.summary}
-            onGas={(putGas) =>
-              m.sendSide(
-                "GAS_LOG",
-                { putGas },
-                putGas ? "Logged: fueled up" : "Logged: not fueled",
-              )
-            }
-          />
-        ) : (
-          <>
-            <CurrentStopView
-              phase={m.phase}
-              activeStop={m.activeStop}
-              totalStops={stops.length}
-              actions={m.actions}
-              busy={m.busy}
-              onPerform={m.perform}
-              notif={m.activeStop ? m.notif[m.activeStop.stopId] : undefined}
-              onMessageDispatch={(message) =>
-                m.sendSide(
-                  "NOTIFY_DISPATCH",
-                  { message },
-                  "Message sent to dispatch",
-                )
-              }
-            />
-
-            {stops.length > 0 && (
-              <RouteOverview stops={stops} activeIndex={m.activeIndex} />
-            )}
-          </>
-        )}
-      </main>
-    </div>
+    <RouteScreen
+      truck={truck}
+      onChangeTruck={() => {
+        clearTruck();
+        router.replace("/select");
+      }}
+    />
   );
 }

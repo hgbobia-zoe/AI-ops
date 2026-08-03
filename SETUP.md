@@ -115,6 +115,28 @@ app serves mock routes. Flip to live by setting the Tables env vars and implemen
 
 ---
 
+## Kiosk mode (running beside Goodshuffle Pro)
+
+Zoe Dispatch is an **addition** to Goodshuffle Pro, not a replacement — GSPRO stays
+the source of truth for routes, stops, and inventory. On the truck tablet they run
+side by side. When a truck is bound, the app opens straight into the **`/kiosk`**
+shell.
+
+- **Start shift** (one tap) goes fullscreen, acquires a screen **wake lock** (tablet
+  stays awake), and **launches Goodshuffle Pro**.
+- The screen is a split: Goodshuffle on one side, the Zoe Dispatch action/automation
+  panel on the other. Exit is **PIN-gated** (the tablet's bind PIN).
+- **Goodshuffle blocks iframe embedding** (`x-frame-options`), so GSPRO opens in its
+  own window rather than inside our page. For a true single-screen split, tile the two
+  windows with the tablet's kiosk browser:
+  - **Android:** Fully Kiosk Browser (or split-screen) — Goodshuffle on one side, this
+    app on the other.
+  - **iPad:** Split View — Safari (Goodshuffle) + this app.
+- Config (`.env`): `NEXT_PUBLIC_GSPRO_URL` (your Goodshuffle URL) and
+  `NEXT_PUBLIC_GSPRO_EMBED` (leave `false`; set `true` only if you have a frameable URL).
+
+Plain full-screen driver view without the split is still at **`/route`**.
+
 ## Where things live in the code
 
 - State machine (single source of truth): `src/lib/stateMachine.ts`
