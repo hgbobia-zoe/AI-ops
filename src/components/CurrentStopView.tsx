@@ -2,15 +2,20 @@
 
 import { useState } from "react";
 import { CheckCircle2, Home, MapPin, Navigation, Phone } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { StateBadge } from "@/components/StateBadge";
 import { ChecklistDialog } from "@/components/ChecklistDialog";
 import { ExceptionDialog } from "@/components/ExceptionDialog";
-import { ACTION_ICON } from "@/lib/stateVisual";
+import { ACTION_ICON, STATE_VISUAL } from "@/lib/stateVisual";
 import type { AvailableAction } from "@/lib/stateMachine";
 import type { ActionType, ChecklistResult, ExceptionType, Stop } from "@/lib/types";
 import type { RoutePhase } from "@/lib/useRouteMachine";
+
+// Shared square-tile styles for the action grid.
+const TILE_CLASS =
+  "surface flex min-h-28 flex-col items-center justify-center gap-2 rounded-3xl border border-white/5 p-4 text-center transition-all hover:border-primary/40 active:scale-[0.97] disabled:opacity-60";
+const TILE_CLASS_DANGER =
+  "flex min-h-28 flex-col items-center justify-center gap-2 rounded-3xl border border-destructive/30 bg-destructive/10 p-4 text-center text-red-300 transition-all hover:bg-destructive/15 active:scale-[0.97] disabled:opacity-60";
 
 export function CurrentStopView({
   phase,
@@ -82,6 +87,7 @@ export function CurrentStopView({
   }
 
   const mapsHref = `https://maps.google.com/?q=${encodeURIComponent(activeStop.address)}`;
+  const StateIcon = STATE_VISUAL[activeStop.state].icon;
 
   return (
     <div className="space-y-5">
@@ -94,31 +100,38 @@ export function CurrentStopView({
           <StateBadge state={activeStop.state} />
         </div>
 
-        <CardContent className="space-y-5 px-6">
-          <h1 className="text-[2rem] font-bold leading-[1.1] tracking-tight">
-            {activeStop.custName}
-          </h1>
+        <CardContent className="space-y-6 px-6 py-2">
+          <div className="flex items-center gap-4">
+            <span
+              className={`flex size-16 shrink-0 items-center justify-center rounded-2xl text-white ${STATE_VISUAL[activeStop.state].dot}`}
+            >
+              <StateIcon className="size-8" />
+            </span>
+            <h1 className="text-4xl font-bold leading-[1.05] tracking-tight">
+              {activeStop.custName}
+            </h1>
+          </div>
 
-          <div className="space-y-2.5">
+          <div className="space-y-3">
             <a
               href={mapsHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-start gap-2.5 text-base text-foreground/90 active:opacity-70"
+              className="flex items-start gap-3 text-lg text-foreground/90 active:opacity-70"
             >
               <MapPin className="mt-0.5 size-5 shrink-0 text-primary" />
               <span className="underline-offset-2 hover:underline">{activeStop.address}</span>
             </a>
             <a
               href={`tel:${activeStop.custPhone}`}
-              className="flex items-center gap-2.5 text-base text-foreground/90 active:opacity-70"
+              className="flex items-center gap-3 text-lg text-foreground/90 active:opacity-70"
             >
               <Phone className="size-5 shrink-0 text-primary" />
               <span>{activeStop.custPhone}</span>
             </a>
           </div>
 
-          <div className="flex gap-3 pt-1">
+          <div className="flex gap-3">
             {activeStop.plannedWindow && (
               <InfoTile label="Window" value={activeStop.plannedWindow} />
             )}
@@ -127,7 +140,60 @@ export function CurrentStopView({
         </CardContent>
       </Card>
 
-      <ActionButtons actions={actions} busy={busy} onClick={handleActionClick} />
+      {/* Action area: big primary tile + a grid of action/quick-action squares. */}
+      <div className="space-y-3">
+        {actions
+          .filter((a) => a.variant === "default")
+          .map((a) => {
+            const Icon = ACTION_ICON[a.action];
+            return (
+              <button
+                key={a.action}
+                onClick={() => handleActionClick(a)}
+                disabled={busy}
+                className="btn-hero flex min-h-32 w-full flex-col items-center justify-center gap-2.5 rounded-3xl border-0 text-white transition-all active:scale-[0.98] disabled:opacity-70"
+              >
+                <Icon className="size-9" />
+                <span className="text-2xl font-semibold">{a.label}</span>
+              </button>
+            );
+          })}
+
+        <div className="grid grid-cols-2 gap-3">
+          <a href={`tel:${activeStop.custPhone}`} className={TILE_CLASS}>
+            <Phone className="size-7 text-primary" />
+            <span className="text-base font-semibold">Call</span>
+          </a>
+          <a
+            href={mapsHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={TILE_CLASS}
+          >
+            <Navigation className="size-7 text-primary" />
+            <span className="text-base font-semibold">Directions</span>
+          </a>
+          {actions
+            .filter((a) => a.variant !== "default")
+            .map((a) => {
+              const Icon = ACTION_ICON[a.action];
+              const danger = a.variant === "destructive";
+              return (
+                <button
+                  key={a.action}
+                  onClick={() => handleActionClick(a)}
+                  disabled={busy}
+                  className={
+                    danger ? TILE_CLASS_DANGER : TILE_CLASS
+                  }
+                >
+                  <Icon className={`size-7 ${danger ? "" : "text-primary"}`} />
+                  <span className="text-base font-semibold">{a.label}</span>
+                </button>
+              );
+            })}
+        </div>
+      </div>
 
       <ChecklistDialog
         open={checklistFor !== null}
@@ -188,35 +254,48 @@ function ActionButtons({
 
   return (
     <div className="space-y-3">
+      {/* Primary action: a big full-width hero tile. */}
       {primary.map((a) => {
         const Icon = ACTION_ICON[a.action];
         return (
-          <Button
+          <button
             key={a.action}
             onClick={() => onClick(a)}
             disabled={busy}
-            className="btn-hero h-[5.5rem] w-full gap-3 rounded-3xl border-0 text-2xl font-semibold text-white transition-all active:scale-[0.98] disabled:opacity-70"
+            className="btn-hero flex min-h-32 w-full flex-col items-center justify-center gap-2.5 rounded-3xl border-0 text-white transition-all active:scale-[0.98] disabled:opacity-70"
           >
-            <Icon className="size-7" />
-            {a.label}
-          </Button>
+            <Icon className="size-9" />
+            <span className="text-2xl font-semibold">{a.label}</span>
+          </button>
         );
       })}
-      {others.map((a) => {
-        const Icon = ACTION_ICON[a.action];
-        return (
-          <Button
-            key={a.action}
-            variant={a.variant === "destructive" ? "destructive" : "secondary"}
-            onClick={() => onClick(a)}
-            disabled={busy}
-            className="h-14 w-full gap-2 rounded-xl text-lg transition-transform active:scale-[0.98]"
-          >
-            <Icon className="size-5" />
-            {a.label}
-          </Button>
-        );
-      })}
+      {/* Secondary actions: a grid of square tiles. */}
+      {others.length > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          {others.map((a) => {
+            const Icon = ACTION_ICON[a.action];
+            const danger = a.variant === "destructive";
+            const solo = others.length === 1;
+            return (
+              <button
+                key={a.action}
+                onClick={() => onClick(a)}
+                disabled={busy}
+                className={`flex min-h-28 flex-col items-center justify-center gap-2 rounded-3xl border p-4 text-center transition-all active:scale-[0.97] disabled:opacity-60 ${
+                  solo ? "col-span-2" : ""
+                } ${
+                  danger
+                    ? "border-destructive/30 bg-destructive/10 text-red-300 hover:bg-destructive/15"
+                    : "surface border-white/5 hover:border-primary/40"
+                }`}
+              >
+                <Icon className="size-7" />
+                <span className="text-base font-semibold">{a.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
