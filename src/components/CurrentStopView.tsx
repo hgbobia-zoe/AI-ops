@@ -85,17 +85,17 @@ export function CurrentStopView({
 
   return (
     <div className="space-y-5">
-      <Card className="overflow-hidden pt-0 shadow-sm">
-        {/* accent strip carries the current state color */}
-        <div className="flex items-center justify-between gap-2 bg-accent/60 px-6 py-2.5">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      <Card className="surface overflow-hidden border-white/5 pt-0">
+        {/* gradient accent strip carries the current-stop context */}
+        <div className="flex items-center justify-between gap-2 border-b border-white/5 bg-gradient-to-r from-primary/15 via-primary/5 to-transparent px-6 py-3">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Stop {activeStop.sequence} of {totalStops}
           </span>
           <StateBadge state={activeStop.state} />
         </div>
 
-        <CardContent className="space-y-4 px-6">
-          <h1 className="text-3xl font-bold leading-tight tracking-tight">
+        <CardContent className="space-y-5 px-6">
+          <h1 className="text-[2rem] font-bold leading-[1.1] tracking-tight">
             {activeStop.custName}
           </h1>
 
@@ -155,14 +155,18 @@ function InfoTile({
 }) {
   return (
     <div
-      className={`flex-1 rounded-xl border px-3 py-2 ${
-        emphasize ? "border-primary/30 bg-primary/5" : "bg-muted/40"
+      className={`flex-1 rounded-2xl border px-4 py-2.5 ${
+        emphasize
+          ? "border-primary/30 bg-primary/10"
+          : "border-white/5 bg-white/[0.03]"
       }`}
     >
-      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+      <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
-      <div className={`text-lg font-semibold ${emphasize ? "text-primary" : ""}`}>
+      <div
+        className={`text-lg font-semibold ${emphasize ? "text-indigo-300" : ""}`}
+      >
         {value}
       </div>
     </div>
@@ -191,7 +195,7 @@ function ActionButtons({
             key={a.action}
             onClick={() => onClick(a)}
             disabled={busy}
-            className="h-20 w-full gap-3 rounded-2xl text-2xl font-semibold shadow-sm transition-transform active:scale-[0.98]"
+            className="btn-hero h-[5.5rem] w-full gap-3 rounded-3xl border-0 text-2xl font-semibold text-white transition-all active:scale-[0.98] disabled:opacity-70"
           >
             <Icon className="size-7" />
             {a.label}
@@ -229,7 +233,7 @@ function Panel({
   tone: "done" | "info";
 }) {
   return (
-    <Card className="shadow-sm">
+    <Card className="surface border-white/5">
       <CardContent className="flex flex-col items-center gap-3 px-8 py-10 text-center">
         <div
           className={`flex size-16 items-center justify-center rounded-2xl ${

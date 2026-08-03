@@ -43,7 +43,7 @@ export function TruckSelect() {
   return (
     <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center p-6">
       <div className="mb-10 flex flex-col items-center text-center">
-        <span className="mb-4 flex size-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-md">
+        <span className="btn-hero mb-4 flex size-16 items-center justify-center rounded-2xl text-white">
           <Truck className="size-8" />
         </span>
         <h1 className="text-3xl font-bold tracking-tight">{appConfig.name}</h1>
@@ -67,9 +67,9 @@ export function TruckSelect() {
               setPin("");
               setPicked(v);
             }}
-            className="flex h-32 flex-col items-center justify-center gap-2 rounded-2xl border bg-card shadow-sm transition-all hover:border-primary/50 hover:shadow-md active:scale-[0.97]"
+            className="surface group flex h-32 flex-col items-center justify-center gap-2 rounded-2xl border border-white/5 transition-all hover:border-primary/40 hover:-translate-y-0.5 active:scale-[0.97]"
           >
-            <span className="flex size-11 items-center justify-center rounded-xl bg-accent text-primary">
+            <span className="flex size-11 items-center justify-center rounded-xl bg-primary/15 text-primary transition-colors group-hover:bg-primary/25">
               <Truck className="size-6" />
             </span>
             <span className="text-xl font-bold">{v.name}</span>

@@ -85,37 +85,44 @@
 }
 
 .dark {
-  --background: oklch(0.17 0.015 264);
-  --foreground: oklch(0.97 0.005 264);
-  --card: oklch(0.21 0.02 264);
-  --card-foreground: oklch(0.97 0.005 264);
-  --popover: oklch(0.21 0.02 264);
-  --popover-foreground: oklch(0.97 0.005 264);
-  --primary: oklch(0.66 0.18 274);
-  --primary-foreground: oklch(0.15 0.03 274);
-  --secondary: oklch(0.27 0.02 264);
-  --secondary-foreground: oklch(0.97 0.005 264);
-  --muted: oklch(0.27 0.02 264);
-  --muted-foreground: oklch(0.72 0.02 264);
-  --accent: oklch(0.32 0.06 274);
-  --accent-foreground: oklch(0.95 0.02 274);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 12%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.66 0.18 274);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
+  /* Deep blue-black canvas with layered, elevated surfaces. */
+  --background: oklch(0.15 0.018 265);
+  --foreground: oklch(0.97 0.006 264);
+  --card: oklch(0.205 0.02 266);
+  --card-foreground: oklch(0.97 0.006 264);
+  --popover: oklch(0.21 0.022 266);
+  --popover-foreground: oklch(0.97 0.006 264);
+  --primary: oklch(0.65 0.19 275);
+  --primary-foreground: oklch(0.98 0.01 275);
+  --secondary: oklch(0.27 0.02 266);
+  --secondary-foreground: oklch(0.97 0.006 264);
+  --muted: oklch(0.25 0.018 266);
+  --muted-foreground: oklch(0.72 0.025 266);
+  --accent: oklch(0.3 0.05 275);
+  --accent-foreground: oklch(0.95 0.02 275);
+  --destructive: oklch(0.65 0.2 22);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: oklch(0.65 0.19 275);
+  --chart-1: oklch(0.65 0.19 275);
+  --chart-2: oklch(0.7 0.14 200);
+  --chart-3: oklch(0.72 0.16 150);
+  --chart-4: oklch(0.78 0.15 75);
+  --chart-5: oklch(0.68 0.2 20);
+  --sidebar: oklch(0.18 0.02 266);
+  --sidebar-foreground: oklch(0.97 0.006 264);
+  --sidebar-primary: oklch(0.65 0.19 275);
+  --sidebar-primary-foreground: oklch(0.98 0.01 275);
+  --sidebar-accent: oklch(0.3 0.05 275);
+  --sidebar-accent-foreground: oklch(0.95 0.02 275);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar-ring: oklch(0.65 0.19 275);
+}
+
+@theme inline {
+  /* Extra brand tokens used by hero controls. */
+  --color-brand: var(--primary);
+  --color-brand-2: oklch(0.62 0.2 305);
 }
 
 @layer base {
@@ -124,8 +131,37 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* Subtle depth: a faint brand glow bleeding from the top. */
+    background-image: radial-gradient(
+      120% 90% at 50% -10%,
+      color-mix(in oklch, var(--primary) 16%, transparent) 0%,
+      transparent 55%
+    );
+    background-attachment: fixed;
   }
   html {
     @apply font-sans;
+    color-scheme: dark;
+  }
+}
+
+@layer components {
+  /* Premium gradient primary action — the driver's main tap target. */
+  .btn-hero {
+    background-image: linear-gradient(
+      135deg,
+      var(--color-brand) 0%,
+      var(--color-brand-2) 100%
+    );
+    box-shadow:
+      0 10px 30px -8px color-mix(in oklch, var(--color-brand) 55%, transparent),
+      inset 0 1px 0 0 oklch(1 0 0 / 25%);
+  }
+  /* Elevated glass surface for cards and the app bar. */
+  .surface {
+    background-color: color-mix(in oklch, var(--card) 88%, transparent);
+    box-shadow:
+      0 1px 0 0 oklch(1 0 0 / 6%) inset,
+      0 12px 30px -18px oklch(0 0 0 / 70%);
   }
 }

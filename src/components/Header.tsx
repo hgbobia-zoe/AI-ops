@@ -30,10 +30,10 @@ export function Header({
   onRefresh: () => void;
 }) {
   return (
-    <header className="sticky top-0 z-20 border-b bg-card/80 backdrop-blur-sm">
+    <header className="sticky top-0 z-20 border-b border-white/5 bg-background/70 backdrop-blur-xl">
       <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-3">
         <div className="flex items-center gap-2.5">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+          <span className="btn-hero flex size-9 items-center justify-center rounded-xl text-white">
             <Truck className="size-5" />
           </span>
           <div className="leading-tight">

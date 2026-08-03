@@ -26,7 +26,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: "#0a0a0a",
+  themeColor: "#0b0e18",
 };
 
 export default function RootLayout({
@@ -37,11 +37,11 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         {children}
-        <Toaster richColors position="top-center" />
+        <Toaster theme="dark" richColors position="top-center" />
       </body>
     </html>
   );
