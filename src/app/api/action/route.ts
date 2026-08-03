@@ -12,7 +12,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { serverConfig } from "@/lib/config";
-import { resolveTransition } from "@/lib/stateMachine";
+import { isSideAction, resolveTransition } from "@/lib/stateMachine";
 import type { ActionRequest, ActionResponse } from "@/lib/types";
 
 // In-memory idempotency cache. Adequate for a single serverless instance in v1;
@@ -59,8 +59,11 @@ export async function POST(req: Request): Promise<NextResponse<ActionResponse>> 
   }
 
   // 2. Transition legality (server-side guard, not just the client map).
-  const toState = resolveTransition(fromState, action, context);
-  if (!toState) {
+  //    Side actions (message dispatch, fuel log) aren't transitions — they skip
+  //    the check and just fan out.
+  const side = isSideAction(action);
+  const toState = side ? fromState : resolveTransition(fromState, action, context);
+  if (!side && !toState) {
     return NextResponse.json(
       { accepted: false, error: "invalid_transition" },
       { status: 409 },
@@ -103,5 +106,5 @@ export async function POST(req: Request): Promise<NextResponse<ActionResponse>> 
     });
   }
 
-  return NextResponse.json({ accepted: true, eventId, toState });
+  return NextResponse.json({ accepted: true, eventId, toState: toState ?? undefined });
 }

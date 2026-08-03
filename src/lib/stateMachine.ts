@@ -210,3 +210,17 @@ export function resolveTransition(
 export function isTerminal(state: StopState): boolean {
   return state === "Returned";
 }
+
+/**
+ * Side actions are NOT state transitions — they only fan out to Slack/logging
+ * (e.g. messaging dispatch, logging fuel). The intake accepts them without a
+ * transition check and forwards them for automation.
+ */
+export const SIDE_ACTIONS: ReadonlySet<ActionType> = new Set<ActionType>([
+  "NOTIFY_DISPATCH",
+  "GAS_LOG",
+]);
+
+export function isSideAction(action: ActionType): boolean {
+  return SIDE_ACTIONS.has(action);
+}

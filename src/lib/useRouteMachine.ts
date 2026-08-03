@@ -1,11 +1,16 @@
 // Client hook that owns the tablet's working copy of the route and drives the
-// state machine. Every driver action flows through performAction():
+// state machine. Every driver action flows through perform():
 //   optimistic local transition → one webhook → (offline-safe) queue+replay.
 //
+// It also tracks the AUTOMATION layer that makes this tool complementary to
+// Goodshuffle (which stays the source of truth for route/stop/inventory detail):
+//   - per-stop notification status (texts, tracking link, dispatch pings),
+//   - an action "receipt" of what each tap triggered,
+//   - side actions (message dispatch, fuel log) that fan out without a transition.
+//
 // NOTE (M1): the mock backend does not persist state, so the local working copy
-// is authoritative during M1 testing. At M2, once the Zapier Tables hold real
-// state, the polled route becomes the source of truth and this overlay reconciles
-// against it. That seam is marked below.
+// is authoritative during M1 testing. At M2 the polled route becomes the source
+// of truth and this overlay reconciles against it. That seam is marked below.
 
 "use client";
 
@@ -13,21 +18,31 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { appConfig } from "./config";
 import { STATE_VISUAL } from "./stateVisual";
+import { automationsFor } from "./automations";
 import { getAvailableActions, resolveTransition } from "./stateMachine";
-import type {
-  AvailableAction,
-} from "./stateMachine";
+import type { AvailableAction } from "./stateMachine";
 import type { ActionType, Route, Stop, StopState } from "./types";
 import { fetchRoute } from "./tablesRead";
-import {
-  buildAction,
-  flushQueue,
-  getGps,
-  sendAction,
-} from "./webhookClient";
+import { buildAction, flushQueue, getGps, sendAction } from "./webhookClient";
 import { queueSize } from "./offlineQueue";
 
 export type RoutePhase = "loading" | "stops" | "headingBack" | "returned" | "empty";
+
+/** The automations our tool fired for one stop, with timestamps. */
+export interface StopNotif {
+  onWay?: string;
+  tracking?: string;
+  arrived?: string;
+}
+
+export interface RouteSummary {
+  stopsCompleted: number;
+  totalStops: number;
+  textsSent: number;
+  exceptions: number;
+  dispatchMsgs: number;
+  startedAt: string | null;
+}
 
 export interface RouteMachine {
   route: Route | null;
@@ -39,13 +54,19 @@ export interface RouteMachine {
   queuedCount: number;
   busy: boolean;
   error: string | null;
+  notif: Record<string, StopNotif>;
+  summary: RouteSummary;
   refresh: () => Promise<void>;
   perform: (action: ActionType, payload?: Record<string, unknown>) => Promise<void>;
+  sendSide: (
+    action: ActionType,
+    payload?: Record<string, unknown>,
+    title?: string,
+  ) => Promise<void>;
 }
 
 function firstActiveIndex(stops: Stop[]): number {
-  const idx = stops.findIndex((s) => s.state !== "Completed");
-  return idx;
+  return stops.findIndex((s) => s.state !== "Completed");
 }
 
 export function useRouteMachine(truckId: string): RouteMachine {
@@ -55,9 +76,25 @@ export function useRouteMachine(truckId: string): RouteMachine {
   const [queuedCount, setQueuedCount] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notif, setNotif] = useState<Record<string, StopNotif>>({});
+  const [counters, setCounters] = useState({ exceptions: 0, dispatchMsgs: 0 });
+  const [startedAt, setStartedAt] = useState<string | null>(null);
   const loadedRef = useRef(false);
 
   const syncQueue = useCallback(() => setQueuedCount(queueSize()), []);
+
+  const receipt = useCallback(
+    (action: ActionType, queued: boolean, title: string) => {
+      const autos = automationsFor(action);
+      const description = autos.length ? autos.join(" · ") : undefined;
+      if (queued) {
+        toast.warning("Saved offline — will sync when reconnected", { description });
+      } else {
+        toast.success(title, { description });
+      }
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -79,8 +116,7 @@ export function useRouteMachine(truckId: string): RouteMachine {
     }
   }, [truckId]);
 
-  // Initial load + light polling for the (future) live data path. refresh()
-  // only setStates after an awaited fetch, so this isn't a synchronous cascade.
+  // Initial load + light polling for the (future) live data path.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
@@ -105,10 +141,8 @@ export function useRouteMachine(truckId: string): RouteMachine {
   }, [syncQueue]);
 
   const activeIndex = route ? firstActiveIndex(route.stops) : -1;
-  const activeStop =
-    route && activeIndex >= 0 ? route.stops[activeIndex] : null;
+  const activeStop = route && activeIndex >= 0 ? route.stops[activeIndex] : null;
 
-  // Derive the actions to show for the current context.
   let actions: AvailableAction[] = [];
   if (phase === "headingBack") {
     actions = getAvailableActions("HeadingBack");
@@ -128,9 +162,7 @@ export function useRouteMachine(truckId: string): RouteMachine {
         const idx = firstActiveIndex(route.stops);
         const isHeadingBack = phase === "headingBack";
         const stop = idx >= 0 ? route.stops[idx] : null;
-        const fromState: StopState = isHeadingBack
-          ? "HeadingBack"
-          : stop!.state;
+        const fromState: StopState = isHeadingBack ? "HeadingBack" : stop!.state;
         const isLast = idx === route.stops.length - 1;
 
         const toState = resolveTransition(fromState, action, {
@@ -166,26 +198,75 @@ export function useRouteMachine(truckId: string): RouteMachine {
           return;
         }
 
-        // Apply the optimistic local transition + side effects.
+        setStartedAt((s) => s ?? new Date().toISOString());
         applyLocal(action, toState, idx);
 
-        if (res.error === "queued_offline") {
-          toast.warning("Saved offline — will sync when reconnected");
-        } else {
-          toast.success(`${STATE_VISUAL[toState].label}`);
+        // Record the customer automations this action fired.
+        const now = new Date().toISOString();
+        const curStopId = stop?.stopId;
+        const nextStop = route.stops[idx + 1];
+        setNotif((prev) => {
+          const next = { ...prev };
+          if (action === "LEAVING_WAREHOUSE" && curStopId)
+            next[curStopId] = { ...next[curStopId], onWay: now, tracking: now };
+          if (action === "ARRIVED" && curStopId)
+            next[curStopId] = { ...next[curStopId], arrived: now };
+          if (action === "HEADING_NEXT" && nextStop)
+            next[nextStop.stopId] = {
+              ...next[nextStop.stopId],
+              onWay: now,
+              tracking: now,
+            };
+          return next;
+        });
+        if (action === "REPORT_EXCEPTION") {
+          setCounters((c) => ({ ...c, exceptions: c.exceptions + 1 }));
         }
+        receipt(action, res.error === "queued_offline", STATE_VISUAL[toState].label);
       } finally {
         setBusy(false);
       }
     },
-    [route, phase, truckId, syncQueue],
+    [route, phase, truckId, syncQueue, receipt],
   );
 
-  function applyLocal(
-    action: ActionType,
-    toState: StopState,
-    idx: number,
-  ) {
+  const sendSide = useCallback(
+    async (action: ActionType, payload?: Record<string, unknown>, title?: string) => {
+      if (!route) return;
+      setBusy(true);
+      try {
+        const idx = firstActiveIndex(route.stops);
+        const stop = idx >= 0 ? route.stops[idx] : null;
+        const fromState: StopState =
+          phase === "headingBack" ? "HeadingBack" : (stop?.state ?? "Waiting");
+        const gps = await getGps();
+        const req = buildAction({
+          truckId,
+          routeId: route.routeId,
+          stopId: stop?.stopId ?? route.routeId,
+          action,
+          fromState,
+          gps,
+          payload,
+        });
+        const res = await sendAction(req);
+        syncQueue();
+        if (!res.accepted) {
+          toast.error("Couldn't send. Try again.");
+          return;
+        }
+        if (action === "NOTIFY_DISPATCH") {
+          setCounters((c) => ({ ...c, dispatchMsgs: c.dispatchMsgs + 1 }));
+        }
+        receipt(action, res.error === "queued_offline", title ?? "Sent");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [route, phase, truckId, syncQueue, receipt],
+  );
+
+  function applyLocal(action: ActionType, toState: StopState, idx: number) {
     setRoute((prev) => {
       if (!prev) return prev;
       const stops = prev.stops.map((s) => ({ ...s }));
@@ -194,7 +275,6 @@ export function useRouteMachine(truckId: string): RouteMachine {
         if (action === "ARRIVED") stops[idx].arrivedAt = new Date().toISOString();
         if (toState === "Completed")
           stops[idx].completedAt = new Date().toISOString();
-        // HEADING_NEXT: backend also moves the next stop to EnRoute + SMS.
         if (action === "HEADING_NEXT" && idx + 1 < stops.length) {
           stops[idx + 1].state = "EnRoute";
         }
@@ -209,6 +289,20 @@ export function useRouteMachine(truckId: string): RouteMachine {
     }
   }
 
+  const summary: RouteSummary = {
+    stopsCompleted: route
+      ? route.stops.filter((s) => s.state === "Completed").length
+      : 0,
+    totalStops: route?.stops.length ?? 0,
+    textsSent: Object.values(notif).reduce(
+      (n, x) => n + (x.onWay ? 1 : 0) + (x.arrived ? 1 : 0),
+      0,
+    ),
+    exceptions: counters.exceptions,
+    dispatchMsgs: counters.dispatchMsgs,
+    startedAt,
+  };
+
   return {
     route,
     phase,
@@ -219,7 +313,10 @@ export function useRouteMachine(truckId: string): RouteMachine {
     queuedCount,
     busy,
     error,
+    notif,
+    summary,
     refresh,
     perform,
+    sendSide,
   };
 }

@@ -7,8 +7,10 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Fuel,
   Home,
   MapPin,
+  MessageSquare,
   PackageOpen,
   Play,
   RotateCcw,
@@ -90,4 +92,6 @@ export const ACTION_ICON: Record<ActionType, LucideIcon> = {
   RESOLVE_CONTINUE: Play,
   RETURN_ITEM: Undo2,
   REOPEN: RotateCcw,
+  NOTIFY_DISPATCH: MessageSquare,
+  GAS_LOG: Fuel,
 };

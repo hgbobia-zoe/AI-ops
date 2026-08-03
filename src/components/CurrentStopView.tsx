@@ -1,15 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, Home, MapPin, Navigation, Phone } from "lucide-react";
+import {
+  CheckCircle2,
+  Home,
+  MapPin,
+  MessageSquare,
+  Navigation,
+  Phone,
+} from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { StateBadge } from "@/components/StateBadge";
 import { ChecklistDialog } from "@/components/ChecklistDialog";
 import { ExceptionDialog } from "@/components/ExceptionDialog";
+import { DispatchDialog } from "@/components/DispatchDialog";
+import { NotificationStatus } from "@/components/NotificationStatus";
 import { ACTION_ICON, STATE_VISUAL } from "@/lib/stateVisual";
 import type { AvailableAction } from "@/lib/stateMachine";
 import type { ActionType, ChecklistResult, ExceptionType, Stop } from "@/lib/types";
-import type { RoutePhase } from "@/lib/useRouteMachine";
+import type { RoutePhase, StopNotif } from "@/lib/useRouteMachine";
 
 // Shared square-tile styles for the action grid.
 const TILE_CLASS =
@@ -24,6 +33,8 @@ export function CurrentStopView({
   actions,
   busy,
   onPerform,
+  notif,
+  onMessageDispatch,
 }: {
   phase: RoutePhase;
   activeStop: Stop | null;
@@ -31,9 +42,12 @@ export function CurrentStopView({
   actions: AvailableAction[];
   busy: boolean;
   onPerform: (action: ActionType, payload?: Record<string, unknown>) => void;
+  notif?: StopNotif;
+  onMessageDispatch: (message: string) => void;
 }) {
   const [checklistFor, setChecklistFor] = useState<AvailableAction | null>(null);
   const [exceptionOpen, setExceptionOpen] = useState(false);
+  const [dispatchOpen, setDispatchOpen] = useState(false);
 
   function handleActionClick(action: AvailableAction) {
     if (action.action === "REPORT_EXCEPTION") {
@@ -173,6 +187,14 @@ export function CurrentStopView({
             <Navigation className="size-7 text-primary" />
             <span className="text-base font-semibold">Directions</span>
           </a>
+          <button
+            onClick={() => setDispatchOpen(true)}
+            disabled={busy}
+            className={TILE_CLASS}
+          >
+            <MessageSquare className="size-7 text-primary" />
+            <span className="text-base font-semibold">Dispatch</span>
+          </button>
           {actions
             .filter((a) => a.variant !== "default")
             .map((a) => {
@@ -195,6 +217,9 @@ export function CurrentStopView({
         </div>
       </div>
 
+      {/* Automation layer — what our tool did for the customer (not in GSPRO). */}
+      <NotificationStatus notif={notif} />
+
       <ChecklistDialog
         open={checklistFor !== null}
         onOpenChange={(o) => !o && setChecklistFor(null)}
@@ -205,6 +230,11 @@ export function CurrentStopView({
         open={exceptionOpen}
         onOpenChange={setExceptionOpen}
         onSubmit={handleExceptionSubmit}
+      />
+      <DispatchDialog
+        open={dispatchOpen}
+        onOpenChange={setDispatchOpen}
+        onSend={onMessageDispatch}
       />
     </div>
   );

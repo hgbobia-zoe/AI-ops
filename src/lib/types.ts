@@ -25,7 +25,10 @@ export type ActionType =
   | "REPORT_EXCEPTION"
   | "RESOLVE_CONTINUE"
   | "RETURN_ITEM"
-  | "REOPEN";
+  | "REOPEN"
+  // Side actions: not state transitions, just fan out to Slack/logging.
+  | "NOTIFY_DISPATCH"
+  | "GAS_LOG";
 
 export type ExceptionType =
   | "Customer unavailable"

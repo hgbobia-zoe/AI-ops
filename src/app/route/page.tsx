@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Header } from "@/components/Header";
 import { CurrentStopView } from "@/components/CurrentStopView";
 import { RouteOverview } from "@/components/RouteOverview";
+import { RouteSummaryPanel } from "@/components/RouteSummaryPanel";
 import { getBoundTruck, clearTruck, type TruckBinding } from "@/lib/device";
 import { useRouteMachine } from "@/lib/useRouteMachine";
 
@@ -62,17 +63,40 @@ function RouteScreen({
       />
 
       <main className="mx-auto max-w-2xl space-y-6 p-4 pb-24">
-        <CurrentStopView
-          phase={m.phase}
-          activeStop={m.activeStop}
-          totalStops={stops.length}
-          actions={m.actions}
-          busy={m.busy}
-          onPerform={m.perform}
-        />
+        {m.phase === "returned" ? (
+          <RouteSummaryPanel
+            summary={m.summary}
+            onGas={(putGas) =>
+              m.sendSide(
+                "GAS_LOG",
+                { putGas },
+                putGas ? "Logged: fueled up" : "Logged: not fueled",
+              )
+            }
+          />
+        ) : (
+          <>
+            <CurrentStopView
+              phase={m.phase}
+              activeStop={m.activeStop}
+              totalStops={stops.length}
+              actions={m.actions}
+              busy={m.busy}
+              onPerform={m.perform}
+              notif={m.activeStop ? m.notif[m.activeStop.stopId] : undefined}
+              onMessageDispatch={(message) =>
+                m.sendSide(
+                  "NOTIFY_DISPATCH",
+                  { message },
+                  "Message sent to dispatch",
+                )
+              }
+            />
 
-        {stops.length > 0 && (
-          <RouteOverview stops={stops} activeIndex={m.activeIndex} />
+            {stops.length > 0 && (
+              <RouteOverview stops={stops} activeIndex={m.activeIndex} />
+            )}
+          </>
         )}
       </main>
     </div>
