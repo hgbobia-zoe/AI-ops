@@ -4,6 +4,7 @@ import { Header } from "@/components/Header";
 import { CurrentStopView } from "@/components/CurrentStopView";
 import { RouteOverview } from "@/components/RouteOverview";
 import { RouteSummaryPanel } from "@/components/RouteSummaryPanel";
+import { RouteStartStates } from "@/components/RouteStartStates";
 import { useRouteMachine } from "@/lib/useRouteMachine";
 import type { TruckBinding } from "@/lib/device";
 
@@ -42,7 +43,17 @@ export function RouteScreen({
             : "mx-auto max-w-2xl space-y-6 p-4 pb-24"
         }
       >
-        {m.phase === "returned" ? (
+        {m.phase === "needsStart" ||
+        m.phase === "scraping" ||
+        m.phase === "failed" ||
+        m.phase === "loading" ? (
+          <RouteStartStates
+            phase={m.phase}
+            busy={m.busy}
+            onStart={m.startRoute}
+            onManualSubmit={m.submitManual}
+          />
+        ) : m.phase === "returned" ? (
           <RouteSummaryPanel
             summary={m.summary}
             onGas={(putGas) =>

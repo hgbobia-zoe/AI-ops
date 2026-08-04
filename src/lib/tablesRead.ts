@@ -17,6 +17,15 @@ export async function fetchRoute(truckId: string): Promise<Route | null> {
     cache: "no-store",
   });
   if (!res.ok) return null;
-  const data = (await res.json()) as { route?: Route };
+  const data = (await res.json()) as { route?: Route | null };
   return data.route ?? null;
+}
+
+/** Kick off Goodshuffle ingestion for a truck (Start Route). */
+export async function triggerIngestion(truckId: string): Promise<void> {
+  await fetch("/api/ingest-route", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ truckId }),
+  });
 }

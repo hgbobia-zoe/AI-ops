@@ -22,11 +22,19 @@ import { automationsFor } from "./automations";
 import { getAvailableActions, resolveTransition } from "./stateMachine";
 import type { AvailableAction } from "./stateMachine";
 import type { ActionType, Route, Stop, StopState } from "./types";
-import { fetchRoute } from "./tablesRead";
+import { fetchRoute, triggerIngestion } from "./tablesRead";
 import { buildAction, flushQueue, getGps, sendAction } from "./webhookClient";
 import { queueSize } from "./offlineQueue";
 
-export type RoutePhase = "loading" | "stops" | "headingBack" | "returned" | "empty";
+export type RoutePhase =
+  | "loading" // initial fetch in flight
+  | "needsStart" // no route yet → show Start Route
+  | "scraping" // ingestion running → "Loading route…"
+  | "failed" // ingestion failed → manual entry fallback
+  | "stops"
+  | "headingBack"
+  | "returned"
+  | "empty";
 
 /** The automations our tool fired for one stop, with timestamps. */
 export interface StopNotif {
@@ -57,6 +65,8 @@ export interface RouteMachine {
   notif: Record<string, StopNotif>;
   summary: RouteSummary;
   refresh: () => Promise<void>;
+  startRoute: () => Promise<void>;
+  submitManual: (stops: Stop[]) => void;
   perform: (action: ActionType, payload?: Record<string, unknown>) => Promise<void>;
   sendSide: (
     action: ActionType,
@@ -99,13 +109,19 @@ export function useRouteMachine(truckId: string): RouteMachine {
   const refresh = useCallback(async () => {
     try {
       const r = await fetchRoute(truckId);
-      if (!r) {
-        setPhase("empty");
+      // Once we've adopted a ready route, local progress is authoritative — don't
+      // let polling clobber it. (M2 seam: replace with reconciliation.)
+      if (loadedRef.current) {
+        setError(null);
         return;
       }
-      // M1: only adopt the fetched route the first time, so local progress isn't
-      // clobbered by the stateless mock. M2 seam: replace with reconciliation.
-      if (!loadedRef.current) {
+      if (!r) {
+        setPhase("needsStart");
+      } else if (r.status === "scraping") {
+        setPhase("scraping");
+      } else if (r.status === "failed") {
+        setPhase("failed");
+      } else if (r.status === "ready" || r.status === "active") {
         setRoute(r);
         loadedRef.current = true;
         setPhase(r.stops.length ? "stops" : "empty");
@@ -116,6 +132,37 @@ export function useRouteMachine(truckId: string): RouteMachine {
     }
   }, [truckId]);
 
+  // Start Route → trigger ingestion; polling picks up scraping → ready/failed.
+  const startRoute = useCallback(async () => {
+    setPhase("scraping");
+    loadedRef.current = false;
+    try {
+      await triggerIngestion(truckId);
+    } catch {
+      setPhase("failed");
+    }
+  }, [truckId]);
+
+  // Manual fallback when the scrape fails: dispatch enters stops by hand.
+  const submitManual = useCallback(
+    (stops: Stop[]) => {
+      const date = new Date().toISOString().slice(0, 10);
+      const routeId = `R-${date}-${truckId}`;
+      const normalized: Stop[] = stops.map((s, i) => ({
+        ...s,
+        routeId,
+        stopId: s.stopId || `S-${i + 1}`,
+        customerId: s.customerId || `C-${i + 1}`,
+        sequence: i + 1,
+        state: "Waiting",
+      }));
+      setRoute({ routeId, date, truckId, status: "ready", stops: normalized });
+      loadedRef.current = true;
+      setPhase(normalized.length ? "stops" : "empty");
+    },
+    [truckId],
+  );
+
   // Initial load + light polling for the (future) live data path.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -123,6 +170,14 @@ export function useRouteMachine(truckId: string): RouteMachine {
     const id = setInterval(() => void refresh(), appConfig.routePollMs);
     return () => clearInterval(id);
   }, [refresh]);
+
+  // While a scrape is running, poll fast so "Loading route…" flips to the stops
+  // as soon as ingestion finishes, instead of waiting a full poll interval.
+  useEffect(() => {
+    if (phase !== "scraping") return;
+    const id = setInterval(() => void refresh(), 2000);
+    return () => clearInterval(id);
+  }, [phase, refresh]);
 
   // Online/offline tracking + flush queued actions on reconnect.
   useEffect(() => {
@@ -316,6 +371,8 @@ export function useRouteMachine(truckId: string): RouteMachine {
     notif,
     summary,
     refresh,
+    startRoute,
+    submitManual,
     perform,
     sendSide,
   };

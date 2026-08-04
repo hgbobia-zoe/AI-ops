@@ -96,22 +96,35 @@ The app's `/api/action` validates + dedupes, then forwards the event (HMAC-signe
 
 ---
 
-## 5. M2 — Goodshuffle route ingestion (Anthropic Computer Use)
+## 5. M2 — Goodshuffle route ingestion (Anthropic Computer Use) — built
 
-`START_ROUTE` sets `Route.status=scraping` and triggers a **serverless Anthropic
-Computer Use agent** that logs into Goodshuffle, reads today's route for the truck,
-and writes `Customers` + `Stops`, then sets `Route.status=ready`. The tablet polls
-status and shows "Loading route…" until ready — **it never blocks**.
+The **Start Route** lifecycle is built and working end to end:
 
-- Store Goodshuffle credentials in the serverless secret store — **never** in the
-  frontend, and never entered interactively.
-- On failure (`status=failed`): Slack alert + dispatch uses the manual-entry fallback.
-- The in-app Claude browser is fine for a **human-triggered morning run** while you
-  build the unattended agent.
+`Start Route` → `POST /api/ingest-route` sets `status=scraping` and runs the ingestion
+job in the background → tablet polls `/api/route` and shows **"Loading route…"** →
+job lands on `ready` (stops loaded) or `failed` (→ **manual-entry** fallback on the
+tablet). The tablet **never blocks**.
 
-Until this is built, keep `USE_MOCK_DATA=true` (or leave the Tables key empty) and the
-app serves mock routes. Flip to live by setting the Tables env vars and implementing the
-`TODO(M2)` branches in `src/app/api/route/route.ts` and `src/app/api/vehicles/route.ts`.
+Two strategies (`INGEST_STRATEGY` env):
+- **`mock`** (default) — returns the sample route after ~1.5s. No API key, no browser.
+  Exercises the whole flow locally. This is what runs today.
+- **`computer-use`** — the real **Anthropic Computer Use agent** (`claude-opus-5` by
+  default): Claude reads Goodshuffle screenshots and drives clicks/scrolls, then calls
+  a `submit_route` tool with the structured stops. Set `ANTHROPIC_API_KEY` and implement
+  the browser driver.
+
+**To turn on the real scraper**, implement `makeDriver()` in
+[src/lib/ingest/goodshuffleIngest.ts](src/lib/ingest/goodshuffleIngest.ts) — a
+`ComputerDriver` ([src/lib/ingest/types.ts](src/lib/ingest/types.ts)) backed by a
+**hosted browser** (Anthropic Computer Use container, Browserbase, or headless
+Playwright) that logs into Goodshuffle with credentials from the **server secret store**
+(never the frontend, never entered interactively). The Computer Use loop itself is done
+([src/lib/ingest/computerUseAgent.ts](src/lib/ingest/computerUseAgent.ts)). Then set
+`INGEST_STRATEGY=computer-use`.
+
+The server route store ([src/lib/ingest/routeStore.ts](src/lib/ingest/routeStore.ts)) is
+in-memory today; at production swap it for the Zapier `Routes`/`Stops` tables (or
+Supabase) behind the same `getRoute`/`setRoute` contract — the tablet never changes.
 
 ---
 
