@@ -65,7 +65,7 @@ env, in code, or in Claude's prompt:
 
 ```bash
 # Opens a real browser; log in by hand, then close it. Saves cookies to the file.
-npx playwright open --save-storage=goodshuffle-auth.json https://app.goodshuffle.com/
+npx playwright open --save-storage=goodshuffle-auth.json https://pro.goodshuffle.com/app/rms/dashboard
 # Point the worker at it:
 export GOODSHUFFLE_STORAGE_STATE=./goodshuffle-auth.json
 ```

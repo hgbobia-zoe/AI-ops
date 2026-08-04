@@ -16,7 +16,10 @@ interface WakeLockNavigator {
 
 /** Goodshuffle Pro URL to launch beside the app (configurable). */
 export function gsproUrl(): string {
-  return process.env.NEXT_PUBLIC_GSPRO_URL || "https://app.goodshuffle.com/";
+  return (
+    process.env.NEXT_PUBLIC_GSPRO_URL ||
+    "https://pro.goodshuffle.com/app/rms/dashboard"
+  );
 }
 
 /** Whether to try embedding GSPRO in an iframe (default false — they block it). */
@@ -72,7 +75,25 @@ export function keepAwake(): () => void {
   return () => document.removeEventListener("visibilitychange", onVisible);
 }
 
-/** Open (or focus) Goodshuffle Pro in its own window for tiling beside the app. */
+/**
+ * Open (or focus) Goodshuffle Pro in its OWN window (not a background tab) so it
+ * can be tiled beside the app. Goodshuffle blocks iframe embedding, so a separate
+ * window is the only way to show both. Sized to the left half of the screen and
+ * best-effort snaps our own window to the right half.
+ */
 export function openGoodshuffle(): void {
-  window.open(gsproUrl(), "gspro");
+  const availW = (typeof screen !== "undefined" && screen.availWidth) || 1280;
+  const availH = (typeof screen !== "undefined" && screen.availHeight) || 800;
+  const half = Math.floor(availW / 2);
+  const features = `popup=yes,left=0,top=0,width=${half},height=${availH}`;
+  const win = window.open(gsproUrl(), "gspro", features);
+  win?.focus();
+  // Best-effort: move our own window to the right half (works when this window
+  // was itself script-opened; a normal browser tab ignores it — snap manually).
+  try {
+    window.moveTo(half, 0);
+    window.resizeTo(availW - half, availH);
+  } catch {
+    /* ignored — the user snaps the window manually */
+  }
 }

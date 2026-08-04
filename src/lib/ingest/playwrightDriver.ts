@@ -36,7 +36,9 @@ export class PlaywrightDriver implements ComputerDriver {
 
     // Navigate to today's dispatch. {truckId}/{date} placeholders let you point
     // GOODSHUFFLE_URL straight at the right view; otherwise the agent navigates.
-    const url = (process.env.GOODSHUFFLE_URL || "https://app.goodshuffle.com/")
+    const url = (
+      process.env.GOODSHUFFLE_URL || "https://pro.goodshuffle.com/app/rms/dashboard"
+    )
       .replace("{truckId}", encodeURIComponent(truckId))
       .replace("{date}", encodeURIComponent(date));
     await this.page.goto(url, { waitUntil: "domcontentloaded" });

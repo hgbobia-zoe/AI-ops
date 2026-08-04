@@ -118,16 +118,17 @@ function GsproPane() {
       <div className="space-y-1">
         <h2 className="text-2xl font-bold">Goodshuffle Pro</h2>
         <p className="max-w-sm text-muted-foreground">
-          Routes, stops, and inventory live in Goodshuffle. It opens in its own
-          window — tile it beside this panel in your kiosk browser.
+          Routes, stops, and inventory live in Goodshuffle. It can&apos;t be embedded
+          (Goodshuffle blocks it), so it opens as its own window — snap it beside
+          this panel.
         </p>
       </div>
       <Button onClick={openGoodshuffle} className="h-14 gap-2 rounded-xl px-8 text-lg">
-        <ExternalLink className="size-5" /> Open / focus Goodshuffle
+        <ExternalLink className="size-5" /> Open Goodshuffle window
       </Button>
       <p className="max-w-xs text-xs text-muted-foreground">
-        Tip: in Fully Kiosk / iPad Split View, keep Goodshuffle on one side and
-        this panel on the other.
+        Desktop: <strong>Win + ←</strong> on the Goodshuffle window, then{" "}
+        <strong>Win + →</strong> here. Tablets: Fully Kiosk / iPad Split View.
       </p>
     </div>
   );
