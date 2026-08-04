@@ -113,14 +113,15 @@ Two strategies (`INGEST_STRATEGY` env):
   a `submit_route` tool with the structured stops. Set `ANTHROPIC_API_KEY` and implement
   the browser driver.
 
-**To turn on the real scraper**, implement `makeDriver()` in
-[src/lib/ingest/goodshuffleIngest.ts](src/lib/ingest/goodshuffleIngest.ts) — a
-`ComputerDriver` ([src/lib/ingest/types.ts](src/lib/ingest/types.ts)) backed by a
-**hosted browser** (Anthropic Computer Use container, Browserbase, or headless
-Playwright) that logs into Goodshuffle with credentials from the **server secret store**
-(never the frontend, never entered interactively). The Computer Use loop itself is done
-([src/lib/ingest/computerUseAgent.ts](src/lib/ingest/computerUseAgent.ts)). Then set
-`INGEST_STRATEGY=computer-use`.
+**To turn on the real scraper**, run the **ingestion worker** — a small server that
+owns a headless Chromium (Playwright) which Claude's Computer Use tool drives. It runs
+on **your server** (Vercel can't run a browser); the Next app just calls it. Full
+instructions in **[worker/README.md](worker/README.md)** — including a one-command
+Docker deploy and how to capture the Goodshuffle login once (no password in code). The
+Playwright driver ([src/lib/ingest/playwrightDriver.ts](src/lib/ingest/playwrightDriver.ts))
+and Computer Use loop ([src/lib/ingest/computerUseAgent.ts](src/lib/ingest/computerUseAgent.ts))
+are built and smoke-tested. Then set `INGEST_STRATEGY=computer-use`,
+`INGEST_WORKER_URL`, and `INGEST_WORKER_SECRET` on the Next app.
 
 The server route store ([src/lib/ingest/routeStore.ts](src/lib/ingest/routeStore.ts)) is
 in-memory today; at production swap it for the Zapier `Routes`/`Stops` tables (or

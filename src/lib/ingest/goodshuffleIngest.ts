@@ -9,11 +9,9 @@
 //     driver. Enabled with INGEST_STRATEGY=computer-use + ANTHROPIC_API_KEY + a
 //     configured driver (see driver TODO below).
 
-import type { Route } from "@/lib/types";
+import type { Route, Stop } from "@/lib/types";
 import { mockRoute } from "@/lib/mockData";
 import { setRoute, setStatus } from "./routeStore";
-import { scrapeGoodshuffle } from "./computerUseAgent";
-import type { ComputerDriver } from "./types";
 
 function strategy(): "mock" | "computer-use" {
   return process.env.INGEST_STRATEGY === "computer-use" ? "computer-use" : "mock";
@@ -54,37 +52,37 @@ async function runIngestion(truckId: string, date: string, routeId: string): Pro
       return;
     }
 
-    // computer-use strategy
-    const driver = await makeDriver();
-    if (!driver) {
+    // computer-use strategy → delegate to the ingestion worker (the server that
+    // owns the browser). Playwright/Chromium never runs inside the Next app.
+    const workerUrl = process.env.INGEST_WORKER_URL;
+    if (!workerUrl) {
+      console.error("[ingest] INGEST_WORKER_URL not set — cannot scrape");
       setStatus(truckId, "failed");
       return;
     }
-    try {
-      const result = await scrapeGoodshuffle(driver, routeId);
-      if (result.ok && result.stops?.length) {
-        setRoute({ routeId, date, truckId, status: "ready", stops: result.stops });
-      } else {
-        console.error("[ingest] scrape failed:", result.error);
-        setStatus(truckId, "failed");
-      }
-    } finally {
-      await driver.dispose?.();
+    const res = await fetch(`${workerUrl.replace(/\/$/, "")}/ingest`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(process.env.INGEST_WORKER_SECRET
+          ? { authorization: `Bearer ${process.env.INGEST_WORKER_SECRET}` }
+          : {}),
+      },
+      body: JSON.stringify({ truckId, date }),
+    });
+    const result = (await res.json()) as {
+      ok: boolean;
+      stops?: Stop[];
+      error?: string;
+    };
+    if (res.ok && result.ok && result.stops?.length) {
+      setRoute({ routeId, date, truckId, status: "ready", stops: result.stops });
+    } else {
+      console.error("[ingest] worker scrape failed:", result.error);
+      setStatus(truckId, "failed");
     }
   } catch (err) {
     console.error("[ingest] unexpected error:", err);
     setStatus(truckId, "failed");
   }
-}
-
-/**
- * Build the production browser driver. TODO(M2 hosting): implement against a
- * hosted browser — an Anthropic Computer Use container, Browserbase, or a
- * headless Playwright instance — that logs into Goodshuffle with credentials
- * from the server secret store (never the client). Returning null makes the
- * computer-use strategy fail cleanly into the manual-entry fallback. The real
- * implementation logs into Goodshuffle for the truck/date being ingested.
- */
-async function makeDriver(): Promise<ComputerDriver | null> {
-  return null;
 }
