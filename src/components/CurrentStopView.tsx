@@ -107,7 +107,7 @@ export function CurrentStopView({
     <div className="space-y-5">
       <Card className="surface overflow-hidden border-white/5 pt-0">
         {/* gradient accent strip carries the current-stop context */}
-        <div className="flex items-center justify-between gap-2 border-b border-white/5 bg-gradient-to-r from-primary/15 via-primary/5 to-transparent px-6 py-3">
+        <div className="flex items-center justify-between gap-2 border-b border-white/5 bg-white/[0.03] px-6 py-3">
           <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Stop {activeStop.sequence} of {totalStops}
           </span>
@@ -165,7 +165,7 @@ export function CurrentStopView({
                 key={a.action}
                 onClick={() => handleActionClick(a)}
                 disabled={busy}
-                className="btn-hero flex min-h-32 w-full flex-col items-center justify-center gap-2.5 rounded-3xl border-0 text-white transition-all active:scale-[0.98] disabled:opacity-70"
+                className="btn-hero flex min-h-32 w-full flex-col items-center justify-center gap-2.5 rounded-3xl border-0 transition-all active:scale-[0.98] disabled:opacity-70"
               >
                 <Icon className="size-9" />
                 <span className="text-2xl font-semibold">{a.label}</span>
@@ -261,7 +261,7 @@ function InfoTile({
         {label}
       </div>
       <div
-        className={`text-lg font-semibold ${emphasize ? "text-indigo-300" : ""}`}
+        className={`text-lg font-semibold ${emphasize ? "text-foreground" : ""}`}
       >
         {value}
       </div>
@@ -292,7 +292,7 @@ function ActionButtons({
             key={a.action}
             onClick={() => onClick(a)}
             disabled={busy}
-            className="btn-hero flex min-h-32 w-full flex-col items-center justify-center gap-2.5 rounded-3xl border-0 text-white transition-all active:scale-[0.98] disabled:opacity-70"
+            className="btn-hero flex min-h-32 w-full flex-col items-center justify-center gap-2.5 rounded-3xl border-0 transition-all active:scale-[0.98] disabled:opacity-70"
           >
             <Icon className="size-9" />
             <span className="text-2xl font-semibold">{a.label}</span>
@@ -347,7 +347,7 @@ function Panel({
         <div
           className={`flex size-16 items-center justify-center rounded-2xl ${
             tone === "done"
-              ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-300"
+              ? "bg-white/10 text-foreground"
               : "bg-primary/10 text-primary"
           }`}
         >

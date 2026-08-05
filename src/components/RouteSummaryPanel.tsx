@@ -61,7 +61,7 @@ export function RouteSummaryPanel({
     <div className="space-y-5">
       <Card className="shadow-sm">
         <CardContent className="flex flex-col items-center gap-2 px-8 py-8 text-center">
-          <div className="flex size-16 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-400">
+          <div className="flex size-16 items-center justify-center rounded-2xl bg-white/10 text-foreground">
             <CheckCircle2 className="size-8" />
           </div>
           <h1 className="text-2xl font-bold">Route complete</h1>
@@ -136,8 +136,8 @@ export function RouteSummaryPanel({
             <div
               className={`rounded-xl p-3 text-center text-sm font-medium ${
                 gas
-                  ? "bg-emerald-500/15 text-emerald-400"
-                  : "bg-amber-500/15 text-amber-400"
+                  ? "bg-white/15 text-foreground"
+                  : "bg-white/5 text-muted-foreground"
               }`}
             >
               {gas ? "Logged: fueled up ✓" : "Logged: not fueled — fleet notified"}

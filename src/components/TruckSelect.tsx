@@ -43,7 +43,7 @@ export function TruckSelect() {
   return (
     <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center p-6">
       <div className="mb-10 flex flex-col items-center text-center">
-        <span className="btn-hero mb-4 flex size-16 items-center justify-center rounded-2xl text-white">
+        <span className="btn-hero mb-4 flex size-16 items-center justify-center rounded-2xl">
           <Truck className="size-8" />
         </span>
         <h1 className="text-3xl font-bold tracking-tight">{appConfig.name}</h1>

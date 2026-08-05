@@ -24,7 +24,7 @@ function Row({
       <span
         className={`flex size-6 shrink-0 items-center justify-center rounded-full ${
           done
-            ? "bg-emerald-500/20 text-emerald-400"
+            ? "bg-white/15 text-foreground"
             : "bg-muted text-muted-foreground"
         }`}
       >

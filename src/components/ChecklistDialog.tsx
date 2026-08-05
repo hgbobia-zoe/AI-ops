@@ -84,7 +84,7 @@ export function ChecklistDialog({
 
           {needsReason && (
             <div className="space-y-2">
-              <Label htmlFor="override-reason" className="text-red-600">
+              <Label htmlFor="override-reason" className="text-foreground">
                 Reason for override (required)
               </Label>
               <Textarea

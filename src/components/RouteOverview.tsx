@@ -27,7 +27,7 @@ export function RouteOverview({
               {!isLast && (
                 <span
                   className={`absolute left-[15px] top-8 h-full w-0.5 ${
-                    stop.state === "Completed" ? "bg-emerald-400" : "bg-border"
+                    stop.state === "Completed" ? "bg-foreground/40" : "bg-border"
                   }`}
                 />
               )}

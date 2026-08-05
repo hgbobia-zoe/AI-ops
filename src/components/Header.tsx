@@ -33,7 +33,7 @@ export function Header({
     <header className="sticky top-0 z-20 border-b border-white/5 bg-background/70 backdrop-blur-xl">
       <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-3">
         <div className="flex items-center gap-2.5">
-          <span className="btn-hero flex size-9 items-center justify-center rounded-xl text-white">
+          <span className="btn-hero flex size-9 items-center justify-center rounded-xl">
             <Truck className="size-5" />
           </span>
           <div className="leading-tight">
@@ -75,7 +75,7 @@ export function Header({
                 key={s.stopId}
                 className={`h-1.5 flex-1 rounded-full transition-all ${
                   s.state === "Completed"
-                    ? "bg-emerald-500"
+                    ? "bg-foreground"
                     : isActive
                       ? v.dot
                       : "bg-border"
@@ -102,15 +102,15 @@ function OnlinePill({
     <span
       className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
         online
-          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200"
-          : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200"
+          ? "bg-white/10 text-muted-foreground"
+          : "bg-white/15 text-foreground"
       }`}
       title={online ? "Online" : "Offline — actions sync when reconnected"}
     >
       {online ? <Wifi className="size-3.5" /> : <WifiOff className="size-3.5" />}
       {online ? "Online" : "Offline"}
       {queuedCount > 0 && (
-        <span className="ml-0.5 rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-white">
+        <span className="ml-0.5 rounded-full bg-foreground px-1.5 text-[10px] font-bold text-background">
           {queuedCount}
         </span>
       )}

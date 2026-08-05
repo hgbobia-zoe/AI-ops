@@ -26,7 +26,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: "#0b0e18",
+  themeColor: "#0a0a0a",
 };
 
 export default function RootLayout({
@@ -41,7 +41,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         {children}
-        <Toaster theme="dark" richColors position="top-center" />
+        <Toaster theme="dark" position="top-center" />
       </body>
     </html>
   );

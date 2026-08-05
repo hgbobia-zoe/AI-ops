@@ -44,7 +44,7 @@ export function RouteStartStates({
         <button
           onClick={onStart}
           disabled={busy}
-          className="btn-hero flex min-h-32 w-full flex-col items-center justify-center gap-2.5 rounded-3xl border-0 text-white transition-all active:scale-[0.98] disabled:opacity-70"
+          className="btn-hero flex min-h-32 w-full flex-col items-center justify-center gap-2.5 rounded-3xl border-0 transition-all active:scale-[0.98] disabled:opacity-70"
         >
           <Play className="size-9" />
           <span className="text-2xl font-semibold">Start Route</span>
