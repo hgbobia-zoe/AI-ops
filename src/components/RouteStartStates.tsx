@@ -94,7 +94,7 @@ function ManualEntry({
         <CardContent className="flex items-start gap-3 p-4">
           <AlertTriangle className="mt-0.5 size-5 shrink-0 text-destructive" />
           <div className="text-sm">
-            <div className="font-semibold text-red-300">Couldn&apos;t read Goodshuffle</div>
+            <div className="font-semibold text-foreground">Couldn&apos;t read Goodshuffle</div>
             <div className="text-muted-foreground">
               Dispatch has been alerted. Enter today&apos;s stops manually to keep moving.
             </div>

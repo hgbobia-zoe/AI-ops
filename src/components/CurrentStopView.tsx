@@ -24,7 +24,7 @@ import type { RoutePhase, StopNotif } from "@/lib/useRouteMachine";
 const TILE_CLASS =
   "surface flex min-h-28 flex-col items-center justify-center gap-2 rounded-3xl border border-white/5 p-4 text-center transition-all hover:border-primary/40 active:scale-[0.97] disabled:opacity-60";
 const TILE_CLASS_DANGER =
-  "flex min-h-28 flex-col items-center justify-center gap-2 rounded-3xl border border-destructive/30 bg-destructive/10 p-4 text-center text-red-300 transition-all hover:bg-destructive/15 active:scale-[0.97] disabled:opacity-60";
+  "flex min-h-28 flex-col items-center justify-center gap-2 rounded-3xl border border-white/20 bg-white/[0.06] p-4 text-center text-foreground transition-all hover:bg-white/10 active:scale-[0.97] disabled:opacity-60";
 
 export function CurrentStopView({
   phase,
@@ -315,7 +315,7 @@ function ActionButtons({
                   solo ? "col-span-2" : ""
                 } ${
                   danger
-                    ? "border-destructive/30 bg-destructive/10 text-red-300 hover:bg-destructive/15"
+                    ? "border-white/20 bg-white/[0.06] text-foreground hover:bg-white/10"
                     : "surface border-white/5 hover:border-primary/40"
                 }`}
               >

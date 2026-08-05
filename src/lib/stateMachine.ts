@@ -35,7 +35,6 @@ export const ALL_STATES: StopState[] = [
   "Waiting",
   "EnRoute",
   "Arrived",
-  "DeliveryInProgress",
   "Completed",
   "Exception",
   "HeadingBack",
@@ -53,17 +52,11 @@ export const TRANSITIONS: TransitionDef[] = [
   },
   // Arrive at the current stop.
   { from: "EnRoute", action: "ARRIVED", to: "Arrived", label: "Arrived" },
-  // Begin the delivery.
+  // Complete this stop and head to the next (checklist gate). Backend moves the
+  // next stop to EnRoute and sends its SMS. (No separate "Start Delivery" step —
+  // the driver goes straight from Arrived to completing the stop.)
   {
     from: "Arrived",
-    action: "START_DELIVERY",
-    to: "DeliveryInProgress",
-    label: "Start Delivery",
-  },
-  // Complete this stop and head to the next (checklist gate). Backend moves the
-  // next stop to EnRoute and sends its SMS.
-  {
-    from: "DeliveryInProgress",
     action: "HEADING_NEXT",
     to: "Completed",
     label: "Heading To Next Customer",
@@ -72,7 +65,7 @@ export const TRANSITIONS: TransitionDef[] = [
   },
   // Complete the final stop and start heading back to the warehouse.
   {
-    from: "DeliveryInProgress",
+    from: "Arrived",
     action: "COMPLETE_AND_RETURN",
     to: "Completed",
     label: "Complete & Head Back",
@@ -109,19 +102,12 @@ export const TRANSITIONS: TransitionDef[] = [
     label: "Report Exception",
     variant: "destructive",
   },
-  {
-    from: "DeliveryInProgress",
-    action: "REPORT_EXCEPTION",
-    to: "Exception",
-    label: "Report Exception",
-    variant: "destructive",
-  },
 
   // Resolving an exception.
   {
     from: "Exception",
     action: "RESOLVE_CONTINUE",
-    to: "DeliveryInProgress",
+    to: "Arrived",
     label: "Resolve & Continue",
   },
   {

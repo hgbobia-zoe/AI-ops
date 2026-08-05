@@ -13,7 +13,6 @@ export const AUTOMATIONS: Partial<Record<ActionType, string[]>> = {
     "Dispatch notified — departed",
   ],
   ARRIVED: ["Customer texted — arrived", "Dispatch notified — arrived"],
-  START_DELIVERY: ["Delivery started — logged"],
   HEADING_NEXT: [
     "Stop marked complete",
     "Next customer texted — on the way",

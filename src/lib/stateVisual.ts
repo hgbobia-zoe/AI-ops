@@ -11,7 +11,6 @@ import {
   Home,
   MapPin,
   MessageSquare,
-  PackageOpen,
   Play,
   RotateCcw,
   Truck,
@@ -50,12 +49,6 @@ export const STATE_VISUAL: Record<StopState, StateVisual> = {
     dot: "bg-white/25",
     badge: "bg-white/10 text-foreground",
   },
-  DeliveryInProgress: {
-    label: "In Progress",
-    icon: PackageOpen,
-    dot: "bg-white/30",
-    badge: "bg-white/15 text-foreground",
-  },
   Completed: {
     label: "Completed",
     icon: CheckCircle2,
@@ -65,8 +58,8 @@ export const STATE_VISUAL: Record<StopState, StateVisual> = {
   Exception: {
     label: "Exception",
     icon: AlertTriangle,
-    dot: "bg-destructive/25",
-    badge: "bg-destructive/15 text-red-300",
+    dot: "bg-white/25",
+    badge: "bg-white/15 text-foreground",
   },
   HeadingBack: {
     label: "Heading Back",
@@ -86,7 +79,6 @@ export const ACTION_ICON: Record<ActionType, LucideIcon> = {
   START_ROUTE: Play,
   LEAVING_WAREHOUSE: Truck,
   ARRIVED: MapPin,
-  START_DELIVERY: PackageOpen,
   HEADING_NEXT: ArrowRight,
   COMPLETE_AND_RETURN: Home,
   ARRIVED_WAREHOUSE: Home,
