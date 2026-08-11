@@ -123,9 +123,17 @@ and Computer Use loop ([src/lib/ingest/computerUseAgent.ts](src/lib/ingest/compu
 are built and smoke-tested. Then set `INGEST_STRATEGY=computer-use`,
 `INGEST_WORKER_URL`, and `INGEST_WORKER_SECRET` on the Next app.
 
-The server route store ([src/lib/ingest/routeStore.ts](src/lib/ingest/routeStore.ts)) is
-in-memory today; at production swap it for the Zapier `Routes`/`Stops` tables (or
-Supabase) behind the same `getRoute`/`setRoute` contract — the tablet never changes.
+**Route state persistence (production).** When `INGEST_WORKER_URL` is set, the Next
+app is **stateless** and proxies route reads/writes to the worker, which owns route
+state in its own (persistent) process — so it works correctly on Vercel's serverless
+without a shared database. Zapier Tables has no server-to-server REST API, so it isn't
+used for the tablet's live read path; it stays the audit system-of-record written by
+the Zaps (Events, Messages, …). Without a worker (mock mode), the app uses an
+in-process store — fine for local dev, not multi-instance.
+
+**Trucks.** The truck-select list comes from the `VEHICLES_JSON` env var (a JSON array
+of `{ truckId, name, plate? }`) — keep it in sync with the Zapier `Vehicles` table.
+Omit it to use demo trucks.
 
 ---
 

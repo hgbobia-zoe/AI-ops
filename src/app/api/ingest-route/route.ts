@@ -1,9 +1,12 @@
-// Start Route → kick off Goodshuffle ingestion. Returns immediately with a
-// `scraping` route; the tablet polls /api/route until ready/failed. This is the
-// app-side trigger for the async "AI browsing" job (see lib/ingest).
+// Start Route → kick off Goodshuffle ingestion.
+//
+// Production: proxies to the ingestion worker (which runs the browser + Computer
+// Use scrape and stores the result). Dev/mock: runs the local mock ingestion.
+// Returns immediately with a `scraping` route; the tablet polls /api/route.
 
 import { NextResponse } from "next/server";
 import { startIngestion } from "@/lib/ingest/goodshuffleIngest";
+import { workerBase, workerHeaders } from "@/lib/ingest/worker";
 
 export async function POST(req: Request) {
   let body: { truckId?: string; date?: string };
@@ -15,6 +18,23 @@ export async function POST(req: Request) {
   if (!body.truckId) {
     return NextResponse.json({ error: "missing_truckId" }, { status: 400 });
   }
+
+  const base = workerBase();
+  if (base) {
+    try {
+      const res = await fetch(`${base}/ingest`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...workerHeaders() },
+        body: JSON.stringify({ truckId: body.truckId, date: body.date }),
+      });
+      const data = await res.json().catch(() => ({}));
+      return NextResponse.json(data, { status: res.status });
+    } catch {
+      return NextResponse.json({ error: "worker_unreachable" }, { status: 502 });
+    }
+  }
+
+  // Dev / mock — run locally against the in-process store.
   const route = startIngestion(body.truckId, body.date);
   return NextResponse.json({ route }, { status: 202 });
 }

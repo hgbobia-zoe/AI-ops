@@ -15,12 +15,25 @@ Tablet ─Start Route→ Next /api/ingest-route ─HTTP→ THIS WORKER ─Playwr
 > This Chromium is **bundled by Playwright** — it is *not* your installed Chrome, and it
 > needs no display. That's why a plain Linux server (or the Docker image) works.
 
+## Why the worker owns route state
+
+The worker is a **single persistent process**, so it holds each truck's route in
+memory across the tablet's polls. The Next app on Vercel is **serverless and
+stateless** — it can't reliably keep that state itself (different requests hit
+different instances). So when `INGEST_WORKER_URL` is set, the app just proxies to
+the endpoints below and this worker is the source of truth for live route state.
+(In-memory is fine for one worker; routes re-scrape on restart. Back it with
+Redis/SQLite if you run several workers.)
+
 ## Endpoints
+
+All except `/health` require `Authorization: Bearer $INGEST_WORKER_SECRET`.
 
 | Method | Path | Notes |
 |---|---|---|
 | `GET`  | `/health` | liveness |
-| `POST` | `/ingest` | `{ truckId, date }`, `Authorization: Bearer $INGEST_WORKER_SECRET` → `{ ok, stops }` |
+| `POST` | `/ingest` | `{ truckId, date }` → `202 { route:{status:"scraping"} }`. Starts the scrape async. |
+| `GET`  | `/route?truckId=…` | `{ route }` — poll for `scraping` → `ready` (with stops) / `failed`. |
 
 ## Run locally
 
