@@ -1,27 +1,58 @@
-// Local (mock) ingestion for dev and demos — used only when no ingestion worker
-// is configured (INGEST_WORKER_URL unset). Returns the sample route after a short
-// delay so the Start Route → "Loading route…" → ready lifecycle is exercisable
-// without a browser or API key. In production the worker does the real scrape and
-// owns route state; see src/app/api/ingest-route + worker/.
+// Route ingestion — runs in-process (the app self-hosts on a Node server with
+// Chromium available, so no separate worker). "Start Route" marks the route
+// `scraping` in the DB, runs the scrape in the background, then writes the stops
+// and flips to `ready` (or `failed`).
+//
+// Strategy: real Anthropic Computer Use + Playwright when ANTHROPIC_API_KEY is set;
+// otherwise the mock route (local dev). The tablet polls /api/route for status.
 
 import type { Route } from "@/lib/types";
 import { mockRoute } from "@/lib/mockData";
-import { setRoute } from "./routeStore";
+import { writeRoute, setRouteStatus } from "@/lib/db/repo";
+import { PlaywrightDriver } from "./playwrightDriver";
+import { scrapeGoodshuffle } from "./computerUseAgent";
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Kick off a mock scrape: mark scraping, then land on ready after ~1.5s. */
+function realScraperEnabled(): boolean {
+  return Boolean(process.env.ANTHROPIC_API_KEY) && process.env.INGEST_MODE !== "mock";
+}
+
+/** Kick off ingestion: mark scraping, scrape in the background, land ready/failed. */
 export function startIngestion(truckId: string, date = today()): Route {
   const routeId = `R-${date}-${truckId}`;
   const scraping: Route = { routeId, date, truckId, status: "scraping", stops: [] };
-  setRoute(scraping);
-
-  void (async () => {
-    await new Promise((r) => setTimeout(r, 1500));
-    setRoute({ ...mockRoute(truckId, date), status: "ready" });
-  })();
-
+  writeRoute(scraping);
+  void runIngest(truckId, date, routeId);
   return scraping;
+}
+
+async function runIngest(truckId: string, date: string, routeId: string): Promise<void> {
+  try {
+    if (!realScraperEnabled()) {
+      await new Promise((r) => setTimeout(r, 1500));
+      writeRoute({ ...mockRoute(truckId, date), status: "ready" });
+      return;
+    }
+
+    const driver = new PlaywrightDriver();
+    try {
+      await driver.prepare(truckId, date);
+      const result = await scrapeGoodshuffle(driver, routeId);
+      if (result.ok && result.stops?.length) {
+        writeRoute({ routeId, date, truckId, status: "ready", stops: result.stops });
+        console.log(`[ingest] ready truck=${truckId} stops=${result.stops.length}`);
+      } else {
+        console.error(`[ingest] scrape failed truck=${truckId}: ${result.error}`);
+        setRouteStatus(routeId, "failed");
+      }
+    } finally {
+      await driver.dispose();
+    }
+  } catch (err) {
+    console.error(`[ingest] error truck=${truckId}`, err);
+    setRouteStatus(routeId, "failed");
+  }
 }

@@ -1,22 +1,18 @@
-# Zoe Dispatch — AI Operations Platform (Module 1)
+# Zoe Dispatch
 
-Tablet-first web app for delivery drivers. Each truck's tablet selects its truck
-(no login) and captures driver actions as discrete events. Everything slow — SMS,
-Slack, route scraping, tracking links — happens asynchronously in the backend, so
-the tablet stays sub-second.
-
-Dispatch is the first module of a deliberately modular AI Operations Platform
-(Fleet, Warehouse, Inventory, AI Ops Manager…). Clean seams now; those modules later.
+Tablet-first dispatch app for delivery drivers. Each truck's tablet selects its
+truck (no login) and captures driver actions. **Everything runs as code** — no
+Zapier, no no-code backend — in one self-contained, self-hostable service.
 
 ## Architecture in one paragraph
 
 The tablet renders state-aware buttons from a shared **state machine**
-(`src/lib/stateMachine.ts`) and fires **one webhook per action** at a thin intake
-(`/api/action`) that validates the transition, dedupes on an idempotency key, and
-forwards the event to **Zapier** for fan-out. **Zapier Tables** is the v1 system of
-record (viable because one stop is only ever touched by one tablet). Actions taken
-offline are queued and replayed on reconnect. The data source sits behind our own API
-routes, so swapping mock → Zapier Tables → Supabase never touches the client.
+(`src/lib/stateMachine.ts`) and fires **one action per tap** at `/api/action`,
+which validates the transition, dedupes on an idempotency key, persists the event
+to **SQLite**, updates the stop, and fans out in code: customer **SMS** (OpenPhone/
+Quo), **Slack** alerts, and a customer **tracking page**. **Start Route** scrapes
+today's route out of Goodshuffle Pro with a headless Chromium driven by **Anthropic
+Computer Use** — all in-process. Ships as one Docker image (app + scraper + DB).
 
 ## Run locally
 
@@ -25,17 +21,18 @@ npm install
 npm run dev
 ```
 
-Runs on mock data — the full driver flow works with **no backend wired up**. Open on a
+Runs on mock routes with integrations logged (not sent) and SQLite at
+`./data/dispatch.db` — the full driver flow works with zero config. Open on a
 tablet viewport.
 
-## Wiring up real backends
+## Deploy
 
-See [SETUP.md](SETUP.md) for the Zapier Tables schema, Zaps, integrations, Vercel deploy,
-and the M2 Goodshuffle (Anthropic Computer Use) ingestion.
+See **[DEPLOY.md](DEPLOY.md)** (Fly.io / Railway, one container + a volume, WordPress
+embed). Architecture and code map in [SETUP.md](SETUP.md).
 
 ## Status
 
-- **M0 Foundations** — ✅ scaffold, state machine, PWA
-- **M1 Tablet shell + action pipeline** — ✅ truck select, state walk, checklist,
-  exceptions, offline queue, intake (validate/dedupe/forward)
-- **M2 Route ingestion** → **M6 AI Ops Manager** — see SETUP.md / the plan
+- Tablet shell, state machine, offline queue, kiosk mode — ✅
+- Route ingestion (Playwright + Computer Use, in-process) — ✅
+- SQLite persistence + code fan-out (SMS / Slack / tracking / audit) — ✅
+- Monochrome UI — ✅

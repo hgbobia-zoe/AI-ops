@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.github
+data
+*.local
+.env*
+npm-debug.log*
+goodshuffle-auth.json
+**/*.md
+!SETUP.md

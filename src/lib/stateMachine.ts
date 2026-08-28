@@ -4,10 +4,6 @@
 // This same definition drives BOTH:
 //   1. the tablet UI (which buttons to render for the current state), and
 //   2. the intake validator in app/api/action (what transitions are accepted).
-//
-// It is mirrored into the Zapier `Transitions` table (see zapier/transitions.seed.json
-// generated from TRANSITIONS below) so the no-code Zaps validate against the exact
-// same rules. Change it here, regenerate the seed, re-import to Zapier.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { ActionType, StopState } from "./types";

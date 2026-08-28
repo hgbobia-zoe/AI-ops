@@ -44,3 +44,11 @@ next-env.d.ts
 goodshuffle-auth.json
 *storage-state*.json
 worker.env
+
+# SQLite database (runtime data)
+/data/
+*.db
+*.db-shm
+*.db-wal
+tok.tmp
+token.tmp

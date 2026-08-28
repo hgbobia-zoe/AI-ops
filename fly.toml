@@ -1,0 +1,36 @@
+# Fly.io deployment for Zoe Dispatch. One machine with a persistent volume for
+# SQLite. See DEPLOY.md for the full walkthrough.
+#
+#   fly launch --no-deploy      (creates the app; keep this fly.toml)
+#   fly volumes create dispatch_data --size 1
+#   fly secrets set ANTHROPIC_API_KEY=... OPENPHONE_API_KEY=... OPENPHONE_FROM=... \
+#                   SLACK_WEBHOOK_URL=... GOODSHUFFLE_URL=... VEHICLES_JSON='[...]' \
+#                   PUBLIC_BASE_URL=https://<app>.fly.dev
+#   fly deploy
+
+app = "zoe-dispatch"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+  DATABASE_PATH = "/data/dispatch.db"
+  GOODSHUFFLE_STORAGE_STATE = "/data/goodshuffle-auth.json"
+
+# SQLite lives here. Volumes are per-machine, so run exactly ONE machine.
+[mounts]
+  source = "dispatch_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1024mb"
