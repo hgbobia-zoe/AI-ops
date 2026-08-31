@@ -285,10 +285,11 @@ async function importViaEval(truckId: string): Promise<GsResult | null> {
  * (old app build, timeout, Goodshuffle signed out, or simply no route today) instead of
  * silently dropping to manual entry.
  *
- * PRIMARY path runs the extraction in the web via `evalInGoodshuffle` (so route/phone
- * fixes ship by a Fly deploy). FALLBACK is the native `importGoodshuffleRoute` (older
- * behavior) if the generic eval hatch is somehow absent or yields nothing — so the pull
- * can never regress below what the APK already did.
+ * PRIMARY path is the native `importGoodshuffleRoute` (proven end-to-end on-device).
+ * The web-owned extraction via `evalInGoodshuffle` (which would let route/phone fixes
+ * ship by a Fly deploy) is kept behind `NEXT_PUBLIC_GS_WEB_EXTRACT=1` until it's
+ * verified against a real logged-in tablet — a first cut regressed the on-device pull,
+ * so it must not be the default.
  */
 export async function importGoodshuffleRouteViaKiosk(truckId: string): Promise<ImportResult> {
   const b = bridge();
@@ -306,15 +307,13 @@ export async function importGoodshuffleRouteViaKiosk(truckId: string): Promise<I
         }
       : { inKiosk: true, ok: false, stops: [], error: fallbackError };
 
-  // Primary: web-owned extraction via the generic eval hatch.
-  if (typeof b.evalInGoodshuffle === "function") {
+  // Opt-in web-owned extraction (still being validated on real hardware).
+  if (process.env.NEXT_PUBLIC_GS_WEB_EXTRACT === "1" && typeof b.evalInGoodshuffle === "function") {
     const res = await importViaEval(truckId);
-    // A clean result (ok true/false, or an in-page error) is authoritative.
     if (res && (res.ok || res.error)) return shape(res, "no_response_timeout");
-    // Empty/no-response → fall through to the native path if available.
   }
 
-  // Fallback: native extraction baked into the APK.
+  // Primary: native extraction baked into the APK (proven path).
   if (typeof b.importGoodshuffleRoute === "function") {
     const res = (await callBridge((bo, id) => bo.importGoodshuffleRoute!(id, truckId))) as GsResult | null;
     return shape(res, "no_response_timeout");

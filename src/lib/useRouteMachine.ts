@@ -184,7 +184,13 @@ export function useRouteMachine(truckId: string): RouteMachine {
           duration: Infinity,
           action: { label: "Try again", onClick: () => void startRouteRef.current() },
         });
+        // In the kiosk, the WebView pull IS the ingestion mechanism. Do NOT fall back to
+        // server-side scraping — it's Cloudflare-blocked (always fails) and would flip the
+        // route to "failed" and WIPE its stops. Keep whatever route is already loaded and
+        // let the driver retry (or use manual entry).
+        return;
       }
+      // Plain web / Electron (not the native kiosk): use the server-side ingestion path.
       await triggerIngestion(truckId);
     } catch {
       setPhase("failed");
