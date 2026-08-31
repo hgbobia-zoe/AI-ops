@@ -8,6 +8,11 @@
 interface ZoeKioskBridge {
   createEtaLink: (requestId: string, paramsJson: string) => void;
   importGoodshuffleRoute?: (requestId: string, truckId: string) => void;
+  // Generic escape hatch: run web-provided JS inside the logged-in Goodshuffle
+  // WebView and resolve its (synchronous) return value. Present in every native
+  // build — it's what lets the EXTRACTION LOGIC live here in the web (shipped by a
+  // Fly deploy) instead of being baked into the APK.
+  evalInGoodshuffle?: (requestId: string, script: string) => void;
   checkForUpdate?: (requestId: string) => void;
   ping?: () => string;
 }
@@ -166,28 +171,154 @@ export interface ImportResult {
   matched?: number; // of those, how many were assigned to this truck
 }
 
+// Which Goodshuffle vehicle.title substring this truck maps to.
+function goodshuffleMatch(truckId: string): string {
+  const t = truckId.toLowerCase();
+  if (t.includes("e450") || t.includes("ford")) return "ford";
+  if (t.includes("npr") || t.includes("isuzu")) return "isuzu";
+  return t;
+}
+
+type GsResult = {
+  ok?: boolean;
+  stops?: ImportedStop[];
+  error?: string;
+  total?: number;
+  matched?: number;
+};
+
+/**
+ * The Goodshuffle route-extraction script, run INSIDE the logged-in Goodshuffle
+ * WebView. It replays Goodshuffle's own internal API (same-origin, session cookies)
+ * to read today's route for this truck, and stashes the normalized stops on
+ * `window.__gsRoute[key]` when the async fetches finish. Living here (web) instead of
+ * in the APK is what makes route/extraction fixes ship by a Fly deploy — no new APK.
+ *
+ * Customer phone: the inlined `transaction.renter` (validated e164 → raw phone), then
+ * the on-site contact. Never dispatcher/storeLocation (those are the Zoe main line).
+ */
+function goodshuffleExtractionScript(key: string, match: string): string {
+  const KEY = JSON.stringify(key);
+  const MATCH = JSON.stringify(match);
+  return `(function(){
+    window.__gsRoute = window.__gsRoute || {};
+    var KEY = ${KEY}, MATCH = ${MATCH};
+    function fail(m){ try { window.__gsRoute[KEY] = {ok:false, error:String(m).slice(0,300)}; } catch(x){} }
+    function done(stops, routes, total, matched){ window.__gsRoute[KEY] = {ok:true, stops:stops, routeNames:routes, total:total, matched:matched}; }
+    try {
+      var now = new Date();
+      var startLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0,0,0);
+      var endLocal = new Date(startLocal.getTime() + 24*3600*1000);
+      var body = { from:startLocal.toISOString(), to:endLocal.toISOString(), warehouseCanonicalIDs:null, crew:null, vehicles:null, statuses:null };
+      function extractStops(route){
+        var wps = (route.waypoints||[]).filter(function(w){ return !w.isOriginWarehouse && !w.isDestinationWarehouse; });
+        wps.sort(function(a,b){ return (a.waypointIndex||0) - (b.waypointIndex||0); });
+        return wps.map(function(w){
+          var tl = (w.logisticRelation && w.logisticRelation.targetLocation) || {};
+          var tx = w.transaction || {};
+          var line = [tl.streetAddressLine1, tl.streetAddressLine2].filter(Boolean).join(" ");
+          var cityState = [tl.city, tl.state].filter(Boolean).join(", ");
+          var address = [line, cityState, tl.zipCode].filter(Boolean).join(", ");
+          var renter = tx.renter || {};
+          var sv = renter.smsValidation || {};
+          var name = tl.contactName || (tx.eventName ? String(tx.eventName).split(" - ")[0].trim() : "") || renter.name;
+          var doc = tx.dayOfContact || null;
+          var s = {
+            custName: name || "",
+            custPhone: sv.e164PhoneNumber || renter.phone || tl.contactPhoneNumber || "",
+            address: address,
+            plannedWindow: w.scheduledArrivalTime || undefined,
+            eta: w.scheduledArrivalTime || undefined
+          };
+          if (doc) { s.dayOfName = doc.name || doc.fullName || undefined; s.dayOfPhone = doc.phoneNumber || doc.phone || undefined; }
+          return s;
+        });
+      }
+      fetch("/app/routing/listRoutes", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body), credentials:"include" })
+        .then(function(r){ return r.json(); })
+        .then(function(routes){
+          var mine = (routes||[]).filter(function(rt){ return rt.vehicle && String(rt.vehicle.title||"").toLowerCase().indexOf(MATCH) >= 0; });
+          mine.sort(function(a,b){ return new Date(a.startDate) - new Date(b.startDate); });
+          var total = (routes||[]).length;
+          if (!mine.length) { done([], [], total, 0); return; }
+          return Promise.all(mine.map(function(rt){
+            return fetch("/app/routing/getRoute?routeID=" + rt.id + "&includeAttributes=true", { headers:{accept:"application/json"}, credentials:"include" })
+              .then(function(r){ return r.json(); });
+          })).then(function(full){
+            var stops = []; var names = [];
+            full.forEach(function(route){ names.push(route.name); stops = stops.concat(extractStops(route)); });
+            done(stops, names, total, mine.length);
+          });
+        })
+        .catch(function(e){ fail(e); });
+    } catch(e) { fail(e); }
+  })();`;
+}
+
+/** Run a script in the Goodshuffle WebView and resolve its return value (or null). */
+async function evalInGoodshuffle(script: string, timeoutMs = 20000): Promise<unknown> {
+  return callBridge((b, id) => b.evalInGoodshuffle!(id, script), timeoutMs);
+}
+
+// Pull today's route by shipping the extraction script to the Goodshuffle WebView and
+// polling its result global — the whole extraction lives in the web (Fly-deployable).
+async function importViaEval(truckId: string): Promise<GsResult | null> {
+  const key = `r${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
+  const match = goodshuffleMatch(truckId);
+  // Kick off the async extraction (returns immediately; stashes to window.__gsRoute[key]).
+  await evalInGoodshuffle(goodshuffleExtractionScript(key, match), 15000);
+  const pollScript = `(function(){try{return (window.__gsRoute && window.__gsRoute[${JSON.stringify(
+    key,
+  )}]) || null;}catch(e){return null;}})()`;
+  // Poll until the fetches complete (~15s budget).
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const res = (await evalInGoodshuffle(pollScript, 8000)) as GsResult | null;
+    if (res && (res.ok !== undefined || res.error)) return res;
+  }
+  return null;
+}
+
 /**
  * Pull today's route for this truck from the kiosk's logged-in Goodshuffle session.
  * Returns a diagnostic result so the caller can tell the driver WHY nothing loaded
  * (old app build, timeout, Goodshuffle signed out, or simply no route today) instead of
  * silently dropping to manual entry.
+ *
+ * PRIMARY path runs the extraction in the web via `evalInGoodshuffle` (so route/phone
+ * fixes ship by a Fly deploy). FALLBACK is the native `importGoodshuffleRoute` (older
+ * behavior) if the generic eval hatch is somehow absent or yields nothing — so the pull
+ * can never regress below what the APK already did.
  */
 export async function importGoodshuffleRouteViaKiosk(truckId: string): Promise<ImportResult> {
   const b = bridge();
   if (!b) return { inKiosk: false, ok: false, stops: [] };
-  if (typeof b.importGoodshuffleRoute !== "function") {
-    return { inKiosk: true, ok: false, stops: [], error: "old_app_build_no_import" };
+
+  const shape = (res: GsResult | null, fallbackError: string): ImportResult =>
+    res
+      ? {
+          inKiosk: true,
+          ok: Boolean(res.ok),
+          stops: Array.isArray(res.stops) ? res.stops : [],
+          error: res.error,
+          total: res.total,
+          matched: res.matched,
+        }
+      : { inKiosk: true, ok: false, stops: [], error: fallbackError };
+
+  // Primary: web-owned extraction via the generic eval hatch.
+  if (typeof b.evalInGoodshuffle === "function") {
+    const res = await importViaEval(truckId);
+    // A clean result (ok true/false, or an in-page error) is authoritative.
+    if (res && (res.ok || res.error)) return shape(res, "no_response_timeout");
+    // Empty/no-response → fall through to the native path if available.
   }
-  const res = (await callBridge((bridgeObj, id) => bridgeObj.importGoodshuffleRoute!(id, truckId))) as
-    | { ok?: boolean; stops?: ImportedStop[]; error?: string; total?: number; matched?: number }
-    | null;
-  if (!res) return { inKiosk: true, ok: false, stops: [], error: "no_response_timeout" };
-  return {
-    inKiosk: true,
-    ok: Boolean(res.ok),
-    stops: Array.isArray(res.stops) ? res.stops : [],
-    error: res.error,
-    total: res.total,
-    matched: res.matched,
-  };
+
+  // Fallback: native extraction baked into the APK.
+  if (typeof b.importGoodshuffleRoute === "function") {
+    const res = (await callBridge((bo, id) => bo.importGoodshuffleRoute!(id, truckId))) as GsResult | null;
+    return shape(res, "no_response_timeout");
+  }
+
+  return { inKiosk: true, ok: false, stops: [], error: "old_app_build_no_import" };
 }
