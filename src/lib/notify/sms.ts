@@ -17,9 +17,28 @@ export function smsConfigured(): boolean {
   return Boolean(process.env.OPENPHONE_API_KEY && process.env.OPENPHONE_FROM);
 }
 
+/**
+ * Coerce a phone number to E.164, which is what OpenPhone requires. Goodshuffle's
+ * validated `e164PhoneNumber` already is; but the raw `renter.phone` ("(301) 640-0251")
+ * and hand-typed numbers are not. US-defaults a bare 10-digit / 1+10-digit number.
+ * Returns "" if it can't form a plausible number, so the caller reports it cleanly.
+ */
+export function toE164(raw: string): string {
+  const trimmed = (raw || "").trim();
+  if (/^\+\d{8,15}$/.test(trimmed)) return trimmed; // already E.164
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  if (trimmed.startsWith("+") && digits.length >= 8) return `+${digits}`;
+  return "";
+}
+
 export async function sendSms(to: string, body: string): Promise<SmsResult> {
   if (!smsConfigured()) return { ok: false, skipped: true, error: "sms not configured" };
-  if (!to) return { ok: false, error: "no recipient phone" };
+  const e164 = toE164(to);
+  if (!e164) {
+    return { ok: false, error: to ? `invalid recipient phone: ${to}` : "no recipient phone" };
+  }
   try {
     const res = await fetch("https://api.openphone.com/v1/messages", {
       method: "POST",
@@ -29,7 +48,7 @@ export async function sendSms(to: string, body: string): Promise<SmsResult> {
       },
       body: JSON.stringify({
         from: process.env.OPENPHONE_FROM,
-        to: [to],
+        to: [e164],
         content: body,
       }),
     });
