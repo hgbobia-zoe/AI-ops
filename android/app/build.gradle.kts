@@ -23,8 +23,8 @@ android {
         applicationId = "com.zoeevents.dispatch.kiosk"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.0.11"
+        versionCode = 13
+        versionName = "1.0.12"
 
         // Configurable endpoints exposed to code as BuildConfig fields. Config.kt
         // reads these as its defaults and allows a runtime override on top.
