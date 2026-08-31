@@ -1,18 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { createElement, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ExternalLink, Maximize2, Lock, Play } from "lucide-react";
+import { ExternalLink, Maximize2, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { RouteScreen } from "@/components/RouteScreen";
-import { getBoundTruck, verifyPin, type TruckBinding } from "@/lib/device";
+import { clearTruck, getBoundTruck, type TruckBinding } from "@/lib/device";
 import {
   acquireWakeLock,
   enterFullscreen,
   exitFullscreen,
   gsproEmbed,
+  GSPRO_PARTITION,
   gsproUrl,
+  gsproWebview,
+  isNativeAndroid,
   keepAwake,
   openGoodshuffle,
 } from "@/lib/kiosk";
@@ -23,6 +25,26 @@ export default function KioskPage() {
   const [started, setStarted] = useState(false);
 
   useEffect(() => {
+    // Detect + cache the native-Android flag FIRST, while `?native=android` is still in
+    // the URL. The cold-start redirect below client-navigates to /select and back, which
+    // drops the query string — so if we don't persist the flag here, isNativeAndroid()
+    // returns false on the way back and the app renders the wrong (web/Electron) layout:
+    // StartOverlay + an in-page Goodshuffle pane instead of the native RouteScreen.
+    isNativeAndroid();
+
+    // On a fresh app launch (cold start), always return to the truck picker with a
+    // clean slate instead of resuming a possibly-stale route. We detect a cold start by
+    // sessionStorage being empty — in a native WebView that resets when the app is fully
+    // closed and reopened, but survives a background resume or in-app navigation.
+    let coldStart = false;
+    try {
+      coldStart = sessionStorage.getItem("zoeSessionActive") !== "1";
+      if (coldStart) sessionStorage.setItem("zoeSessionActive", "1");
+    } catch {
+      /* ignore */
+    }
+    if (coldStart) clearTruck();
+
     const bound = getBoundTruck();
     if (!bound) {
       router.replace("/select");
@@ -47,11 +69,26 @@ export default function KioskPage() {
   }
 
   // One user gesture unlocks fullscreen + wake lock + launching Goodshuffle.
+  // When GSPRO is embedded in-pane (Electron kiosk shell), we must NOT also spawn
+  // a separate window — the iframe pane already shows it.
+  // Inside the Android APK the native shell already shows Goodshuffle beside us, so we
+  // render ONLY the dispatch UI (full width) — no in-app Goodshuffle pane. (Goodshuffle
+  // can't be iframed anyway; the native top-level WebView is what makes its login work.)
+  const native = isNativeAndroid();
+
   async function startShift() {
     await enterFullscreen();
     await acquireWakeLock();
-    openGoodshuffle();
+    if (!native && !gsproEmbed()) openGoodshuffle();
     setStarted(true);
+  }
+
+  if (native) {
+    return (
+      <div className="h-dvh w-dvw overflow-hidden">
+        <RouteScreen truck={truck} kiosk onChangeTruck={() => router.replace("/select")} />
+      </div>
+    );
   }
 
   if (!started) {
@@ -99,6 +136,19 @@ function StartOverlay({
 }
 
 function GsproPane() {
+  // Electron kiosk shell: a <webview> makes GSPRO first-party, so login works and
+  // persists. (<webview> isn't a standard JSX element, so build it via createElement
+  // to keep TypeScript happy; it only functions inside the Electron shell.)
+  if (gsproWebview()) {
+    return createElement("webview", {
+      src: gsproUrl(),
+      partition: GSPRO_PARTITION,
+      allowpopups: "true",
+      className: "h-full w-full border-0",
+    });
+  }
+  // Header-stripping setups (browser extension / reverse proxy) can use a plain
+  // iframe — but note GSPRO login may fail there due to third-party cookies.
   if (gsproEmbed()) {
     return (
       <iframe
@@ -136,30 +186,20 @@ function GsproPane() {
 
 function ExitKiosk({ onExit }: { onExit: () => void }) {
   const [prompting, setPrompting] = useState(false);
-  const [pin, setPin] = useState("");
-  const [err, setErr] = useState(false);
 
   function attempt() {
-    if (verifyPin(pin)) {
-      void exitFullscreen();
-      onExit();
-    } else {
-      setErr(true);
-    }
+    void exitFullscreen();
+    onExit();
   }
 
   return (
     <>
       <button
-        onClick={() => {
-          setPin("");
-          setErr(false);
-          setPrompting(true);
-        }}
+        onClick={() => setPrompting(true)}
         aria-label="Exit kiosk"
         className="fixed bottom-3 right-3 z-30 flex size-9 items-center justify-center rounded-full bg-card/70 text-muted-foreground backdrop-blur hover:text-foreground"
       >
-        <Lock className="size-4" />
+        <Maximize2 className="size-4" />
       </button>
 
       {prompting && (
@@ -167,22 +207,11 @@ function ExitKiosk({ onExit }: { onExit: () => void }) {
           <div className="w-full max-w-xs space-y-4 rounded-2xl border bg-card p-6">
             <div className="flex items-center gap-2">
               <Maximize2 className="size-5 text-muted-foreground" />
-              <h3 className="text-lg font-semibold">Exit kiosk</h3>
+              <h3 className="text-lg font-semibold">Exit kiosk?</h3>
             </div>
             <p className="text-sm text-muted-foreground">
-              Enter the tablet PIN to leave kiosk mode.
+              Leave kiosk mode and return to the standard view.
             </p>
-            <Input
-              inputMode="numeric"
-              value={pin}
-              autoFocus
-              onChange={(e) => {
-                setPin(e.target.value);
-                setErr(false);
-              }}
-              placeholder="PIN"
-            />
-            {err && <p className="text-sm text-destructive">Incorrect PIN.</p>}
             <div className="flex gap-2">
               <Button
                 variant="outline"

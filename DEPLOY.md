@@ -1,109 +1,232 @@
-# Deploy — Zoe Dispatch (all code, no Zapier)
+# Deploy & Configure — Zoe Dispatch
 
 One self-contained container: the Next.js app + the Goodshuffle scraper
-(Playwright/Chromium, in-process) + the SQLite database + the notification
-integrations (SMS, Slack, tracking). Deploy it to a managed container host and
-point your domain (or a WordPress page) at it.
+(Playwright/Chromium, in-process) + the SQLite database + proof-of-delivery file
+storage + the notification/ETA integrations. It needs a **persistent volume**, so it
+runs on a container host (Fly.io), **not** Vercel.
 
 ```
-Tablet ──▶ Next.js app ──▶ SQLite (routes, stops, events, messages, exceptions, audit)
+Tablet ──▶ Next.js app ──▶ SQLite + POD files  (on the /data volume)
                 │
                 ├─ Start Route ─▶ Playwright + Claude Computer Use ─▶ Goodshuffle
-                └─ each action ─▶ OpenPhone SMS · Slack · /track/<token> link
+                ├─ each action ─▶ OpenPhone SMS · Slack · /track/<token> link
+                └─ live ETA    ─▶ Zonar (truck GPS → drive time)
+Dashboard (/dispatch) ─▶ split view with Ignition (fleet telematics)
 ```
 
-Nothing is manual/no-code — configuration is just environment variables.
+Everything is configured with **environment variables** — no code changes to turn
+features on. The app runs fully with them all **off** (mock routes; SMS/Slack logged
+as "would send"; planned ETA; full-width dashboard).
 
 ---
 
-## 1. Environment variables
+## Live deployment
 
-Set these as host secrets (all optional except where noted — unset integrations
-simply log what they'd do). Full list + examples in [.env.example](.env.example).
+- **URL:** https://zoe-dispatch.fly.dev
+- **Fly app:** `zoe-dispatch` · org **Zoe Events** (`personal`) · region `iad`
+- **Machine:** 1 × shared-cpu-1x / 1 GB · **Volume:** `dispatch_data` (1 GB) at `/data`
+- **State today:** mock mode, **no app auth** (open). See _TODO_ at the bottom.
 
-| Var | Purpose |
-|---|---|
-| `PUBLIC_BASE_URL` | Public URL of this app (builds customer tracking links). **Set this.** |
-| `DATABASE_PATH` | SQLite file path (default `/data/dispatch.db` in the container). |
-| `VEHICLES_JSON` | Truck list, e.g. `[{"truckId":"T-05","name":"Truck 5"}]`. |
-| `ANTHROPIC_API_KEY` | Enables the real Goodshuffle scraper (Computer Use). Unset → mock routes. |
-| `GOODSHUFFLE_URL` | `https://pro.goodshuffle.com/app/rms/dashboard` |
-| `GOODSHUFFLE_STORAGE_STATE` | Path to a saved login (see §4). |
-| `OPENPHONE_API_KEY` / `OPENPHONE_FROM` | Customer SMS (Quo/OpenPhone). |
-| `SLACK_WEBHOOK_URL` | Slack alerts. |
-
----
-
-## 2. Deploy to Fly.io (recommended)
-
-A [fly.toml](fly.toml) and [Dockerfile](Dockerfile) are included. One machine + a
-volume for SQLite.
+### Redeploy (after code changes)
 
 ```bash
-fly launch --no-deploy            # uses the included fly.toml; pick an app name/region
-fly volumes create dispatch_data --size 1 --region iad
-fly secrets set \
-  PUBLIC_BASE_URL=https://<app>.fly.dev \
-  ANTHROPIC_API_KEY=... \
-  OPENPHONE_API_KEY=... OPENPHONE_FROM=+1301... \
-  SLACK_WEBHOOK_URL=... \
-  VEHICLES_JSON='[{"truckId":"T-05","name":"Truck 5"}]'
-fly deploy
+fly deploy --app zoe-dispatch --remote-only
 ```
 
-> SQLite lives on the volume, and volumes are per-machine — keep it to **one
-> machine** (`min_machines_running = 1`, auto-stop off, already set in fly.toml).
+Fly builds the image on its remote builder (the local image is large) and rolls the
+single machine. `flyctl` lives at `~/.fly/bin/flyctl.exe`; sign in once with
+`fly auth login` (opens your browser → Continue with Google).
 
-## 2b. Deploy to Railway (alternative)
-
-1. New Project → Deploy from GitHub repo → it detects the `Dockerfile`.
-2. Add a **Volume** mounted at `/data`.
-3. Add the env vars from §1 (set `DATABASE_PATH=/data/dispatch.db`).
-4. Set the service to **1 replica** (SQLite is single-writer).
+> SQLite + uploaded photos live on the volume, and volumes are per-machine — keep it
+> to **one machine** (already set: `min_machines_running = 1`, auto-stop off).
 
 ---
 
-## 3. Put it under your domain / WordPress
+## Where to set the values on Fly
 
-The app can't run *inside* WordPress (WP is PHP), but you can surface it under your
-domain two easy ways:
+Every item below (except the Goodshuffle login file) is a **Fly secret**. Two ways:
 
-- **Subdomain (cleanest):** point `dispatch.zoeeventsdmv.com` at the host (Fly/Railway
-  gives you a CNAME/target). Set `PUBLIC_BASE_URL` to that subdomain.
-- **Embed in a WordPress page:** add an HTML block with an iframe:
-  ```html
-  <iframe src="https://dispatch.zoeeventsdmv.com" style="width:100%;height:90vh;border:0" allow="fullscreen"></iframe>
-  ```
-  (Drivers can still "Add to Home Screen" from the subdomain for the full-screen PWA.)
+**A) Fly dashboard (web UI)** — the simplest for pasting API keys:
+1. Go to **https://fly.io/apps/zoe-dispatch**
+2. In the left sidebar, click **Secrets**  (direct: https://fly.io/apps/zoe-dispatch/secrets)
+3. Enter the **name** (e.g. `SLACK_WEBHOOK_URL`) and **value**, click **Set / Save**.
+4. Fly redeploys the machine automatically (~30s). Repeat per secret.
+
+**B) CLI** — good for setting several at once:
+```bash
+fly secrets set --app zoe-dispatch \
+  SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..." \
+  OPENPHONE_API_KEY="..." OPENPHONE_FROM="+13015551234"
+```
+Each `fly secrets set` triggers one redeploy. To stage several without deploying yet,
+add `--stage`, then run `fly deploy` once.
+
+To see what's set (names only, never values): `fly secrets list --app zoe-dispatch`.
+To remove one: `fly secrets unset KEY --app zoe-dispatch`.
+
+Already set: `PUBLIC_BASE_URL`, `VEHICLES_JSON`. Baseline env (in `fly.toml`, not
+secret): `PORT`, `DATABASE_PATH=/data/dispatch.db`, `GOODSHUFFLE_STORAGE_STATE`.
 
 ---
 
-## 4. Capture the Goodshuffle login (once)
+## The items — what, how to get it, which key
 
-So the scraper logs in without a password in code:
+### ① Real route scraping (replaces mock routes) — needs BOTH
+| Item | How to get it | Fly key / where |
+|---|---|---|
+| Anthropic API key | [console.anthropic.com](https://console.anthropic.com) → **API Keys** → Create Key (paid, usage-based) | secret `ANTHROPIC_API_KEY` |
+| Goodshuffle login | Capture it once (see **§ Goodshuffle login** below) | file at `/data/goodshuffle-auth.json` (path already set) |
+| Goodshuffle URL | Default is correct: the RMS dispatch dashboard | secret `GOODSHUFFLE_URL` (optional) |
+
+### ② Customer texts (Quo / OpenPhone)
+| Item | How to get it | Fly key |
+|---|---|---|
+| OpenPhone API key | OpenPhone web app → **Settings → API** → generate key (needs a Business plan) | `OPENPHONE_API_KEY` |
+| Sending number | Your OpenPhone number in E.164, e.g. `+13015551234` | `OPENPHONE_FROM` |
+
+### ③ Slack alerts
+| Item | How to get it | Fly key |
+|---|---|---|
+| Incoming webhook | [api.slack.com/apps](https://api.slack.com/apps) → create app → **Incoming Webhooks** → activate → **Add New Webhook to Workspace** → pick a channel → copy the `https://hooks.slack.com/services/…` URL | `SLACK_WEBHOOK_URL` |
+| Failure-alert throttle | Optional. Seconds an identical failure is suppressed after its first post, so a persistent outage can't spam the channel. **Default `600`** (10 min). | `ALERT_THROTTLE_SECONDS` |
+
+The same webhook carries two kinds of message: the normal operational updates
+(departed / arrived / completed / exception), **and** `⛔ Zoe Dispatch failure` alerts
+whenever an integration call actually fails — a customer/coordinator SMS the provider
+rejected, GPS TrackIt (Zonar) or Google Maps erroring, a route scrape that failed, or
+any unexpected fan-out error. Skipped-because-unconfigured cases (e.g. SMS keys unset)
+are **not** alerted — only genuine failures. Identical failures are throttled per
+`ALERT_THROTTLE_SECONDS` above.
+
+### ④ Live drive-time ETA (Zonar)
+| Item | How to get it | Fly key |
+|---|---|---|
+| Zonar account creds | From your Zonar account / rep: customer id + API username + password | `ZONAR_CUSTOMER`, `ZONAR_USERNAME`, `ZONAR_PASSWORD` |
+| Truck → asset map | Your Zonar asset/GPS ids per truck | `ZONAR_ASSETS_JSON` — e.g. `{"NPR-1":"1234","NPR-2":"1235"}` |
+| ETA action name | From Zonar API docs/support (their docs are login-gated; confirm the `showeta`-style action) | `ZONAR_ETA_ACTION` |
+| Timezone | For arrival clock times (default America/New_York) | `ETA_TIMEZONE` |
+
+### ⑤ Dashboard split view (Ignition)
+| Item | How to get it | Fly key |
+|---|---|---|
+| Ignition web URL | The URL you open to see Ignition's fleet view | `IGNITION_URL` |
+| Force iframe | Only if Ignition permits framing; otherwise it opens as a tiled window / webview | `IGNITION_EMBED="true"` |
+
+### ⑥ Optional — traffic-aware ETA fallback / geocoding
+| Item | How to get it | Fly key |
+|---|---|---|
+| Google Maps key | [console.cloud.google.com](https://console.cloud.google.com) → new project → enable **Geocoding API** + **Directions API** → **Credentials** → API key (billing required) | `GOOGLE_MAPS_API_KEY` |
+
+Full list with inline notes: [.env.example](.env.example).
+
+---
+
+## Goodshuffle login (the storage-state file)
+
+`GOODSHUFFLE_STORAGE_STATE` is **not** a pasted secret — it's a saved browser session
+(cookies + local storage) so the scraper starts already logged in, without a password
+in code. Capture it once:
 
 ```bash
+# On any machine with the repo:
 npx playwright open --save-storage=goodshuffle-auth.json https://pro.goodshuffle.com/app/rms/dashboard
-# log in by hand, close the window, then upload the file to the volume and set:
-#   GOODSHUFFLE_STORAGE_STATE=/data/goodshuffle-auth.json
+# → a browser opens; log into Goodshuffle by hand, then close the window.
+# goodshuffle-auth.json now holds the session.
 ```
 
-Re-capture when the session expires.
+Then upload it to the Fly volume (the app reads `/data/goodshuffle-auth.json`):
+
+```bash
+fly ssh sftp shell --app zoe-dispatch
+# at the prompt:
+put goodshuffle-auth.json /data/goodshuffle-auth.json
+```
+
+Re-capture when the session expires. (Ping me and I'll script this end-to-end.)
 
 ---
 
-## 5. Turning integrations on
+## Optional — custom domain
 
-Everything works with integrations **off** (routes load, actions persist, the UI is
-fully usable; SMS/Slack are logged as "would send"). Flip each on by adding its keys:
+Point a subdomain at the app instead of `*.fly.dev`:
 
-- **SMS:** `OPENPHONE_API_KEY` + `OPENPHONE_FROM` (your OpenPhone number, E.164).
-- **Slack:** `SLACK_WEBHOOK_URL` (an Incoming Webhook).
-- **Real scraping:** `ANTHROPIC_API_KEY` + the saved Goodshuffle login.
+```bash
+fly certs add dispatch.zoeeventsdmv.com --app zoe-dispatch   # prints the DNS records to add
+```
+Add the shown CNAME/A/AAAA records at your DNS provider, then update
+`PUBLIC_BASE_URL=https://dispatch.zoeeventsdmv.com` (so tracking links use it).
+You can also embed the app in a WordPress page with an `<iframe>`.
+
+---
+
+## Kiosk / dashboard desktop shells (optional)
+
+The truck tablet and the dashboard can run in the Electron shell so Goodshuffle /
+Ignition embed fully with persistent login (`kiosk-shell/`):
+
+```bash
+cd kiosk-shell && npm install
+APP_URL=https://zoe-dispatch.fly.dev npm start                # truck kiosk (app + Goodshuffle)
+APP_URL=https://zoe-dispatch.fly.dev IGNITION_URL="..." npm run dashboard   # office dashboard (board + Ignition)
+```
+
+---
+
+## Android kiosk — updates (OTA)
+
+Two layers update independently:
+
+- **The dispatch app (UI, features, fixes)** is a web app the kiosk loads from
+  `zoe-dispatch.fly.dev`. It updates the instant you deploy the server — **no APK work,
+  nothing to touch on the tablets.** This is the vast majority of changes.
+- **The native shell (the APK itself** — JS bridge, kiosk-lock behavior, WebView
+  settings) changes rarely. For that, the app **self-updates over the air.**
+
+### One-time setup
+1. Set a publish token as a Fly secret (any long random string):
+   ```bash
+   fly secrets set --app zoe-dispatch KIOSK_PUBLISH_TOKEN="$(openssl rand -hex 24)"
+   ```
+2. Sideload the current signed APK on each tablet **once** (the first OTA-capable build
+   can't install itself). From then on, updates are automatic.
+
+### Pushing a native update
+1. Bump `versionCode` in `android/app/build.gradle.kts` (tablets only update to a
+   HIGHER versionCode).
+2. Build the signed release APK (see `android/README`), then publish:
+   ```bash
+   cd android
+   export KIOSK_PUBLISH_TOKEN=...        # same value as the Fly secret
+   ./publish-ota.sh "what changed"
+   ```
+   That POSTs the APK to `/api/kiosk/publish`, which stores it on the volume. Each
+   tablet checks `/api/kiosk/latest` on launch and every 6h, downloads, verifies the
+   sha256, and installs — **silently**, because the kiosk runs as device owner.
+
+Safety: the endpoint is disabled until `KIOSK_PUBLISH_TOKEN` is set, and Android only
+installs an update signed with the **same Zoe release key** (kept off-repo on your
+machine) — so a leaked token alone cannot push a malicious build.
+
+---
+
+## Tests
+
+```bash
+npm test          # Vitest — state machine, parsers, DB dedupe/roundtrip
+```
+
+---
+
+## TODO before real customer traffic
+
+- **App authentication** — the app is currently open (anyone with the URL can drive
+  state / trigger texts). Add sign-in before wiring OpenPhone with a real key.
+- Point the truck tablets at `https://zoe-dispatch.fly.dev` (Add to Home Screen for
+  the full-screen PWA).
 
 ## Local dev
 
 ```bash
 npm install
-npm run dev      # http://localhost:3000 — mock routes, integrations logged, SQLite at ./data/dispatch.db
+npm run dev       # http://localhost:3000 — mock routes, integrations logged, SQLite at ./data/dispatch.db
 ```

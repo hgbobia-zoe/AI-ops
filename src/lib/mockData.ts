@@ -4,11 +4,11 @@
 
 import type { Route, Stop, Vehicle } from "./types";
 
+// Truck designations are provisional — will be renamed later.
 export const MOCK_VEHICLES: Vehicle[] = [
-  { truckId: "T-05", name: "Truck 5", plate: "ZOE-105", active: true },
-  { truckId: "T-06", name: "Truck 6", plate: "ZOE-106", active: true },
-  { truckId: "T-07", name: "Truck 7", plate: "ZOE-107", active: true },
-  { truckId: "T-08", name: "Truck 8", plate: "ZOE-108", active: true },
+  { truckId: "NPR-1", name: "Isuzu NPR 1", active: true },
+  { truckId: "NPR-2", name: "Isuzu NPR 2", active: true },
+  { truckId: "E450", name: "Ford E450", active: true },
 ];
 
 function mockStop(seq: number, over: Partial<Stop>): Stop {
@@ -44,6 +44,9 @@ export function mockRoute(truckId: string, date: string): Route {
       custName: "Riverside Weddings",
       custPhone: "+15555550122",
       address: "88 Lakeview Dr, Springfield",
+      // This event has a day-of coordinator — texts go to them too.
+      dayOfName: "Jordan (Coordinator)",
+      dayOfPhone: "+15555550190",
       plannedWindow: "3:00p – 5:00p",
       eta: "3:40p",
     }),
@@ -56,7 +59,10 @@ export function mockRoute(truckId: string, date: string): Route {
       plannedWindow: "5:00p – 7:00p",
       eta: "5:20p",
     }),
-  ].map((s) => ({ ...s, routeId }));
+    // stop_id is a global primary key, so it must be unique across ALL routes —
+    // scope it to the routeId (not just the sequence) or a second truck's mock
+    // route collides with the first's S-1/S-2/S-3.
+  ].map((s) => ({ ...s, routeId, stopId: `${routeId}-S${s.sequence}` }));
 
   return {
     routeId,

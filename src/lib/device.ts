@@ -1,6 +1,5 @@
 // Per-tablet device binding. Drivers do not log in — the tablet is bound once to
-// a truck and remembers it. A short PIN can lock the binding so a stray tap can't
-// silently switch trucks mid-route.
+// a truck and remembers it. Switching trucks is done from the header menu.
 
 "use client";
 
@@ -10,7 +9,6 @@ export interface TruckBinding {
   truckId: string;
   name: string;
   boundAt: string; // ISO8601
-  pin?: string; // optional lock; empty means unlocked
 }
 
 export function getBoundTruck(): TruckBinding | null {
@@ -24,22 +22,14 @@ export function getBoundTruck(): TruckBinding | null {
   }
 }
 
-export function bindTruck(truckId: string, name: string, pin?: string): TruckBinding {
+export function bindTruck(truckId: string, name: string): TruckBinding {
   const binding: TruckBinding = {
     truckId,
     name,
     boundAt: new Date().toISOString(),
-    pin: pin || undefined,
   };
   window.localStorage.setItem(appConfig.storage.truck, JSON.stringify(binding));
   return binding;
-}
-
-/** Returns true if the PIN matches (or no PIN is set). */
-export function verifyPin(pin: string): boolean {
-  const b = getBoundTruck();
-  if (!b?.pin) return true;
-  return b.pin === pin;
 }
 
 export function clearTruck(): void {

@@ -58,13 +58,14 @@ export interface ActionPayloads {
   START_ROUTE: { date: string };
   HEADING_NEXT: {
     checklist: ChecklistResult;
-    signatureUrl?: string;
-    photosRef?: string;
+    /** Proof-of-delivery references (ids from POST /api/pod). */
+    photoIds?: string[];
+    signatureId?: string;
   };
   COMPLETE_AND_RETURN: {
     checklist: ChecklistResult;
-    signatureUrl?: string;
-    photosRef?: string;
+    photoIds?: string[];
+    signatureId?: string;
   };
   REPORT_EXCEPTION: { type: ExceptionType; reason: string };
   [key: string]: Record<string, unknown> | undefined;
@@ -114,13 +115,18 @@ export interface Stop {
   custName: string;
   custPhone: string;
   address: string;
+  // Optional day-of coordinator for this event. When present, "on the way" /
+  // "arrived" texts go to them as well as the customer.
+  dayOfName?: string;
+  dayOfPhone?: string;
   plannedWindow?: string;
   eta?: string;
   arrivedAt?: string;
   completedAt?: string;
   trackingLinkId?: string;
-  signatureUrl?: string;
-  photosRef?: string;
+  /** Proof of delivery captured at completion. */
+  photoIds?: string[];
+  signatureId?: string;
 }
 
 export type RouteStatus =

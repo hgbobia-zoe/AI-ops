@@ -1,0 +1,19 @@
+# Copy to `kiosk.properties` (same folder as settings.gradle.kts) to override the
+# built-in defaults at BUILD time, without editing source. All keys are optional.
+# The file is git-ignored. Values here can also be supplied as environment variables.
+
+# Zoe Dispatch web app (the Next.js PWA).
+APP_URL=https://zoe-dispatch.fly.dev
+
+# Goodshuffle Pro dashboard shown side-by-side.
+GSPRO_URL=https://pro.goodshuffle.com/app/rms/dashboard
+
+# Zonar Ignition — loaded in the HIDDEN WebView that holds a logged-in session for
+# customer ETA-link generation.
+IGNITION_URL=https://ignition.zonarsystems.com/app/realtimemaps/main
+
+# PIN that unlocks / exits the kiosk (long-press top-left corner).
+EXIT_PIN=1379
+
+# PIN that reveals the hidden Ignition WebView (long-press top-right corner).
+UNHIDE_PIN=1379

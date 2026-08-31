@@ -11,6 +11,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ComputerDriver, IngestResult } from "./types";
 import type { Stop } from "@/lib/types";
+import { normalizePhone } from "./dayOfContact";
 
 const MODEL = process.env.INGEST_MODEL || "claude-opus-5";
 const MAX_TURNS = Number(process.env.INGEST_MAX_TURNS || 40);
@@ -33,6 +34,15 @@ const SUBMIT_ROUTE_TOOL = {
             custName: { type: "string" },
             custPhone: { type: "string" },
             address: { type: "string" },
+            dayOfName: {
+              type: "string",
+              description:
+                "Name of the day-of coordinator / 'Day of Contact', if the stop lists one. Omit if none.",
+            },
+            dayOfPhone: {
+              type: "string",
+              description: "Phone of the day-of coordinator, if listed. Omit if none.",
+            },
             plannedWindow: { type: "string", description: "delivery time window" },
             eta: { type: "string" },
           },
@@ -49,6 +59,8 @@ interface SubmittedStop {
   custName: string;
   custPhone?: string;
   address: string;
+  dayOfName?: string;
+  dayOfPhone?: string;
   plannedWindow?: string;
   eta?: string;
 }
@@ -74,8 +86,9 @@ export async function scrapeGoodshuffle(
     "You are reading a delivery dispatch route from the Goodshuffle Pro web app. " +
     "Scroll through today's route for the selected truck, read every stop in order " +
     "(customer name, address, phone, time window, ETA, and whether it is a Delivery, " +
-    "Pickup, or Warehouse stop), then call submit_route with all stops. Do not modify " +
-    "anything in Goodshuffle — only read.";
+    "Pickup, or Warehouse stop). If a stop lists a day-of coordinator / 'Day of Contact' " +
+    "(a name and/or phone), include it as dayOfName/dayOfPhone; omit when absent. Then " +
+    "call submit_route with all stops. Do not modify anything in Goodshuffle — only read.";
 
   // Seed the conversation with the first screenshot.
   const first = await driver.screenshot();
@@ -187,14 +200,18 @@ function assembleStops(submitted: SubmittedStop[], routeId: string): Stop[] {
     .slice()
     .sort((a, b) => a.sequence - b.sequence)
     .map((s, i) => ({
-      stopId: `S-${i + 1}`,
+      // Route-scope the id: stop_id is a global PK, so a bare `S-1` would collide
+      // across trucks/routes in the shared DB.
+      stopId: `${routeId}-S${i + 1}`,
       routeId,
-      customerId: `C-${i + 1}`,
+      customerId: `${routeId}-C${i + 1}`,
       sequence: s.sequence ?? i + 1,
       state: "Waiting" as const,
       custName: s.custName,
       custPhone: s.custPhone ?? "",
       address: s.address,
+      dayOfName: s.dayOfName || undefined,
+      dayOfPhone: s.dayOfPhone ? normalizePhone(s.dayOfPhone) : undefined,
       plannedWindow: s.plannedWindow,
       eta: s.eta,
     }));

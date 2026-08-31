@@ -1,14 +1,15 @@
 "use client";
 
-import { Truck, Wifi, WifiOff, RefreshCw, MoreHorizontal } from "lucide-react";
+import { useState } from "react";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  Truck,
+  Wifi,
+  WifiOff,
+  RefreshCw,
+  MoreHorizontal,
+  DownloadCloud,
+  ArrowUpCircle,
+} from "lucide-react";
 import { STATE_VISUAL } from "@/lib/stateVisual";
 import type { Stop } from "@/lib/types";
 
@@ -20,6 +21,8 @@ export function Header({
   queuedCount,
   onChangeTruck,
   onRefresh,
+  onPullRoute,
+  onCheckUpdate,
 }: {
   truckName: string;
   stops: Stop[];
@@ -28,7 +31,18 @@ export function Header({
   queuedCount: number;
   onChangeTruck: () => void;
   onRefresh: () => void;
+  onPullRoute?: () => void;
+  onCheckUpdate?: () => void;
 }) {
+  // Plain, self-contained dropdown — no Base UI menu (its portal + pointer-capture can
+  // fail to open inside older Android System WebViews). This uses only onClick + a
+  // backdrop, which works everywhere.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const run = (fn: () => void) => () => {
+    setMenuOpen(false);
+    fn();
+  };
+
   return (
     <header className="sticky top-0 z-20 border-b border-white/5 bg-background/70 backdrop-blur-xl">
       <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-3">
@@ -44,24 +58,52 @@ export function Header({
 
         <div className="flex items-center gap-2">
           <OnlinePill online={online} queuedCount={queuedCount} />
-          <DropdownMenu>
-            <DropdownMenuTrigger
+          <div className="relative">
+            <button
+              type="button"
               aria-label="Menu"
+              onClick={() => setMenuOpen((o) => !o)}
               className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <MoreHorizontal className="size-5" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-44">
-              <DropdownMenuLabel>{truckName}</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={onRefresh}>
-                <RefreshCw className="size-4" /> Refresh route
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={onChangeTruck}>
-                <Truck className="size-4" /> Change truck
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+            </button>
+
+            {menuOpen && (
+              <>
+                {/* backdrop closes the menu on any outside tap */}
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setMenuOpen(false)}
+                  aria-hidden
+                />
+                <div
+                  role="menu"
+                  className="absolute right-0 top-[calc(100%+6px)] z-50 min-w-52 overflow-hidden rounded-xl border bg-card p-1 shadow-xl"
+                >
+                  <div className="px-3 py-2 text-xs font-medium text-muted-foreground">
+                    {truckName}
+                  </div>
+                  <div className="my-1 h-px bg-border" />
+                  {onPullRoute && (
+                    <MenuItem onClick={run(onPullRoute)} icon={<DownloadCloud className="size-4" />}>
+                      Pull route from Goodshuffle
+                    </MenuItem>
+                  )}
+                  <MenuItem onClick={run(onRefresh)} icon={<RefreshCw className="size-4" />}>
+                    Refresh route
+                  </MenuItem>
+                  <MenuItem onClick={run(onChangeTruck)} icon={<Truck className="size-4" />}>
+                    Switch truck
+                  </MenuItem>
+                  {onCheckUpdate && (
+                    <MenuItem onClick={run(onCheckUpdate)} icon={<ArrowUpCircle className="size-4" />}>
+                      Check for updates
+                    </MenuItem>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -88,6 +130,28 @@ export function Header({
         </div>
       )}
     </header>
+  );
+}
+
+function MenuItem({
+  onClick,
+  icon,
+  children,
+}: {
+  onClick: () => void;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm text-foreground transition-colors hover:bg-accent active:bg-accent"
+    >
+      {icon}
+      {children}
+    </button>
   );
 }
 

@@ -14,11 +14,15 @@ interface StopRow {
   cust_name: string | null;
   cust_phone: string | null;
   address: string | null;
+  day_of_name: string | null;
+  day_of_phone: string | null;
   planned_window: string | null;
   eta: string | null;
   arrived_at: string | null;
   completed_at: string | null;
   tracking_token: string | null;
+  photos_ref: string | null;
+  signature_ref: string | null;
 }
 
 interface RouteRow {
@@ -40,12 +44,24 @@ function toStop(r: StopRow): Stop {
     custName: r.cust_name ?? "",
     custPhone: r.cust_phone ?? "",
     address: r.address ?? "",
+    dayOfName: r.day_of_name ?? undefined,
+    dayOfPhone: r.day_of_phone ?? undefined,
     plannedWindow: r.planned_window ?? undefined,
     eta: r.eta ?? undefined,
     arrivedAt: r.arrived_at ?? undefined,
     completedAt: r.completed_at ?? undefined,
     trackingLinkId: r.tracking_token ?? undefined,
+    photoIds: r.photos_ref ? (safeJson(r.photos_ref) as string[]) : undefined,
+    signatureId: r.signature_ref ?? undefined,
   };
+}
+
+function safeJson(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return undefined;
+  }
 }
 
 /** The current route for a truck (latest), with its stops in order. */
@@ -109,9 +125,11 @@ export function writeRoute(route: Route): void {
     db.prepare("DELETE FROM stops WHERE route_id = ?").run(rt.routeId);
     const ins = db.prepare(
       `INSERT INTO stops (stop_id, route_id, customer_id, sequence, state, cust_name,
-        cust_phone, address, planned_window, eta, arrived_at, completed_at, tracking_token)
+        cust_phone, address, day_of_name, day_of_phone, planned_window, eta, arrived_at,
+        completed_at, tracking_token)
        VALUES (@stopId, @routeId, @customerId, @sequence, @state, @custName,
-        @custPhone, @address, @plannedWindow, @eta, @arrivedAt, @completedAt, @trackingToken)`,
+        @custPhone, @address, @dayOfName, @dayOfPhone, @plannedWindow, @eta, @arrivedAt,
+        @completedAt, @trackingToken)`,
     );
     for (const s of rt.stops) {
       ins.run({
@@ -123,6 +141,8 @@ export function writeRoute(route: Route): void {
         custName: s.custName ?? null,
         custPhone: s.custPhone ?? null,
         address: s.address ?? null,
+        dayOfName: s.dayOfName ?? null,
+        dayOfPhone: s.dayOfPhone ?? null,
         plannedWindow: s.plannedWindow ?? null,
         eta: s.eta ?? null,
         arrivedAt: s.arrivedAt ?? null,
@@ -132,6 +152,70 @@ export function writeRoute(route: Route): void {
     }
   });
   tx(route);
+}
+
+export interface MessageRow {
+  toPhone: string | null;
+  body: string | null;
+  status: string | null;
+  sentAt: string;
+  stopId: string | null;
+}
+
+/** Recent outbound messages, newest first — for the dispatch dashboard. */
+export function getRecentMessages(limit = 40): MessageRow[] {
+  const rows = getDb()
+    .prepare(
+      "SELECT to_phone, body, status, sent_at, stop_id FROM messages ORDER BY sent_at DESC LIMIT ?",
+    )
+    .all(limit) as {
+    to_phone: string | null;
+    body: string | null;
+    status: string | null;
+    sent_at: string;
+    stop_id: string | null;
+  }[];
+  return rows.map((r) => ({
+    toPhone: r.to_phone,
+    body: r.body,
+    status: r.status,
+    sentAt: r.sent_at,
+    stopId: r.stop_id,
+  }));
+}
+
+export interface ExceptionRow {
+  exceptionId: string;
+  stopId: string | null;
+  type: string | null;
+  reason: string | null;
+  truckId: string | null;
+  ts: string;
+  resolved: boolean;
+}
+
+/** Unresolved exceptions, newest first — for the dispatch dashboard. */
+export function getOpenExceptions(): ExceptionRow[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM exceptions WHERE resolved = 0 ORDER BY ts DESC")
+    .all() as {
+    exception_id: string;
+    stop_id: string | null;
+    type: string | null;
+    reason: string | null;
+    truck_id: string | null;
+    ts: string;
+    resolved: number;
+  }[];
+  return rows.map((r) => ({
+    exceptionId: r.exception_id,
+    stopId: r.stop_id,
+    type: r.type,
+    reason: r.reason,
+    truckId: r.truck_id,
+    ts: r.ts,
+    resolved: Boolean(r.resolved),
+  }));
 }
 
 export function getStop(stopId: string): Stop | null {
@@ -152,6 +236,20 @@ export function updateStopState(
     db.prepare("UPDATE stops SET arrived_at = ? WHERE stop_id = ?").run(opts.arrivedAt, stopId);
   if (opts.completedAt)
     db.prepare("UPDATE stops SET completed_at = ? WHERE stop_id = ?").run(opts.completedAt, stopId);
+}
+
+/** Attach proof-of-delivery references (captured at completion) to a stop. */
+export function setStopProof(
+  stopId: string,
+  proof: { photoIds?: string[]; signatureId?: string },
+): void {
+  getDb()
+    .prepare("UPDATE stops SET photos_ref = ?, signature_ref = ? WHERE stop_id = ?")
+    .run(
+      proof.photoIds?.length ? JSON.stringify(proof.photoIds) : null,
+      proof.signatureId ?? null,
+      stopId,
+    );
 }
 
 /** Move the next stop (by sequence) of a route into EnRoute; return it. */
@@ -305,20 +403,27 @@ export interface TrackingView {
   active: boolean;
   expiresAt: string | null;
   stop: Stop | null;
+  truckId: string | null;
 }
 
 export function getTracking(token: string): TrackingView | null {
   const db = getDb();
   const link = db
     .prepare("SELECT * FROM tracking_links WHERE token = ?")
-    .get(token) as { token: string; stop_id: string; active: number; expires_at: string } | undefined;
+    .get(token) as
+    | { token: string; stop_id: string; route_id: string; active: number; expires_at: string }
+    | undefined;
   if (!link) return null;
   const stop = getStop(link.stop_id);
+  const route = db
+    .prepare("SELECT truck_id FROM routes WHERE route_id = ?")
+    .get(link.route_id) as { truck_id: string } | undefined;
   return {
     token: link.token,
     active: Boolean(link.active),
     expiresAt: link.expires_at ?? null,
     stop,
+    truckId: route?.truck_id ?? null,
   };
 }
 

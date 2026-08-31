@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Foreground for the adaptive launcher icon: a white "Z" (Zoe) centred in the 108dp
+  safe zone on the black background. Monochrome-safe.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,38 h32 v9 l-19,23 h19 v9 h-33 v-9 l19,-23 h-18 z" />
+</vector>

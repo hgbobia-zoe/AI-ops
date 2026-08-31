@@ -9,12 +9,12 @@
 import type { Route } from "@/lib/types";
 import { mockRoute } from "@/lib/mockData";
 import { writeRoute, setRouteStatus } from "@/lib/db/repo";
+import { alertOps } from "@/lib/notify/alert";
+import { todayInOpsTz } from "@/lib/dates";
 import { PlaywrightDriver } from "./playwrightDriver";
 import { scrapeGoodshuffle } from "./computerUseAgent";
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+const today = todayInOpsTz;
 
 function realScraperEnabled(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY) && process.env.INGEST_MODE !== "mock";
@@ -31,6 +31,12 @@ export function startIngestion(truckId: string, date = today()): Route {
 
 async function runIngest(truckId: string, date: string, routeId: string): Promise<void> {
   try {
+    // Manual mode: Goodshuffle is behind Cloudflare (no automated scrape), so skip
+    // straight to the manual-entry / route-import flow instead of a doomed scrape.
+    if (process.env.INGEST_MODE === "manual") {
+      setRouteStatus(routeId, "failed");
+      return;
+    }
     if (!realScraperEnabled()) {
       await new Promise((r) => setTimeout(r, 1500));
       writeRoute({ ...mockRoute(truckId, date), status: "ready" });
@@ -47,6 +53,7 @@ async function runIngest(truckId: string, date: string, routeId: string): Promis
       } else {
         console.error(`[ingest] scrape failed truck=${truckId}: ${result.error}`);
         setRouteStatus(routeId, "failed");
+        void alertOps("Route scrape (Goodshuffle)", `truck ${truckId}: ${result.error ?? "no stops returned"} — use manual entry`);
       }
     } finally {
       await driver.dispose();
@@ -54,5 +61,6 @@ async function runIngest(truckId: string, date: string, routeId: string): Promis
   } catch (err) {
     console.error(`[ingest] error truck=${truckId}`, err);
     setRouteStatus(routeId, "failed");
+    void alertOps("Route scrape (Goodshuffle)", `truck ${truckId}: ${String(err)} — use manual entry`);
   }
 }

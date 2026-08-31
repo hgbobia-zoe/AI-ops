@@ -11,8 +11,18 @@ ENV NODE_ENV=production
 # Chromium is already in the base image at the matching version — don't re-download.
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
+# Build tools so better-sqlite3 can compile its native binding (the base image
+# has no compiler, and there's no prebuilt binary for this Node version).
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json ./
-RUN npm ci
+# npm install (not ci): resolves platform-specific native deps in the Linux
+# container. The lockfile is generated on Windows and omits some Linux-only
+# optional deps (@emnapi/*), which `npm ci` rejects.
+# --include=dev because NODE_ENV=production would otherwise skip devDeps that the
+# build needs (@tailwindcss/postcss, typescript, eslint).
+RUN npm install --include=dev --no-audit --no-fund
 
 COPY . .
 RUN npm run build

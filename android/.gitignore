@@ -1,0 +1,26 @@
+# Android / Gradle build outputs
+.gradle/
+build/
+/local.properties
+/kiosk.properties
+
+# Built APKs (sideload artifacts — never commit)
+*.apk
+
+# Gradle wrapper binary — regenerate with `gradle wrapper --gradle-version 8.9`
+gradle/wrapper/gradle-wrapper.jar
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+
+# Keystores / secrets (never commit)
+*.jks
+*.keystore
+
+# OS cruft
+.DS_Store
+
+# Kotlin compiler scratch
+.kotlin/

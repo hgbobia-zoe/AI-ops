@@ -32,11 +32,15 @@ CREATE TABLE IF NOT EXISTS stops (
   cust_name      TEXT,
   cust_phone     TEXT,
   address        TEXT,
+  day_of_name    TEXT,
+  day_of_phone   TEXT,
   planned_window TEXT,
   eta            TEXT,
   arrived_at     TEXT,
   completed_at   TEXT,
-  tracking_token TEXT
+  tracking_token TEXT,
+  photos_ref     TEXT,
+  signature_ref  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_stops_route ON stops(route_id, sequence);
 
@@ -106,12 +110,31 @@ type DB = InstanceType<typeof Database>;
 
 const g = globalThis as unknown as { __aiopsDb?: DB };
 
+// Additive column migrations for DBs created before a column existed. Each is
+// idempotent — skipped if the column is already present.
+const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
+  { table: "stops", column: "day_of_name", type: "TEXT" },
+  { table: "stops", column: "day_of_phone", type: "TEXT" },
+  { table: "stops", column: "photos_ref", type: "TEXT" }, // JSON array of POD photo ids
+  { table: "stops", column: "signature_ref", type: "TEXT" }, // POD signature image id
+];
+
+function migrate(db: DB): void {
+  for (const m of MIGRATIONS) {
+    const cols = db.prepare(`PRAGMA table_info(${m.table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === m.column)) {
+      db.exec(`ALTER TABLE ${m.table} ADD COLUMN ${m.column} ${m.type}`);
+    }
+  }
+}
+
 function open(): DB {
   mkdirSync(dirname(DB_PATH), { recursive: true });
   const db = new Database(DB_PATH);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
+  migrate(db);
   return db;
 }
 

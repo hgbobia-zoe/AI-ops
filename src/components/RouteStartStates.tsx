@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Play, MapPin, AlertTriangle, Plus, Trash2 } from "lucide-react";
+import { Loader2, Play, MapPin, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -90,13 +90,14 @@ function ManualEntry({
 
   return (
     <div className="space-y-4">
-      <Card className="border-destructive/30 bg-destructive/5">
+      <Card className="border-white/10 bg-white/[0.03]">
         <CardContent className="flex items-start gap-3 p-4">
-          <AlertTriangle className="mt-0.5 size-5 shrink-0 text-destructive" />
+          <MapPin className="mt-0.5 size-5 shrink-0 text-primary" />
           <div className="text-sm">
-            <div className="font-semibold text-foreground">Couldn&apos;t read Goodshuffle</div>
+            <div className="font-semibold text-foreground">Enter today&apos;s route</div>
             <div className="text-muted-foreground">
-              Dispatch has been alerted. Enter today&apos;s stops manually to keep moving.
+              Add each stop in order — customer, address, phone. These drive the texts,
+              ETA, and tracking link.
             </div>
           </div>
         </CardContent>

@@ -7,5 +7,8 @@ data
 .env*
 npm-debug.log*
 goodshuffle-auth.json
+**/*.test.ts
+vitest.config.ts
+kiosk-shell
 **/*.md
 !SETUP.md

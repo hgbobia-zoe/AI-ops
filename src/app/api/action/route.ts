@@ -12,6 +12,7 @@ import {
   advanceNextStop,
   getStop,
   insertEventIfNew,
+  setStopProof,
   updateStopState,
 } from "@/lib/db/repo";
 import { runFanout } from "@/lib/notify/fanout";
@@ -67,6 +68,11 @@ export async function POST(req: Request): Promise<NextResponse<ActionResponse>> 
       updateStopState(body.stopId, toState, { arrivedAt: now });
     } else if (toState === "Completed") {
       updateStopState(body.stopId, "Completed", { completedAt: now });
+      // Persist proof of delivery captured at completion.
+      const p = body.payload as { photoIds?: string[]; signatureId?: string } | undefined;
+      if (p && (p.photoIds?.length || p.signatureId)) {
+        setStopProof(body.stopId, { photoIds: p.photoIds, signatureId: p.signatureId });
+      }
       if (action === "HEADING_NEXT") nextStop = advanceNextStop(body.routeId, cur.sequence);
     } else {
       updateStopState(body.stopId, toState);

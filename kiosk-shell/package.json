@@ -1,0 +1,41 @@
+{
+  "name": "zoe-dispatch-kiosk",
+  "productName": "Zoe Dispatch Kiosk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Electron kiosk shell that runs Zoe Dispatch with Goodshuffle Pro embedded side-by-side on a truck tablet.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "cross-env KIOSK=0 electron .",
+    "dashboard": "cross-env SHELL_PATH=/dispatch KIOSK=0 electron .",
+    "dashboard:kiosk": "cross-env SHELL_PATH=/dispatch electron .",
+    "dist": "electron-builder --win --x64",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.zoeevents.dispatch.kiosk",
+    "productName": "Zoe Dispatch Kiosk",
+    "files": ["main.js", "preload.js"],
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": ["dmg"]
+    },
+    "linux": {
+      "target": ["AppImage"]
+    }
+  }
+}

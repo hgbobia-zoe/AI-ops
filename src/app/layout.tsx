@@ -1,15 +1,25 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Crimson_Pro, Inter, Jost } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// Match the zoeeventsdmv.com brand type system:
+//   Crimson Pro (serif) → headings · Inter → body · Jost → buttons/labels.
+// All self-hosted by next/font (no runtime request to Google — works offline on
+// the truck tablets).
+const serif = Crimson_Pro({
+  variable: "--font-serif",
+  subsets: ["latin"],
+  style: ["normal", "italic"],
+});
+
+const sans = Inter({
+  variable: "--font-body",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const label = Jost({
+  variable: "--font-jost",
   subsets: ["latin"],
 });
 
@@ -37,7 +47,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`dark ${sans.variable} ${serif.variable} ${label.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         {children}

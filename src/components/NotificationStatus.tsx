@@ -2,11 +2,16 @@
 
 import { Check, MessageSquare, MapPin, Bell } from "lucide-react";
 import type { StopNotif } from "@/lib/useRouteMachine";
+import { DISPLAY_TZ } from "@/lib/dates";
 
 function fmt(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: DISPLAY_TZ,
+  });
 }
 
 function Row({

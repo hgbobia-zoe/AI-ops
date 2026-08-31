@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">Zoe Dispatch Kiosk</string>
+
+    <!-- Exit gesture / PIN prompt. -->
+    <string name="exit_dialog_title">Exit kiosk</string>
+    <string name="exit_dialog_message">Enter the tablet PIN to unlock and leave the kiosk.</string>
+    <string name="exit_pin_hint">PIN</string>
+    <string name="exit_confirm">Unlock</string>
+    <string name="exit_wrong_pin">Wrong PIN.</string>
+    <string name="cancel">Cancel</string>
+
+    <!-- Ignition reveal gesture / overlay. -->
+    <string name="reveal_dialog_title">Show Ignition</string>
+    <string name="reveal_dialog_message">Enter the code to reveal the Ignition session (for sign-in / troubleshooting).</string>
+    <string name="reveal_pin_hint">Code</string>
+    <string name="reveal_confirm">Show</string>
+    <string name="ignition_hide">✓ Done — back to app</string>
+
+    <!-- Attention banner (login needed / expired). -->
+    <string name="attention_signin_needed">Sign-in needed</string>
+    <string name="fix_goodshuffle_btn">Fix Goodshuffle</string>
+    <string name="fix_ignition_btn">Fix Ignition</string>
+</resources>

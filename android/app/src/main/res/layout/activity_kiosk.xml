@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Split kiosk layout:
+    • Left  half   : Goodshuffle Pro (gsproWebView) — the operational source of truth.
+    • Right half   : the Zoe Dispatch web app (dispatchWebView), hosts window.ZoeKiosk.
+    • Ignition     : a full-size WebView kept ALIVE but hidden inside ignitionOverlay
+                     (INVISIBLE by default — laid out full size so it renders and holds
+                     its login, but not drawn and not touchable). Revealed as an overlay
+                     via the PIN gesture, or during first-run setup.
+    • attentionBanner : loud strip shown whenever a login is missing/expired, with a
+                     per-component "Fix" button. GONE when both sessions are healthy.
+    • exitHotspot  : transparent TOP-LEFT target; long-press → exit PIN (leave kiosk).
+    • revealHotspot: transparent TOP-RIGHT target; long-press → unhide PIN (show Ignition).
+
+  A vertical guideline at 50% keeps the split responsive across tablet sizes.
+-->
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:keepScreenOn="true">
+
+    <androidx.constraintlayout.widget.Guideline
+        android:id="@+id/splitGuideline"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        app:layout_constraintGuide_percent="0.5" />
+
+    <!-- Goodshuffle Pro (left). Real logged-in session. Top is pinned below the
+         attention banner so, when the banner shows, it pushes content down instead of
+         covering it. (When the banner is GONE it collapses to the top edge.) -->
+    <WebView
+        android:id="@+id/gsproWebView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/splitGuideline"
+        app:layout_constraintTop_toBottomOf="@id/attentionBanner"
+        app:layout_constraintBottom_toBottomOf="parent" />
+
+    <!-- Dispatch app (right). Hosts window.ZoeKiosk. -->
+    <WebView
+        android:id="@+id/dispatchWebView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintStart_toEndOf="@id/splitGuideline"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/attentionBanner"
+        app:layout_constraintBottom_toBottomOf="parent" />
+
+    <!-- Invisible EXIT target: long-press top-left to reveal the exit PIN prompt. -->
+    <View
+        android:id="@+id/exitHotspot"
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:background="@android:color/transparent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- Invisible REVEAL target: long-press top-right to unhide Ignition (PIN-gated). -->
+    <View
+        android:id="@+id/revealHotspot"
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:background="@android:color/transparent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- Attention banner: LOUD, persistent, shown whenever a required login is missing
+         or expired (Goodshuffle and/or Ignition). Driven by live session checks, not a
+         one-time flag — if a session drops mid-shift it reappears. GONE when both are OK.
+         Each "Fix" button re-opens the relevant sign-in; no hidden key combo needed. -->
+    <LinearLayout
+        android:id="@+id/attentionBanner"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:visibility="gone"
+        android:padding="14dp"
+        android:elevation="16dp"
+        android:background="#B91C1C"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:id="@+id/attentionText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="@android:color/white"
+            android:textStyle="bold"
+            android:textSize="15sp"
+            android:text="@string/attention_signin_needed" />
+
+        <Button
+            android:id="@+id/fixGoodshuffleButton"
+            style="?attr/materialButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:visibility="gone"
+            android:text="@string/fix_goodshuffle_btn" />
+
+        <Button
+            android:id="@+id/fixIgnitionButton"
+            style="?attr/materialButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:visibility="gone"
+            android:text="@string/fix_ignition_btn" />
+    </LinearLayout>
+
+    <!-- Ignition overlay. INVISIBLE by default. Set VISIBLE on the reveal PIN or during
+         setup, so its Zonar session can be signed in and holds for createEtaLink. -->
+    <FrameLayout
+        android:id="@+id/ignitionOverlay"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="invisible"
+        android:background="@android:color/black"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent">
+
+        <WebView
+            android:id="@+id/ignitionWebView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- "Hide" control, top-right of the overlay, to re-hide Ignition. -->
+        <Button
+            android:id="@+id/hideIgnitionButton"
+            style="?attr/materialButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_margin="16dp"
+            android:text="@string/ignition_hide" />
+
+    </FrameLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

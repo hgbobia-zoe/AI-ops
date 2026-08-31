@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import {
   CheckCircle2,
   Home,
@@ -8,14 +8,17 @@ import {
   MessageSquare,
   Navigation,
   Phone,
+  UserRound,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { StateBadge } from "@/components/StateBadge";
-import { ChecklistDialog } from "@/components/ChecklistDialog";
+import { ChecklistDialog, type ProofRefs } from "@/components/ChecklistDialog";
 import { ExceptionDialog } from "@/components/ExceptionDialog";
 import { DispatchDialog } from "@/components/DispatchDialog";
 import { NotificationStatus } from "@/components/NotificationStatus";
 import { ACTION_ICON, STATE_VISUAL } from "@/lib/stateVisual";
+import { useLiveEta } from "@/lib/eta/useLiveEta";
+import { formatClockTime } from "@/lib/dates";
 import type { AvailableAction } from "@/lib/stateMachine";
 import type { ActionType, ChecklistResult, ExceptionType, Stop } from "@/lib/types";
 import type { RoutePhase, StopNotif } from "@/lib/useRouteMachine";
@@ -30,6 +33,7 @@ export function CurrentStopView({
   phase,
   activeStop,
   totalStops,
+  truckId,
   actions,
   busy,
   onPerform,
@@ -39,6 +43,7 @@ export function CurrentStopView({
   phase: RoutePhase;
   activeStop: Stop | null;
   totalStops: number;
+  truckId: string;
   actions: AvailableAction[];
   busy: boolean;
   onPerform: (action: ActionType, payload?: Record<string, unknown>) => void;
@@ -48,6 +53,8 @@ export function CurrentStopView({
   const [checklistFor, setChecklistFor] = useState<AvailableAction | null>(null);
   const [exceptionOpen, setExceptionOpen] = useState(false);
   const [dispatchOpen, setDispatchOpen] = useState(false);
+  // Real ETA from the truck's live location while heading to this stop.
+  const live = useLiveEta(truckId, activeStop?.stopId, activeStop?.state === "EnRoute");
 
   function handleActionClick(action: AvailableAction) {
     if (action.action === "REPORT_EXCEPTION") {
@@ -89,9 +96,13 @@ export function CurrentStopView({
     );
   }
 
-  function handleChecklistConfirm(result: ChecklistResult) {
+  function handleChecklistConfirm(result: ChecklistResult, proof?: ProofRefs) {
     if (!checklistFor) return;
-    onPerform(checklistFor.action, { checklist: result });
+    onPerform(checklistFor.action, {
+      checklist: result,
+      photoIds: proof?.photoIds,
+      signatureId: proof?.signatureId,
+    });
     setChecklistFor(null);
   }
 
@@ -100,7 +111,22 @@ export function CurrentStopView({
     setExceptionOpen(false);
   }
 
-  const mapsHref = `https://maps.google.com/?q=${encodeURIComponent(activeStop.address)}`;
+  const encodedAddress = encodeURIComponent(activeStop.address);
+  const mapsHref = `https://maps.google.com/?q=${encodedAddress}`;
+  // Desktop/iOS fallback: Google Maps directions. Stable href so SSR and client
+  // hydration match (no per-UA branching at render time).
+  const directionsHref = `https://www.google.com/maps/dir/?api=1&destination=${encodedAddress}`;
+
+  // On Android, fire a `geo:` intent instead: Android shows the "Open with" app
+  // chooser across every installed navigation app (Google Maps, Waze, TruckMap…),
+  // and the driver can set their preferred one — e.g. TruckMap — as the default.
+  function openDirections(e: MouseEvent<HTMLAnchorElement>) {
+    if (typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent)) {
+      e.preventDefault();
+      window.location.href = `geo:0,0?q=${encodedAddress}`;
+    }
+  }
+
   const StateIcon = STATE_VISUAL[activeStop.state].icon;
 
   return (
@@ -131,6 +157,7 @@ export function CurrentStopView({
               href={mapsHref}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={openDirections}
               className="flex items-start gap-3 text-lg text-foreground/90 active:opacity-70"
             >
               <MapPin className="mt-0.5 size-5 shrink-0 text-primary" />
@@ -143,13 +170,40 @@ export function CurrentStopView({
               <Phone className="size-5 shrink-0 text-primary" />
               <span>{activeStop.custPhone}</span>
             </a>
+            {(activeStop.dayOfName || activeStop.dayOfPhone) && (
+              <a
+                href={activeStop.dayOfPhone ? `tel:${activeStop.dayOfPhone}` : undefined}
+                className="flex items-center gap-3 text-base text-muted-foreground active:opacity-70"
+              >
+                <UserRound className="size-5 shrink-0 text-primary" />
+                <span>
+                  <span className="text-foreground">
+                    {activeStop.dayOfName || "Day-of coordinator"}
+                  </span>
+                  {activeStop.dayOfPhone && ` · ${activeStop.dayOfPhone}`}
+                  <span className="ml-1.5 rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+                    Day-of
+                  </span>
+                </span>
+              </a>
+            )}
           </div>
 
           <div className="flex gap-3">
             {activeStop.plannedWindow && (
-              <InfoTile label="Window" value={activeStop.plannedWindow} />
+              <InfoTile label="Window" value={formatClockTime(activeStop.plannedWindow)} />
             )}
-            {activeStop.eta && <InfoTile label="ETA" value={activeStop.eta} emphasize />}
+            {live ? (
+              <InfoTile
+                label={live.minutesAway > 0 ? `ETA · live · ${live.minutesAway} min` : "ETA · live"}
+                value={live.etaText}
+                emphasize
+              />
+            ) : (
+              activeStop.eta && (
+                <InfoTile label="ETA" value={formatClockTime(activeStop.eta)} emphasize />
+              )
+            )}
           </div>
         </CardContent>
       </Card>
@@ -179,9 +233,10 @@ export function CurrentStopView({
             <span className="text-base font-semibold">Call</span>
           </a>
           <a
-            href={mapsHref}
+            href={directionsHref}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={openDirections}
             className={TILE_CLASS}
           >
             <Navigation className="size-7 text-primary" />

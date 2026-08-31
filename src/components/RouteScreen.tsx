@@ -1,11 +1,14 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Header } from "@/components/Header";
 import { CurrentStopView } from "@/components/CurrentStopView";
 import { RouteOverview } from "@/components/RouteOverview";
 import { RouteSummaryPanel } from "@/components/RouteSummaryPanel";
 import { RouteStartStates } from "@/components/RouteStartStates";
 import { useRouteMachine } from "@/lib/useRouteMachine";
+import { canCheckForUpdate, checkForUpdateViaKiosk } from "@/lib/kioskBridge";
 import type { TruckBinding } from "@/lib/device";
 
 /**
@@ -24,6 +27,17 @@ export function RouteScreen({
   const m = useRouteMachine(truck.truckId);
   const stops = m.route?.stops ?? [];
 
+  // "Check for updates" only appears inside the Android kiosk build that supports it.
+  const [canUpdate, setCanUpdate] = useState(false);
+  useEffect(() => setCanUpdate(canCheckForUpdate()), []);
+
+  const onCheckUpdate = useCallback(async () => {
+    toast.loading("Checking for updates…", { id: "ota" });
+    const msg = await checkForUpdateViaKiosk();
+    toast.dismiss("ota");
+    toast.message(msg ?? "Couldn't check for updates.");
+  }, []);
+
   return (
     <div className={kiosk ? "flex h-full flex-col bg-background" : "min-h-dvh bg-background"}>
       <Header
@@ -33,7 +47,9 @@ export function RouteScreen({
         online={m.online}
         queuedCount={m.queuedCount}
         onChangeTruck={onChangeTruck}
-        onRefresh={m.refresh}
+        onRefresh={m.resync}
+        onPullRoute={m.startRoute}
+        onCheckUpdate={canUpdate ? onCheckUpdate : undefined}
       />
 
       <main
@@ -70,6 +86,7 @@ export function RouteScreen({
               phase={m.phase}
               activeStop={m.activeStop}
               totalStops={stops.length}
+              truckId={truck.truckId}
               actions={m.actions}
               busy={m.busy}
               onPerform={m.perform}

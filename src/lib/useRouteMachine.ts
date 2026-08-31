@@ -25,6 +25,8 @@ import type { ActionType, Route, Stop, StopState } from "./types";
 import { fetchRoute, triggerIngestion } from "./tablesRead";
 import { buildAction, flushQueue, getGps, sendAction } from "./webhookClient";
 import { queueSize } from "./offlineQueue";
+import { todayInOpsTz } from "./dates";
+import { createEtaLinkViaKiosk, importGoodshuffleRouteViaKiosk } from "./kioskBridge";
 
 export type RoutePhase =
   | "loading" // initial fetch in flight
@@ -64,7 +66,8 @@ export interface RouteMachine {
   error: string | null;
   notif: Record<string, StopNotif>;
   summary: RouteSummary;
-  refresh: () => Promise<void>;
+  refresh: (force?: boolean) => Promise<void>;
+  resync: () => Promise<void>;
   startRoute: () => Promise<void>;
   submitManual: (stops: Stop[]) => void;
   perform: (action: ActionType, payload?: Record<string, unknown>) => Promise<void>;
@@ -106,21 +109,24 @@ export function useRouteMachine(truckId: string): RouteMachine {
     [],
   );
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (force = false) => {
     try {
       const r = await fetchRoute(truckId);
-      // Once we've adopted a ready route, local progress is authoritative — don't
-      // let polling clobber it. (M2 seam: replace with reconciliation.)
-      if (loadedRef.current) {
+      // Background polling must not clobber the driver's in-progress state. Only a
+      // FORCED resync (the Refresh button, or advancing to the next stop) re-adopts
+      // the server route — which dispatch may have updated overnight or mid-day.
+      // The server preserves completed/active stops on re-import, so adopting it is
+      // safe: it reflects finished deliveries plus any updated upcoming stops.
+      if (loadedRef.current && !force) {
         setError(null);
         return;
       }
       if (!r) {
-        setPhase("needsStart");
+        if (!loadedRef.current) setPhase("needsStart");
       } else if (r.status === "scraping") {
         setPhase("scraping");
       } else if (r.status === "failed") {
-        setPhase("failed");
+        if (!loadedRef.current) setPhase("failed");
       } else if (r.status === "ready" || r.status === "active") {
         setRoute(r);
         loadedRef.current = true;
@@ -132,35 +138,103 @@ export function useRouteMachine(truckId: string): RouteMachine {
     }
   }, [truckId]);
 
+  /** Force-pull the current server route (Refresh button / on advancing). */
+  const resync = useCallback(() => refresh(true), [refresh]);
+
   // Start Route → trigger ingestion; polling picks up scraping → ready/failed.
+  const startRouteRef = useRef<() => void>(() => {});
   const startRoute = useCallback(async () => {
     setPhase("scraping");
     loadedRef.current = false;
     try {
+      // In the Android kiosk, pull today's route straight from the logged-in
+      // Goodshuffle session (server-side scraping is Cloudflare-blocked).
+      const res = await importGoodshuffleRouteViaKiosk(truckId);
+      if (res.inKiosk) {
+        if (res.ok && res.stops.length) {
+          await fetch("/api/route/import", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ truckId, stops: res.stops }),
+          });
+          loadedRef.current = false;
+          await refresh(true);
+          toast.dismiss("gs-pull-fail");
+          toast.success(`Loaded ${res.stops.length} stop${res.stops.length === 1 ? "" : "s"} from Goodshuffle`);
+          return;
+        }
+        // In the kiosk but nothing loaded — make it LOUD: a persistent prompt that
+        // names the PRECISE reason (using the route counts) and offers to retry.
+        const why =
+          res.error === "old_app_build_no_import"
+            ? "This app build can't import yet — update the tablet."
+            : res.error === "no_response_timeout"
+              ? "Goodshuffle didn't respond — check it's signed in (left panel)."
+              : res.error
+                ? `Goodshuffle import failed: ${res.error}`
+                : res.total === 0
+                  ? "No routes scheduled in Goodshuffle for today."
+                  : res.matched === 0
+                    ? `Found ${res.total} route(s) today, but none assigned to this truck.`
+                    : res.total != null
+                      ? "Found the route, but it has no delivery stops."
+                      : "No Goodshuffle route found for this truck today.";
+        toast.error(`Couldn't pull the route — ${why}`, {
+          id: "gs-pull-fail",
+          duration: Infinity,
+          action: { label: "Try again", onClick: () => void startRouteRef.current() },
+        });
+      }
       await triggerIngestion(truckId);
     } catch {
       setPhase("failed");
     }
-  }, [truckId]);
+  }, [truckId, refresh]);
+  // Keep a live ref so the toast's "Try again" always calls the latest startRoute.
+  startRouteRef.current = startRoute;
 
-  // Manual fallback when the scrape fails: dispatch enters stops by hand.
+  // Manual fallback when the scrape fails: dispatch enters stops by hand. Persists
+  // to the server (so actions → SMS work), then adopts the server route.
   const submitManual = useCallback(
-    (stops: Stop[]) => {
-      const date = new Date().toISOString().slice(0, 10);
-      const routeId = `R-${date}-${truckId}`;
-      const normalized: Stop[] = stops.map((s, i) => ({
-        ...s,
-        routeId,
-        stopId: s.stopId || `S-${i + 1}`,
-        customerId: s.customerId || `C-${i + 1}`,
-        sequence: i + 1,
-        state: "Waiting",
-      }));
-      setRoute({ routeId, date, truckId, status: "ready", stops: normalized });
-      loadedRef.current = true;
-      setPhase(normalized.length ? "stops" : "empty");
+    async (stops: Stop[]) => {
+      try {
+        await fetch("/api/route/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            truckId,
+            stops: stops.map((s) => ({
+              custName: s.custName,
+              custPhone: s.custPhone,
+              address: s.address,
+              dayOfName: s.dayOfName,
+              dayOfPhone: s.dayOfPhone,
+              plannedWindow: s.plannedWindow,
+              eta: s.eta,
+            })),
+          }),
+        });
+        loadedRef.current = false; // let refresh adopt the freshly-written server route
+        await refresh();
+      } catch {
+        // Network failure: render locally so dispatch isn't blocked (note: local-only
+        // stops won't drive server actions until connectivity returns).
+        const date = todayInOpsTz();
+        const routeId = `R-${date}-${truckId}`;
+        const normalized: Stop[] = stops.map((s, i) => ({
+          ...s,
+          routeId,
+          stopId: s.stopId || `${routeId}-S${i + 1}`,
+          customerId: s.customerId || `${routeId}-C${i + 1}`,
+          sequence: i + 1,
+          state: "Waiting",
+        }));
+        setRoute({ routeId, date, truckId, status: "ready", stops: normalized });
+        loadedRef.current = true;
+        setPhase(normalized.length ? "stops" : "empty");
+      }
     },
-    [truckId],
+    [truckId, refresh],
   );
 
   // Initial load + light polling for the (future) live data path.
@@ -229,6 +303,16 @@ export function useRouteMachine(truckId: string): RouteMachine {
           return;
         }
 
+        // In the Android kiosk, mint a Zonar ETA link for the customer this action's
+        // "on the way" SMS will reach, and pass it on the payload (fanout prefers it
+        // over the self-hosted /track link). No-op — and instant — outside the kiosk.
+        let payloadOut = payload;
+        if (action === "LEAVING_WAREHOUSE" || action === "HEADING_NEXT") {
+          const target = action === "HEADING_NEXT" ? route.stops[idx + 1] : stop;
+          const link = await createEtaLinkViaKiosk(truckId, target?.address);
+          if (link) payloadOut = { ...(payload ?? {}), etaLink: link };
+        }
+
         const gps = await getGps();
         const req = buildAction({
           truckId,
@@ -237,7 +321,7 @@ export function useRouteMachine(truckId: string): RouteMachine {
           action,
           fromState,
           gps,
-          payload,
+          payload: payloadOut,
           context: { isFirstStop: idx === 0, isLastStop: isLast },
         });
 
@@ -278,11 +362,18 @@ export function useRouteMachine(truckId: string): RouteMachine {
           setCounters((c) => ({ ...c, exceptions: c.exceptions + 1 }));
         }
         receipt(action, res.error === "queued_offline", STATE_VISUAL[toState].label);
+
+        // Heading to the next customer: pull the current route so any overnight /
+        // mid-day change dispatch made to the upcoming stops is reflected before the
+        // driver rolls. Only when processed online (offline stays on optimistic state).
+        if (action === "HEADING_NEXT" && res.error !== "queued_offline") {
+          void refresh(true);
+        }
       } finally {
         setBusy(false);
       }
     },
-    [route, phase, truckId, syncQueue, receipt],
+    [route, phase, truckId, syncQueue, receipt, refresh],
   );
 
   const sendSide = useCallback(
@@ -371,6 +462,7 @@ export function useRouteMachine(truckId: string): RouteMachine {
     notif,
     summary,
     refresh,
+    resync,
     startRoute,
     submitManual,
     perform,

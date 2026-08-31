@@ -12,8 +12,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { bindTruck } from "@/lib/device";
 import { fetchVehicles } from "@/lib/tablesRead";
 import { appConfig } from "@/lib/config";
@@ -25,7 +23,6 @@ export function TruckSelect() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Vehicle | null>(null);
-  const [pin, setPin] = useState("");
 
   useEffect(() => {
     fetchVehicles()
@@ -36,7 +33,7 @@ export function TruckSelect() {
 
   function confirmBind() {
     if (!picked) return;
-    bindTruck(picked.truckId, picked.name, pin || undefined);
+    bindTruck(picked.truckId, picked.name);
     router.push("/kiosk");
   }
 
@@ -63,10 +60,7 @@ export function TruckSelect() {
         {vehicles.map((v) => (
           <button
             key={v.truckId}
-            onClick={() => {
-              setPin("");
-              setPicked(v);
-            }}
+            onClick={() => setPicked(v)}
             className="surface group flex h-32 flex-col items-center justify-center gap-2 rounded-2xl border border-white/5 transition-all hover:border-primary/40 hover:-translate-y-0.5 active:scale-[0.97]"
           >
             <span className="flex size-11 items-center justify-center rounded-xl bg-primary/15 text-primary transition-colors group-hover:bg-primary/25">
@@ -88,16 +82,6 @@ export function TruckSelect() {
               This tablet will stay bound to {picked?.name} until you change it.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2 py-2">
-            <Label htmlFor="pin">Lock PIN (optional)</Label>
-            <Input
-              id="pin"
-              inputMode="numeric"
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
-              placeholder="Prevents accidental truck changes"
-            />
-          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPicked(null)} className="h-12">
               Cancel
