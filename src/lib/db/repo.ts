@@ -252,6 +252,37 @@ export function setStopProof(
     );
 }
 
+/**
+ * TEST/dev helper: reset a route's progress back to the start — every stop to
+ * "Waiting", with arrival/completion timestamps, proof refs, and the tracking
+ * token cleared, and the route status back to "ready". The stops themselves
+ * (customer, address, phone, window) are untouched. Returns the rows changed.
+ * With a truckId, resets that truck's most recent route; without one, resets
+ * every non-Waiting stop (only used behind the ROUTE_RESET_ENABLED gate).
+ */
+export function resetRouteProgress(truckId?: string): { stops: number; routes: number } {
+  const db = getDb();
+  const clearStops =
+    "UPDATE stops SET state='Waiting', arrived_at=NULL, completed_at=NULL, " +
+    "photos_ref=NULL, signature_ref=NULL, tracking_token=NULL";
+  if (truckId) {
+    const route = db
+      .prepare("SELECT route_id FROM routes WHERE truck_id = ? ORDER BY date DESC LIMIT 1")
+      .get(truckId) as { route_id: string } | undefined;
+    if (!route) return { stops: 0, routes: 0 };
+    const s = db.prepare(`${clearStops} WHERE route_id = ?`).run(route.route_id);
+    const r = db
+      .prepare("UPDATE routes SET status='ready', updated_at=? WHERE route_id = ?")
+      .run(new Date().toISOString(), route.route_id);
+    return { stops: s.changes, routes: r.changes };
+  }
+  const s = db.prepare(`${clearStops} WHERE state != 'Waiting'`).run();
+  const r = db
+    .prepare("UPDATE routes SET status='ready', updated_at=? WHERE status != 'ready'")
+    .run(new Date().toISOString());
+  return { stops: s.changes, routes: r.changes };
+}
+
 /** Move the next stop (by sequence) of a route into EnRoute; return it. */
 export function advanceNextStop(routeId: string, currentSequence: number): Stop | null {
   const db = getDb();
