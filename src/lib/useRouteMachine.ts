@@ -275,6 +275,19 @@ export function useRouteMachine(truckId: string): RouteMachine {
     };
   }, [syncQueue]);
 
+  // The native kiosk fires window.__zoeGoodshuffleReady the instant Goodshuffle sign-in
+  // completes. Auto-pull the route then — but ONLY when nothing is loaded yet, so a
+  // mid-shift re-auth can't clobber a route the driver is already working.
+  useEffect(() => {
+    const w = window as unknown as { __zoeGoodshuffleReady?: () => void };
+    w.__zoeGoodshuffleReady = () => {
+      if (!loadedRef.current) void startRouteRef.current();
+    };
+    return () => {
+      if (w.__zoeGoodshuffleReady) delete w.__zoeGoodshuffleReady;
+    };
+  }, []);
+
   const activeIndex = route ? firstActiveIndex(route.stops) : -1;
   const activeStop = route && activeIndex >= 0 ? route.stops[activeIndex] : null;
 

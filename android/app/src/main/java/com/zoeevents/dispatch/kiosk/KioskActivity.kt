@@ -486,10 +486,18 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
     // on resume, so an expiry mid-shift pops the banner back up.
 
     private val sessionHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    // True while the attention banner is up. Goodshuffle signs in via an in-page (SPA)
+    // transition that fires NO page-load event, so onPageFinished alone can miss it —
+    // while the banner is up we poll FAST (a completed login registers in ~3s); once
+    // everything's signed in we back off to the slow interval.
+    @Volatile private var attentionShowing = true
+    // Goodshuffle's last known signed-OUT state, so we can catch the sign-in EDGE
+    // (signed-out -> signed-in) and auto-refresh the route the instant it's available.
+    private var lastGsBad = true
     private val sessionTick = object : Runnable {
         override fun run() {
             checkSessions()
-            sessionHandler.postDelayed(this, SESSION_CHECK_MS)
+            sessionHandler.postDelayed(this, if (attentionShowing) SESSION_CHECK_FAST_MS else SESSION_CHECK_MS)
         }
     }
 
@@ -497,6 +505,9 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
         binding.fixGoodshuffleButton.setOnClickListener {
             // Goodshuffle lives in the visible left pane — reload it so its sign-in shows.
             binding.gsproWebView.loadUrl(Config.gsproUrl(this))
+            // Resume fast polling + probe shortly after, so the login registers promptly.
+            attentionShowing = true
+            sessionHandler.postDelayed({ checkSessions() }, 1_500)
         }
         binding.fixIgnitionButton.setOnClickListener {
             // Ignition is the hidden pane — reveal it full-screen to sign in.
@@ -533,7 +544,19 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
     }
 
     private fun updateAttentionBanner(gsBad: Boolean, igBad: Boolean) {
+        // Goodshuffle just came back (sign-in completed): tell the dispatch app to refresh
+        // its route now that the pull will work, instead of making the driver tap retry.
+        // The web registers window.__zoeGoodshuffleReady; a no-op if it hasn't yet.
+        if (lastGsBad && !gsBad) {
+            binding.dispatchWebView.evaluateJavascript(
+                "window.__zoeGoodshuffleReady && window.__zoeGoodshuffleReady();",
+                null,
+            )
+        }
+        lastGsBad = gsBad
         val show = gsBad || igBad
+        // Drive the poll cadence: fast while anything needs sign-in, slow when all good.
+        attentionShowing = show
         binding.attentionBanner.visibility = if (show) android.view.View.VISIBLE else android.view.View.GONE
         binding.fixGoodshuffleButton.visibility = if (gsBad) android.view.View.VISIBLE else android.view.View.GONE
         binding.fixIgnitionButton.visibility = if (igBad) android.view.View.VISIBLE else android.view.View.GONE
@@ -666,6 +689,7 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
             "https://wrfalckup5gc3flo7bizcsfmiq.appsync-api.us-east-1.amazonaws.com/graphql"
         private const val WEB_RESULT_POLL_MS = 500L
         private const val WEB_RESULT_MAX_TRIES = 40 // ~20s before giving up
-        private const val SESSION_CHECK_MS = 60_000L // re-check logins every minute
+        private const val SESSION_CHECK_MS = 60_000L // re-check logins every minute (all good)
+        private const val SESSION_CHECK_FAST_MS = 3_000L // re-check every 3s while a sign-in is pending
     }
 }
