@@ -3,10 +3,11 @@
 // proof-of-delivery photos/signatures. One supervisor action: reopen a completed
 // stop (guarded). Auto-refreshes so it stays live.
 
-import { AlertTriangle, MessageSquare, Truck as TruckIcon } from "lucide-react";
+import { AlertTriangle, CircleCheck, MessageSquare, Truck as TruckIcon } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { IgnitionPane } from "@/components/IgnitionPane";
 import { ReopenButton } from "@/components/ReopenButton";
+import { CloseRouteButton } from "@/components/CloseRouteButton";
 import {
   getOpenExceptions,
   getRecentMessages,
@@ -191,6 +192,20 @@ function TruckCard({ name, route }: { name: string; route: Route | null }) {
             <StopLine key={s.stopId} stop={s} truckId={route.truckId} routeId={route.routeId} />
           ))}
         </ul>
+      )}
+
+      {/* Office control: force-close a route the driver couldn't finish on the tablet. */}
+      {route && (
+        <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-3">
+          {route.status === "done" ? (
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <CircleCheck className="size-3.5" /> Route closed — loads fresh on next pull
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground">Tablet down / dead battery?</span>
+          )}
+          {route.status !== "done" && <CloseRouteButton truckId={route.truckId} />}
+        </div>
       )}
     </div>
   );

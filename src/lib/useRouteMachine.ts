@@ -131,6 +131,10 @@ export function useRouteMachine(truckId: string): RouteMachine {
         setRoute(r);
         loadedRef.current = true;
         setPhase(r.stops.length ? "stops" : "empty");
+      } else if (r.status === "done") {
+        // Office force-closed this route (e.g. the tablet died mid-shift). Invite a
+        // fresh pull of today's route instead of hanging on "Loading…".
+        if (!loadedRef.current) setPhase("needsStart");
       }
       setError(null);
     } catch {

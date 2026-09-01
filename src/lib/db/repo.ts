@@ -111,6 +111,20 @@ export function setRouteStatus(routeId: string, status: RouteStatus): void {
     .run(status, new Date().toISOString(), routeId);
 }
 
+/**
+ * Force-close a truck's current route from the office. For when the driver couldn't
+ * finish it on the tablet (dead battery, tablet down): sets the route status to "done"
+ * so it drops off the active board and the tablet re-prompts to load today's route.
+ * It does NOT fabricate stop completions — it preserves where the driver actually got to.
+ */
+export function closeRoute(truckId: string): { ok: boolean; routeId?: string; already?: boolean } {
+  const route = getRoute(truckId);
+  if (!route) return { ok: false };
+  if (route.status === "done") return { ok: true, routeId: route.routeId, already: true };
+  setRouteStatus(route.routeId, "done");
+  return { ok: true, routeId: route.routeId };
+}
+
 /** Write a fully-scraped route: upsert the route row and replace its stops. */
 export function writeRoute(route: Route): void {
   const db = getDb();
