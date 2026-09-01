@@ -29,13 +29,17 @@ export const dynamic = "force-dynamic";
 export default async function DispatchPage({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string }>;
+  searchParams: Promise<{ date?: string; native?: string; embed?: string }>;
 }) {
   const sp = await searchParams;
   const today = todayInOpsTz();
   const date = sp?.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : today;
   const ignitionUrl = process.env.IGNITION_URL || "";
-  if (!ignitionUrl) {
+  // In the native kiosk's board mode the shell already shows the live Ignition map in
+  // the pane beside us — so render the board full-width and skip our own IgnitionPane
+  // (which would just try, and fail, to iframe Ignition).
+  const embeddedInKiosk = sp?.native === "android" || sp?.embed === "1";
+  if (!ignitionUrl || embeddedInKiosk) {
     return (
       <main className="mx-auto max-w-6xl p-5 pb-16">
         <DispatchBoard date={date} today={today} />
