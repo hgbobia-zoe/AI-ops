@@ -21,6 +21,13 @@ describe("renderTemplate", () => {
     expect(out).toBe("Hi Dave\n\nThanks");
   });
 
+  it("ships distinct pickup templates that say 'pick up'", () => {
+    const t = defaultSettings().templates;
+    expect(t.onWayPickup).toMatch(/pick up/i);
+    expect(t.arrivedPickup).toMatch(/pick up/i);
+    expect(t.onWayPickup).not.toBe(t.onWay);
+  });
+
   it("renders the default on-way template with no link cleanly", () => {
     const out = renderTemplate(defaultSettings().templates.onWay, {
       firstName: "Dave",

@@ -11,6 +11,7 @@
 import { getDb } from "@/lib/db";
 
 export interface MessageTemplates {
+  // Delivery (drop-off) texts.
   /** Customer "on the way" text. */
   onWay: string;
   /** Customer "arrived" text. */
@@ -19,6 +20,11 @@ export interface MessageTemplates {
   coordinatorOnWay: string;
   /** Day-of coordinator "arrived" text. */
   coordinatorArrived: string;
+  // Pickup (collection) texts — used when the stop's kind is "pickup".
+  onWayPickup: string;
+  arrivedPickup: string;
+  coordinatorOnWayPickup: string;
+  coordinatorArrivedPickup: string;
 }
 
 export interface AppSettings {
@@ -99,6 +105,20 @@ export function defaultSettings(): AppSettings {
         "Thank you!",
       coordinatorArrived:
         "Hi {firstName}, {company} has arrived at {custName}. We'll begin unloading shortly.",
+      onWayPickup:
+        "Hi {firstName},\n\n" +
+        "Just a quick update — our team is on the way to pick up your rentals and will arrive within the next hour. Please have the items gathered and accessible.\n\n" +
+        "You can check the latest location here: {link}\n\n" +
+        "Thank you!",
+      arrivedPickup:
+        "Hi {firstName}, your {company} team has arrived to pick up your rentals. Thank you!",
+      coordinatorOnWayPickup:
+        "Hi {firstName},\n\n" +
+        "{company} here — our team is en route to {custName} to pick up the rentals and will arrive within the next hour. You're listed as the day-of coordinator.\n\n" +
+        "Latest location: {link}\n\n" +
+        "Thank you!",
+      coordinatorArrivedPickup:
+        "Hi {firstName}, {company} has arrived at {custName} to pick up the rentals.",
     },
     smsProvider: process.env.SMS_PROVIDER || "openphone",
     gpsProvider: process.env.GPS_PROVIDER || "zonar",

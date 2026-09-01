@@ -318,6 +318,11 @@ function StopLine({
       <div className="flex items-center gap-2">
         <span className="w-5 shrink-0 text-center text-xs text-muted-foreground">{stop.sequence}</span>
         <span className="flex-1 truncate text-sm">{stop.custName}</span>
+        {stop.kind === "pickup" && (
+          <span className="shrink-0 rounded bg-amber-400/90 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-black">
+            Pickup
+          </span>
+        )}
         <StateBadge state={stop.state} />
         {stop.state === "Completed" && (
           <ReopenButton truckId={truckId} routeId={routeId} stopId={stop.stopId} />

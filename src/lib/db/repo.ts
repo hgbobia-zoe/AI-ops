@@ -13,6 +13,7 @@ interface StopRow {
   state: string;
   cust_name: string | null;
   cust_first_name: string | null;
+  kind: string | null;
   cust_phone: string | null;
   address: string | null;
   day_of_name: string | null;
@@ -44,6 +45,7 @@ function toStop(r: StopRow): Stop {
     state: r.state as StopState,
     custName: r.cust_name ?? "",
     custFirstName: r.cust_first_name ?? undefined,
+    kind: r.kind === "pickup" ? "pickup" : r.kind === "delivery" ? "delivery" : undefined,
     custPhone: r.cust_phone ?? "",
     address: r.address ?? "",
     dayOfName: r.day_of_name ?? undefined,
@@ -158,10 +160,10 @@ export function writeRoute(route: Route): void {
     db.prepare("DELETE FROM stops WHERE route_id = ?").run(rt.routeId);
     const ins = db.prepare(
       `INSERT INTO stops (stop_id, route_id, customer_id, sequence, state, cust_name,
-        cust_first_name, cust_phone, address, day_of_name, day_of_phone, planned_window,
+        cust_first_name, kind, cust_phone, address, day_of_name, day_of_phone, planned_window,
         eta, arrived_at, completed_at, tracking_token)
        VALUES (@stopId, @routeId, @customerId, @sequence, @state, @custName,
-        @custFirstName, @custPhone, @address, @dayOfName, @dayOfPhone, @plannedWindow,
+        @custFirstName, @kind, @custPhone, @address, @dayOfName, @dayOfPhone, @plannedWindow,
         @eta, @arrivedAt, @completedAt, @trackingToken)`,
     );
     for (const s of rt.stops) {
@@ -173,6 +175,7 @@ export function writeRoute(route: Route): void {
         state: s.state,
         custName: s.custName ?? null,
         custFirstName: s.custFirstName ?? null,
+        kind: s.kind ?? null,
         custPhone: s.custPhone ?? null,
         address: s.address ?? null,
         dayOfName: s.dayOfName ?? null,

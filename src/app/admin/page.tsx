@@ -17,6 +17,10 @@ interface Templates {
   arrived: string;
   coordinatorOnWay: string;
   coordinatorArrived: string;
+  onWayPickup: string;
+  arrivedPickup: string;
+  coordinatorOnWayPickup: string;
+  coordinatorArrivedPickup: string;
 }
 interface Settings {
   companyName: string;
@@ -31,11 +35,16 @@ interface Settings {
   gpsVehicleIds: Record<string, string>;
 }
 
-const TEMPLATE_FIELDS: { key: keyof Templates; label: string; hint: string }[] = [
-  { key: "onWay", label: "Customer — on the way", hint: "Sent when the driver leaves for this stop." },
-  { key: "arrived", label: "Customer — arrived", hint: "Sent when the driver arrives." },
-  { key: "coordinatorOnWay", label: "Coordinator — on the way", hint: "Day-of coordinator, if the stop has one." },
-  { key: "coordinatorArrived", label: "Coordinator — arrived", hint: "Day-of coordinator, if the stop has one." },
+// Each slot has a delivery and a pickup variant; the toggle picks which set is edited.
+const TEMPLATE_SLOTS: {
+  keys: { delivery: keyof Templates; pickup: keyof Templates };
+  label: string;
+  hint: string;
+}[] = [
+  { keys: { delivery: "onWay", pickup: "onWayPickup" }, label: "Customer — on the way", hint: "Sent when the driver leaves for this stop." },
+  { keys: { delivery: "arrived", pickup: "arrivedPickup" }, label: "Customer — arrived", hint: "Sent when the driver arrives." },
+  { keys: { delivery: "coordinatorOnWay", pickup: "coordinatorOnWayPickup" }, label: "Coordinator — on the way", hint: "Day-of coordinator, if the stop has one." },
+  { keys: { delivery: "coordinatorArrived", pickup: "coordinatorArrivedPickup" }, label: "Coordinator — arrived", hint: "Day-of coordinator, if the stop has one." },
 ];
 
 const VARS = [
@@ -63,6 +72,8 @@ export default function AdminPage() {
   // switch the Goodshuffle / Ignition WebView sessions).
   const [inKiosk, setInKiosk] = useState(false);
   useEffect(() => setInKiosk(isKiosk()), []);
+  // Which template set the Message templates editor is showing.
+  const [tplMode, setTplMode] = useState<"delivery" | "pickup">("delivery");
 
   useEffect(() => {
     if (!authed) return;
@@ -289,16 +300,40 @@ export default function AdminPage() {
                 tracking link for that stop.
               </p>
             </div>
-            {TEMPLATE_FIELDS.map((f) => (
-              <Field key={f.key} label={f.label} hint={f.hint}>
-                <textarea
-                  value={s.templates[f.key]}
-                  onChange={(e) => setS({ ...s, templates: { ...s.templates, [f.key]: e.target.value } })}
-                  rows={f.key.startsWith("coordinator") || f.key === "onWay" ? 5 : 3}
-                  className="w-full resize-y rounded-xl border border-white/10 bg-background px-3 py-2 text-sm leading-relaxed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                />
-              </Field>
-            ))}
+
+            {/* Delivery / Pickup toggle — each stop uses the set matching its type. */}
+            <div className="inline-flex rounded-xl border border-white/10 bg-white/[0.03] p-1 text-sm">
+              {(["delivery", "pickup"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setTplMode(m)}
+                  className={`rounded-lg px-4 py-1.5 font-medium capitalize transition-colors ${
+                    tplMode === m ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+            <p className="-mt-2 text-xs text-muted-foreground">
+              Zoe Dispatch reads each stop&apos;s type from Goodshuffle and automatically uses the{" "}
+              <span className="font-medium capitalize text-foreground">{tplMode}</span> wording below for it.
+            </p>
+
+            {TEMPLATE_SLOTS.map((f) => {
+              const key = f.keys[tplMode];
+              return (
+                <Field key={key} label={f.label} hint={f.hint}>
+                  <textarea
+                    value={s.templates[key]}
+                    onChange={(e) => setS({ ...s, templates: { ...s.templates, [key]: e.target.value } })}
+                    rows={f.keys.delivery.startsWith("coordinator") || f.keys.delivery === "onWay" ? 5 : 3}
+                    className="w-full resize-y rounded-xl border border-white/10 bg-background px-3 py-2 text-sm leading-relaxed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                </Field>
+              );
+            })}
           </Section>
 
           <div className="flex justify-end">

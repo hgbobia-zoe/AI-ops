@@ -535,6 +535,7 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
                 var s = {
                   custName: name || "",
                   custFirstName: renter.firstName || undefined,
+                  kind: (w.waypointType === "PICK_UP" ? "pickup" : "delivery"),
                   custPhone: sv.e164PhoneNumber || renter.phone || tl.contactPhoneNumber || "",
                   address: address,
                   plannedWindow: w.scheduledArrivalTime || undefined,

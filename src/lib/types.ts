@@ -116,6 +116,10 @@ export interface Stop {
   /** The customer's real first name (from Goodshuffle's renter), used to personalize
    *  texts. custName may be an event/last-name label, so greetings prefer this. */
   custFirstName?: string;
+  /** Whether this stop is a delivery (drop-off) or a pickup (collection). From
+   *  Goodshuffle's waypointType. Drives which message template is used. Defaults to
+   *  "delivery" when unknown. */
+  kind?: "delivery" | "pickup";
   custPhone: string;
   address: string;
   // Optional day-of coordinator for this event. When present, "on the way" /

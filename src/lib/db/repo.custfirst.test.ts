@@ -35,6 +35,7 @@ describe("custFirstName round-trips through the DB", () => {
           state: "Waiting",
           custName: "Lebensohn - Wedding",
           custFirstName: "Dave",
+          kind: "pickup",
           custPhone: "+13015551234",
           address: "5410 Moorland Lane, Bethesda, MD",
         },
@@ -44,5 +45,6 @@ describe("custFirstName round-trips through the DB", () => {
     const back = getRoute("TEST");
     expect(back?.stops[0].custFirstName).toBe("Dave");
     expect(back?.stops[0].custName).toBe("Lebensohn - Wedding");
+    expect(back?.stops[0].kind).toBe("pickup");
   });
 });

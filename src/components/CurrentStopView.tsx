@@ -134,9 +134,20 @@ export function CurrentStopView({
       <Card className="surface overflow-hidden border-white/5 pt-0">
         {/* gradient accent strip carries the current-stop context */}
         <div className="flex items-center justify-between gap-2 border-b border-white/5 bg-white/[0.03] px-6 py-3">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Stop {activeStop.sequence} of {totalStops}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Stop {activeStop.sequence} of {totalStops}
+            </span>
+            {activeStop.kind && (
+              <span
+                className={`rounded-md px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${
+                  activeStop.kind === "pickup" ? "bg-amber-400 text-black" : "bg-white/10 text-muted-foreground"
+                }`}
+              >
+                {activeStop.kind}
+              </span>
+            )}
+          </div>
           <StateBadge state={activeStop.state} />
         </div>
 

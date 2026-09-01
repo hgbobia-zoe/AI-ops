@@ -65,24 +65,45 @@ function templateVars(
   };
 }
 
+// Pick the delivery or pickup wording for a template slot, based on the stop's kind
+// (defaults to delivery when unknown — the original behavior).
+function slotText(
+  s: AppSettings,
+  stop: Stop,
+  slot: "onWay" | "arrived" | "coordinatorOnWay" | "coordinatorArrived",
+): string {
+  const t = s.templates;
+  const pickup = stop.kind === "pickup";
+  switch (slot) {
+    case "onWay":
+      return pickup ? t.onWayPickup : t.onWay;
+    case "arrived":
+      return pickup ? t.arrivedPickup : t.arrived;
+    case "coordinatorOnWay":
+      return pickup ? t.coordinatorOnWayPickup : t.coordinatorOnWay;
+    case "coordinatorArrived":
+      return pickup ? t.coordinatorArrivedPickup : t.coordinatorArrived;
+  }
+}
+
 // Customer texts (editable in /admin; defaults match the original Quo wording).
 function onWayText(s: AppSettings, stop: Stop, truck: string, link?: string): string {
-  return renderTemplate(s.templates.onWay, templateVars(s, stop, truck, greetName(stop), link));
+  return renderTemplate(slotText(s, stop, "onWay"), templateVars(s, stop, truck, greetName(stop), link));
 }
 function arrivedText(s: AppSettings, stop: Stop, truck: string): string {
-  return renderTemplate(s.templates.arrived, templateVars(s, stop, truck, greetName(stop)));
+  return renderTemplate(slotText(s, stop, "arrived"), templateVars(s, stop, truck, greetName(stop)));
 }
 
 // Day-of coordinator variants — same info, addressed to the coordinator.
 function coordinatorOnWayText(s: AppSettings, stop: Stop, truck: string, link?: string): string {
   return renderTemplate(
-    s.templates.coordinatorOnWay,
+    slotText(s, stop, "coordinatorOnWay"),
     templateVars(s, stop, truck, firstName(stop.dayOfName), link),
   );
 }
 function coordinatorArrivedText(s: AppSettings, stop: Stop, truck: string): string {
   return renderTemplate(
-    s.templates.coordinatorArrived,
+    slotText(s, stop, "coordinatorArrived"),
     templateVars(s, stop, truck, firstName(stop.dayOfName)),
   );
 }
