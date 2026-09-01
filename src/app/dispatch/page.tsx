@@ -211,7 +211,11 @@ function TruckCard({
   const pct = total ? Math.round((done / total) * 100) : 0;
 
   return (
-    <div className="surface space-y-4 rounded-2xl border border-white/5 p-5">
+    <div
+      className={`surface space-y-4 rounded-2xl border border-white/5 p-5 ${
+        route?.status === "done" ? "opacity-60" : ""
+      }`}
+    >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <span className="btn-hero flex size-9 items-center justify-center rounded-xl">
@@ -348,6 +352,7 @@ function StatusTag({ status }: { status: string | null }) {
 }
 
 function routeStatusLabel(route: Route, done: number, total: number): string {
+  if (route.status === "done") return "Closed";
   if (route.status === "scraping") return "Loading route…";
   if (route.status === "failed") return "Route failed — manual entry";
   if (total === 0) return "Ready to start";

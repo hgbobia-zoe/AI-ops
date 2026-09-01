@@ -6,26 +6,40 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { CircleX } from "lucide-react";
+import { CircleX, Check } from "lucide-react";
 
 export function CloseRouteButton({ truckId }: { truckId: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [done, setDone] = useState(false);
 
   async function close() {
     setBusy(true);
     try {
-      await fetch("/api/route/close", {
+      const r = await fetch("/api/route/close", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ truckId }),
       });
-      router.refresh();
+      if (r.ok) {
+        // Show closed immediately so there's no "did it work?" gap while the board
+        // re-renders; router.refresh() then syncs the rest of the card.
+        setDone(true);
+        router.refresh();
+      }
     } finally {
       setBusy(false);
       setConfirming(false);
     }
+  }
+
+  if (done) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Check className="size-3.5" /> Route closed
+      </span>
+    );
   }
 
   if (confirming) {
