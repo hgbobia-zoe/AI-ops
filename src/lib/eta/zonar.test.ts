@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { parsePosition } from "./zonar";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parsePosition, getTruckPosition, rateLimitedUntil } from "./zonar";
 
 describe("parsePosition", () => {
   it("finds lat/long in a nested Zonar response", () => {
@@ -23,5 +23,31 @@ describe("parsePosition", () => {
   it("finds the position deep inside a GPS TrackIt unit object", () => {
     const unit = { id: 1, label: "Isuzu NPR 1", lastEvent: { latitude: 38.9, longitude: -77.03 } };
     expect(parsePosition(unit)).toMatchObject({ lat: 38.9, lng: -77.03 });
+  });
+});
+
+describe("getTruckPosition rate-limit backoff", () => {
+  beforeEach(() => {
+    process.env.GPSTRACKIT_API_KEY = "test-key";
+    (globalThis as { __gpstrackitRateLimitedUntil?: number }).__gpstrackitRateLimitedUntil = 0;
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env.GPSTRACKIT_API_KEY;
+  });
+
+  it("backs off after a 429 and stops calling the API", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 429 }) as unknown as Response);
+
+    // First call hits the API, gets 429, returns null, and arms the backoff.
+    expect(await getTruckPosition("NPR-1")).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(rateLimitedUntil()).toBeGreaterThan(Date.now());
+
+    // Second call is skipped entirely while backing off — no new API hit.
+    expect(await getTruckPosition("NPR-1")).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

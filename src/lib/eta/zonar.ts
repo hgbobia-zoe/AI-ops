@@ -45,14 +45,35 @@ export interface TruckPosition {
   ts?: string;
 }
 
+// GPS TrackIt caps calls per day; when we hit 429 (rate-limited / quota reached) there's
+// no point retrying every 45s — that keeps us throttled and burns whatever's left. So we
+// stop calling until `rateLimitedUntil`, degrading to the planned ETA in the meantime.
+// A 429 is self-healing (the quota resets), so we do NOT page ops for it. Stored on
+// globalThis so the backoff survives Next's per-bundle module copies.
+const DEFAULT_BACKOFF_MS = Number(process.env.GPSTRACKIT_RATELIMIT_BACKOFF_SECONDS || 900) * 1000;
+const rl = globalThis as unknown as { __gpstrackitRateLimitedUntil?: number };
+
+export function rateLimitedUntil(): number {
+  return rl.__gpstrackitRateLimitedUntil ?? 0;
+}
+
 /** Fetch a truck's current GPS position from GPS TrackIt. Null if unconfigured/unavailable. */
 export async function getTruckPosition(truckId: string): Promise<TruckPosition | null> {
   if (!zonarConfigured()) return null;
+  // Backing off after a recent 429 — skip the call, fall back to the planned ETA.
+  if (Date.now() < rateLimitedUntil()) return null;
   try {
     const res = await fetch(`${BASE}unit/${encodeURIComponent(unitId(truckId))}`, {
       headers: headers(),
       cache: "no-store",
     });
+    if (res.status === 429) {
+      const retryAfter = Number(res.headers.get("retry-after")) || 0;
+      const backoff = retryAfter > 0 ? retryAfter * 1000 : DEFAULT_BACKOFF_MS;
+      rl.__gpstrackitRateLimitedUntil = Date.now() + backoff;
+      console.warn(`[gpstrackit] 429 rate-limited — backing off ${Math.round(backoff / 1000)}s`);
+      return null; // quiet degrade: a rate limit is transient, don't page ops
+    }
     if (!res.ok) {
       console.error("[gpstrackit] unit HTTP", res.status);
       void alertOps("GPS TrackIt (Zonar)", `unit ${truckId}: HTTP ${res.status} — live ETA/tracking unavailable`);
