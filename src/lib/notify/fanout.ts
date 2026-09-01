@@ -37,7 +37,7 @@ function firstName(name?: string): string {
 // How to address the customer in a text. Prefer the real first name from Goodshuffle's
 // renter (custFirstName); fall back to the first token of the display name — which is
 // often an event/last-name label ("Lebensohn - Wedding"), hence the preference.
-function greetName(stop: Stop): string {
+export function greetName(stop: Stop): string {
   return firstName(stop.custFirstName || stop.custName);
 }
 
