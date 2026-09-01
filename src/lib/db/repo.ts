@@ -64,17 +64,9 @@ function safeJson(s: string): unknown {
   }
 }
 
-/** The current route for a truck (latest), with its stops in order. */
-export function getRoute(truckId: string): Route | null {
-  const db = getDb();
-  const row = db
-    .prepare(
-      "SELECT * FROM routes WHERE truck_id = ? ORDER BY updated_at DESC LIMIT 1",
-    )
-    .get(truckId) as RouteRow | undefined;
-  if (!row) return null;
+function buildRoute(row: RouteRow): Route {
   const stops = (
-    db
+    getDb()
       .prepare("SELECT * FROM stops WHERE route_id = ? ORDER BY sequence")
       .all(row.route_id) as StopRow[]
   ).map(toStop);
@@ -86,6 +78,31 @@ export function getRoute(truckId: string): Route | null {
     status: row.status as RouteStatus,
     stops,
   };
+}
+
+/** The current route for a truck (latest), with its stops in order. */
+export function getRoute(truckId: string): Route | null {
+  const row = getDb()
+    .prepare("SELECT * FROM routes WHERE truck_id = ? ORDER BY updated_at DESC LIMIT 1")
+    .get(truckId) as RouteRow | undefined;
+  return row ? buildRoute(row) : null;
+}
+
+/** A truck's route for a specific calendar day (YYYY-MM-DD), or null if none. */
+export function getRouteForDate(truckId: string, date: string): Route | null {
+  const row = getDb()
+    .prepare("SELECT * FROM routes WHERE truck_id = ? AND date = ? ORDER BY updated_at DESC LIMIT 1")
+    .get(truckId, date) as RouteRow | undefined;
+  return row ? buildRoute(row) : null;
+}
+
+/** Distinct route dates, newest first — for the dispatch history picker. */
+export function getRouteDates(): string[] {
+  return (
+    getDb().prepare("SELECT DISTINCT date FROM routes ORDER BY date DESC").all() as {
+      date: string;
+    }[]
+  ).map((r) => r.date);
 }
 
 export function upsertRoute(r: {

@@ -9,12 +9,14 @@ import { IgnitionPane } from "@/components/IgnitionPane";
 import { ReopenButton } from "@/components/ReopenButton";
 import { CloseRouteButton } from "@/components/CloseRouteButton";
 import { ResolveExceptionButton } from "@/components/ResolveExceptionButton";
+import Link from "next/link";
+import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
 import {
   getOpenExceptions,
   getRecentMessages,
-  getRoute,
+  getRouteForDate,
 } from "@/lib/db/repo";
-import { DISPLAY_TZ } from "@/lib/dates";
+import { DISPLAY_TZ, todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { STATE_VISUAL } from "@/lib/stateVisual";
 import type { Route, Stop } from "@/lib/types";
@@ -24,12 +26,19 @@ export const dynamic = "force-dynamic";
 // The dashboard is a split view — our board beside Ignition (fleet telematics) —
 // mirroring how the delivery kiosk splits the app beside Goodshuffle. The split
 // only appears when NEXT_PUBLIC_IGNITION_URL is set; otherwise the board is full-width.
-export default function DispatchPage() {
+export default async function DispatchPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ date?: string }>;
+}) {
+  const sp = await searchParams;
+  const today = todayInOpsTz();
+  const date = sp?.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : today;
   const ignitionUrl = process.env.IGNITION_URL || "";
   if (!ignitionUrl) {
     return (
       <main className="mx-auto max-w-6xl p-5 pb-16">
-        <DispatchBoard />
+        <DispatchBoard date={date} today={today} />
       </main>
     );
   }
@@ -41,46 +50,58 @@ export default function DispatchPage() {
       </section>
       {/* Our dispatch board — the action layer. */}
       <section className="min-h-0 flex-1 overflow-y-auto p-5 pb-16">
-        <DispatchBoard />
+        <DispatchBoard date={date} today={today} />
       </section>
     </div>
   );
 }
 
-async function DispatchBoard() {
+async function DispatchBoard({ date, today }: { date: string; today: string }) {
   const trucks = getActiveVehicles();
-  const fleet = trucks.map((t) => ({ truck: t, route: getRoute(t.truckId) }));
-  const exceptions = getOpenExceptions();
-  const messages = getRecentMessages(30);
+  const fleet = trucks.map((t) => ({ truck: t, route: getRouteForDate(t.truckId, date) }));
+  const isToday = date === today;
+  const exceptions = isToday ? getOpenExceptions() : [];
+  const messages = isToday ? getRecentMessages(30) : [];
+  const anyRoute = fleet.some((f) => f.route);
 
   const truckName = (id: string | null) =>
     trucks.find((t) => t.truckId === id)?.name ?? id ?? "—";
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6">
-      <AutoRefresh seconds={15} />
+      {isToday && <AutoRefresh seconds={15} />}
 
-      <header className="flex items-center justify-between">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Dispatch</h1>
           <p className="text-sm text-muted-foreground">
-            {trucks.length} trucks · live view · refreshes automatically
+            {trucks.length} trucks ·{" "}
+            {isToday ? "live view · refreshes automatically" : "history view"}
           </p>
         </div>
-        {exceptions.length > 0 && (
-          <span className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-sm font-medium">
-            <AlertTriangle className="size-4" /> {exceptions.length} open
-          </span>
-        )}
+        <DateNav date={date} today={today} />
       </header>
+
+      {!anyRoute && (
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-muted-foreground">
+          No routes scheduled for {isToday ? "today" : formatYmdLong(date)}.
+        </div>
+      )}
 
       {/* Fleet */}
       <section className="grid gap-4 lg:grid-cols-2">
         {fleet.map(({ truck, route }) => (
-          <TruckCard key={truck.truckId} name={truck.name} route={route} />
+          <TruckCard
+            key={truck.truckId}
+            name={truck.name}
+            route={route}
+            noRouteLabel={isToday ? "No route scheduled today" : "No route this day"}
+          />
         ))}
       </section>
 
+      {isToday && (
+        <>
       {/* Exceptions */}
       <section className="space-y-2">
         <h2 className="text-lg font-semibold">Open exceptions</h2>
@@ -128,11 +149,61 @@ async function DispatchBoard() {
           </div>
         )}
       </section>
+        </>
+      )}
     </div>
   );
 }
 
-function TruckCard({ name, route }: { name: string; route: Route | null }) {
+function DateNav({ date, today }: { date: string; today: string }) {
+  const prev = shiftYmd(date, -1);
+  const next = shiftYmd(date, 1);
+  const isToday = date === today;
+  const href = (d: string) => (d === today ? "/dispatch" : `/dispatch?date=${d}`);
+  return (
+    <div className="flex items-center gap-1.5">
+      <Link
+        href={href(prev)}
+        aria-label="Previous day"
+        className="flex size-9 items-center justify-center rounded-lg border border-white/10 text-muted-foreground hover:text-foreground"
+      >
+        <ChevronLeft className="size-4" />
+      </Link>
+      <span className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm font-medium">
+        <CalendarDays className="size-4 text-muted-foreground" />
+        {isToday ? "Today" : formatYmdLong(date)}
+      </span>
+      <Link
+        href={href(next)}
+        aria-label="Next day"
+        aria-disabled={isToday}
+        className={`flex size-9 items-center justify-center rounded-lg border border-white/10 ${
+          isToday ? "pointer-events-none opacity-40" : "text-muted-foreground hover:text-foreground"
+        }`}
+      >
+        <ChevronRight className="size-4" />
+      </Link>
+      {!isToday && (
+        <Link
+          href="/dispatch"
+          className="ml-1 rounded-lg border border-white/10 px-2.5 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+        >
+          Today
+        </Link>
+      )}
+    </div>
+  );
+}
+
+function TruckCard({
+  name,
+  route,
+  noRouteLabel = "No route scheduled",
+}: {
+  name: string;
+  route: Route | null;
+  noRouteLabel?: string;
+}) {
   const stops = route?.stops ?? [];
   const total = stops.length;
   const done = stops.filter((s) => s.state === "Completed" || s.state === "Returned").length;
@@ -149,7 +220,7 @@ function TruckCard({ name, route }: { name: string; route: Route | null }) {
           <div>
             <div className="font-semibold">{name}</div>
             <div className="text-xs text-muted-foreground">
-              {route ? routeStatusLabel(route, done, total) : "No route today"}
+              {route ? routeStatusLabel(route, done, total) : noRouteLabel}
             </div>
           </div>
         </div>

@@ -36,6 +36,26 @@ export function todayInOpsTz(d: Date = new Date()): string {
   return ymdInTz(process.env.ETA_TIMEZONE || DEFAULT_TZ, d);
 }
 
+/** Shift a `YYYY-MM-DD` string by `days` (may be negative); returns `YYYY-MM-DD`. */
+export function shiftYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+/** `YYYY-MM-DD` → "Wed, Sep 3" for headings. Parsed as a plain calendar day (UTC). */
+export function formatYmdLong(ymd: string): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (!y || !m || !d) return ymd;
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
 // Matches an ISO-8601 datetime like 2026-08-31T09:00:00.000-04:00 (with or without
 // fractional seconds / offset). Goodshuffle stops arrive with raw ISO windows/ETAs.
 const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
