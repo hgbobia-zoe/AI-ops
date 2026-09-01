@@ -250,12 +250,22 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
                         if (boardMode) exitBoardMode()
                         binding.dispatchWebView.loadUrl(Config.appUrl(this) + "/admin")
                     }
-                    1 -> confirmSwitchLogin("Goodshuffle") { switchGoodshuffleLogin() }
-                    2 -> confirmSwitchLogin("Ignition") { switchIgnitionLogin() }
+                    1 -> switchGoodshuffleLogin()
+                    2 -> switchIgnitionLogin()
                 }
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    // Direct entry points (also callable from the web /admin via the bridge): each shows
+    // a confirm, then signs that one site out on this tablet.
+    override fun switchGoodshuffleLogin() {
+        runOnUiThread { confirmSwitchLogin("Goodshuffle") { doSwitchGoodshuffleLogin() } }
+    }
+
+    override fun switchIgnitionLogin() {
+        runOnUiThread { confirmSwitchLogin("Ignition") { doSwitchIgnitionLogin() } }
     }
 
     private fun confirmSwitchLogin(name: String, onConfirm: () -> Unit) {
@@ -267,7 +277,7 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
             .show()
     }
 
-    private fun switchGoodshuffleLogin() {
+    private fun doSwitchGoodshuffleLogin() {
         if (boardMode) exitBoardMode()
         signOutWebView(binding.gsproWebView, Config.gsproUrl(this))
         // Goodshuffle is the visible pane; a fresh load lands on its sign-in.
@@ -276,7 +286,7 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
         sessionHandler.postDelayed({ checkSessions() }, 2_000)
     }
 
-    private fun switchIgnitionLogin() {
+    private fun doSwitchIgnitionLogin() {
         signOutWebView(binding.ignitionWebView, Config.ignitionUrl(this))
         // Reveal Ignition full-screen so the operator can sign the new account in.
         showIgnition()

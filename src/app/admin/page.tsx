@@ -6,7 +6,8 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2 } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn } from "lucide-react";
+import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 
 const ADMIN_PIN = process.env.NEXT_PUBLIC_ADMIN_PIN || "0000";
 
@@ -54,6 +55,10 @@ export default function AdminPage() {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Whether this page is running inside the tablet/desktop kiosk (only there can we
+  // switch the Goodshuffle / Ignition WebView sessions).
+  const [inKiosk, setInKiosk] = useState(false);
+  useEffect(() => setInKiosk(isKiosk()), []);
 
   useEffect(() => {
     if (!authed) return;
@@ -212,6 +217,40 @@ export default function AdminPage() {
                 ))}
               </div>
             </div>
+          </Section>
+
+          {/* Tablet sign-ins (Goodshuffle / Ignition) */}
+          <Section icon={<KeyRound className="size-4" />} title="Tablet sign-ins">
+            <p className="text-sm text-muted-foreground">
+              Goodshuffle and Ignition are signed in on each tablet (and the office
+              display) — there are no passwords to store here. To switch accounts, sign the
+              current one out on the device and sign the new one in.
+            </p>
+            {inKiosk ? (
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => switchGoodshuffleLoginViaKiosk()}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/15 px-4 py-2.5 text-sm hover:bg-accent"
+                >
+                  <LogIn className="size-4" /> Switch Goodshuffle login
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchIgnitionLoginViaKiosk()}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/15 px-4 py-2.5 text-sm hover:bg-accent"
+                >
+                  <LogIn className="size-4" /> Switch Ignition login
+                </button>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm text-muted-foreground">
+                You&apos;re viewing this in a regular browser, so there&apos;s no tablet
+                session to switch here. Open this on the tablet or office display and use{" "}
+                <span className="font-medium text-foreground">⋯ → Admin</span> to switch a
+                Goodshuffle or Ignition login.
+              </div>
+            )}
           </Section>
 
           {/* Templates */}

@@ -84,6 +84,14 @@ class KioskJsBridge(private val host: BridgeHost) {
          */
         fun openAdminPanel()
 
+        /** Sign the current Goodshuffle account out of this tablet (confirm, then clear
+         *  its session) so a different one can sign in. */
+        fun switchGoodshuffleLogin()
+
+        /** Sign the current Ignition account out of this tablet (confirm, then clear its
+         *  session) and reveal Ignition so a different one can sign in. */
+        fun switchIgnitionLogin()
+
         /** Attempt to leave lock-task mode; returns true if the PIN matched. */
         fun requestExit(pin: String): Boolean
     }
@@ -183,6 +191,20 @@ class KioskJsBridge(private val host: BridgeHost) {
     fun openAdminPanel() {
         Log.i(TAG, "openAdminPanel() called")
         host.openAdminPanel()
+    }
+
+    /** Switch the Goodshuffle login on this tablet (confirm + sign out). */
+    @JavascriptInterface
+    fun switchGoodshuffleLogin() {
+        Log.i(TAG, "switchGoodshuffleLogin() called")
+        host.switchGoodshuffleLogin()
+    }
+
+    /** Switch the Ignition login on this tablet (confirm + sign out). */
+    @JavascriptInterface
+    fun switchIgnitionLogin() {
+        Log.i(TAG, "switchIgnitionLogin() called")
+        host.switchIgnitionLogin()
     }
 
     companion object {

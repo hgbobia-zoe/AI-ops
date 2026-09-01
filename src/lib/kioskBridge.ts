@@ -23,6 +23,10 @@ interface ZoeKioskBridge {
   // Open the native admin panel: switch the Goodshuffle / Ignition logins on this
   // tablet, or open web settings. Absent in older builds.
   openAdminPanel?: () => void;
+  // Sign one companion site out of this tablet so a different account can sign in.
+  // Present in the APK from v1.0.17; older builds expose only openAdminPanel.
+  switchGoodshuffleLogin?: () => void;
+  switchIgnitionLogin?: () => void;
   ping?: () => string;
 }
 
@@ -158,6 +162,45 @@ export function openAdminPanelViaKiosk(): boolean {
     }
   }
   return false;
+}
+
+/** True when running inside the native kiosk shell (so tablet-login actions apply). */
+export function isKiosk(): boolean {
+  return inAndroidKiosk();
+}
+
+/**
+ * Switch the Goodshuffle / Ignition login on THIS tablet (the native shell shows a
+ * confirm, then signs that site out). Returns true if handled natively. Falls back to
+ * opening the whole native admin panel on older APKs that lack the direct method;
+ * returns false in a plain browser, where there's no device session to switch.
+ */
+export function switchGoodshuffleLoginViaKiosk(): boolean {
+  const b = bridge();
+  if (!b) return false;
+  if (typeof b.switchGoodshuffleLogin === "function") {
+    try {
+      b.switchGoodshuffleLogin();
+      return true;
+    } catch {
+      /* fall through */
+    }
+  }
+  return openAdminPanelViaKiosk();
+}
+
+export function switchIgnitionLoginViaKiosk(): boolean {
+  const b = bridge();
+  if (!b) return false;
+  if (typeof b.switchIgnitionLogin === "function") {
+    try {
+      b.switchIgnitionLogin();
+      return true;
+    } catch {
+      /* fall through */
+    }
+  }
+  return openAdminPanelViaKiosk();
 }
 
 // truckId → Ignition unit id. Captured from Zonar's searchUnits (see
