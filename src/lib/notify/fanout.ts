@@ -8,7 +8,7 @@ import { sendSms } from "./sms";
 import { slackNotify } from "./slack";
 import { alertOps } from "./alert";
 import { createTracking, expireTracking, insertMessage, insertException, insertAudit } from "@/lib/db/repo";
-import { getSettings, renderTemplate, type AppSettings } from "@/lib/settings";
+import { getSettings, renderTemplate, templateForKind, type AppSettings } from "@/lib/settings";
 import { formatClockTime } from "@/lib/dates";
 
 export interface FanoutCtx {
@@ -65,26 +65,11 @@ function templateVars(
   };
 }
 
-// Pick the delivery or pickup wording for a template slot, based on the stop's kind
-// (defaults to delivery when unknown — the original behavior).
-function slotText(
+const slotText = (
   s: AppSettings,
   stop: Stop,
   slot: "onWay" | "arrived" | "coordinatorOnWay" | "coordinatorArrived",
-): string {
-  const t = s.templates;
-  const pickup = stop.kind === "pickup";
-  switch (slot) {
-    case "onWay":
-      return pickup ? t.onWayPickup : t.onWay;
-    case "arrived":
-      return pickup ? t.arrivedPickup : t.arrived;
-    case "coordinatorOnWay":
-      return pickup ? t.coordinatorOnWayPickup : t.coordinatorOnWay;
-    case "coordinatorArrived":
-      return pickup ? t.coordinatorArrivedPickup : t.coordinatorArrived;
-  }
-}
+): string => templateForKind(s.templates, stop.kind, slot);
 
 // Customer texts (editable in /admin; defaults match the original Quo wording).
 function onWayText(s: AppSettings, stop: Stop, truck: string, link?: string): string {

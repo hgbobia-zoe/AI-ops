@@ -126,6 +126,26 @@ export function defaultSettings(): AppSettings {
   };
 }
 
+/** Pick the delivery or pickup wording for a template slot, based on the stop's kind
+ *  (defaults to delivery when unknown — the original behavior). */
+export function templateForKind(
+  t: MessageTemplates,
+  kind: "delivery" | "pickup" | undefined,
+  slot: "onWay" | "arrived" | "coordinatorOnWay" | "coordinatorArrived",
+): string {
+  const pickup = kind === "pickup";
+  switch (slot) {
+    case "onWay":
+      return pickup ? t.onWayPickup : t.onWay;
+    case "arrived":
+      return pickup ? t.arrivedPickup : t.arrived;
+    case "coordinatorOnWay":
+      return pickup ? t.coordinatorOnWayPickup : t.coordinatorOnWay;
+    case "coordinatorArrived":
+      return pickup ? t.coordinatorArrivedPickup : t.coordinatorArrived;
+  }
+}
+
 // Deep-merge a stored partial over the defaults so newly-added fields keep working on
 // an old saved row. Objects merge one level (templates / the id maps); scalars replace.
 function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSettings {

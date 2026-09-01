@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderTemplate, defaultSettings } from "./settings";
+import { renderTemplate, defaultSettings, templateForKind } from "./settings";
 
 describe("renderTemplate", () => {
   it("substitutes provided variables", () => {
@@ -26,6 +26,14 @@ describe("renderTemplate", () => {
     expect(t.onWayPickup).toMatch(/pick up/i);
     expect(t.arrivedPickup).toMatch(/pick up/i);
     expect(t.onWayPickup).not.toBe(t.onWay);
+  });
+
+  it("templateForKind selects the pickup set only for pickup stops", () => {
+    const t = defaultSettings().templates;
+    expect(templateForKind(t, "pickup", "onWay")).toBe(t.onWayPickup);
+    expect(templateForKind(t, "delivery", "onWay")).toBe(t.onWay);
+    expect(templateForKind(t, undefined, "onWay")).toBe(t.onWay); // default = delivery
+    expect(templateForKind(t, "pickup", "coordinatorArrived")).toBe(t.coordinatorArrivedPickup);
   });
 
   it("renders the default on-way template with no link cleanly", () => {
