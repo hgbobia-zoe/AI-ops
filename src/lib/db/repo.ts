@@ -379,6 +379,14 @@ export function insertMessage(m: {
     });
 }
 
+/** Mark an exception resolved — dispatch cleared it from the board. */
+export function resolveException(exceptionId: string): boolean {
+  const info = getDb()
+    .prepare("UPDATE exceptions SET resolved = 1 WHERE exception_id = ?")
+    .run(exceptionId);
+  return info.changes > 0;
+}
+
 export function insertException(x: {
   stopId?: string;
   type: string;

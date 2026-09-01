@@ -8,6 +8,7 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { IgnitionPane } from "@/components/IgnitionPane";
 import { ReopenButton } from "@/components/ReopenButton";
 import { CloseRouteButton } from "@/components/CloseRouteButton";
+import { ResolveExceptionButton } from "@/components/ResolveExceptionButton";
 import {
   getOpenExceptions,
   getRecentMessages,
@@ -93,13 +94,14 @@ async function DispatchBoard() {
                 className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm"
               >
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                <div>
+                <div className="min-w-0 flex-1">
                   <div className="font-medium">
                     {truckName(x.truckId)} · {x.type}
                   </div>
                   {x.reason && <div className="text-muted-foreground">{x.reason}</div>}
                   <div className="text-xs text-muted-foreground">{fmtTime(x.ts)}</div>
                 </div>
+                <ResolveExceptionButton exceptionId={x.exceptionId} />
               </div>
             ))}
           </div>
