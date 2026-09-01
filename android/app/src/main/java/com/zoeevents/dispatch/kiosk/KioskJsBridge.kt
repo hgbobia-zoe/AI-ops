@@ -77,6 +77,13 @@ class KioskJsBridge(private val host: BridgeHost) {
          */
         fun openDispatchBoard()
 
+        /**
+         * Open the native admin panel: switch the Goodshuffle / Ignition logins on this
+         * tablet (sign out the current account so a different one can sign in), or open
+         * web settings. Gated on the web side by the admin code.
+         */
+        fun openAdminPanel()
+
         /** Attempt to leave lock-task mode; returns true if the PIN matched. */
         fun requestExit(pin: String): Boolean
     }
@@ -169,6 +176,13 @@ class KioskJsBridge(private val host: BridgeHost) {
     fun openDispatchBoard() {
         Log.i(TAG, "openDispatchBoard() called")
         host.openDispatchBoard()
+    }
+
+    /** Open the native admin panel (switch Goodshuffle / Ignition logins). */
+    @JavascriptInterface
+    fun openAdminPanel() {
+        Log.i(TAG, "openAdminPanel() called")
+        host.openAdminPanel()
     }
 
     companion object {

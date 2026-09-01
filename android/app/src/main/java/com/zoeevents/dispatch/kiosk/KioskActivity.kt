@@ -225,6 +225,99 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
         runOnUiThread { enterBoardMode() }
     }
 
+    override fun openAdminPanel() {
+        runOnUiThread { showAdminPanel() }
+    }
+
+    // ── Admin panel (switch companion logins / open web settings) ───────────────
+    // The Goodshuffle and Ignition logins live in their WebView sessions on this tablet.
+    // "Switch login" signs the current account out of just that site (clears its cookies
+    // + web storage) and reloads it to its sign-in, so a different account can sign in —
+    // without disturbing the other site's session. Reached from the dispatch ⋯ menu
+    // (admin-code gated on the web side).
+
+    private fun showAdminPanel() {
+        val items = arrayOf(
+            "Open settings (templates, Ignition link…)",
+            "Switch Goodshuffle login",
+            "Switch Ignition login",
+        )
+        AlertDialog.Builder(this)
+            .setTitle(R.string.admin_title)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> {
+                        if (boardMode) exitBoardMode()
+                        binding.dispatchWebView.loadUrl(Config.appUrl(this) + "/admin")
+                    }
+                    1 -> confirmSwitchLogin("Goodshuffle") { switchGoodshuffleLogin() }
+                    2 -> confirmSwitchLogin("Ignition") { switchIgnitionLogin() }
+                }
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun confirmSwitchLogin(name: String, onConfirm: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle("Switch $name login")
+            .setMessage("Sign the current $name account out of this tablet so a different one can sign in?")
+            .setNegativeButton(R.string.cancel, null)
+            .setPositiveButton("Sign out") { _, _ -> onConfirm() }
+            .show()
+    }
+
+    private fun switchGoodshuffleLogin() {
+        if (boardMode) exitBoardMode()
+        signOutWebView(binding.gsproWebView, Config.gsproUrl(this))
+        // Goodshuffle is the visible pane; a fresh load lands on its sign-in.
+        attentionShowing = true
+        lastGsBad = true
+        sessionHandler.postDelayed({ checkSessions() }, 2_000)
+    }
+
+    private fun switchIgnitionLogin() {
+        signOutWebView(binding.ignitionWebView, Config.ignitionUrl(this))
+        // Reveal Ignition full-screen so the operator can sign the new account in.
+        showIgnition()
+    }
+
+    /**
+     * Sign a companion site out of its WebView: clear that origin's cookies AND web
+     * storage (Ignition's Cognito token lives in localStorage, not a cookie), then
+     * reload the site so it shows its login. Scoped to this one origin so the other
+     * companion session is untouched.
+     */
+    private fun signOutWebView(webView: WebView, url: String) {
+        clearCookiesFor(url)
+        webView.evaluateJavascript(
+            "try{localStorage.clear();sessionStorage.clear();}catch(e){}",
+        ) {
+            // Reload only after storage is cleared, so the new page starts signed-out.
+            webView.loadUrl(url)
+        }
+    }
+
+    /** Expire the visible cookies for [url]'s origin (host + dot-host). Best-effort. */
+    private fun clearCookiesFor(url: String) {
+        try {
+            val cm = android.webkit.CookieManager.getInstance()
+            val host = android.net.Uri.parse(url).host ?: return
+            val existing = cm.getCookie(url) ?: ""
+            for (pair in existing.split(";")) {
+                val name = pair.substringBefore("=").trim()
+                if (name.isEmpty()) continue
+                cm.setCookie(url, "$name=; Max-Age=0; Path=/")
+                cm.setCookie(url, "$name=; Max-Age=0; Path=/; Domain=$host")
+                cm.setCookie(url, "$name=; Max-Age=0; Path=/; Domain=.$host")
+            }
+            cm.flush()
+            Log.i(TAG, "cleared cookies for $host")
+        } catch (t: Throwable) {
+            Log.w(TAG, "clearCookiesFor failed: ${t.message}")
+        }
+    }
+
     // ── Dispatch-board mode (office display) ────────────────────────────────────
     // Full-screen board + live Ignition side-by-side. Reuses the already-alive Ignition
     // WebView (its logged-in Zonar session) rather than iframing it — Ignition blocks

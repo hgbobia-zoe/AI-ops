@@ -10,9 +10,10 @@ import {
   DownloadCloud,
   ArrowUpCircle,
   LayoutDashboard,
+  SlidersHorizontal,
 } from "lucide-react";
 import { STATE_VISUAL } from "@/lib/stateVisual";
-import { openDispatchBoardViaKiosk } from "@/lib/kioskBridge";
+import { openDispatchBoardViaKiosk, openAdminPanelViaKiosk } from "@/lib/kioskBridge";
 import type { Stop } from "@/lib/types";
 
 // 4-digit code that gates "Dispatch view" (switching the tablet/desktop kiosk from
@@ -47,6 +48,7 @@ export function Header({
   // backdrop, which works everywhere.
   const [menuOpen, setMenuOpen] = useState(false);
   const [pinOpen, setPinOpen] = useState(false);
+  const [pinTarget, setPinTarget] = useState<"dispatch" | "admin">("dispatch");
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState(false);
   const run = (fn: () => void) => () => {
@@ -54,17 +56,33 @@ export function Header({
     fn();
   };
 
-  function openDispatch() {
+  const promptFor = (target: "dispatch" | "admin") => () => {
+    setPinTarget(target);
+    setPin("");
+    setPinError(false);
+    setPinOpen(true);
+  };
+
+  const PIN_UI = {
+    dispatch: { title: "Switch to dispatch view", body: "Enter the 4-digit code to open the dispatch board." },
+    admin: { title: "Admin", body: "Enter the 4-digit code to open admin." },
+  } as const;
+
+  function submitPin() {
     if (pin !== DISPATCH_PIN) {
       setPinError(true);
       setPin("");
       return;
     }
     setPinOpen(false);
-    // In the native kiosk, ask the shell to go full-screen board + Ignition side-by-side.
-    // In a plain browser / older APK it returns false, so we just navigate to the board.
-    if (!openDispatchBoardViaKiosk()) {
-      window.location.href = "/dispatch";
+    if (pinTarget === "dispatch") {
+      // Native kiosk: go full-screen board + Ignition side-by-side. Browser/older APK:
+      // navigate to the board.
+      if (!openDispatchBoardViaKiosk()) window.location.href = "/dispatch";
+    } else {
+      // Native kiosk: open the native admin panel (switch logins). Browser/older APK:
+      // open web settings.
+      if (!openAdminPanelViaKiosk()) window.location.href = "/admin";
     }
   }
 
@@ -129,15 +147,11 @@ export function Header({
                     </MenuItem>
                   )}
                   <div className="my-1 h-px bg-border" />
-                  <MenuItem
-                    onClick={run(() => {
-                      setPin("");
-                      setPinError(false);
-                      setPinOpen(true);
-                    })}
-                    icon={<LayoutDashboard className="size-4" />}
-                  >
+                  <MenuItem onClick={run(promptFor("dispatch"))} icon={<LayoutDashboard className="size-4" />}>
                     Dispatch view
+                  </MenuItem>
+                  <MenuItem onClick={run(promptFor("admin"))} icon={<SlidersHorizontal className="size-4" />}>
+                    Admin
                   </MenuItem>
                 </div>
               </>
@@ -156,11 +170,14 @@ export function Header({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2 text-sm font-semibold">
-              <LayoutDashboard className="size-4" /> Switch to dispatch view
+              {pinTarget === "admin" ? (
+                <SlidersHorizontal className="size-4" />
+              ) : (
+                <LayoutDashboard className="size-4" />
+              )}{" "}
+              {PIN_UI[pinTarget].title}
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Enter the 4-digit code to open the dispatch board.
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{PIN_UI[pinTarget].body}</p>
             <input
               autoFocus
               type="password"
@@ -173,7 +190,7 @@ export function Header({
                 setPinError(false);
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") openDispatch();
+                if (e.key === "Enter") submitPin();
               }}
               placeholder="••••"
               className="mt-3 w-full rounded-xl border bg-background px-4 py-3 text-center text-2xl tracking-[0.5em] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -193,7 +210,7 @@ export function Header({
               </button>
               <button
                 type="button"
-                onClick={openDispatch}
+                onClick={submitPin}
                 disabled={pin.length !== 4}
                 className="btn-hero flex-1 rounded-xl px-4 py-2.5 text-sm font-medium disabled:opacity-50"
               >

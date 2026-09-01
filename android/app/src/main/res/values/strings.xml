@@ -19,6 +19,9 @@
     <!-- Dispatch-board mode. -->
     <string name="board_exit_btn">← Driver view</string>
 
+    <!-- Admin panel. -->
+    <string name="admin_title">Admin</string>
+
     <!-- Attention banner (login needed / expired). -->
     <string name="attention_signin_needed">Sign-in needed</string>
     <string name="fix_goodshuffle_btn">Fix Goodshuffle</string>

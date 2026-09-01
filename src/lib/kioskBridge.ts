@@ -20,6 +20,9 @@ interface ZoeKioskBridge {
   // — the native side owns the reflow. Absent in older builds (caller falls back to a
   // plain navigation to /dispatch).
   openDispatchBoard?: () => void;
+  // Open the native admin panel: switch the Goodshuffle / Ignition logins on this
+  // tablet, or open web settings. Absent in older builds.
+  openAdminPanel?: () => void;
   ping?: () => string;
 }
 
@@ -131,6 +134,24 @@ export function openDispatchBoardViaKiosk(): boolean {
   if (b && typeof b.openDispatchBoard === "function") {
     try {
       b.openDispatchBoard();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Open the native admin panel (switch Goodshuffle / Ignition logins). Returns true if
+ * the native shell handled it; false in a plain browser / older APK, where the caller
+ * should open /admin (web settings) instead.
+ */
+export function openAdminPanelViaKiosk(): boolean {
+  const b = bridge();
+  if (b && typeof b.openAdminPanel === "function") {
+    try {
+      b.openAdminPanel();
       return true;
     } catch {
       return false;
