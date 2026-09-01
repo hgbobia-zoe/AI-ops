@@ -24,8 +24,11 @@ export function liveEtaEnabled(): boolean {
   return zonarConfigured();
 }
 
-// Short in-memory cache so repeated views / polls don't each burn an API call.
-const CACHE_MS = Number(process.env.ETA_CACHE_SECONDS || 120) * 1000;
+// Short in-memory cache so repeated views / polls don't each burn an API call. This TTL
+// — not the client poll interval — governs how many calls we make to GPS TrackIt (which
+// caps ~800/day): one upstream call per truck+stop per TTL, shared across every viewer.
+// A truck's ETA barely moves in a few minutes, so 4 min keeps us well under the cap.
+const CACHE_MS = Number(process.env.ETA_CACHE_SECONDS || 240) * 1000;
 const g = globalThis as unknown as { __etaCache?: Map<string, { at: number; eta: LiveEta }> };
 const cache = (g.__etaCache ??= new Map());
 

@@ -38,7 +38,9 @@ export function useLiveEta(
       }
     };
     void load();
-    const id = setInterval(load, 45_000);
+    // Refresh the UI every 60s. Note this does NOT set the GPS-TrackIt call rate — the
+    // server caches upstream results (ETA_CACHE_SECONDS), so most polls are cache hits.
+    const id = setInterval(load, 60_000);
     return () => {
       alive = false;
       clearInterval(id);
