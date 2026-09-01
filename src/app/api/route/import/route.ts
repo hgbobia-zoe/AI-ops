@@ -12,6 +12,20 @@ import type { Stop } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
+// CORS: allow the "Pull Zoe Routes" bookmarklet — which runs INSIDE a logged-in
+// Goodshuffle tab — to POST the extracted route here. Restricted to the Goodshuffle
+// origin so only code running there (using the operator's own session) can post.
+const CORS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "https://pro.goodshuffle.com",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "content-type",
+  Vary: "Origin",
+};
+
+export function OPTIONS(): NextResponse {
+  return new NextResponse(null, { status: 204, headers: CORS });
+}
+
 export async function POST(req: Request): Promise<NextResponse> {
   let body: {
     truckId?: string;
@@ -21,13 +35,13 @@ export async function POST(req: Request): Promise<NextResponse> {
   try {
     body = (await req.json()) as typeof body;
   } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+    return NextResponse.json({ error: "invalid_json" }, { status: 400, headers: CORS });
   }
 
   const truckId = body.truckId;
   const stopsIn = body.stops;
   if (!truckId || !Array.isArray(stopsIn) || stopsIn.length === 0) {
-    return NextResponse.json({ error: "truckId and non-empty stops[] required" }, { status: 400 });
+    return NextResponse.json({ error: "truckId and non-empty stops[] required" }, { status: 400, headers: CORS });
   }
 
   const date = body.date || todayInOpsTz();
@@ -99,11 +113,14 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
 
   writeRoute({ routeId, date, truckId, status: "ready", stops });
-  return NextResponse.json({
-    ok: true,
-    routeId,
-    stops: stops.length,
-    kept: reconciled ? actioned.length : 0,
-    firstStopId: stops[0]?.stopId,
-  });
+  return NextResponse.json(
+    {
+      ok: true,
+      routeId,
+      stops: stops.length,
+      kept: reconciled ? actioned.length : 0,
+      firstStopId: stops[0]?.stopId,
+    },
+    { headers: CORS },
+  );
 }
