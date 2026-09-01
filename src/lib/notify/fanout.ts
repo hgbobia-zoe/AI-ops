@@ -8,6 +8,8 @@ import { sendSms } from "./sms";
 import { slackNotify } from "./slack";
 import { alertOps } from "./alert";
 import { createTracking, expireTracking, insertMessage, insertException, insertAudit } from "@/lib/db/repo";
+import { getSettings, renderTemplate, type AppSettings } from "@/lib/settings";
+import { formatClockTime } from "@/lib/dates";
 
 export interface FanoutCtx {
   action: ActionType;
@@ -41,42 +43,48 @@ export function greetName(stop: Stop): string {
   return firstName(stop.custFirstName || stop.custName);
 }
 
-// Customer-facing tracking link: prefer the truck's Zonar "ETA Link" (live location
-// + ETA, configured per truck via IGNITION_ETALINK_JSON); else our self-hosted link.
-function etaLink(truckId: string): string | undefined {
-  try {
-    const map = JSON.parse(process.env.IGNITION_ETALINK_JSON || "{}") as Record<string, string>;
-    return map[truckId] || undefined;
-  } catch {
-    return undefined;
-  }
+
+// Values a message template can reference. `who` is the greeting name — the customer's
+// first name on customer texts, the coordinator's on coordinator texts.
+function templateVars(
+  s: AppSettings,
+  stop: Stop,
+  truck: string,
+  who: string,
+  link?: string,
+): Record<string, string | undefined> {
+  return {
+    firstName: who,
+    custName: stop.custName || "your event",
+    company: s.companyName,
+    truck,
+    address: stop.address,
+    eta: formatClockTime(stop.eta),
+    window: formatClockTime(stop.plannedWindow),
+    link, // undefined → its line is dropped by renderTemplate
+  };
 }
 
-// Customer "on the way" text — matches the Zoe Events Quo template.
-function onWayText(stop: Stop, link?: string): string {
-  const tail = link ? `\n\nYou can check the latest location here: ${link}` : "";
-  return (
-    `Hi ${greetName(stop)},\n\n` +
-    `This is just a quick update regarding your delivery. Our team is en route and will be arriving at your location within the next hour. Please ensure someone is available to receive your rentals.` +
-    `${tail}\n\nThank you!`
-  );
+// Customer texts (editable in /admin; defaults match the original Quo wording).
+function onWayText(s: AppSettings, stop: Stop, truck: string, link?: string): string {
+  return renderTemplate(s.templates.onWay, templateVars(s, stop, truck, greetName(stop), link));
 }
-
-function arrivedText(stop: Stop): string {
-  return `Hi ${greetName(stop)}, your Zoe Events delivery team has arrived. We'll begin unloading shortly. Thank you!`;
+function arrivedText(s: AppSettings, stop: Stop, truck: string): string {
+  return renderTemplate(s.templates.arrived, templateVars(s, stop, truck, greetName(stop)));
 }
 
 // Day-of coordinator variants — same info, addressed to the coordinator.
-function coordinatorOnWayText(stop: Stop, link?: string): string {
-  const tail = link ? `\n\nLatest location: ${link}` : "";
-  return (
-    `Hi ${firstName(stop.dayOfName)},\n\n` +
-    `Zoe Events here — our delivery team is en route to ${stop.custName || "your event"} and will arrive within the next hour. You're listed as the day-of coordinator.${tail}\n\nThank you!`
+function coordinatorOnWayText(s: AppSettings, stop: Stop, truck: string, link?: string): string {
+  return renderTemplate(
+    s.templates.coordinatorOnWay,
+    templateVars(s, stop, truck, firstName(stop.dayOfName), link),
   );
 }
-
-function coordinatorArrivedText(stop: Stop): string {
-  return `Hi ${firstName(stop.dayOfName)}, Zoe Events has arrived at ${stop.custName || "your event"}. We'll begin unloading shortly.`;
+function coordinatorArrivedText(s: AppSettings, stop: Stop, truck: string): string {
+  return renderTemplate(
+    s.templates.coordinatorArrived,
+    templateVars(s, stop, truck, firstName(stop.dayOfName)),
+  );
 }
 
 async function sendTo(stopId: string, phone: string, body: string): Promise<void> {
@@ -117,6 +125,7 @@ async function slack(text: string): Promise<void> {
 }
 
 export async function runFanout(ctx: FanoutCtx): Promise<void> {
+  const s = getSettings();
   const truck = truckLabel(ctx.truckId);
   const cur = ctx.currentStop;
   try {
@@ -128,17 +137,17 @@ export async function runFanout(ctx: FanoutCtx): Promise<void> {
         // else our own /track link.
         const link =
           (ctx.payload?.etaLink as string | undefined) ||
-          etaLink(ctx.truckId) ||
+          s.ignitionEtaLinks[ctx.truckId] ||
           createTracking(cur.stopId, cur.routeId, ctx.baseUrl).url;
-        await sms(cur, onWayText(cur, link));
-        await smsCoordinator(cur, coordinatorOnWayText(cur, link));
+        await sms(cur, onWayText(s, cur, truck, link));
+        await smsCoordinator(cur, coordinatorOnWayText(s, cur, truck, link));
         await slack(`🚚 ${truck} departed → ${cur.custName}${cur.dayOfName ? ` (day-of: ${cur.dayOfName})` : ""}`);
         break;
       }
       case "ARRIVED": {
         if (!cur) break;
-        await sms(cur, arrivedText(cur));
-        await smsCoordinator(cur, coordinatorArrivedText(cur));
+        await sms(cur, arrivedText(s, cur, truck));
+        await smsCoordinator(cur, coordinatorArrivedText(s, cur, truck));
         await slack(`📍 ${truck} arrived at ${cur.custName}`);
         break;
       }
@@ -150,10 +159,10 @@ export async function runFanout(ctx: FanoutCtx): Promise<void> {
         if (ctx.nextStop) {
           const link =
             (ctx.payload?.etaLink as string | undefined) ||
-            etaLink(ctx.truckId) ||
+            s.ignitionEtaLinks[ctx.truckId] ||
             createTracking(ctx.nextStop.stopId, ctx.nextStop.routeId, ctx.baseUrl).url;
-          await sms(ctx.nextStop, onWayText(ctx.nextStop, link));
-          await smsCoordinator(ctx.nextStop, coordinatorOnWayText(ctx.nextStop, link));
+          await sms(ctx.nextStop, onWayText(s, ctx.nextStop, truck, link));
+          await smsCoordinator(ctx.nextStop, coordinatorOnWayText(s, ctx.nextStop, truck, link));
           await slack(`🚚 ${truck} heading to ${ctx.nextStop.custName}${ctx.nextStop.dayOfName ? ` (day-of: ${ctx.nextStop.dayOfName})` : ""}`);
         }
         break;

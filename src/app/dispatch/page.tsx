@@ -10,13 +10,14 @@ import { ReopenButton } from "@/components/ReopenButton";
 import { CloseRouteButton } from "@/components/CloseRouteButton";
 import { ResolveExceptionButton } from "@/components/ResolveExceptionButton";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
+import { ChevronLeft, ChevronRight, CalendarDays, Settings } from "lucide-react";
 import {
   getOpenExceptions,
   getRecentMessages,
   getRouteForDate,
 } from "@/lib/db/repo";
 import { DISPLAY_TZ, todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
+import { getSettings } from "@/lib/settings";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { STATE_VISUAL } from "@/lib/stateVisual";
 import type { Route, Stop } from "@/lib/types";
@@ -34,7 +35,7 @@ export default async function DispatchPage({
   const sp = await searchParams;
   const today = todayInOpsTz();
   const date = sp?.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : today;
-  const ignitionUrl = process.env.IGNITION_URL || "";
+  const ignitionUrl = getSettings().ignitionUrl;
   // In the native kiosk's board mode the shell already shows the live Ignition map in
   // the pane beside us — so render the board full-width and skip our own IgnitionPane
   // (which would just try, and fail, to iframe Ignition).
@@ -83,7 +84,17 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
             {isToday ? "live view · refreshes automatically" : "history view"}
           </p>
         </div>
-        <DateNav date={date} today={today} />
+        <div className="flex items-center gap-1.5">
+          <DateNav date={date} today={today} />
+          <Link
+            href="/admin"
+            aria-label="Settings"
+            title="Settings"
+            className="flex size-9 items-center justify-center rounded-lg border border-white/10 text-muted-foreground hover:text-foreground"
+          >
+            <Settings className="size-4" />
+          </Link>
+        </div>
       </header>
 
       {!anyRoute && (

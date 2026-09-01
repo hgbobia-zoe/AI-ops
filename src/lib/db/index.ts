@@ -96,6 +96,12 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   ts        TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tracking_links (
   token      TEXT PRIMARY KEY,
   stop_id    TEXT,
