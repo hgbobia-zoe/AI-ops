@@ -44,7 +44,10 @@ export function Header({
   };
 
   return (
-    <header className="sticky top-0 z-20 border-b border-white/5 bg-background/70 backdrop-blur-xl">
+    {/* NOTE: no `backdrop-blur` here. A backdrop-filter ancestor creates a containing
+        block + stacking context that older Android System WebViews mis-handle — it
+        hid/mispositioned the dropdown so the ⋯ tap "did nothing". Solid bg avoids it. */}
+    <header className="sticky top-0 z-30 border-b border-white/10 bg-background">
       <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-3">
         <div className="flex items-center gap-2.5">
           <span className="btn-hero flex size-9 items-center justify-center rounded-xl">
@@ -63,7 +66,7 @@ export function Header({
               type="button"
               aria-label="Menu"
               onClick={() => setMenuOpen((o) => !o)}
-              className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex size-11 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <MoreHorizontal className="size-5" />
             </button>
