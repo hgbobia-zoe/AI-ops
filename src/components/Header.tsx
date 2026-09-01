@@ -9,9 +9,17 @@ import {
   MoreHorizontal,
   DownloadCloud,
   ArrowUpCircle,
+  LayoutDashboard,
 } from "lucide-react";
 import { STATE_VISUAL } from "@/lib/stateVisual";
+import { openDispatchBoardViaKiosk } from "@/lib/kioskBridge";
 import type { Stop } from "@/lib/types";
+
+// 4-digit code that gates "Dispatch view" (switching the tablet/desktop kiosk from
+// the driver stop view to the full dispatch board). Overridable via env without a
+// rebuild; defaults to 0000 for now. Not a security boundary — just keeps a driver
+// from wandering onto the office board by accident.
+const DISPATCH_PIN = process.env.NEXT_PUBLIC_DISPATCH_PIN || "0000";
 
 export function Header({
   truckName,
@@ -38,10 +46,27 @@ export function Header({
   // fail to open inside older Android System WebViews). This uses only onClick + a
   // backdrop, which works everywhere.
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pinOpen, setPinOpen] = useState(false);
+  const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState(false);
   const run = (fn: () => void) => () => {
     setMenuOpen(false);
     fn();
   };
+
+  function openDispatch() {
+    if (pin !== DISPATCH_PIN) {
+      setPinError(true);
+      setPin("");
+      return;
+    }
+    setPinOpen(false);
+    // In the native kiosk, ask the shell to go full-screen board + Ignition side-by-side.
+    // In a plain browser / older APK it returns false, so we just navigate to the board.
+    if (!openDispatchBoardViaKiosk()) {
+      window.location.href = "/dispatch";
+    }
+  }
 
   // NOTE: no `backdrop-blur` on the header. A backdrop-filter ancestor creates a
   // containing block + stacking context that older Android System WebViews mis-handle —
@@ -103,12 +128,81 @@ export function Header({
                       Check for updates
                     </MenuItem>
                   )}
+                  <div className="my-1 h-px bg-border" />
+                  <MenuItem
+                    onClick={run(() => {
+                      setPin("");
+                      setPinError(false);
+                      setPinOpen(true);
+                    })}
+                    icon={<LayoutDashboard className="size-4" />}
+                  >
+                    Dispatch view
+                  </MenuItem>
                 </div>
               </>
             )}
           </div>
         </div>
       </div>
+
+      {pinOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setPinOpen(false)}
+        >
+          <div
+            className="w-full max-w-xs rounded-2xl border bg-card p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <LayoutDashboard className="size-4" /> Switch to dispatch view
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Enter the 4-digit code to open the dispatch board.
+            </p>
+            <input
+              autoFocus
+              type="password"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={4}
+              value={pin}
+              onChange={(e) => {
+                setPin(e.target.value.replace(/\D/g, "").slice(0, 4));
+                setPinError(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") openDispatch();
+              }}
+              placeholder="••••"
+              className="mt-3 w-full rounded-xl border bg-background px-4 py-3 text-center text-2xl tracking-[0.5em] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            {pinError && (
+              <p className="mt-2 text-center text-xs font-medium text-red-400">
+                Wrong code
+              </p>
+            )}
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setPinOpen(false)}
+                className="flex-1 rounded-xl border px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={openDispatch}
+                disabled={pin.length !== 4}
+                className="btn-hero flex-1 rounded-xl px-4 py-2.5 text-sm font-medium disabled:opacity-50"
+              >
+                Open
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {stops.length > 0 && (
         <div className="mx-auto flex max-w-2xl items-center gap-1.5 px-4 pb-3">

@@ -10,6 +10,7 @@ import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -48,6 +49,7 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
         wireExitGesture()
         wireIgnitionReveal()
         wireAttention()
+        wireBoardMode()
         blockBack()
         enterLockTask()
 
@@ -217,6 +219,83 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
             val json = JSONObject().put("ok", true).put("message", msg).toString()
             resolve(requestId, json) // resolve() hops to the UI thread + the dispatch page
         }
+    }
+
+    override fun openDispatchBoard() {
+        runOnUiThread { enterBoardMode() }
+    }
+
+    // ── Dispatch-board mode (office display) ────────────────────────────────────
+    // Full-screen board + live Ignition side-by-side. Reuses the already-alive Ignition
+    // WebView (its logged-in Zonar session) rather than iframing it — Ignition blocks
+    // embedding, so a native WebView is the only way to show it beside the board. Toggled
+    // from the dispatch app's ⋯ menu (PIN-gated on the web side); "Driver view" returns.
+
+    @Volatile private var boardMode = false
+
+    private fun wireBoardMode() {
+        binding.exitBoardButton.setOnClickListener { exitBoardMode() }
+    }
+
+    private fun enterBoardMode() {
+        if (boardMode) return
+        boardMode = true
+
+        // Dispatch board takes the LEFT half.
+        binding.dispatchWebView.loadUrl(Config.appUrl(this) + "/dispatch?embed=1&native=android")
+        (binding.dispatchWebView.layoutParams as ConstraintLayout.LayoutParams).apply {
+            startToStart = ConstraintLayout.LayoutParams.PARENT_ID
+            startToEnd = ConstraintLayout.LayoutParams.UNSET
+            endToEnd = ConstraintLayout.LayoutParams.UNSET
+            endToStart = R.id.boardGuideline
+            binding.dispatchWebView.layoutParams = this
+        }
+
+        // Live Ignition map fills the RIGHT half (its overlay, re-constrained + revealed).
+        (binding.ignitionOverlay.layoutParams as ConstraintLayout.LayoutParams).apply {
+            startToStart = R.id.boardGuideline
+            endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
+            binding.ignitionOverlay.layoutParams = this
+        }
+        binding.ignitionOverlay.visibility = android.view.View.VISIBLE
+        binding.hideIgnitionButton.visibility = android.view.View.GONE // "Driver view" replaces it
+
+        binding.gsproWebView.visibility = android.view.View.GONE
+        binding.attentionBanner.visibility = android.view.View.GONE
+
+        binding.exitBoardButton.visibility = android.view.View.VISIBLE
+        binding.exitBoardButton.bringToFront()
+        applyImmersive()
+    }
+
+    private fun exitBoardMode() {
+        if (!boardMode) return
+        boardMode = false
+
+        binding.exitBoardButton.visibility = android.view.View.GONE
+
+        // Restore Ignition to a hidden, full-size overlay (session stays alive).
+        binding.ignitionOverlay.visibility = android.view.View.INVISIBLE
+        (binding.ignitionOverlay.layoutParams as ConstraintLayout.LayoutParams).apply {
+            startToStart = ConstraintLayout.LayoutParams.PARENT_ID
+            endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
+            binding.ignitionOverlay.layoutParams = this
+        }
+        binding.hideIgnitionButton.visibility = android.view.View.VISIBLE
+
+        // Goodshuffle back, dispatch back to the right quarter + driver view.
+        binding.gsproWebView.visibility = android.view.View.VISIBLE
+        (binding.dispatchWebView.layoutParams as ConstraintLayout.LayoutParams).apply {
+            startToStart = ConstraintLayout.LayoutParams.UNSET
+            startToEnd = R.id.splitGuideline
+            endToStart = ConstraintLayout.LayoutParams.UNSET
+            endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
+            binding.dispatchWebView.layoutParams = this
+        }
+        binding.dispatchWebView.loadUrl(Config.appUrl(this) + "/kiosk?embed=1&native=android")
+        applyImmersive()
+        // Re-probe sessions so the attention banner returns if a login is missing.
+        sessionHandler.postDelayed({ checkSessions() }, 1_000)
     }
 
     /**
@@ -630,6 +709,8 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 when {
+                    // In board mode, Back returns to the driver view.
+                    boardMode -> exitBoardMode()
                     // If the Ignition overlay is up, Back navigates it / dismisses it.
                     isIgnitionVisible() -> {
                         if (binding.ignitionWebView.canGoBack()) {

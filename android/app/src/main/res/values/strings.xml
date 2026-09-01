@@ -16,6 +16,9 @@
     <string name="reveal_confirm">Show</string>
     <string name="ignition_hide">✓ Done — back to app</string>
 
+    <!-- Dispatch-board mode. -->
+    <string name="board_exit_btn">← Driver view</string>
+
     <!-- Attention banner (login needed / expired). -->
     <string name="attention_signin_needed">Sign-in needed</string>
     <string name="fix_goodshuffle_btn">Fix Goodshuffle</string>

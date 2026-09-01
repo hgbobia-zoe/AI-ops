@@ -14,6 +14,12 @@ interface ZoeKioskBridge {
   // Fly deploy) instead of being baked into the APK.
   evalInGoodshuffle?: (requestId: string, script: string) => void;
   checkForUpdate?: (requestId: string) => void;
+  // Switch the kiosk shell into full-screen "dispatch board" mode: the dispatch
+  // WebView expands to the left half showing /dispatch, the live Ignition map fills
+  // the right half, and Goodshuffle is hidden. For the office display. Fire-and-forget
+  // — the native side owns the reflow. Absent in older builds (caller falls back to a
+  // plain navigation to /dispatch).
+  openDispatchBoard?: () => void;
   ping?: () => string;
 }
 
@@ -112,6 +118,25 @@ function callBridge(
       settle(null);
     }
   });
+}
+
+/**
+ * Enter full-screen dispatch-board mode in the native kiosk (board + live Ignition
+ * side-by-side, Goodshuffle hidden). Returns true if the native shell handled it;
+ * false in a plain browser / older APK, where the caller should navigate to /dispatch
+ * itself. Synchronous fire-and-forget — the native side owns the layout change.
+ */
+export function openDispatchBoardViaKiosk(): boolean {
+  const b = bridge();
+  if (b && typeof b.openDispatchBoard === "function") {
+    try {
+      b.openDispatchBoard();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 // truckId → Ignition unit id. Captured from Zonar's searchUnits (see

@@ -70,6 +70,13 @@ class KioskJsBridge(private val host: BridgeHost) {
         /** Run an on-demand OTA update check; resolve a short status message to [requestId]. */
         fun checkForUpdate(requestId: String)
 
+        /**
+         * Enter full-screen dispatch-board mode: the dispatch WebView (now showing
+         * /dispatch) takes the left half, the live Ignition map fills the right half,
+         * and Goodshuffle is hidden. For the office display. Fire-and-forget.
+         */
+        fun openDispatchBoard()
+
         /** Attempt to leave lock-task mode; returns true if the PIN matched. */
         fun requestExit(pin: String): Boolean
     }
@@ -151,6 +158,17 @@ class KioskJsBridge(private val host: BridgeHost) {
     fun checkForUpdate(requestId: String) {
         Log.i(TAG, "checkForUpdate() called")
         host.checkForUpdate(requestId)
+    }
+
+    /**
+     * Switch the shell into full-screen dispatch-board mode (board + live Ignition
+     * side-by-side, Goodshuffle hidden). Gated on the web side by a 4-digit code; the
+     * native side just performs the layout change.
+     */
+    @JavascriptInterface
+    fun openDispatchBoard() {
+        Log.i(TAG, "openDispatchBoard() called")
+        host.openDispatchBoard()
     }
 
     companion object {
