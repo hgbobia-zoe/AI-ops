@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Split kiosk layout:
-    • Left  half   : Goodshuffle Pro (gsproWebView) — the operational source of truth.
-    • Right half   : the Zoe Dispatch web app (dispatchWebView), hosts window.ZoeKiosk.
+    • Left  3/4    : Goodshuffle Pro (gsproWebView) — the operational source of truth.
+    • Right 1/4    : the Zoe Dispatch web app (dispatchWebView), hosts window.ZoeKiosk.
     • Ignition     : a full-size WebView kept ALIVE but hidden inside ignitionOverlay
                      (INVISIBLE by default — laid out full size so it renders and holds
                      its login, but not drawn and not touchable). Revealed as an overlay
@@ -12,7 +12,7 @@
     • exitHotspot  : transparent TOP-LEFT target; long-press → exit PIN (leave kiosk).
     • revealHotspot: transparent TOP-RIGHT target; long-press → unhide PIN (show Ignition).
 
-  A vertical guideline at 50% keeps the split responsive across tablet sizes.
+  A vertical guideline at 75% keeps the split responsive across tablet sizes.
 -->
 <androidx.constraintlayout.widget.ConstraintLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
@@ -27,7 +27,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        app:layout_constraintGuide_percent="0.5" />
+        app:layout_constraintGuide_percent="0.75" />
 
     <!-- Goodshuffle Pro (left). Real logged-in session. Top is pinned below the
          attention banner so, when the banner shows, it pushes content down instead of
