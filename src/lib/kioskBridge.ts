@@ -250,6 +250,7 @@ function goodshuffleExtractionScript(key: string, match: string): string {
           var doc = tx.dayOfContact || null;
           var s = {
             custName: name || "",
+            custFirstName: renter.firstName || undefined,
             custPhone: sv.e164PhoneNumber || renter.phone || tl.contactPhoneNumber || "",
             address: address,
             plannedWindow: w.scheduledArrivalTime || undefined,

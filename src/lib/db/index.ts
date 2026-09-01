@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS stops (
   sequence       INTEGER NOT NULL,
   state          TEXT NOT NULL,
   cust_name      TEXT,
+  cust_first_name TEXT,
   cust_phone     TEXT,
   address        TEXT,
   day_of_name    TEXT,
@@ -113,6 +114,7 @@ const g = globalThis as unknown as { __aiopsDb?: DB };
 // Additive column migrations for DBs created before a column existed. Each is
 // idempotent — skipped if the column is already present.
 const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
+  { table: "stops", column: "cust_first_name", type: "TEXT" }, // customer's real first name, for greetings
   { table: "stops", column: "day_of_name", type: "TEXT" },
   { table: "stops", column: "day_of_phone", type: "TEXT" },
   { table: "stops", column: "photos_ref", type: "TEXT" }, // JSON array of POD photo ids

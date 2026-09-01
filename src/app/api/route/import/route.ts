@@ -54,6 +54,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     sequence: i + 1,
     state: "Waiting",
     custName: s.custName ?? "",
+    custFirstName: s.custFirstName ?? undefined,
     custPhone: s.custPhone ?? "",
     address: s.address ?? "",
     dayOfName: s.dayOfName,
@@ -70,6 +71,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       ? {
           ...existingStop,
           custName: incoming.custName ?? existingStop.custName,
+          custFirstName: incoming.custFirstName ?? existingStop.custFirstName,
           custPhone: incoming.custPhone ?? existingStop.custPhone,
           address: incoming.address ?? existingStop.address,
           dayOfName: incoming.dayOfName ?? existingStop.dayOfName,

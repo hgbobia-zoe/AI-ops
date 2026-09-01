@@ -113,6 +113,9 @@ export interface Stop {
   state: StopState;
   // Read-hot fields denormalized onto the stop so the tablet reads one table.
   custName: string;
+  /** The customer's real first name (from Goodshuffle's renter), used to personalize
+   *  texts. custName may be an event/last-name label, so greetings prefer this. */
+  custFirstName?: string;
   custPhone: string;
   address: string;
   // Optional day-of coordinator for this event. When present, "on the way" /

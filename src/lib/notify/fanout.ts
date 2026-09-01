@@ -34,6 +34,13 @@ function firstName(name?: string): string {
   return (name || "there").trim().split(/\s+/)[0] || "there";
 }
 
+// How to address the customer in a text. Prefer the real first name from Goodshuffle's
+// renter (custFirstName); fall back to the first token of the display name — which is
+// often an event/last-name label ("Lebensohn - Wedding"), hence the preference.
+function greetName(stop: Stop): string {
+  return firstName(stop.custFirstName || stop.custName);
+}
+
 // Customer-facing tracking link: prefer the truck's Zonar "ETA Link" (live location
 // + ETA, configured per truck via IGNITION_ETALINK_JSON); else our self-hosted link.
 function etaLink(truckId: string): string | undefined {
@@ -49,14 +56,14 @@ function etaLink(truckId: string): string | undefined {
 function onWayText(stop: Stop, link?: string): string {
   const tail = link ? `\n\nYou can check the latest location here: ${link}` : "";
   return (
-    `Hi ${firstName(stop.custName)},\n\n` +
+    `Hi ${greetName(stop)},\n\n` +
     `This is just a quick update regarding your delivery. Our team is en route and will be arriving at your location within the next hour. Please ensure someone is available to receive your rentals.` +
     `${tail}\n\nThank you!`
   );
 }
 
 function arrivedText(stop: Stop): string {
-  return `Hi ${firstName(stop.custName)}, your Zoe Events delivery team has arrived. We'll begin unloading shortly. Thank you!`;
+  return `Hi ${greetName(stop)}, your Zoe Events delivery team has arrived. We'll begin unloading shortly. Thank you!`;
 }
 
 // Day-of coordinator variants — same info, addressed to the coordinator.
