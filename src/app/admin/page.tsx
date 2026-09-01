@@ -6,8 +6,9 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap } from "lucide-react";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
+import { IntegrationsSettings } from "@/components/IntegrationsSettings";
 
 const ADMIN_PIN = process.env.NEXT_PUBLIC_ADMIN_PIN || "0000";
 
@@ -25,6 +26,9 @@ interface Settings {
   ignitionEtaLinks: Record<string, string>;
   ignitionUnits: Record<string, number>;
   templates: Templates;
+  smsProvider: string;
+  gpsProvider: string;
+  gpsVehicleIds: Record<string, string>;
 }
 
 const TEMPLATE_FIELDS: { key: keyof Templates; label: string; hint: string }[] = [
@@ -217,6 +221,18 @@ export default function AdminPage() {
                 ))}
               </div>
             </div>
+          </Section>
+
+          {/* Integrations — switch GPS + phone provider */}
+          <Section icon={<PlugZap className="size-4" />} title="Integrations">
+            <IntegrationsSettings
+              smsProvider={s.smsProvider}
+              gpsProvider={s.gpsProvider}
+              gpsVehicleIds={s.gpsVehicleIds ?? {}}
+              trucks={trucks}
+              pin={pin}
+              onChange={(patch) => setS({ ...s, ...patch })}
+            />
           </Section>
 
           {/* Tablet sign-ins (Goodshuffle / Ignition) */}

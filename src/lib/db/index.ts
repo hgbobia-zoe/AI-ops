@@ -102,6 +102,14 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at TEXT NOT NULL
 );
 
+-- Provider credentials (API keys/tokens + non-secret provider config like from-numbers).
+-- Read only server-side; secret fields are never returned to the client in plaintext.
+CREATE TABLE IF NOT EXISTS secrets (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tracking_links (
   token      TEXT PRIMARY KEY,
   stop_id    TEXT,

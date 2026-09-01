@@ -36,6 +36,12 @@ export interface AppSettings {
   /** Per-truck Zonar unit ids, for minting live ETA links (truckId → unitId). */
   ignitionUnits: Record<string, number>;
   templates: MessageTemplates;
+  /** Active integration providers (see src/lib/providers.ts). */
+  smsProvider: string;
+  gpsProvider: string;
+  /** Per-truck vehicle id in the active GPS provider (truckId → provider vehicle id).
+   *  Used by server-side GPS providers (Samsara/Motive); Zonar uses ignitionUnits. */
+  gpsVehicleIds: Record<string, string>;
 }
 
 // The variables a template may reference, with a short description for the admin UI.
@@ -94,6 +100,9 @@ export function defaultSettings(): AppSettings {
       coordinatorArrived:
         "Hi {firstName}, {company} has arrived at {custName}. We'll begin unloading shortly.",
     },
+    smsProvider: process.env.SMS_PROVIDER || "openphone",
+    gpsProvider: process.env.GPS_PROVIDER || "zonar",
+    gpsVehicleIds: {},
   };
 }
 
@@ -107,6 +116,7 @@ function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSetting
     templates: { ...base.templates, ...(over.templates ?? {}) },
     ignitionEtaLinks: over.ignitionEtaLinks ?? base.ignitionEtaLinks,
     ignitionUnits: over.ignitionUnits ?? base.ignitionUnits,
+    gpsVehicleIds: over.gpsVehicleIds ?? base.gpsVehicleIds,
   };
 }
 

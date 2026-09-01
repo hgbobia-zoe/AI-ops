@@ -53,6 +53,9 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
       coordinatorOnWay: str(t.coordinatorOnWay, current.templates.coordinatorOnWay),
       coordinatorArrived: str(t.coordinatorArrived, current.templates.coordinatorArrived),
     },
+    smsProvider: str(b.smsProvider, current.smsProvider),
+    gpsProvider: str(b.gpsProvider, current.gpsProvider),
+    gpsVehicleIds: strMap(b.gpsVehicleIds, current.gpsVehicleIds),
   };
 }
 
