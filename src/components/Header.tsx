@@ -43,10 +43,10 @@ export function Header({
     fn();
   };
 
+  // NOTE: no `backdrop-blur` on the header. A backdrop-filter ancestor creates a
+  // containing block + stacking context that older Android System WebViews mis-handle —
+  // it hid/mispositioned the dropdown so the ⋯ tap "did nothing". Solid bg avoids it.
   return (
-    {/* NOTE: no `backdrop-blur` here. A backdrop-filter ancestor creates a containing
-        block + stacking context that older Android System WebViews mis-handle — it
-        hid/mispositioned the dropdown so the ⋯ tap "did nothing". Solid bg avoids it. */}
     <header className="sticky top-0 z-30 border-b border-white/10 bg-background">
       <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-3">
         <div className="flex items-center gap-2.5">
