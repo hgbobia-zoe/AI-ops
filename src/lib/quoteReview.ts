@@ -34,8 +34,19 @@ const SYSTEM =
   "items, flag concrete logistics or staffing risks the crew should know before the job: " +
   "missing complementary items (e.g. a tent with no sidewalls/lighting/flooring when the " +
   "scale implies it), access/setup concerns, or unusual scale. Do NOT restate the crew " +
-  "count — that's computed separately. Be terse and specific. Respond ONLY as JSON: " +
-  '{"risks": string[], "notes": string}. Empty risks array if nothing stands out.';
+  "count — that's computed separately. Be terse and specific. " +
+  'Output RAW JSON ONLY — no markdown, no code fences, no prose — exactly: ' +
+  '{"risks": string[], "notes": string}. Use an empty risks array if nothing stands out.';
+
+// Models often wrap JSON in ``` fences or add a sentence. Strip fences and slice to the
+// outermost braces before parsing.
+function extractJson(text: string): unknown {
+  let s = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
+  const first = s.indexOf("{");
+  const last = s.lastIndexOf("}");
+  if (first >= 0 && last > first) s = s.slice(first, last + 1);
+  return JSON.parse(s);
+}
 
 export async function reviewQuote(q: Quote): Promise<QuoteReview> {
   const need = crewForItems(q.items);
@@ -61,7 +72,7 @@ export async function reviewQuote(q: Quote): Promise<QuoteReview> {
 
   if (!r.ok || !r.text) return { ...base, llm: null, llmError: r.error };
   try {
-    const parsed = JSON.parse(r.text) as { risks?: unknown; notes?: unknown };
+    const parsed = extractJson(r.text) as { risks?: unknown; notes?: unknown };
     return {
       ...base,
       llm: {
