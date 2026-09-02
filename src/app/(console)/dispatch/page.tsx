@@ -3,14 +3,13 @@
 // proof-of-delivery photos/signatures. One supervisor action: reopen a completed
 // stop (guarded). Auto-refreshes so it stays live.
 
-import { AlertTriangle, CircleCheck, MessageSquare, Truck as TruckIcon } from "lucide-react";
+import { AlertTriangle, CircleCheck, MessageSquare, Truck as TruckIcon, ExternalLink } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
-import { IgnitionPane } from "@/components/IgnitionPane";
 import { ReopenButton } from "@/components/ReopenButton";
 import { CloseRouteButton } from "@/components/CloseRouteButton";
 import { ResolveExceptionButton } from "@/components/ResolveExceptionButton";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, CalendarDays, Settings, Users } from "lucide-react";
+import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
 import {
   getOpenExceptions,
   getRecentMessages,
@@ -24,40 +23,32 @@ import type { Route, Stop } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-// The dashboard is a split view — our board beside Ignition (fleet telematics) —
-// mirroring how the delivery kiosk splits the app beside Goodshuffle. The split
-// only appears when NEXT_PUBLIC_IGNITION_URL is set; otherwise the board is full-width.
+// Full-width board. Ignition (fleet telematics) can't be iframed (X-Frame-Options), so
+// when its URL is set we surface a compact "Open Ignition" link — the office big-screen
+// gets Ignition side-by-side via the native kiosk board mode instead.
 export default async function DispatchPage({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string; native?: string; embed?: string }>;
+  searchParams: Promise<{ date?: string }>;
 }) {
   const sp = await searchParams;
   const today = todayInOpsTz();
   const date = sp?.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : today;
   const ignitionUrl = getSettings().ignitionUrl;
-  // In the native kiosk's board mode the shell already shows the live Ignition map in
-  // the pane beside us — so render the board full-width and skip our own IgnitionPane
-  // (which would just try, and fail, to iframe Ignition).
-  const embeddedInKiosk = sp?.native === "android" || sp?.embed === "1";
-  if (!ignitionUrl || embeddedInKiosk) {
-    return (
-      <main className="mx-auto max-w-6xl p-5 pb-16">
-        <DispatchBoard date={date} today={today} />
-      </main>
-    );
-  }
   return (
-    <div className="flex h-dvh w-full flex-col lg:flex-row">
-      {/* Ignition — live fleet, the operational reference. */}
-      <section className="min-h-0 flex-1 border-b border-white/10 lg:border-b-0 lg:border-r">
-        <IgnitionPane url={ignitionUrl} forceEmbed={process.env.IGNITION_EMBED === "true"} />
-      </section>
-      {/* Our dispatch board — the action layer. */}
-      <section className="min-h-0 flex-1 overflow-y-auto p-5 pb-16">
-        <DispatchBoard date={date} today={today} />
-      </section>
-    </div>
+    <main className="mx-auto max-w-6xl p-5 pb-16 md:p-8">
+      {ignitionUrl && (
+        <a
+          href={ignitionUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mb-4 inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ExternalLink className="size-3.5" /> Open Ignition (live fleet)
+        </a>
+      )}
+      <DispatchBoard date={date} today={today} />
+    </main>
   );
 }
 
@@ -84,25 +75,7 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
             {isToday ? "live view · refreshes automatically" : "history view"}
           </p>
         </div>
-        <div className="flex items-center gap-1.5">
-          <DateNav date={date} today={today} />
-          <Link
-            href="/staffing"
-            aria-label="Crew"
-            title="Crew"
-            className="flex size-9 items-center justify-center rounded-lg border border-white/10 text-muted-foreground hover:text-foreground"
-          >
-            <Users className="size-4" />
-          </Link>
-          <Link
-            href="/admin"
-            aria-label="Settings"
-            title="Settings"
-            className="flex size-9 items-center justify-center rounded-lg border border-white/10 text-muted-foreground hover:text-foreground"
-          >
-            <Settings className="size-4" />
-          </Link>
-        </div>
+        <DateNav date={date} today={today} />
       </header>
 
       {!anyRoute && (
