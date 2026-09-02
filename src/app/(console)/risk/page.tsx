@@ -17,6 +17,7 @@ import {
   CalendarDays,
 } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { QuoteReviewButton } from "@/components/QuoteReviewButton";
 import {
   getCrewForDate,
   connecteamConfigured,
@@ -140,34 +141,38 @@ export default async function EventRiskPage({
         ) : (
           routeNeeds.map(({ route: r, need }) => {
             const first = earliestStopOfRoute(r);
+            const items = r.stops.flatMap((s) => s.items ?? []);
             return (
-              <div key={r.routeId} className="surface flex flex-wrap items-center justify-between gap-3 border border-white/5 p-3">
-                <div className="flex items-center gap-2.5">
-                  <span className="btn-hero flex size-8 items-center justify-center">
-                    <Truck className="size-4" />
-                  </span>
-                  <div>
-                    <div className="font-medium">{r.truckId}</div>
-                    <div className="text-xs text-muted-foreground">{r.stops.length} stops</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-5">
-                  <div>
-                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Crew needed</div>
-                    <div className="flex items-center gap-1.5 font-semibold tabular-nums">
-                      {need.crew}
-                      {need.hasTent && (
-                        <span className="bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-black">
-                          {need.reasons[need.reasons.length - 1] ?? "tent"}
-                        </span>
-                      )}
+              <div key={r.routeId} className="surface space-y-3 border border-white/5 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <span className="btn-hero flex size-8 items-center justify-center">
+                      <Truck className="size-4" />
+                    </span>
+                    <div>
+                      <div className="font-medium">{r.truckId}</div>
+                      <div className="text-xs text-muted-foreground">{r.stops.length} stops</div>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">First stop</div>
-                    <div className="font-semibold tabular-nums">{first ? formatClockTime(first) : "—"}</div>
+                  <div className="flex items-center gap-5">
+                    <div>
+                      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Crew needed</div>
+                      <div className="flex items-center gap-1.5 font-semibold tabular-nums">
+                        {need.crew}
+                        {need.hasTent && (
+                          <span className="bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-black">
+                            {need.reasons[need.reasons.length - 1] ?? "tent"}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">First stop</div>
+                      <div className="font-semibold tabular-nums">{first ? formatClockTime(first) : "—"}</div>
+                    </div>
                   </div>
                 </div>
+                {items.length > 0 && <QuoteReviewButton items={items} eventName={`${r.truckId} route`} />}
               </div>
             );
           })
