@@ -61,6 +61,18 @@ Returns the route with **fully-populated waypoints**. Each waypoint:
 | plannedWindow/eta | `scheduledArrivalTime` |
 | (kind)          | `waypointType` — DROP_OFF vs PICK_UP |
 
+## Line items per stop (crew rules + quote review)
+Each waypoint carries its **`transactionID`** (the "open the project" link). Its line items
+come in TWO steps (both same-origin, session cookies):
+1. `GET /app/vendorTransaction/initContractView?transactionID=<txID>` →
+   `.lineItemGroupsToLoad` = `[{ id, groupName, ... }]` (e.g. "Rental Items", "Logistics").
+2. `GET /app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID=<groupID>&transactionID=<txID>`
+   → the group's items. **name = `itemTitle`, quantity = `quantityBooked`.**
+Both params are REQUIRED on step 2 (missing `transactionID` → 400). The extractors attach
+`items:[{name,quantity}]` per stop (parallel per stop + per group; best-effort, never
+blocks the pull). Feeds `crewRules.ts` (tent → 2, 40x60 → 3) and `quoteReview.ts`.
+Verified live 2026-09-02.
+
 ## Known gaps / notes
 - `contactPhoneNumber` (on-site contact) is often blank. RESOLVED: the customer's real
   phone is the **inlined `transaction.renter`** (`smsValidation.e164PhoneNumber` / `phone`) —

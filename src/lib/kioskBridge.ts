@@ -249,6 +249,7 @@ export interface ImportedStop {
   dayOfPhone?: string;
   plannedWindow?: string;
   eta?: string;
+  items?: { name: string; quantity?: number }[];
 }
 
 export interface ImportResult {
@@ -322,8 +323,36 @@ function goodshuffleExtractionScript(key: string, match: string): string {
             eta: w.scheduledArrivalTime || undefined
           };
           if (doc) { s.dayOfName = doc.name || doc.fullName || undefined; s.dayOfPhone = doc.phoneNumber || doc.phone || undefined; }
+          s._txID = w.transactionID || (tx && tx.id) || null;
           return s;
         });
+      }
+      // Event line items for a stop's transaction (name = itemTitle, qty = quantityBooked)
+      // — drives the crew-size (tent) rules + quote review. Best-effort; never blocks.
+      function fetchItems(txID){
+        var H = { headers:{"x-requested-with":"XMLHttpRequest", accept:"application/json"}, credentials:"include" };
+        return fetch("/app/vendorTransaction/initContractView?transactionID=" + txID, H)
+          .then(function(r){ return r.json(); })
+          .then(function(cv){
+            var groups = (cv && cv.lineItemGroupsToLoad) || [];
+            return Promise.all(groups.map(function(g){
+              return fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID=" + g.id + "&transactionID=" + txID, H)
+                .then(function(r){ return r.json(); }).catch(function(){ return null; });
+            }));
+          })
+          .then(function(lists){
+            var items = [];
+            function walk(o,d){ if(!o||typeof o!=="object"||d>7) return; if(Object.prototype.toString.call(o)==="[object Array]"){ for(var i=0;i<o.length;i++) walk(o[i],d+1); return; } if(o.itemTitle) items.push({name:o.itemTitle, quantity:o.quantityBooked}); for(var k in o) walk(o[k],d+1); }
+            (lists||[]).forEach(function(gj){ walk(gj,0); });
+            return items;
+          })
+          .catch(function(){ return undefined; });
+      }
+      function attachItems(stops){
+        return Promise.all(stops.map(function(s){
+          if (!s._txID) { delete s._txID; return Promise.resolve(); }
+          return fetchItems(s._txID).then(function(it){ if (it && it.length) s.items = it; delete s._txID; });
+        })).then(function(){ return stops; });
       }
       fetch("/app/routing/listRoutes", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body), credentials:"include" })
         .then(function(r){ return r.json(); })
@@ -338,7 +367,7 @@ function goodshuffleExtractionScript(key: string, match: string): string {
           })).then(function(full){
             var stops = []; var names = [];
             full.forEach(function(route){ names.push(route.name); stops = stops.concat(extractStops(route)); });
-            done(stops, names, total, mine.length);
+            attachItems(stops).then(function(){ done(stops, names, total, mine.length); });
           });
         })
         .catch(function(e){ fail(e); });
