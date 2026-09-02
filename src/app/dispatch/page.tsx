@@ -10,7 +10,7 @@ import { ReopenButton } from "@/components/ReopenButton";
 import { CloseRouteButton } from "@/components/CloseRouteButton";
 import { ResolveExceptionButton } from "@/components/ResolveExceptionButton";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, CalendarDays, Settings } from "lucide-react";
+import { ChevronLeft, ChevronRight, CalendarDays, Settings, Users } from "lucide-react";
 import {
   getOpenExceptions,
   getRecentMessages,
@@ -86,6 +86,14 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
         </div>
         <div className="flex items-center gap-1.5">
           <DateNav date={date} today={today} />
+          <Link
+            href="/staffing"
+            aria-label="Crew"
+            title="Crew"
+            className="flex size-9 items-center justify-center rounded-lg border border-white/10 text-muted-foreground hover:text-foreground"
+          >
+            <Users className="size-4" />
+          </Link>
           <Link
             href="/admin"
             aria-label="Settings"
