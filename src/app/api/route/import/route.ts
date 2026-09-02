@@ -62,6 +62,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     dayOfPhone: s.dayOfPhone,
     plannedWindow: s.plannedWindow,
     eta: s.eta,
+    items: Array.isArray(s.items) ? s.items : undefined,
   });
 
   // Overlay the mutable customer/address fields of an incoming stop onto an existing
@@ -80,6 +81,7 @@ export async function POST(req: Request): Promise<NextResponse> {
           dayOfPhone: incoming.dayOfPhone ?? existingStop.dayOfPhone,
           plannedWindow: incoming.plannedWindow ?? existingStop.plannedWindow,
           eta: incoming.eta ?? existingStop.eta,
+          items: incoming.items ?? existingStop.items,
         }
       : existingStop;
 

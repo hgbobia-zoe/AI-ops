@@ -128,6 +128,9 @@ export interface Stop {
   dayOfPhone?: string;
   plannedWindow?: string;
   eta?: string;
+  /** Goodshuffle line items for this stop's event (name + qty). Drives crew-size rules
+   *  (tent → 2, 40x60 → 3) and, later, LLM quote review. Optional; absent on old pulls. */
+  items?: { name: string; quantity?: number }[];
   arrivedAt?: string;
   completedAt?: string;
   trackingLinkId?: string;

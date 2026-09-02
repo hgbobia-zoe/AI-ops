@@ -20,6 +20,7 @@ interface StopRow {
   day_of_phone: string | null;
   planned_window: string | null;
   eta: string | null;
+  items: string | null;
   arrived_at: string | null;
   completed_at: string | null;
   tracking_token: string | null;
@@ -52,6 +53,7 @@ function toStop(r: StopRow): Stop {
     dayOfPhone: r.day_of_phone ?? undefined,
     plannedWindow: r.planned_window ?? undefined,
     eta: r.eta ?? undefined,
+    items: r.items ? (safeJson(r.items) as Stop["items"]) : undefined,
     arrivedAt: r.arrived_at ?? undefined,
     completedAt: r.completed_at ?? undefined,
     trackingLinkId: r.tracking_token ?? undefined,
@@ -161,10 +163,10 @@ export function writeRoute(route: Route): void {
     const ins = db.prepare(
       `INSERT INTO stops (stop_id, route_id, customer_id, sequence, state, cust_name,
         cust_first_name, kind, cust_phone, address, day_of_name, day_of_phone, planned_window,
-        eta, arrived_at, completed_at, tracking_token)
+        eta, items, arrived_at, completed_at, tracking_token)
        VALUES (@stopId, @routeId, @customerId, @sequence, @state, @custName,
         @custFirstName, @kind, @custPhone, @address, @dayOfName, @dayOfPhone, @plannedWindow,
-        @eta, @arrivedAt, @completedAt, @trackingToken)`,
+        @eta, @items, @arrivedAt, @completedAt, @trackingToken)`,
     );
     for (const s of rt.stops) {
       ins.run({
@@ -182,6 +184,7 @@ export function writeRoute(route: Route): void {
         dayOfPhone: s.dayOfPhone ?? null,
         plannedWindow: s.plannedWindow ?? null,
         eta: s.eta ?? null,
+        items: s.items?.length ? JSON.stringify(s.items) : null,
         arrivedAt: s.arrivedAt ?? null,
         completedAt: s.completedAt ?? null,
         trackingToken: s.trackingLinkId ?? null,

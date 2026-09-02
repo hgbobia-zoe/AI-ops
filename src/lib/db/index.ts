@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS stops (
   day_of_phone   TEXT,
   planned_window TEXT,
   eta            TEXT,
+  items          TEXT,
   arrived_at     TEXT,
   completed_at   TEXT,
   tracking_token TEXT,
@@ -131,6 +132,7 @@ const g = globalThis as unknown as { __aiopsDb?: DB };
 const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "stops", column: "cust_first_name", type: "TEXT" }, // customer's real first name, for greetings
   { table: "stops", column: "kind", type: "TEXT" }, // "delivery" | "pickup" (from Goodshuffle waypointType)
+  { table: "stops", column: "items", type: "TEXT" }, // JSON [{name, quantity}] — event line items (crew rules)
   { table: "stops", column: "day_of_name", type: "TEXT" },
   { table: "stops", column: "day_of_phone", type: "TEXT" },
   { table: "stops", column: "photos_ref", type: "TEXT" }, // JSON array of POD photo ids

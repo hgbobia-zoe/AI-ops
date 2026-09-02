@@ -26,6 +26,7 @@ import {
 } from "@/lib/connecteam";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRouteForDate } from "@/lib/db/repo";
+import { crewForRoute, type CrewNeed } from "@/lib/crewRules";
 import { todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
 import type { Route } from "@/lib/types";
 
@@ -57,7 +58,12 @@ export default async function EventRiskPage({
   const prepD = distinctByRole(crewD, "prep");
   const openShifts = [...crewD, ...crewPrev].filter((s) => s.isOpen).length;
 
-  const flags = computeFlags({ routes, date, dayBefore, driversD, prepPrev, prepD, openShifts, configured });
+  // Crew each route needs from its line items (tent → 2, 40x60 → 3). All trucks roll the
+  // same day, so the day needs the SUM across routes.
+  const routeNeeds = routes.map((r) => ({ route: r, need: crewForRoute(r.stops.map((s) => s.items ?? [])) }));
+  const totalCrewNeeded = routeNeeds.reduce((sum, x) => sum + x.need.crew, 0);
+
+  const flags = computeFlags({ routes, date, dayBefore, driversD, prepPrev, prepD, openShifts, totalCrewNeeded, routeNeeds, configured });
 
   return (
     <main className="mx-auto max-w-3xl p-5 pb-16 md:p-8">
@@ -129,13 +135,13 @@ export default async function EventRiskPage({
         <h2 className="flex items-center gap-2 text-lg font-semibold">
           <Truck className="size-4" /> Routes
         </h2>
-        {routes.length === 0 ? (
+        {routeNeeds.length === 0 ? (
           <p className="text-sm text-muted-foreground">No active routes for {isToday ? "today" : formatYmdLong(date)}.</p>
         ) : (
-          routes.map((r) => {
+          routeNeeds.map(({ route: r, need }) => {
             const first = earliestStopOfRoute(r);
             return (
-              <div key={r.routeId} className="surface flex items-center justify-between gap-3 border border-white/5 p-3">
+              <div key={r.routeId} className="surface flex flex-wrap items-center justify-between gap-3 border border-white/5 p-3">
                 <div className="flex items-center gap-2.5">
                   <span className="btn-hero flex size-8 items-center justify-center">
                     <Truck className="size-4" />
@@ -145,9 +151,22 @@ export default async function EventRiskPage({
                     <div className="text-xs text-muted-foreground">{r.stops.length} stops</div>
                   </div>
                 </div>
-                <div className="text-right text-sm">
-                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">First stop</div>
-                  <div className="font-semibold tabular-nums">{first ? formatClockTime(first) : "—"}</div>
+                <div className="flex items-center gap-5">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Crew needed</div>
+                    <div className="flex items-center gap-1.5 font-semibold tabular-nums">
+                      {need.crew}
+                      {need.hasTent && (
+                        <span className="bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-black">
+                          {need.reasons[need.reasons.length - 1] ?? "tent"}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">First stop</div>
+                    <div className="font-semibold tabular-nums">{first ? formatClockTime(first) : "—"}</div>
+                  </div>
                 </div>
               </div>
             );
@@ -171,18 +190,24 @@ function computeFlags(a: {
   prepPrev: CrewMember[];
   prepD: CrewMember[];
   openShifts: number;
+  totalCrewNeeded: number;
+  routeNeeds: { route: Route; need: CrewNeed }[];
   configured: boolean;
 }): Flag[] {
   const flags: Flag[] = [];
   if (!a.configured || a.routes.length === 0) return flags;
 
-  // Driver on the event day.
+  // Driver on the event day + enough people for the day's crew-size needs (tent rules).
   if (a.driversD.length === 0) {
     flags.push({ severity: "high", text: `No driver scheduled for ${formatYmdLong(a.date)} — the route can't roll.` });
-  } else if (a.driversD.length < a.routes.length) {
+  } else if (a.driversD.length < a.totalCrewNeeded) {
+    const tentRoutes = a.routeNeeds.filter((x) => x.need.hasTent);
+    const detail = tentRoutes.length
+      ? ` — incl. ${tentRoutes.map((x) => `${x.route.truckId} (${x.need.reasons.join(", ")})`).join("; ")}`
+      : "";
     flags.push({
-      severity: "warn",
-      text: `Only ${a.driversD.length} driver${a.driversD.length === 1 ? "" : "s"} scheduled for ${a.routes.length} routes.`,
+      severity: tentRoutes.length ? "high" : "warn",
+      text: `Today's routes need ~${a.totalCrewNeeded} crew on the trucks${detail}, but only ${a.driversD.length} driver${a.driversD.length === 1 ? "" : "s"} scheduled.`,
     });
   }
 
