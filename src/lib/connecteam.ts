@@ -37,6 +37,9 @@ async function ctGet(path: string, timeoutMs = 12000): Promise<unknown | null> {
   }
 }
 
+/** Ops role, derived from the Connecteam "Title" custom field. */
+export type CrewRole = "driver" | "prep" | "other";
+
 export interface CrewMember {
   userId: number;
   name: string;
@@ -45,6 +48,25 @@ export interface CrewMember {
   phone?: string;
   email?: string;
   userType?: string;
+  /** The Connecteam "Title" custom field, e.g. "Driver", "Warehouse Associate". */
+  title?: string;
+  role: CrewRole;
+}
+
+// Map a Title to an ops role. Drivers drive on the event day; warehouse associates +
+// event asset processors prep/load (and process returns) — typically the day before.
+export function roleFromTitle(title?: string): CrewRole {
+  const t = (title || "").toLowerCase();
+  if (t.includes("driver")) return "driver";
+  if (t.includes("warehouse") || t.includes("asset")) return "prep";
+  return "other";
+}
+
+/** Pull the "Title" custom field value off a raw Connecteam user. */
+function titleOf(u: Record<string, unknown>): string | undefined {
+  const fields = (u.customFields as Array<{ name?: string; value?: unknown }>) ?? [];
+  const f = fields.find((x) => x.name === "Title");
+  return typeof f?.value === "string" ? f.value : undefined;
 }
 
 export interface Scheduler {
@@ -81,6 +103,7 @@ export async function getUsers(): Promise<Map<number, CrewMember>> {
     if (!userId) continue;
     const firstName = (u.firstName as string) || "";
     const lastName = (u.lastName as string) || "";
+    const title = titleOf(u);
     map.set(userId, {
       userId,
       firstName,
@@ -89,6 +112,8 @@ export async function getUsers(): Promise<Map<number, CrewMember>> {
       phone: u.phoneNumber as string | undefined,
       email: u.email as string | undefined,
       userType: u.userType as string | undefined,
+      title,
+      role: roleFromTitle(title),
     });
   }
   return map;
@@ -156,7 +181,9 @@ export async function getCrewForDate(date: string): Promise<CrewShift[]> {
         title: (s.title as string) || "",
         jobId: (s.jobId as string) || undefined,
         address: loc?.gps?.address || undefined,
-        assignees: ids.map((id) => users.get(id) ?? { userId: id, name: `#${id}` }),
+        assignees: ids.map(
+          (id): CrewMember => users.get(id) ?? { userId: id, name: `#${id}`, role: "other" },
+        ),
       });
     }
   }

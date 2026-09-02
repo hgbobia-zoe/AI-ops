@@ -1,33 +1,35 @@
-// Event Risk — lines the day's crew (Connecteam) up against the delivery routes
-// (Goodshuffle → our DB) and flags staffing risk: no crew for today's routes, crew
-// starting too late to be ready before departure, open/unassigned shifts, and headcount.
-// The crew-size rule (tent = 2, 40x60 = 3+) needs Goodshuffle line items we don't store
-// yet — noted below as the next input to wire.
+// Event Risk — matches how Zoe actually runs: items are prepped & LOADED THE DAY BEFORE
+// (warehouse associates + event asset processors), and the DRIVER is scheduled on the
+// event day. So for each day's routes we check two days: is prep/load crew on the
+// schedule the day before, and is a driver on the schedule that day. Data: routes
+// (Goodshuffle → our DB) + crew with roles (Connecteam "Title" field).
 
 import Link from "next/link";
 import {
   ShieldAlert,
   ShieldCheck,
-  Clock,
-  MapPin,
   UserRound,
   Truck,
+  PackageCheck,
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
   CalendarDays,
 } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
-import { getCrewForDate, connecteamConfigured, shiftClock, type CrewShift } from "@/lib/connecteam";
+import {
+  getCrewForDate,
+  connecteamConfigured,
+  type CrewShift,
+  type CrewMember,
+  type CrewRole,
+} from "@/lib/connecteam";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRouteForDate } from "@/lib/db/repo";
 import { todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
 import type { Route } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-// How long before the first stop the crew should already be on the clock (arrive + load).
-const READY_LEAD_MIN = 45;
 
 export default async function EventRiskPage({
   searchParams,
@@ -37,6 +39,7 @@ export default async function EventRiskPage({
   const sp = await searchParams;
   const today = todayInOpsTz();
   const date = sp?.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : today;
+  const dayBefore = shiftYmd(date, -1);
   const isToday = date === today;
 
   const trucks = getActiveVehicles();
@@ -44,12 +47,17 @@ export default async function EventRiskPage({
     .map((t) => getRouteForDate(t.truckId, date))
     .filter((r): r is Route => Boolean(r) && r!.status !== "done");
 
-  const crew = connecteamConfigured() ? await getCrewForDate(date) : [];
-  const crewPeople = new Set(crew.flatMap((s) => s.assignees.map((a) => a.userId))).size;
+  const configured = connecteamConfigured();
+  const [crewD, crewPrev] = configured
+    ? await Promise.all([getCrewForDate(date), getCrewForDate(dayBefore)])
+    : [[], []];
 
-  const flags = computeFlags(routes, crew);
-  const earliestStop = earliestRouteTime(routes);
-  const earliestCrew = crew.length ? Math.min(...crew.map((s) => s.startUnix)) : null;
+  const driversD = distinctByRole(crewD, "driver");
+  const prepPrev = distinctByRole(crewPrev, "prep");
+  const prepD = distinctByRole(crewD, "prep");
+  const openShifts = [...crewD, ...crewPrev].filter((s) => s.isOpen).length;
+
+  const flags = computeFlags({ routes, date, dayBefore, driversD, prepPrev, prepD, openShifts, configured });
 
   return (
     <main className="mx-auto max-w-3xl p-5 pb-16 md:p-8">
@@ -61,8 +69,8 @@ export default async function EventRiskPage({
             <ShieldAlert className="size-7" /> Event Risk
           </h1>
           <p className="text-sm text-muted-foreground">
-            {routes.length} route{routes.length === 1 ? "" : "s"} · {crewPeople} crew ·{" "}
-            {crew.length} shift{crew.length === 1 ? "" : "s"}
+            {routes.length} route{routes.length === 1 ? "" : "s"} · {driversD.length} driver
+            {driversD.length === 1 ? "" : "s"} · {prepPrev.length} prep crew (day before)
           </p>
         </div>
         <DateNav date={date} today={today} />
@@ -71,10 +79,10 @@ export default async function EventRiskPage({
       {/* Risk flags */}
       <section className="mb-8">
         {flags.length === 0 ? (
-          <div className="flex items-center gap-2 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-200">
+          <div className="flex items-center gap-2 border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-200">
             <ShieldCheck className="size-5 shrink-0" />
-            {connecteamConfigured()
-              ? "No staffing risks flagged for this day."
+            {configured
+              ? "Prep the day before and a driver on the day — no staffing risks flagged."
               : "Connect Connecteam to check staffing coverage."}
           </div>
         ) : (
@@ -82,7 +90,7 @@ export default async function EventRiskPage({
             {flags.map((f, i) => (
               <div
                 key={i}
-                className={`flex items-start gap-2.5 rounded-2xl border p-4 text-sm ${
+                className={`flex items-start gap-2.5 border p-4 text-sm ${
                   f.severity === "high"
                     ? "border-red-500/30 bg-red-500/10 text-red-200"
                     : "border-amber-500/30 bg-amber-500/10 text-amber-200"
@@ -96,22 +104,28 @@ export default async function EventRiskPage({
         )}
       </section>
 
-      {/* Coverage timeline hint */}
-      {earliestStop && (
-        <p className="mb-6 text-xs text-muted-foreground">
-          First stop today lands around <span className="font-medium text-foreground">{formatClockTime(earliestStop.iso)}</span>
-          {earliestCrew != null && crew.length > 0 && (
-            <>
-              {" "}· earliest crew on the clock{" "}
-              <span className="font-medium text-foreground">{shiftClock(earliestCrew, crew[0].timezone)}</span>
-            </>
-          )}
-          . Crew should be loading ~{READY_LEAD_MIN} min before the first stop.
-        </p>
-      )}
+      {/* Prep & load — the day before */}
+      <RoleSection
+        icon={<PackageCheck className="size-4" />}
+        title="Prep & load"
+        when={`Day before · ${formatYmdLong(dayBefore)}`}
+        crew={prepPrev}
+        emptyText={
+          configured ? "No warehouse / asset crew scheduled the day before." : "Connecteam not connected."
+        }
+      />
+
+      {/* Drivers — event day */}
+      <RoleSection
+        icon={<Truck className="size-4" />}
+        title="Drivers"
+        when={`Event day · ${isToday ? "Today" : formatYmdLong(date)}`}
+        crew={driversD}
+        emptyText={configured ? "No driver scheduled." : "Connecteam not connected."}
+      />
 
       {/* Routes */}
-      <section className="mb-8 space-y-2">
+      <section className="mb-2 space-y-2">
         <h2 className="flex items-center gap-2 text-lg font-semibold">
           <Truck className="size-4" /> Routes
         </h2>
@@ -121,9 +135,9 @@ export default async function EventRiskPage({
           routes.map((r) => {
             const first = earliestStopOfRoute(r);
             return (
-              <div key={r.routeId} className="surface flex items-center justify-between gap-3 rounded-xl border border-white/5 p-3">
+              <div key={r.routeId} className="surface flex items-center justify-between gap-3 border border-white/5 p-3">
                 <div className="flex items-center gap-2.5">
-                  <span className="btn-hero flex size-8 items-center justify-center rounded-lg">
+                  <span className="btn-hero flex size-8 items-center justify-center">
                     <Truck className="size-4" />
                   </span>
                   <div>
@@ -140,25 +154,6 @@ export default async function EventRiskPage({
           })
         )}
       </section>
-
-      {/* Crew */}
-      <section className="space-y-2">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          <UserRound className="size-4" /> Crew
-        </h2>
-        {!connecteamConfigured() ? (
-          <p className="text-sm text-muted-foreground">Connecteam not connected.</p>
-        ) : crew.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No crew scheduled.</p>
-        ) : (
-          crew.map((s) => <ShiftRow key={s.id} shift={s} />)
-        )}
-      </section>
-
-      <p className="mt-8 text-xs text-muted-foreground">
-        Next input: crew-size rules (tent = 2 people, 40×60 = 3+) need Goodshuffle line items per event —
-        we&apos;ve proven we can read those; wiring them in lets this flag under-crewed tent jobs.
-      </p>
     </main>
   );
 }
@@ -168,60 +163,56 @@ interface Flag {
   text: string;
 }
 
-function computeFlags(routes: Route[], crew: CrewShift[]): Flag[] {
+function computeFlags(a: {
+  routes: Route[];
+  date: string;
+  dayBefore: string;
+  driversD: CrewMember[];
+  prepPrev: CrewMember[];
+  prepD: CrewMember[];
+  openShifts: number;
+  configured: boolean;
+}): Flag[] {
   const flags: Flag[] = [];
-  if (routes.length === 0) return flags;
+  if (!a.configured || a.routes.length === 0) return flags;
 
-  const crewPeople = new Set(crew.flatMap((s) => s.assignees.map((a) => a.userId))).size;
-  const openShifts = crew.filter((s) => s.isOpen).length;
-
-  if (crew.length === 0) {
-    flags.push({ severity: "high", text: `${routes.length} route${routes.length === 1 ? "" : "s"} scheduled but no crew on the schedule.` });
-    return flags;
+  // Driver on the event day.
+  if (a.driversD.length === 0) {
+    flags.push({ severity: "high", text: `No driver scheduled for ${formatYmdLong(a.date)} — the route can't roll.` });
+  } else if (a.driversD.length < a.routes.length) {
+    flags.push({
+      severity: "warn",
+      text: `Only ${a.driversD.length} driver${a.driversD.length === 1 ? "" : "s"} scheduled for ${a.routes.length} routes.`,
+    });
   }
 
-  // Crew not on the clock early enough before the first stop.
-  const earliest = earliestRouteTime(routes);
-  const earliestCrew = Math.min(...crew.map((s) => s.startUnix));
-  if (earliest) {
-    const needBy = earliest.unix - READY_LEAD_MIN * 60;
-    if (earliestCrew > needBy) {
+  // Prep & load the day before.
+  if (a.prepPrev.length === 0) {
+    if (a.prepD.length > 0) {
+      flags.push({
+        severity: "warn",
+        text: `Prep/load crew is only scheduled same-day, not the day before (${formatYmdLong(a.dayBefore)}) — items may not be loaded before departure.`,
+      });
+    } else {
       flags.push({
         severity: "high",
-        text: `Earliest crew starts after the crew should already be loading (~${READY_LEAD_MIN} min before the first stop) — coverage may be late.`,
+        text: `No warehouse / asset crew scheduled the day before (${formatYmdLong(a.dayBefore)}) to prep & load.`,
       });
     }
   }
 
-  if (openShifts > 0) {
-    flags.push({ severity: "warn", text: `${openShifts} open shift${openShifts === 1 ? "" : "s"} still unassigned.` });
+  if (a.openShifts > 0) {
+    flags.push({ severity: "warn", text: `${a.openShifts} open shift${a.openShifts === 1 ? "" : "s"} unassigned.` });
   }
-
-  if (crewPeople < routes.length) {
-    flags.push({
-      severity: "warn",
-      text: `Only ${crewPeople} crew for ${routes.length} routes — likely too few for a driver + helper on each.`,
-    });
-  }
-
   return flags;
 }
 
-// Earliest parseable stop time across all routes (ISO), with its Unix seconds.
-function earliestRouteTime(routes: Route[]): { iso: string; unix: number } | null {
-  let best: { iso: string; unix: number } | null = null;
-  for (const r of routes) {
-    const iso = earliestStopOfRoute(r);
-    if (!iso) continue;
-    const t = Date.parse(iso);
-    if (Number.isNaN(t)) continue;
-    const unix = Math.floor(t / 1000);
-    if (!best || unix < best.unix) best = { iso, unix };
-  }
-  return best;
+function distinctByRole(shifts: CrewShift[], role: CrewRole): CrewMember[] {
+  const m = new Map<number, CrewMember>();
+  for (const s of shifts) for (const a of s.assignees) if (a.role === role) m.set(a.userId, a);
+  return [...m.values()];
 }
 
-// The earliest planned time (ISO) among a route's stops, or null if none parse.
 function earliestStopOfRoute(r: Route): string | null {
   let best: string | null = null;
   let bestT = Infinity;
@@ -229,44 +220,51 @@ function earliestStopOfRoute(r: Route): string | null {
     const raw = s.plannedWindow || s.eta;
     if (!raw) continue;
     const t = Date.parse(raw);
-    if (Number.isNaN(t)) continue;
-    if (t < bestT) {
-      bestT = t;
-      best = raw;
-    }
+    if (Number.isNaN(t) || t >= bestT) continue;
+    bestT = t;
+    best = raw;
   }
   return best;
 }
 
-function ShiftRow({ shift }: { shift: CrewShift }) {
+function RoleSection({
+  icon,
+  title,
+  when,
+  crew,
+  emptyText,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  when: string;
+  crew: CrewMember[];
+  emptyText: string;
+}) {
   return (
-    <div className="surface flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/5 p-3">
-      <div className="flex items-center gap-2 text-sm font-semibold tabular-nums">
-        <Clock className="size-4 text-muted-foreground" />
-        {shiftClock(shift.startUnix, shift.timezone)} – {shiftClock(shift.endUnix, shift.timezone)}
+    <section className="mb-8 space-y-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="flex items-center gap-2 text-lg font-semibold">
+          {icon} {title}
+        </h2>
+        <span className="text-xs text-muted-foreground">{when}</span>
       </div>
-      <div className="flex flex-1 flex-wrap items-center justify-end gap-1.5">
-        {shift.isOpen ? (
-          <span className="rounded-md bg-amber-400 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-black">
-            Open
-          </span>
-        ) : shift.assignees.length === 0 ? (
-          <span className="text-sm text-muted-foreground">Unassigned</span>
-        ) : (
-          shift.assignees.map((a) => (
-            <span key={a.userId} className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-sm">
+      {crew.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{emptyText}</p>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {crew.map((c) => (
+            <span
+              key={c.userId}
+              className="inline-flex items-center gap-1.5 border border-white/10 bg-white/5 px-2.5 py-1 text-sm"
+            >
               <UserRound className="size-3.5 text-muted-foreground" />
-              {a.name}
+              {c.name}
+              {c.title && <span className="text-[11px] text-muted-foreground">· {c.title}</span>}
             </span>
-          ))
-        )}
-      </div>
-      {shift.address && (
-        <div className="flex w-full items-center gap-1.5 text-xs text-muted-foreground">
-          <MapPin className="size-3.5" /> {shift.address}
+          ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -277,14 +275,14 @@ function DateNav({ date, today }: { date: string; today: string }) {
   const href = (d: string) => (d === today ? "/risk" : `/risk?date=${d}`);
   return (
     <div className="flex items-center gap-1.5">
-      <Link href={href(prev)} aria-label="Previous day" className="flex size-9 items-center justify-center rounded-lg border border-white/10 text-muted-foreground hover:text-foreground">
+      <Link href={href(prev)} aria-label="Previous day" className="flex size-9 items-center justify-center border border-white/10 text-muted-foreground hover:text-foreground">
         <ChevronLeft className="size-4" />
       </Link>
-      <span className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm font-medium">
+      <span className="inline-flex items-center gap-2 border border-white/10 px-3 py-1.5 text-sm font-medium">
         <CalendarDays className="size-4 text-muted-foreground" />
         {isToday ? "Today" : formatYmdLong(date)}
       </span>
-      <Link href={href(next)} aria-label="Next day" className="flex size-9 items-center justify-center rounded-lg border border-white/10 text-muted-foreground hover:text-foreground">
+      <Link href={href(next)} aria-label="Next day" className="flex size-9 items-center justify-center border border-white/10 text-muted-foreground hover:text-foreground">
         <ChevronRight className="size-4" />
       </Link>
     </div>

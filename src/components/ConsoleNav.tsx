@@ -69,10 +69,10 @@ function BladeLink({ blade, active }: { blade: Blade; active: boolean }) {
     <Link
       href={blade.href}
       aria-current={active ? "page" : undefined}
-      className={`flex items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+      className={`flex items-center gap-2.5 whitespace-nowrap border-l-2 px-3 py-2.5 text-sm font-medium transition-colors ${
         active
-          ? "bg-foreground text-background"
-          : "text-muted-foreground hover:bg-white/5 hover:text-foreground"
+          ? "border-foreground bg-white/[0.06] text-foreground"
+          : "border-transparent text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"
       }`}
     >
       <Icon className="size-[18px] shrink-0" />
