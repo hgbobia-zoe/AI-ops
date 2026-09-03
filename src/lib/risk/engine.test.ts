@@ -413,6 +413,30 @@ describe("Event Risk engine — driver-assignment DEFAULT (flag off, prod behavi
     expect(has(f, "driver_shift_gap", "HIGH")).toBe(true);
   });
 
+  it("two NON-overlapping routes need only ONE driver (no false shortage)", () => {
+    const f = assessDay({
+      date: DATE,
+      routes: [route("R1", "NPR-1", { stopHour: 8 }), route("R2", "E450", { stopHour: 16 })],
+      driverShifts: [shift(1, "Al", 6, 20)], // one driver, whole day
+      warehouseShifts: warehouseOk,
+      fieldCrewScheduled: 2,
+      now: NOW,
+    });
+    expect(has(f, "driver_shortage")).toBe(false);
+  });
+
+  it("two OVERLAPPING routes DO need two drivers (shortage with one)", () => {
+    const f = assessDay({
+      date: DATE,
+      routes: [route("R1", "NPR-1", { stopHour: 9 }), route("R2", "E450", { stopHour: 9 })],
+      driverShifts: [shift(1, "Al", 6, 20)],
+      warehouseShifts: warehouseOk,
+      fieldCrewScheduled: 2,
+      now: NOW,
+    });
+    expect(has(f, "driver_shortage")).toBe(true);
+  });
+
   it("flag ON → an unassigned route IS flagged route_no_driver (deliberate rollout)", () => {
     const f = assessDay({
       date: DATE,

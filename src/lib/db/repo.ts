@@ -560,16 +560,19 @@ export function saveBookings(items: BookingRecord[]): void {
   const db = getDb();
   const now = new Date().toISOString();
 
-  // Prior revenue per booking, for change detection (MVP4 P3).
+  // Prior revenue + status per booking, for change detection (revenue change + cancellation).
   const prior = new Map<string, number | null>();
+  const priorStatus = new Map<string, string>();
   const ids = items.map((i) => i.bookingId);
   if (ids.length > 0) {
     const ph = ids.map(() => "?").join(",");
-    for (const r of db.prepare(`SELECT booking_id, grand_total FROM bookings WHERE booking_id IN (${ph})`).all(...ids) as {
+    for (const r of db.prepare(`SELECT booking_id, grand_total, status_label FROM bookings WHERE booking_id IN (${ph})`).all(...ids) as {
       booking_id: string;
       grand_total: number | null;
+      status_label: string | null;
     }[]) {
       prior.set(String(r.booking_id), r.grand_total == null ? null : Number(r.grand_total));
+      priorStatus.set(String(r.booking_id), (r.status_label ?? "").toLowerCase());
     }
   }
 
@@ -602,10 +605,12 @@ export function saveBookings(items: BookingRecord[]): void {
   });
   tx();
 
-  // Log revenue changes on already-known bookings (financial-plan change).
+  // Log meaningful changes to Operational History.
+  const isCancelled = (s: string): boolean => s.includes("cancel") || s.includes("lost") || s.includes("dead");
   for (const i of items) {
     const before = prior.get(i.bookingId);
     const after = i.grandTotal ?? null;
+    // Revenue change (financial-plan change) on a known booking.
     if (before != null && after != null && before !== after) {
       logChange({
         source: "goodshuffle",
@@ -617,6 +622,21 @@ export function saveBookings(items: BookingRecord[]): void {
         fromValue: String(before),
         toValue: String(after),
         changeKey: `bookingval|${i.bookingId}|${after}`,
+      });
+    }
+    // Cancellation: a known booking flipped to a cancelled/lost status.
+    const wasCancelled = priorStatus.has(i.bookingId) && isCancelled(priorStatus.get(i.bookingId)!);
+    const nowCancelled = isCancelled((i.statusLabel ?? "").toLowerCase());
+    if (priorStatus.has(i.bookingId) && !wasCancelled && nowCancelled) {
+      logChange({
+        source: "goodshuffle",
+        entity: "event",
+        entityId: i.bookingId,
+        eventId: i.bookingId,
+        kind: "booking_cancelled",
+        field: i.eventName,
+        toValue: i.statusLabel ?? "cancelled",
+        changeKey: `cancelled|${i.bookingId}`,
       });
     }
   }

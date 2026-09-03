@@ -30,7 +30,8 @@ export function customerOverview(): CustomerOverview {
   const customers = aggregateCustomers(events, today);
   const total = customers.length;
   const repeatCount = customers.filter((c) => c.repeat).length;
-  const dormant = customers.filter((c) => c.status === "dormant");
+  // Dormant, HIGHEST-VALUE first — a lapsed $20k client should top a lapsed 2×$300 one.
+  const dormant = customers.filter((c) => c.status === "dormant").sort((a, b) => (b.totalRevenue ?? 0) - (a.totalRevenue ?? 0) || b.bookings - a.bookings);
   const revVals = customers.map((c) => c.totalRevenue).filter((v): v is number => v != null);
   return {
     today,

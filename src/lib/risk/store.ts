@@ -227,6 +227,11 @@ export function getRiskQueue(): StoredRisk[] {
     .sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || (a.date ?? "").localeCompare(b.date ?? ""));
 }
 
+export function getRiskById(id: string): StoredRisk | null {
+  const row = getDb().prepare("SELECT * FROM risk_items WHERE id = ?").get(id) as Row | undefined;
+  return row ? toStored(row) : null;
+}
+
 export function setRiskStatus(id: string, status: RiskStatus, owner?: string): boolean {
   const now = new Date().toISOString();
   const resolvedAt = status === "RESOLVED" ? now : null;

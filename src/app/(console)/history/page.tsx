@@ -38,6 +38,10 @@ function describe(c: ChangeRow): { icon: React.ReactNode; text: React.ReactNode;
       return { icon: dot, tone: "text-emerald-300", text: <>Booking value changed — <b>{target}</b> ${c.fromValue} → <b>${c.toValue}</b></> };
     case "event_completed":
       return { icon: pkg, tone: c.toValue === "complete" ? "text-emerald-300" : "text-amber-300", text: <>Event closed — <b>{target}</b> {c.field}</> };
+    case "booking_cancelled":
+      return { icon: risk, tone: "text-red-300", text: <>Booking cancelled — <b>{target}</b></> };
+    case "risk_status_changed":
+      return { icon: risk, tone: "text-sky-300", text: <>Risk {c.toValue} — <b>{target}</b></> };
     default:
       return { icon: dot, tone: "text-muted-foreground", text: <>{c.kind} — {target}</> };
   }

@@ -60,6 +60,24 @@ function overlaps(a: RouteWindow, b: RouteWindow): boolean {
   return a.startUnix < b.endUnix && b.startUnix < a.endUnix;
 }
 
+/** Max number of route windows overlapping at any instant = min distinct drivers needed. Back-to-back
+ *  routes (one ends as the next starts) count as 1, since the same driver can run both. */
+function peakConcurrency(wins: RouteWindow[]): number {
+  const events: Array<[number, number]> = [];
+  for (const w of wins) {
+    events.push([w.startUnix, 1]);
+    events.push([w.endUnix, -1]);
+  }
+  events.sort((a, b) => a[0] - b[0] || a[1] - b[1]); // at equal time, end (-1) before start (+1)
+  let cur = 0;
+  let peak = 0;
+  for (const [, d] of events) {
+    cur += d;
+    if (cur > peak) peak = cur;
+  }
+  return peak;
+}
+
 /** Whole-day-of-week proximity: days from `now` to the route date (0 = today, 1 = tomorrow). */
 export function daysUntil(date: string, now: Date): number {
   const [y, m, d] = date.split("-").map(Number);
@@ -219,7 +237,11 @@ function assessDrivers(
   // Day-level headcount coverage — only when staffing is verified (else we can't count).
   if (staffingVerified) {
     const scheduled = new Set(driverShifts.map((s) => String(s.userId)));
-    const need = active.length;
+    // Drivers needed = PEAK simultaneous routes (one driver can run two non-overlapping routes
+    // back-to-back), plus routes whose window is unknown (can't prove they're sequenceable).
+    const windows = active.map((r) => routeWindow(r, cfg));
+    const windowed = windows.filter((w): w is NonNullable<typeof w> => Boolean(w));
+    const need = peakConcurrency(windowed) + (windows.length - windowed.length);
     if (scheduled.size < need) {
       const gap = need - scheduled.size;
       const base: RiskSeverity = scheduled.size === 0 ? "CRITICAL" : "HIGH";
