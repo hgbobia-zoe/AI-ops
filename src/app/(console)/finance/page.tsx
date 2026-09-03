@@ -129,6 +129,38 @@ export default async function FinancePage({
         </div>
       </section>
 
+      {/* Labor trajectory (MVP4 P3) — how this week's labor plan moved toward actual */}
+      {s.laborTrajectory.length >= 2 && (
+        <section className="mb-8 space-y-2">
+          <h2 className="text-lg font-semibold">Labor trajectory</h2>
+          <p className="text-[11px] text-muted-foreground">How this week&apos;s labor evolved — scheduled plan → revised → actual timesheets.</p>
+          <div className="overflow-x-auto border border-white/10">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="p-2.5">Captured</th>
+                  <th className="p-2.5 text-right">Planned cost</th>
+                  <th className="p-2.5 text-right">Actual cost</th>
+                  <th className="p-2.5 text-right">Hours (plan/act)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {s.laborTrajectory.map((t, i) => (
+                  <tr key={i}>
+                    <td className="p-2.5 text-muted-foreground">
+                      {new Date(t.capturedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                    </td>
+                    <td className="p-2.5 text-right tabular-nums">{money(t.plannedCost)}</td>
+                    <td className="p-2.5 text-right tabular-nums">{t.actualCost == null ? <span className="text-muted-foreground">—</span> : money(t.actualCost)}</td>
+                    <td className="p-2.5 text-right tabular-nums text-muted-foreground">{hrs(t.plannedHours)} / {hrs(t.actualHours)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       {/* Event profitability */}
       <section className="space-y-2">
         <h2 className="text-lg font-semibold">Events this period</h2>

@@ -4,6 +4,7 @@
 
 import { getPlannedHours, getActualHours, getPayRates, rateForUserOn } from "@/lib/connecteam";
 import { getBookingsRevenueInRange, getBookingsInRange, type EventFinancialView } from "@/lib/db/repo";
+import { saveLaborSnapshot, getLaborTrajectory, type LaborSnapshotRow } from "./laborHistory";
 import { financeConfig } from "./config";
 import { computeVariance, laborPctOfRevenue, contribution, contributionMargin, type Variance, type MoneyStatus } from "./calc";
 import type { Period } from "./periods";
@@ -36,6 +37,8 @@ export interface FinanceSummary {
     status: MoneyStatus;
   };
   events: EventFinancialView[];
+  /** planned→revised→actual labor over time for this week (empty for non-week periods). */
+  laborTrajectory: LaborSnapshotRow[];
 }
 
 function sumHoursCost(hours: Map<number, number>, rateAt: (uid: number) => number | null): { cost: number | null; missing: number; anyRate: boolean } {
@@ -81,6 +84,15 @@ export async function financeForPeriod(period: Period): Promise<FinanceSummary> 
   const contributionVal = contribution(signed, ac.cost);
   const marginPct = contributionMargin(signed, ac.cost);
 
+  // Labor trajectory (MVP4 P3): for a week, snapshot the labor plan (deduped) as it evolves from
+  // scheduled plan toward actual timesheets. Only when Connecteam actually responded (else all-null
+  // noise). Piggybacks the numbers already computed above — no extra Connecteam calls.
+  let laborTrajectory: LaborSnapshotRow[] = [];
+  if (period.isWeek && laborVerified) {
+    saveLaborSnapshot({ weekStart: start, plannedHours, plannedCost: pc.cost, actualHours, actualCost: ac.cost });
+    laborTrajectory = getLaborTrajectory(start);
+  }
+
   return {
     period,
     laborVerified,
@@ -116,6 +128,7 @@ export async function financeForPeriod(period: Period): Promise<FinanceSummary> 
         revenueStatus: b.signed ? "SIGNED" : "QUOTE",
       }),
     ),
+    laborTrajectory,
   };
 }
 

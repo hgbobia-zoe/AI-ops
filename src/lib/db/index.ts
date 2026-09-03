@@ -284,6 +284,21 @@ CREATE TABLE IF NOT EXISTS event_outcomes (
 );
 CREATE INDEX IF NOT EXISTS idx_event_outcomes_closed ON event_outcomes(closed_at DESC);
 
+-- Labor trajectory (MVP4 P3) — the planned→revised→actual labor plan for a week, captured over
+-- time (deduped: only when the numbers change). Shows how a week's labor evolved from scheduled
+-- plan toward actual timesheets. Dollars.
+CREATE TABLE IF NOT EXISTS labor_snapshots (
+  id            TEXT PRIMARY KEY,
+  week_start    TEXT NOT NULL,      -- Sunday, YYYY-MM-DD
+  planned_hours REAL,
+  planned_cost  REAL,
+  actual_hours  REAL,
+  actual_cost   REAL,
+  sig           TEXT,               -- hash of the four figures; a repeat is NOT re-snapshotted
+  captured_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_labor_snapshots_week ON labor_snapshots(week_start, captured_at);
+
 -- Per-event readiness score (0-100) + component breakdown, recomputed each scan.
 CREATE TABLE IF NOT EXISTS event_readiness (
   event_id                   TEXT PRIMARY KEY,
