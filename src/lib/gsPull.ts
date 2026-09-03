@@ -8,10 +8,16 @@
 // The office account has financial access the driver/tablet account lacks, so this path also
 // captures contract totals (revenue) + customer identity. Shows an on-page banner (a human clicks it).
 
-/** Build the office pull IIFE. `apiBase` is the absolute Zoe Ops origin (e.g. https://zoe-dispatch.fly.dev). */
-export function buildOfficePullScript(apiBase: string): string {
+/** Build the office pull IIFE. `apiBase` is the absolute Zoe Ops origin (e.g. https://zoe-dispatch.fly.dev).
+ *  `publishToken` (when the KIOSK_PUBLISH_TOKEN secret is set) is sent as x-publish-token so the
+ *  now-gated ingest endpoints accept the write — only logged-in users can see /admin/pull, so the
+ *  token isn't exposed publicly. */
+export function buildOfficePullScript(apiBase: string, publishToken?: string): string {
   const API = JSON.stringify(apiBase.replace(/\/+$/, ""));
+  const PUB = JSON.stringify(publishToken ?? "");
   return `(function(){
+    var PUB=${PUB};
+    function POSTH(){ return PUB ? {"content-type":"application/json","x-publish-token":PUB} : {"content-type":"application/json"}; }
   function banner(msg,color){ try{ var id="__zoePull"; var e=document.getElementById(id); if(!e){e=document.createElement("div");e.id=id;e.style.cssText="position:fixed;z-index:2147483647;top:14px;right:14px;padding:11px 15px;border-radius:8px;font:600 13px system-ui,sans-serif;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:360px";document.body.appendChild(e);} e.style.background=color; e.textContent=msg; }catch(x){} }
   function done(){ setTimeout(function(){var e=document.getElementById("__zoePull");if(e)e.remove();},7000); }
   try{
@@ -33,7 +39,7 @@ export function buildOfficePullScript(apiBase: string): string {
         var recs=Object.keys(all).map(function(id){ var p=all[id]; var d=null; try{ if(p.logistics_start_date){ var dt=new Date(p.logistics_start_date); if(!isNaN(dt)) d=new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,10); } }catch(e){}
           return { bookingId:String(p.id), eventName:p.eventName||"", eventDate:d, statusLabel:p.statusLabel||"", signed:!!p.signed, grandTotalCents:p.grand_total, contractTotalCents:p.contract_total, amountPaidCents:p.amount_paid, amountDueCents:p.amount_due, clientName:p.client_name||"", clientEmail:p.client_email||"" }; });
         if(!recs.length) return 0;
-        return fetch(API+"/api/gs/projects",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({projects:recs})}).then(function(r){return r.ok?recs.length:0;}).catch(function(){return 0;});
+        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs})}).then(function(r){return r.ok?recs.length:0;}).catch(function(){return 0;});
       });
     }
 
@@ -68,7 +74,7 @@ export function buildOfficePullScript(apiBase: string): string {
           return fetch("/app/routing/getRoute?routeID="+rt.id+"&includeAttributes=true",{headers:{accept:"application/json"},credentials:"include"}).then(function(r){return r.json();}).then(function(full){ return attachItems(extractStops(full)).then(function(stops){ byTruck[tid]=(byTruck[tid]||[]).concat(stops); if(!gsBy[tid])gsBy[tid]=String(rt.id); }); }); }); });
         return chain.then(function(){
           var trucks=Object.keys(byTruck).filter(function(t){return byTruck[t].length;}); var totalStops=0,failed=0;
-          return Promise.all(trucks.map(function(tid){ var st=byTruck[tid]; totalStops+=st.length; return fetch(API+"/api/route/import",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({truckId:tid,stops:st,gsRouteId:gsBy[tid]})}).then(function(r){ if(!r.ok)failed++; }).catch(function(){failed++;}); })).then(function(){ return {stops:totalStops,failed:failed}; });
+          return Promise.all(trucks.map(function(tid){ var st=byTruck[tid]; totalStops+=st.length; return fetch(API+"/api/route/import",{method:"POST",headers:POSTH(),body:JSON.stringify({truckId:tid,stops:st,gsRouteId:gsBy[tid]})}).then(function(r){ if(!r.ok)failed++; }).catch(function(){failed++;}); })).then(function(){ return {stops:totalStops,failed:failed}; });
         });
       }).catch(function(){ return {stops:0,failed:1}; });
     }

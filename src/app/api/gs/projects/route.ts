@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "https://pro.goodshuffle.com",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "content-type",
+  "Access-Control-Allow-Headers": "content-type, x-publish-token",
   Vary: "Origin",
 };
 
@@ -43,6 +43,10 @@ const dollars = (cents: number | undefined): number | null =>
 const ymd = (s: string | null | undefined): string | null => (s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null);
 
 export async function POST(req: Request): Promise<NextResponse> {
+  const publishToken = process.env.GS_INGEST_TOKEN;
+  if (publishToken && req.headers.get("x-publish-token") !== publishToken) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
+  }
   let body: { projects?: InProject[] };
   try {
     body = (await req.json()) as typeof body;

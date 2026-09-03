@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "https://pro.goodshuffle.com",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "content-type",
+  "Access-Control-Allow-Headers": "content-type, x-publish-token",
   Vary: "Origin",
 };
 
@@ -25,11 +25,24 @@ export function OPTIONS(): NextResponse {
   return new NextResponse(null, { status: 204, headers: CORS });
 }
 
-export function GET(): NextResponse {
+// The pending-write queue carries customer names/phones + GS ids, so gate reads too.
+function tokenDenied(req: Request): NextResponse | null {
+  const token = process.env.GS_INGEST_TOKEN;
+  if (token && req.headers.get("x-publish-token") !== token) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
+  }
+  return null;
+}
+
+export function GET(req: Request): NextResponse {
+  const denied = tokenDenied(req);
+  if (denied) return denied;
   return NextResponse.json({ ops: listPendingGsOps() }, { headers: CORS });
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
+  const denied = tokenDenied(req);
+  if (denied) return denied;
   let body: { id?: string; ok?: boolean; error?: string };
   try {
     body = (await req.json()) as typeof body;

@@ -25,7 +25,7 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
   const host = h.get("host") ?? "zoe-dispatch.fly.dev";
   const proto = h.get("x-forwarded-proto") ?? "https";
   const base = `${proto}://${host}`;
-  const script = buildOfficePullScript(base);
+  const script = buildOfficePullScript(base, process.env.GS_INGEST_TOKEN);
 
   const state = getPullState();
   const ageH = state.lastPullAt ? Math.round((Date.now() - Date.parse(state.lastPullAt)) / 3_600_000) : null;

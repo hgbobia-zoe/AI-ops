@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "https://pro.goodshuffle.com",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "content-type",
+  "Access-Control-Allow-Headers": "content-type, x-publish-token",
   Vary: "Origin",
 };
 
@@ -31,6 +31,12 @@ export function OPTIONS(): NextResponse {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
+  // Cross-origin write from the office bookmarklet — gated by the ingest token (enforced once
+  // GS_INGEST_TOKEN is set; the bookmarklet carries it). CORS is not a security control.
+  const publishToken = process.env.GS_INGEST_TOKEN;
+  if (publishToken && req.headers.get("x-publish-token") !== publishToken) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
+  }
   let body: {
     truckId?: string;
     date?: string;
