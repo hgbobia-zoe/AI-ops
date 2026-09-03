@@ -61,6 +61,7 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
   const trucks = getActiveVehicles();
   const fleet = trucks.map((t) => ({ truck: t, route: getRouteForDate(t.truckId, date) }));
   const isToday = date === today;
+  const isFuture = date > today;
   const exceptions = isToday ? getOpenExceptions() : [];
   const messages = isToday ? getRecentMessages(30) : [];
   const anyRoute = fleet.some((f) => f.route);
@@ -77,7 +78,7 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
           <h1 className="text-3xl font-bold tracking-tight">Dispatch</h1>
           <p className="text-sm text-muted-foreground">
             {trucks.length} trucks ·{" "}
-            {isToday ? "live view · refreshes automatically" : "history view"}
+            {isToday ? "live view · refreshes automatically" : isFuture ? "upcoming — planning view" : "history view"}
           </p>
         </div>
         <DateNav date={date} today={today} />
@@ -184,10 +185,7 @@ function DateNav({ date, today }: { date: string; today: string }) {
       <Link
         href={href(next)}
         aria-label="Next day"
-        aria-disabled={isToday}
-        className={`flex size-9 items-center justify-center rounded-lg border border-white/10 ${
-          isToday ? "pointer-events-none opacity-40" : "text-muted-foreground hover:text-foreground"
-        }`}
+        className="flex size-9 items-center justify-center rounded-lg border border-white/10 text-muted-foreground hover:text-foreground"
       >
         <ChevronRight className="size-4" />
       </Link>

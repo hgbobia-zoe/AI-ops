@@ -1,9 +1,9 @@
-// Customer Intelligence (MVP6) — assembles name-based frequency/recency segments. Customer $
-// value stays UNAVAILABLE until revenue is captured; identity is approximate until the renter id
-// is captured. Both caveats are surfaced in the UI so no one over-trusts the numbers.
+// Customer Intelligence (MVP6) — value, repeat, and win-back from the Goodshuffle BOOKINGS feed.
+// Identity is the client email when present (stable), else name. Revenue (LTV) is real now that
+// bookings carry contract totals.
 
 import { todayInOpsTz } from "@/lib/dates";
-import { getCustomerEvents } from "@/lib/db/repo";
+import { getAllBookings } from "@/lib/db/repo";
 import { aggregateCustomers, type CustomerAgg } from "./calc";
 
 export interface CustomerOverview {
@@ -11,26 +11,37 @@ export interface CustomerOverview {
   customers: CustomerAgg[];
   total: number;
   repeatCount: number;
-  repeatRate: number | null; // fraction of customers with >= 2 bookings
+  repeatRate: number | null;
+  totalRevenue: number | null; // sum of known customer revenue
+  topByRevenue: CustomerAgg[];
   topByBookings: CustomerAgg[];
-  dormant: CustomerAgg[]; // repeat customers past the dormant window
-  valueAvailable: false; // $ value needs the revenue capture
+  dormant: CustomerAgg[];
+  identityEmailBased: boolean; // true when at least one customer keyed by email (stable)
 }
 
 export function customerOverview(): CustomerOverview {
   const today = todayInOpsTz();
-  const customers = aggregateCustomers(getCustomerEvents(), today);
+  const events = getAllBookings().map((b) => ({
+    name: b.clientName || b.eventName,
+    date: b.eventDate ?? "",
+    email: b.clientEmail || undefined,
+    revenue: b.grandTotal,
+  }));
+  const customers = aggregateCustomers(events, today);
   const total = customers.length;
   const repeatCount = customers.filter((c) => c.repeat).length;
   const dormant = customers.filter((c) => c.status === "dormant");
+  const revVals = customers.map((c) => c.totalRevenue).filter((v): v is number => v != null);
   return {
     today,
     customers,
     total,
     repeatCount,
     repeatRate: total > 0 ? repeatCount / total : null,
+    totalRevenue: revVals.length > 0 ? revVals.reduce((s, v) => s + v, 0) : null,
+    topByRevenue: [...customers].sort((a, b) => (b.totalRevenue ?? 0) - (a.totalRevenue ?? 0)).slice(0, 12),
     topByBookings: customers.slice(0, 12),
     dormant,
-    valueAvailable: false,
+    identityEmailBased: customers.some((c) => c.key.startsWith("em:")),
   };
 }

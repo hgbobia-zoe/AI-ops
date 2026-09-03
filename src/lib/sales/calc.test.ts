@@ -23,6 +23,22 @@ describe("sales — week bucketing", () => {
     expect(p.reduce((n, b) => n + b.count, 0)).toBe(4); // the pre-horizon one is not bucketed
   });
 
+  it("sums booking revenue per week; null when a week has no priced booking", () => {
+    const today = "2026-09-02";
+    const p = bookingPipeline(
+      [
+        { date: "2026-09-02", revenue: 1000 },
+        { date: "2026-09-04", revenue: 500 },
+        { date: "2026-09-10", revenue: null }, // week 1: booked but unpriced
+      ],
+      today,
+      { weeks: 8, nearTermWeeks: 2 },
+    );
+    expect(p[0].revenue).toBe(1500); // week 0 sums both
+    expect(p[1].revenue).toBe(null); // week 1 booked but no known revenue
+    expect(p[2].revenue).toBe(null); // empty week
+  });
+
   it("flags a near-term empty week, but not a far-out empty week", () => {
     const today = "2026-09-02";
     const events = [{ date: "2026-09-10" }]; // only week 1 has a booking

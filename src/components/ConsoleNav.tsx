@@ -16,6 +16,7 @@ import {
   UserRound,
   History,
   Workflow,
+  Download,
   Settings,
   Sparkles,
   type LucideIcon,
@@ -41,7 +42,10 @@ const BLADES: Blade[] = [
   { href: "/automation", label: "Automation", icon: Workflow },
 ];
 
-const BOTTOM: Blade[] = [{ href: "/admin", label: "Settings", icon: Settings }];
+const BOTTOM: Blade[] = [
+  { href: "/admin/pull", label: "Pull Routes", icon: Download },
+  { href: "/admin", label: "Settings", icon: Settings },
+];
 
 export function ConsoleNav() {
   const pathname = usePathname();

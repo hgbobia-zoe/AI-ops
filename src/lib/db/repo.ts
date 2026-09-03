@@ -495,6 +495,117 @@ export function getEventStub(txId: string): { date: string; label: string; route
   return { date: row.date, label: row.label ?? "", routeId: row.route_id ?? undefined };
 }
 
+// ── Bookings (Goodshuffle projects — the commercial pipeline) ────────────────
+
+export interface BookingRecord {
+  bookingId: string;
+  eventName?: string;
+  eventDate?: string | null; // YYYY-MM-DD
+  statusLabel?: string;
+  signed?: boolean;
+  contractTotal?: number | null; // dollars
+  grandTotal?: number | null; // dollars (revenue)
+  amountPaid?: number | null;
+  amountDue?: number | null;
+  clientName?: string;
+  clientEmail?: string;
+}
+
+export interface BookingView {
+  bookingId: string;
+  eventName: string;
+  eventDate: string | null;
+  statusLabel: string;
+  signed: boolean;
+  grandTotal: number | null;
+  amountPaid: number | null;
+  amountDue: number | null;
+  clientName: string;
+  clientEmail: string;
+}
+
+function toBookingView(r: Record<string, unknown>): BookingView {
+  return {
+    bookingId: String(r.booking_id),
+    eventName: String(r.event_name ?? ""),
+    eventDate: (r.event_date as string) ?? null,
+    statusLabel: String(r.status_label ?? ""),
+    signed: Number(r.signed ?? 0) === 1,
+    grandTotal: r.grand_total == null ? null : Number(r.grand_total),
+    amountPaid: r.amount_paid == null ? null : Number(r.amount_paid),
+    amountDue: r.amount_due == null ? null : Number(r.amount_due),
+    clientName: String(r.client_name ?? ""),
+    clientEmail: String(r.client_email ?? ""),
+  };
+}
+
+/** Upsert bookings (from a searchProjects pull), keyed by Goodshuffle project id. */
+export function saveBookings(items: BookingRecord[]): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const up = db.prepare(
+    `INSERT INTO bookings (booking_id, event_name, event_date, status_label, signed, contract_total,
+       grand_total, amount_paid, amount_due, client_name, client_email, updated_at)
+     VALUES (@bookingId,@eventName,@eventDate,@statusLabel,@signed,@contractTotal,@grandTotal,
+       @amountPaid,@amountDue,@clientName,@clientEmail,@now)
+     ON CONFLICT(booking_id) DO UPDATE SET event_name=@eventName, event_date=@eventDate,
+       status_label=@statusLabel, signed=@signed, contract_total=@contractTotal, grand_total=@grandTotal,
+       amount_paid=@amountPaid, amount_due=@amountDue, client_name=@clientName, client_email=@clientEmail,
+       updated_at=@now`,
+  );
+  const tx = db.transaction(() => {
+    for (const i of items)
+      up.run({
+        bookingId: i.bookingId,
+        eventName: i.eventName ?? null,
+        eventDate: i.eventDate ?? null,
+        statusLabel: i.statusLabel ?? null,
+        signed: i.signed ? 1 : 0,
+        contractTotal: i.contractTotal ?? null,
+        grandTotal: i.grandTotal ?? null,
+        amountPaid: i.amountPaid ?? null,
+        amountDue: i.amountDue ?? null,
+        clientName: i.clientName ?? null,
+        clientEmail: i.clientEmail ?? null,
+        now,
+      });
+  });
+  tx();
+}
+
+/** Booked events on/after `startYmd`, soonest first (the forward pipeline). Dated only. */
+export function getUpcomingBookings(startYmd: string): BookingView[] {
+  return (
+    getDb()
+      .prepare("SELECT * FROM bookings WHERE event_date IS NOT NULL AND event_date >= ? ORDER BY event_date ASC")
+      .all(startYmd) as Record<string, unknown>[]
+  ).map(toBookingView);
+}
+
+/** Revenue (sum of grand_total, dollars) for bookings dated in [start,end]. null if none priced. */
+export function getBookingsRevenueInRange(start: string, end: string): { revenue: number | null; count: number } {
+  const row = getDb()
+    .prepare(
+      "SELECT SUM(grand_total) AS total, COUNT(grand_total) AS n FROM bookings WHERE event_date >= ? AND event_date <= ? AND grand_total IS NOT NULL",
+    )
+    .get(start, end) as { total: number | null; n: number };
+  return { revenue: row.n > 0 ? row.total : null, count: row.n };
+}
+
+/** Per-booking rows dated in [start,end] (for the finance event table). */
+export function getBookingsInRange(start: string, end: string): BookingView[] {
+  return (
+    getDb()
+      .prepare("SELECT * FROM bookings WHERE event_date >= ? AND event_date <= ? ORDER BY event_date")
+      .all(start, end) as Record<string, unknown>[]
+  ).map(toBookingView);
+}
+
+/** All bookings (for Customer Intelligence aggregation). */
+export function getAllBookings(): BookingView[] {
+  return (getDb().prepare("SELECT * FROM bookings ORDER BY event_date").all() as Record<string, unknown>[]).map(toBookingView);
+}
+
 export function saveEventReadiness(items: ReadinessRecord[]): void {
   const db = getDb();
   const now = new Date().toISOString();

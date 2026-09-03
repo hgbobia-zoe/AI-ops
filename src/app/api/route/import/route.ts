@@ -10,6 +10,7 @@ import { getRouteForDate, writeRoute, saveEventRevenue, type EventFinancialRecor
 import { todayInOpsTz } from "@/lib/dates";
 import { alertRouteRisks } from "@/lib/notify/routeRisk";
 import { scheduleScanSoon } from "@/lib/risk/scan";
+import { recordPullSuccess } from "@/lib/pull/state";
 import type { Stop } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -152,6 +153,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     });
   }
   if (revenueByTx.size > 0) saveEventRevenue([...revenueByTx.values()]);
+
+  // Mark data fresh — powers the freshness banner + resets the staleness alarm.
+  recordPullSuccess(truckId, stops.length);
 
   // Proactive Slack heads-up for business/office stops scheduled outside open hours
   // (so a truck doesn't roll up while the place is closed). Fire-and-forget; throttled.

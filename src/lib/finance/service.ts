@@ -3,7 +3,7 @@
 // executive scorecard. RULES CALCULATE — every figure is deterministic or explicitly UNAVAILABLE.
 
 import { getPlannedHours, getActualHours, getPayRates, rateForUserOn } from "@/lib/connecteam";
-import { getRevenueInRange, getEventFinancialsInRange, type EventFinancialView } from "@/lib/db/repo";
+import { getBookingsRevenueInRange, getBookingsInRange, type EventFinancialView } from "@/lib/db/repo";
 import { financeConfig } from "./config";
 import { computeVariance, laborPctOfRevenue, contribution, contributionMargin, type Variance, type MoneyStatus } from "./calc";
 import type { Period } from "./periods";
@@ -73,8 +73,8 @@ export async function financeForPeriod(period: Period): Promise<FinanceSummary> 
   const ac = laborVerified ? sumHoursCost(actual.hours, rateAt) : { cost: null, missing: 0, anyRate: false };
   const rateStatus: MoneyStatus = !laborVerified || !(pc.anyRate || ac.anyRate) ? "UNAVAILABLE" : "ACTUAL";
 
-  // Revenue — Goodshuffle (event_financials). Null until the revenue import runs.
-  const { revenue: signed, events } = getRevenueInRange(start, end);
+  // Revenue — Goodshuffle BOOKINGS (searchProjects), the commercial pipeline. Null until a pull runs.
+  const { revenue: signed, count: events } = getBookingsRevenueInRange(start, end);
   const target = period.isWeek ? cfg.weeklyRevenueTarget : null;
   const revenueStatus: MoneyStatus = signed == null ? "UNAVAILABLE" : "SIGNED";
 
@@ -107,7 +107,15 @@ export async function financeForPeriod(period: Period): Promise<FinanceSummary> 
       marginPct,
       status: signed == null ? "UNAVAILABLE" : "PROJECTED",
     },
-    events: getEventFinancialsInRange(start, end),
+    events: getBookingsInRange(start, end).map(
+      (b): EventFinancialView => ({
+        eventId: b.bookingId,
+        date: b.eventDate ?? "",
+        label: b.eventName || `Booking ${b.bookingId}`,
+        revenue: b.grandTotal,
+        revenueStatus: b.signed ? "SIGNED" : "QUOTE",
+      }),
+    ),
   };
 }
 

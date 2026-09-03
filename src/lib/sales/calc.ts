@@ -9,6 +9,8 @@ export interface WeekBucket {
   weekEnd: string; // Saturday
   label: string; // "Sep 7 – 13"
   count: number;
+  /** Sum of known booking revenue ($) in the week; null when no booking in the week carried a value. */
+  revenue: number | null;
   /** Near-term week with zero bookings — the one honest "attention" signal we can give from
    *  counts alone (far-out empties are normal and NOT flagged). */
   nearTermGap: boolean;
@@ -36,7 +38,7 @@ export interface PipelineOptions {
 
 /** Bucket booked events into `weeks` upcoming Sun–Sat weeks starting from today's week. */
 export function bookingPipeline(
-  events: { date: string }[],
+  events: { date: string; revenue?: number | null }[],
   today: string,
   opts: PipelineOptions = { weeks: 8, nearTermWeeks: 2 },
 ): WeekBucket[] {
@@ -45,12 +47,13 @@ export function bookingPipeline(
   for (let i = 0; i < opts.weeks; i++) {
     const ws = shiftYmd(start0, i * 7);
     const we = shiftYmd(ws, 6);
-    buckets.push({ weekStart: ws, weekEnd: we, label: weekLabel(ws, we), count: 0, nearTermGap: false });
+    buckets.push({ weekStart: ws, weekEnd: we, label: weekLabel(ws, we), count: 0, revenue: null, nearTermGap: false });
   }
   for (const e of events) {
     for (const b of buckets) {
       if (e.date >= b.weekStart && e.date <= b.weekEnd) {
         b.count++;
+        if (typeof e.revenue === "number") b.revenue = (b.revenue ?? 0) + e.revenue;
         break;
       }
     }

@@ -250,6 +250,26 @@ CREATE TABLE IF NOT EXISTS automation_proposals (
   status            TEXT DEFAULT 'observed'
 );
 
+-- Goodshuffle BOOKINGS (projects) — the commercial pipeline, distinct from routes (logistics).
+-- Source: /app/project/searchProjects. This is the truth for Sales (forward pipeline), Finance
+-- (revenue), and Customer (value/repeat). Amounts stored in DOLLARS (converted from GS cents on
+-- ingest). Keyed by the Goodshuffle project id.
+CREATE TABLE IF NOT EXISTS bookings (
+  booking_id      TEXT PRIMARY KEY,   -- Goodshuffle project id
+  event_name      TEXT,
+  event_date      TEXT,               -- YYYY-MM-DD (from logistics_start_date); null if unscheduled
+  status_label    TEXT,
+  signed          INTEGER,            -- 1 = signed contract, 0 = quote/unsigned
+  contract_total  REAL,               -- dollars
+  grand_total     REAL,               -- dollars (revenue)
+  amount_paid     REAL,               -- dollars
+  amount_due      REAL,               -- dollars
+  client_name     TEXT,
+  client_email    TEXT,               -- stable-ish customer identity for MVP6
+  updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(event_date);
+
 -- Per-event readiness score (0-100) + component breakdown, recomputed each scan.
 CREATE TABLE IF NOT EXISTS event_readiness (
   event_id                   TEXT PRIMARY KEY,

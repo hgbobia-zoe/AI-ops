@@ -1,14 +1,14 @@
-// Customer Intelligence (MVP6) — repeat/frequency/recency from real booking history. Identity is
-// name-based (approximate until the Goodshuffle renter id is captured) and customer $ value is
-// DATA UNAVAILABLE until revenue is captured. Both caveats are shown so nothing is over-trusted.
+// Customer Intelligence (MVP6) — value, repeat, and win-back from the Goodshuffle bookings feed.
+// Identity is the client email when present (stable); revenue (LTV) is real.
 
-import { Users, Repeat, Moon, AlertTriangle } from "lucide-react";
+import { Users, Repeat, DollarSign, Moon } from "lucide-react";
 import { customerOverview } from "@/lib/customer/service";
 import type { CustomerAgg } from "@/lib/customer/calc";
 
 export const dynamic = "force-dynamic";
 
 const pct = (n: number | null): string => (n == null ? "—" : `${Math.round(n * 100)}%`);
+const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
 const fmtDate = (ymd: string): string => {
   if (!ymd) return "—";
   const [y, m, d] = ymd.split("-").map(Number);
@@ -33,60 +33,55 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
         <h1 className="flex items-center gap-2 text-3xl font-bold tracking-tight">
           <Users className="size-7" /> Customer Intelligence
         </h1>
-        <p className="text-sm text-muted-foreground">Repeat business and win-back candidates from booking history.</p>
+        <p className="text-sm text-muted-foreground">Value, repeat business, and win-back candidates from Goodshuffle bookings.</p>
       </header>
 
-      <div className="mb-6 flex items-start gap-2.5 border border-white/10 bg-white/[0.02] p-3 text-[11px] text-muted-foreground">
-        <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-        <span>
-          Customers are matched by their Goodshuffle <b>contact id</b> when the event was pulled with it, otherwise by
-          <b> name</b> (approximate — near-duplicates may split or merge). Per-customer <b>$ value</b> lights up as revenue
-          is captured on the pull.
-        </span>
-      </div>
-
       {/* Scorecard */}
-      <section className="mb-6 grid gap-3 md:grid-cols-3">
+      <section className="mb-6 grid gap-3 md:grid-cols-4">
         <div className="surface border border-white/5 p-4">
           <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><Users className="size-4" /> Customers</div>
           <div className="text-3xl font-bold tabular-nums">{s.total}</div>
-          <p className="mt-1 text-[11px] text-muted-foreground">Distinct names in booking history.</p>
         </div>
         <div className="surface border border-white/5 p-4">
-          <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><Repeat className="size-4" /> Repeat customers</div>
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><Repeat className="size-4" /> Repeat</div>
           <div className="text-3xl font-bold tabular-nums">{s.repeatCount}</div>
-          <p className="mt-1 text-[11px] text-muted-foreground">{pct(s.repeatRate)} of customers have booked 2+ times.</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">{pct(s.repeatRate)} of customers</p>
         </div>
         <div className="surface border border-white/5 p-4">
-          <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><Moon className="size-4" /> Dormant repeats</div>
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><DollarSign className="size-4" /> Revenue</div>
+          <div className="text-2xl font-bold tabular-nums">{money(s.totalRevenue)}</div>
+          <p className="mt-1 text-[11px] text-muted-foreground">across all bookings</p>
+        </div>
+        <div className="surface border border-white/5 p-4">
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><Moon className="size-4" /> Dormant</div>
           <div className="text-3xl font-bold tabular-nums">{s.dormant.length}</div>
-          <p className="mt-1 text-[11px] text-muted-foreground">Repeat customers with no booking in 12+ months.</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">repeat, quiet 12+ mo</p>
         </div>
       </section>
 
-      {/* Top by bookings */}
+      {/* Top customers by revenue */}
       <section className="mb-8 space-y-2">
-        <h2 className="text-lg font-semibold">Top customers by bookings</h2>
-        {s.topByBookings.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No booking history yet.</p>
+        <h2 className="text-lg font-semibold">Top customers by revenue</h2>
+        {s.topByRevenue.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No bookings yet — pull from Settings → Pull Routes.</p>
         ) : (
           <div className="overflow-x-auto border border-white/10">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="p-2.5">Customer</th>
+                  <th className="p-2.5 text-right">Revenue</th>
                   <th className="p-2.5 text-right">Bookings</th>
-                  <th className="p-2.5">First</th>
                   <th className="p-2.5">Last</th>
                   <th className="p-2.5">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {s.topByBookings.map((c) => (
+                {s.topByRevenue.map((c) => (
                   <tr key={c.key}>
                     <td className="p-2.5 font-medium">{c.name}</td>
+                    <td className="p-2.5 text-right tabular-nums">{money(c.totalRevenue)}</td>
                     <td className="p-2.5 text-right tabular-nums">{c.bookings}</td>
-                    <td className="p-2.5 text-muted-foreground">{fmtDate(c.firstSeen)}</td>
                     <td className="p-2.5 text-muted-foreground">{fmtDate(c.lastSeen)}</td>
                     <td className="p-2.5"><StatusPill c={c} /></td>
                   </tr>
@@ -107,7 +102,8 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
               <thead>
                 <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="p-2.5">Customer</th>
-                  <th className="p-2.5 text-right">Past bookings</th>
+                  <th className="p-2.5 text-right">Past revenue</th>
+                  <th className="p-2.5 text-right">Bookings</th>
                   <th className="p-2.5">Last booking</th>
                 </tr>
               </thead>
@@ -115,6 +111,7 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
                 {s.dormant.slice(0, 20).map((c) => (
                   <tr key={c.key}>
                     <td className="p-2.5 font-medium">{c.name}</td>
+                    <td className="p-2.5 text-right tabular-nums">{money(c.totalRevenue)}</td>
                     <td className="p-2.5 text-right tabular-nums">{c.bookings}</td>
                     <td className="p-2.5 text-muted-foreground">{fmtDate(c.lastSeen)}</td>
                   </tr>
@@ -124,6 +121,11 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
           </div>
         </section>
       )}
+
+      <p className="mt-6 text-[11px] text-muted-foreground">
+        {s.identityEmailBased ? "Customers are matched by email (stable)." : "Customers are matched by name until emails are pulled."}{" "}
+        From Goodshuffle bookings. Pull fresh data from Settings → Pull Routes.
+      </p>
     </main>
   );
 }
