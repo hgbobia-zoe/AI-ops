@@ -9,6 +9,7 @@ import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/h
 import { getCrewForDateSafe, connecteamConfigured, type CrewShift, type CrewRole } from "@/lib/connecteam";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { slackNotify } from "@/lib/notify/slack";
+import { recordPull, logImport } from "@/lib/pull/state";
 import { assessDay, daysUntil } from "./engine";
 import { reconcileRisks, getRiskQueue, type RiskChanges } from "./store";
 import { computeReadiness } from "./readiness";
@@ -211,6 +212,17 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   for (const e of changes.escalated) logChange({ source: "risk", entity: "risk", entityId: e.risk.signature, kind: "risk_escalated", field: e.risk.title, fromValue: e.from, toValue: e.to, changeKey: `escalated|${e.risk.signature}|${e.to}` });
   for (const r of changes.resolved) logChange({ source: "risk", entity: "risk", entityId: r.signature, kind: "risk_resolved", field: r.title, changeKey: `resolved|${r.signature}|${dayKey}` });
   for (const r of changes.regressed) logChange({ source: "risk", entity: "risk", entityId: r.signature, kind: "risk_regressed", field: r.title, changeKey: `regressed|${r.signature}|${dayKey}` });
+
+  // Record Connecteam reachability for the Data Health view (was computed then discarded).
+  if (ctOn && dates.length > 0) {
+    const verifiedDays = dates.length - unverifiedStaffingDates.size;
+    logImport("connecteam", verifiedDays > 0, {
+      rowsIn: dates.length,
+      rowsWritten: verifiedDays,
+      detail: verifiedDays > 0 ? undefined : "Connecteam unreachable during scan",
+    });
+    if (verifiedDays > 0) recordPull("connecteam", verifiedDays);
+  }
 
   // Slack is best-effort — a notification failure must never fail the scan or lose the
   // persisted risk state (already committed above).

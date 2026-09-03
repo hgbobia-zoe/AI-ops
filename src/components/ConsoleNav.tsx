@@ -19,6 +19,7 @@ import {
   Download,
   Settings,
   UserCog,
+  HeartPulse,
   LogOut,
   Sparkles,
   type LucideIcon,
@@ -54,6 +55,7 @@ export function ConsoleNav({ role }: { role: Role }) {
   const blades = BLADES.filter((b) => !b.financial || canSeeFinancials(role));
   const bottom: Blade[] = [];
   if (canManageSettings(role)) bottom.push({ href: "/admin/pull", label: "Pull Routes", icon: Download });
+  if (canManageSettings(role)) bottom.push({ href: "/admin/health", label: "Data Health", icon: HeartPulse });
   if (canManageUsers(role)) bottom.push({ href: "/admin/users", label: "Team", icon: UserCog });
   if (canManageSettings(role)) bottom.push({ href: "/admin", label: "Settings", icon: Settings });
 
