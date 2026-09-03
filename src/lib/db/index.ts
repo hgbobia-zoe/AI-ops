@@ -299,6 +299,21 @@ CREATE TABLE IF NOT EXISTS labor_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_labor_snapshots_week ON labor_snapshots(week_start, captured_at);
 
+-- Import ledger (Data Health keystone) — one row per pull/ingest attempt, so we can answer
+-- "did last night's pull get everything?" and reconstruct STALE / RETRIEVAL-FAILED / INCOMPLETE.
+CREATE TABLE IF NOT EXISTS import_log (
+  id           TEXT PRIMARY KEY,
+  ts           TEXT NOT NULL,
+  source       TEXT NOT NULL,        -- route:<truck> | bookings | revenue
+  ok           INTEGER NOT NULL,     -- 1 = complete success, 0 = failed/partial
+  rows_in      INTEGER,
+  rows_written INTEGER,
+  rows_skipped INTEGER,
+  detail       TEXT                  -- error message / partial note
+);
+CREATE INDEX IF NOT EXISTS idx_import_log_ts ON import_log(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_import_log_source ON import_log(source, ts DESC);
+
 -- Team members with roles (Owner / Admin / Member) — the access matrix. Passwords are scrypt
 -- hashes (never plaintext). Role gates financials, settings, and user management.
 CREATE TABLE IF NOT EXISTS users (

@@ -30,16 +30,17 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string): s
 
     // ---- Bookings feed (projects) → Sales / Finance / Customer ----
     function pullProjects(){
-      var all={};
+      var all={}, total=0, pErr=false;
       // searchProjects paginates ?page=N, 0-indexed (no param == page 0). Walk pages until one
-      // returns nothing new (end reached), with a safety cap.
-      function fetchPage(pg){ return fetch("/app/project/searchProjects?page="+pg,H).then(function(r){return r.json();}).then(function(b){ var ps=b&&b.projectSearch; if(!ps)return {added:0,count:0}; var res=ps.results||[]; var added=0; res.forEach(function(p){ if(p&&p.id!=null&&!all[p.id]){all[p.id]=p;added++;} }); return {added:added,count:res.length}; }).catch(function(){return {added:0,count:0};}); }
-      function loop(pg){ return fetchPage(pg).then(function(r){ if(r.count>0 && pg<20) return loop(pg+1); return null; }); }
+      // returns nothing (end), with a safety cap. A FETCH ERROR (not an empty page) marks the pull
+      // partial so the server won't treat a truncated pipeline as complete/fresh.
+      function fetchPage(pg){ return fetch("/app/project/searchProjects?page="+pg,H).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(b){ var ps=b&&b.projectSearch; if(!ps)return {count:0}; if(ps.totalResultCount)total=ps.totalResultCount; var res=ps.results||[]; res.forEach(function(p){ if(p&&p.id!=null&&!all[p.id])all[p.id]=p; }); return {count:res.length}; }).catch(function(){ pErr=true; return {count:0}; }); }
+      function loop(pg){ return fetchPage(pg).then(function(r){ if(!pErr && r.count>0 && pg<40) return loop(pg+1); return null; }); }
       return loop(0).then(function(){
         var recs=Object.keys(all).map(function(id){ var p=all[id]; var d=null; try{ if(p.logistics_start_date){ var dt=new Date(p.logistics_start_date); if(!isNaN(dt)) d=new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,10); } }catch(e){}
           return { bookingId:String(p.id), eventName:p.eventName||"", eventDate:d, statusLabel:p.statusLabel||"", signed:!!p.signed, grandTotalCents:p.grand_total, contractTotalCents:p.contract_total, amountPaidCents:p.amount_paid, amountDueCents:p.amount_due, clientName:p.client_name||"", clientEmail:p.client_email||"" }; });
-        if(!recs.length) return 0;
-        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs})}).then(function(r){return r.ok?recs.length:0;}).catch(function(){return 0;});
+        if(!recs.length) return { saved:0, partial:pErr };
+        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr,totalReported:total})}).then(function(r){return r.json();}).then(function(j){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial) }; }).catch(function(){ return { saved:0, partial:true }; });
       });
     }
 
@@ -69,20 +70,23 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string): s
       var now=new Date(); var start=new Date(now.getFullYear(),now.getMonth(),now.getDate(),0,0,0); var end=new Date(start.getTime()+24*3600*1000);
       var body={from:start.toISOString(),to:end.toISOString(),warehouseCanonicalIDs:null,crew:null,vehicles:null,statuses:null};
       return fetch("/app/routing/listRoutes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),credentials:"include"}).then(function(r){return r.json();}).then(function(routes){
-        var byTruck={},gsBy={},chain=Promise.resolve();
-        (routes||[]).forEach(function(rt){ chain=chain.then(function(){ var tid=truckIdFor(rt.vehicle&&rt.vehicle.title); if(!tid)return;
+        var byTruck={},gsBy={},chain=Promise.resolve(),unmatched={};
+        (routes||[]).forEach(function(rt){ chain=chain.then(function(){ var title=(rt.vehicle&&rt.vehicle.title)||""; var tid=truckIdFor(title); if(!tid){ if(title)unmatched[title]=1; return; }
           return fetch("/app/routing/getRoute?routeID="+rt.id+"&includeAttributes=true",{headers:{accept:"application/json"},credentials:"include"}).then(function(r){return r.json();}).then(function(full){ return attachItems(extractStops(full)).then(function(stops){ byTruck[tid]=(byTruck[tid]||[]).concat(stops); if(!gsBy[tid])gsBy[tid]=String(rt.id); }); }); }); });
         return chain.then(function(){
-          var trucks=Object.keys(byTruck).filter(function(t){return byTruck[t].length;}); var totalStops=0,failed=0;
-          return Promise.all(trucks.map(function(tid){ var st=byTruck[tid]; totalStops+=st.length; return fetch(API+"/api/route/import",{method:"POST",headers:POSTH(),body:JSON.stringify({truckId:tid,stops:st,gsRouteId:gsBy[tid]})}).then(function(r){ if(!r.ok)failed++; }).catch(function(){failed++;}); })).then(function(){ return {stops:totalStops,failed:failed}; });
+          var trucks=Object.keys(byTruck).filter(function(t){return byTruck[t].length;}); var totalStops=0,failed=0; var unm=Object.keys(unmatched);
+          return Promise.all(trucks.map(function(tid){ var st=byTruck[tid]; totalStops+=st.length; return fetch(API+"/api/route/import",{method:"POST",headers:POSTH(),body:JSON.stringify({truckId:tid,stops:st,gsRouteId:gsBy[tid]})}).then(function(r){ if(!r.ok)failed++; }).catch(function(){failed++;}); })).then(function(){ return {stops:totalStops,failed:failed,unmatched:unm}; });
         });
-      }).catch(function(){ return {stops:0,failed:1}; });
+      }).catch(function(){ return {stops:0,failed:1,unmatched:[]}; });
     }
 
     Promise.all([pullRoutes(), pullProjects()]).then(function(res){
-      var r=res[0]||{stops:0,failed:0}, bookings=res[1]||0;
-      if(r.failed) banner("⚠️ Bookings synced ("+bookings+"), but routes failed to save.","#b91c1c");
-      else banner("✅ Synced "+r.stops+" route stops + "+bookings+" bookings → Zoe Ops","#15803d");
+      var r=res[0]||{stops:0,failed:0}, bk=res[1]||{saved:0,partial:false};
+      var unm=(r.unmatched&&r.unmatched.length)?" · ⚠ unrecognized truck(s): "+r.unmatched.join(", "):"";
+      if(r.failed) banner("⚠️ Bookings synced ("+bk.saved+"), but routes failed to save."+unm,"#b91c1c");
+      else if(bk.partial) banner("⚠️ Routes synced ("+r.stops+"), but bookings were INCOMPLETE ("+bk.saved+" saved) — a page failed. Try again."+unm,"#b45309");
+      else if(unm) banner("✅ Synced "+r.stops+" stops + "+bk.saved+" bookings"+unm,"#b45309");
+      else banner("✅ Synced "+r.stops+" route stops + "+bk.saved+" bookings → Zoe Ops","#15803d");
       done();
     }).catch(function(e){ banner("⚠️ Pull failed: "+String(e).slice(0,90),"#b91c1c"); done(); });
   }catch(e){ banner("⚠️ "+String(e).slice(0,110),"#b91c1c"); }

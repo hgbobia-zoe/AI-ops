@@ -671,6 +671,22 @@ export function getBookingsInRange(start: string, end: string): BookingView[] {
   ).map(toBookingView);
 }
 
+/** Revenue ($ grand_total) by booking id, for a set of ids — the single revenue source of truth.
+ *  Event tx_id === booking id (same Goodshuffle id space), so risk/history snapshots read revenue
+ *  from here rather than the separate event_financials table (which diverged). */
+export function getBookingRevenueByIds(ids: string[]): Map<string, number | null> {
+  const out = new Map<string, number | null>();
+  if (ids.length === 0) return out;
+  const ph = ids.map(() => "?").join(",");
+  for (const r of getDb().prepare(`SELECT booking_id, grand_total FROM bookings WHERE booking_id IN (${ph})`).all(...ids) as {
+    booking_id: string;
+    grand_total: number | null;
+  }[]) {
+    out.set(String(r.booking_id), r.grand_total == null ? null : Number(r.grand_total));
+  }
+  return out;
+}
+
 /** All bookings (for Customer Intelligence aggregation). */
 export function getAllBookings(): BookingView[] {
   return (getDb().prepare("SELECT * FROM bookings ORDER BY event_date").all() as Record<string, unknown>[]).map(toBookingView);

@@ -4,7 +4,7 @@
 // ONLY meaningful changes (new HIGH/CRITICAL, escalations, resolutions, regressions).
 
 import { getActiveVehicles } from "@/lib/vehicles";
-import { getRouteForDate, getRouteDates, getEventsInRange, saveEventReadiness, getEventFinancialsInRange } from "@/lib/db/repo";
+import { getRouteForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds } from "@/lib/db/repo";
 import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/history/store";
 import { getCrewForDateSafe, connecteamConfigured, type CrewShift, type CrewRole } from "@/lib/connecteam";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
@@ -169,7 +169,7 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   // Operational History (MVP4): snapshot each event's known state (deduped — only on a real
   // change) so we can later answer "what did we know N days out?", and log risk lifecycle
   // transitions to the append-only change log (idempotent).
-  const revByEvent = new Map(getEventFinancialsInRange(dates[0] ?? today, dates[dates.length - 1] ?? today).map((e) => [e.eventId, e.revenue]));
+  const revByEvent = getBookingRevenueByIds(readiness.map((r) => r.eventId));
   // Reschedule detection (MVP4 P3): the event's last-known date vs its current schedule date.
   const prevDates = getLatestSnapshotDates();
   for (const ev of readiness) {

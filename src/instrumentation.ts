@@ -8,6 +8,15 @@ export async function register(): Promise<void> {
   const g = globalThis as unknown as { __zoePullStaleTimer?: NodeJS.Timeout };
   if (g.__zoePullStaleTimer) return;
 
+  // Seed the first Owner from env on boot (idempotent), so the access gate has an account to log
+  // into the moment the secrets are set.
+  try {
+    const { bootstrapOwner } = await import("@/lib/auth/users");
+    bootstrapOwner();
+  } catch {
+    /* non-fatal */
+  }
+
   const run = async (): Promise<void> => {
     try {
       const { checkPullStaleness } = await import("@/lib/pull/staleness");

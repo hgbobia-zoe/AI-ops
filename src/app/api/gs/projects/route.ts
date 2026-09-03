@@ -8,7 +8,7 @@
 
 import { NextResponse } from "next/server";
 import { saveBookings, type BookingRecord } from "@/lib/db/repo";
-import { recordPullSuccess } from "@/lib/pull/state";
+import { recordPull, logImport } from "@/lib/pull/state";
 
 export const dynamic = "force-dynamic";
 
@@ -47,7 +47,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (publishToken && req.headers.get("x-publish-token") !== publishToken) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
   }
-  let body: { projects?: InProject[] };
+  let body: { projects?: InProject[]; partial?: boolean; totalReported?: number };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -74,9 +74,16 @@ export async function POST(req: Request): Promise<NextResponse> {
       clientEmail: p.clientEmail,
     });
   }
-  if (records.length > 0) {
-    saveBookings(records);
-    recordPullSuccess("bookings", records.length); // bookings pull counts as a successful pull
-  }
-  return NextResponse.json({ ok: true, saved: records.length }, { headers: CORS });
+  if (records.length > 0) saveBookings(records);
+
+  // A partial pull (the bookmarklet hit a pagination error) must NOT be treated as fresh/complete —
+  // otherwise Sales/Finance/Customer run on a truncated pipeline that looks whole.
+  const partial = Boolean(body.partial) || (typeof body.totalReported === "number" && body.totalReported > records.length);
+  const detail = partial
+    ? `partial pull: saved ${records.length}${typeof body.totalReported === "number" ? ` of ~${body.totalReported}` : ""}`
+    : undefined;
+  logImport("bookings", !partial, { rowsIn: projects.length, rowsWritten: records.length, detail });
+  if (!partial && records.length > 0) recordPull("bookings", records.length);
+
+  return NextResponse.json({ ok: true, saved: records.length, partial }, { headers: CORS });
 }

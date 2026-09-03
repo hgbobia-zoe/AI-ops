@@ -37,6 +37,31 @@ async function ctGet(path: string, timeoutMs = 12000): Promise<unknown | null> {
   }
 }
 
+/** Fetch ALL pages of a Connecteam list endpoint (they cap at a page size, so a single call
+ *  silently truncates). Dedup-terminated: stops on a short page OR when a page adds nothing new —
+ *  so it can't loop even if the endpoint ignores `offset` (worst case = today's single-page behavior). */
+async function ctGetAllPages<T>(base: string, extract: (j: unknown) => T[], keyOf: (t: T) => string | number, pageSize = 200): Promise<T[]> {
+  const seen = new Set<string | number>();
+  const out: T[] = [];
+  const sep = base.includes("?") ? "&" : "?";
+  for (let offset = 0, guard = 0; guard < 100; guard++, offset += pageSize) {
+    const j = await ctGet(`${base}${sep}offset=${offset}&limit=${pageSize}`);
+    if (!j) break;
+    const page = extract(j);
+    let added = 0;
+    for (const it of page) {
+      const k = keyOf(it);
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(it);
+        added++;
+      }
+    }
+    if (page.length < pageSize || added === 0) break;
+  }
+  return out;
+}
+
 /** Ops role, derived from the Connecteam "Title" custom field. */
 export type CrewRole = "driver" | "prep" | "other";
 
@@ -96,9 +121,13 @@ type ShiftsResp = { data?: { shifts?: Array<Record<string, unknown>> } };
 
 /** The team, keyed by userId (name resolved from first/last). */
 export async function getUsers(): Promise<Map<number, CrewMember>> {
-  const j = (await ctGet("/users/v1/users?limit=300")) as UsersResp | null;
+  const users = await ctGetAllPages<Record<string, unknown>>(
+    "/users/v1/users",
+    (j) => ((j as UsersResp)?.data?.users ?? []) as Record<string, unknown>[],
+    (u) => Number(u.userId),
+  );
   const map = new Map<number, CrewMember>();
-  for (const u of j?.data?.users ?? []) {
+  for (const u of users) {
     const userId = Number(u.userId);
     if (!userId) continue;
     const firstName = (u.firstName as string) || "";
@@ -131,10 +160,11 @@ export async function getSchedulers(): Promise<Scheduler[]> {
 }
 
 async function getShifts(sched: Scheduler, startUnix: number, endUnix: number): Promise<Array<Record<string, unknown>>> {
-  const j = (await ctGet(
-    `/scheduler/v1/schedulers/${sched.schedulerId}/shifts?startTime=${startUnix}&endTime=${endUnix}&limit=500`,
-  )) as ShiftsResp | null;
-  return j?.data?.shifts ?? [];
+  return ctGetAllPages<Record<string, unknown>>(
+    `/scheduler/v1/schedulers/${sched.schedulerId}/shifts?startTime=${startUnix}&endTime=${endUnix}`,
+    (j) => ((j as ShiftsResp)?.data?.shifts ?? []) as Record<string, unknown>[],
+    (s) => String(s.id ?? `${s.userId}|${s.startTime}|${s.endTime}`),
+  );
 }
 
 /** `YYYY-MM-DD` for a Unix-seconds instant in timezone `tz`. */
@@ -241,8 +271,12 @@ export async function getPayRates(startDate: string, endDate: string): Promise<M
   if (!connecteamConfigured()) return map;
   // Confirmed shape (live probe): data.payRatesByUsers = [{ userId, payRate }], where payRate is
   // an object (or array w/ history) of { effectiveDate, rateType, defaultRate, resourcesRates, … }.
-  const j = await ctGet(`/pay-rates/v1/pay-rates?startDate=${startDate}&endDate=${endDate}&rateType=hourly&isIncludeHistory=true&limit=500`);
-  for (const item of findArray(j, ["payRatesByUsers"])) {
+  const items = await ctGetAllPages<Json>(
+    `/pay-rates/v1/pay-rates?startDate=${startDate}&endDate=${endDate}&rateType=hourly&isIncludeHistory=true`,
+    (j) => findArray(j, ["payRatesByUsers"]),
+    (it) => Number((it as Record<string, unknown>).userId),
+  );
+  for (const item of items) {
     const userId = num(item.userId);
     if (!userId) continue;
     const pr = item.payRate;

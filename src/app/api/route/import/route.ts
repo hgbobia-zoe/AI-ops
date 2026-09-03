@@ -6,11 +6,11 @@
 //         dayOfPhone?, plannedWindow?, eta? }, ...] }
 
 import { NextResponse } from "next/server";
-import { getRouteForDate, writeRoute, saveEventRevenue, type EventFinancialRecord } from "@/lib/db/repo";
+import { getRouteForDate, writeRoute } from "@/lib/db/repo";
 import { todayInOpsTz } from "@/lib/dates";
 import { alertRouteRisks } from "@/lib/notify/routeRisk";
 import { scheduleScanSoon } from "@/lib/risk/scan";
-import { recordPullSuccess } from "@/lib/pull/state";
+import { recordPull, logImport } from "@/lib/pull/state";
 import { reconcileStops } from "@/lib/ingest/reconcile";
 import type { Stop } from "@/lib/types";
 
@@ -67,30 +67,14 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   writeRoute({ routeId, date, truckId, status: "ready", gsRouteId: body.gsRouteId, stops });
 
-  // Forward any Goodshuffle contract totals captured with this pull into event_financials
-  // (Financial Intelligence). Cents → dollars; keyed by txId; one record per distinct event.
-  // Only the incoming stops carry totals (frozen/kept stops keep their prior revenue).
-  const revenueByTx = new Map<string, EventFinancialRecord>();
-  for (const s of stopsIn) {
-    const tx = s.txId;
-    const cents = s.grandTotalCents;
-    if (!tx || typeof cents !== "number" || !Number.isFinite(cents)) continue;
-    const revenue = Math.round(cents) / 100;
-    const collected = typeof s.paidCents === "number" && Number.isFinite(s.paidCents) ? Math.round(s.paidCents) / 100 : null;
-    revenueByTx.set(tx, {
-      eventId: tx,
-      date,
-      label: s.custName || undefined,
-      routeId,
-      revenue,
-      revenueStatus: collected != null && collected >= revenue ? "COLLECTED" : "SIGNED",
-      collected,
-    });
-  }
-  if (revenueByTx.size > 0) saveEventRevenue([...revenueByTx.values()]);
+  // NOTE: revenue is NOT written here. The single source of truth is the `bookings` feed
+  // (searchProjects), keyed by the same id as the stop's txId — see getBookingRevenueByIds. The
+  // route pull used to ALSO write event_financials, which diverged from bookings; that write was
+  // removed to keep one authoritative revenue number per event.
 
-  // Mark data fresh — powers the freshness banner + resets the staleness alarm.
-  recordPullSuccess(truckId, stops.length);
+  // Mark this truck's routes fresh (per-source) + ledger the import.
+  recordPull(`route:${truckId}`, stops.length);
+  logImport(`route:${truckId}`, true, { rowsIn: stopsIn.length, rowsWritten: stops.length });
 
   // Proactive Slack heads-up for business/office stops scheduled outside open hours
   // (so a truck doesn't roll up while the place is closed). Fire-and-forget; throttled.
