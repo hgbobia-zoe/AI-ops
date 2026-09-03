@@ -19,7 +19,22 @@ export interface SnapshotInput {
 }
 
 function snapshotSig(s: SnapshotInput): string {
-  return JSON.stringify([s.driverName ?? "", s.riskLevel, s.readinessScore, s.openRisks, s.revenue ?? null]);
+  // eventDate is part of the signature so a reschedule (date change) is captured as a new snapshot.
+  return JSON.stringify([s.eventDate, s.driverName ?? "", s.riskLevel, s.readinessScore, s.openRisks, s.revenue ?? null]);
+}
+
+/** Last-known event_date per event (from its most recent snapshot). Lets the scan detect a
+ *  reschedule: the current schedule date differs from what we last recorded for that event. */
+export function getLatestSnapshotDates(): Map<string, string> {
+  const rows = getDb()
+    .prepare(
+      `SELECT event_id, event_date FROM event_snapshots s
+       WHERE captured_at = (SELECT MAX(captured_at) FROM event_snapshots s2 WHERE s2.event_id = s.event_id)`,
+    )
+    .all() as { event_id: string; event_date: string }[];
+  const m = new Map<string, string>();
+  for (const r of rows) if (r.event_date) m.set(r.event_id, r.event_date);
+  return m;
 }
 
 /** Write a snapshot only if the event's latest snapshot differs (meaningful change). Returns true if written. */
@@ -153,4 +168,58 @@ export function getEventTimeline(eventId: string): { snapshots: SnapshotRow[]; c
   );
   const changes = (getDb().prepare("SELECT * FROM history_changes WHERE event_id = ? ORDER BY ts DESC").all(eventId) as Record<string, unknown>[]).map(toChange);
   return { snapshots: snaps, changes };
+}
+
+// ── Post-event outcomes (MVP4 Phase 3) ───────────────────────────────────────
+// Recorded when a route is closed — how the event actually went (completed vs total stops).
+// The factual basis for postmortems / "did we deliver on plan?".
+
+export interface OutcomeInput {
+  eventId: string;
+  routeId: string;
+  date: string;
+  totalStops: number;
+  completedStops: number;
+}
+
+/** Record (or refresh) an event's outcome. Idempotent per (eventId, routeId). */
+export function recordEventOutcome(o: OutcomeInput, now: Date = new Date()): void {
+  getDb()
+    .prepare(
+      `INSERT INTO event_outcomes (event_id, route_id, date, total_stops, completed_stops, all_completed, closed_at)
+       VALUES (@eventId,@routeId,@date,@totalStops,@completedStops,@allCompleted,@now)
+       ON CONFLICT(event_id, route_id) DO UPDATE SET total_stops=@totalStops, completed_stops=@completedStops,
+         all_completed=@allCompleted, closed_at=@now`,
+    )
+    .run({
+      eventId: o.eventId,
+      routeId: o.routeId,
+      date: o.date,
+      totalStops: o.totalStops,
+      completedStops: o.completedStops,
+      allCompleted: o.completedStops >= o.totalStops && o.totalStops > 0 ? 1 : 0,
+      now: now.toISOString(),
+    });
+}
+
+export interface OutcomeRow {
+  eventId: string;
+  routeId: string;
+  date: string;
+  totalStops: number;
+  completedStops: number;
+  allCompleted: boolean;
+  closedAt: string;
+}
+
+export function getRecentOutcomes(limit = 100): OutcomeRow[] {
+  return (getDb().prepare("SELECT * FROM event_outcomes ORDER BY closed_at DESC LIMIT ?").all(limit) as Record<string, unknown>[]).map((r) => ({
+    eventId: String(r.event_id),
+    routeId: String(r.route_id),
+    date: String(r.date ?? ""),
+    totalStops: Number(r.total_stops ?? 0),
+    completedStops: Number(r.completed_stops ?? 0),
+    allCompleted: Number(r.all_completed ?? 0) === 1,
+    closedAt: String(r.closed_at),
+  }));
 }

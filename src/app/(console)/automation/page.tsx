@@ -2,11 +2,28 @@
 // take, derived deterministically from live risks and booking gaps. Nothing here executes: no
 // texts, no Goodshuffle writes, no crew changes. Enabling execution is a separate, gated step.
 
-import { Workflow, Lock, RotateCcw, Globe, ArrowUpRight } from "lucide-react";
+import Link from "next/link";
+import { Workflow, Lock, RotateCcw, Globe, ArrowUpRight, ExternalLink } from "lucide-react";
 import { automationOverview, type ObservedAction } from "@/lib/automation/service";
 import type { Tier, Target } from "@/lib/automation/actions";
 
 export const dynamic = "force-dynamic";
+
+// Where a human goes to actually handle a proposal. Recommendation only — the platform never
+// performs the action itself. Internal blades are same-tab links; external systems open in a new tab.
+function recommendation(p: ObservedAction): { href: string; label: string; external: boolean } {
+  if (p.actionType === "review_booking_gap") return { href: "/sales", label: "Review in Sales", external: false };
+  switch (p.target) {
+    case "dispatch":
+      return { href: "/dispatch", label: "Open Dispatch", external: false };
+    case "goodshuffle":
+      return { href: "https://pro.goodshuffle.com", label: "Open Goodshuffle", external: true };
+    case "connecteam":
+      return { href: "https://app.connecteam.com", label: "Open Connecteam", external: true };
+    default:
+      return { href: "/risk", label: "Review in Event Risk", external: false };
+  }
+}
 
 const TIER_LABEL: Record<Tier, string> = { observe: "Observe", recommend: "Recommend", prepare: "Prepare", approve: "Approve", auto: "Auto" };
 const TIER_STYLE: Record<Tier, string> = {
@@ -46,10 +63,27 @@ function ActionRow({ p }: { p: ObservedAction }): React.JSX.Element {
       <div className="mt-2 font-medium">{p.title}</div>
       <p className="mt-0.5 text-sm text-muted-foreground">{p.detail}</p>
       <div className="mt-2.5 flex items-center gap-2">
-        <span className="cursor-not-allowed border border-white/10 px-2.5 py-1 text-xs text-muted-foreground" title="Execution is not wired — observe mode">
-          Approve &amp; run · disabled
-        </span>
-        <span className="text-[11px] text-muted-foreground">wiring pending your go-ahead</span>
+        {(() => {
+          const rec = recommendation(p);
+          return rec.external ? (
+            <a
+              href={rec.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 border border-white/15 px-2.5 py-1 text-xs text-foreground hover:bg-white/[0.06]"
+            >
+              {rec.label} <ExternalLink className="size-3" />
+            </a>
+          ) : (
+            <Link
+              href={rec.href}
+              className="inline-flex items-center gap-1.5 border border-white/15 px-2.5 py-1 text-xs text-foreground hover:bg-white/[0.06]"
+            >
+              {rec.label} <ArrowUpRight className="size-3" />
+            </Link>
+          );
+        })()}
+        <span className="text-[11px] text-muted-foreground">recommendation · you take the action</span>
       </div>
     </div>
   );
@@ -71,11 +105,11 @@ export default async function AutomationPage(): Promise<React.JSX.Element> {
       <div className="mb-6 flex items-start gap-3 border border-emerald-500/30 bg-emerald-500/[0.06] p-4">
         <Lock className="mt-0.5 size-5 shrink-0 text-emerald-300" />
         <div className="text-sm">
-          <div className="font-semibold text-emerald-200">Observe mode — nothing executes</div>
+          <div className="font-semibold text-emerald-200">Observe &amp; recommend — nothing runs automatically</div>
           <p className="mt-1 text-muted-foreground">
-            Everything below is a <b>proposal</b> derived from live risks and booking gaps. No texts are sent, no Goodshuffle
-            data is changed, no crew is moved. Each action shows its intended tier and whether it&apos;s outward-facing, so
-            you can decide — action by action — what should ever run automatically.
+            Everything below is a <b>recommendation</b> derived from live risks and booking gaps. The platform sends no
+            texts, changes no Goodshuffle data, and moves no crew — each item links you to where <b>you</b> take the
+            action. The tier + outward-facing tags show what could later be automated, when you choose to.
           </p>
         </div>
       </div>

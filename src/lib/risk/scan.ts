@@ -5,7 +5,7 @@
 
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRouteForDate, getRouteDates, getEventsInRange, saveEventReadiness, getEventFinancialsInRange } from "@/lib/db/repo";
-import { captureEventSnapshot, logChange } from "@/lib/history/store";
+import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/history/store";
 import { getCrewForDateSafe, connecteamConfigured, type CrewShift, type CrewRole } from "@/lib/connecteam";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { slackNotify } from "@/lib/notify/slack";
@@ -168,6 +168,24 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   // change) so we can later answer "what did we know N days out?", and log risk lifecycle
   // transitions to the append-only change log (idempotent).
   const revByEvent = new Map(getEventFinancialsInRange(dates[0] ?? today, dates[dates.length - 1] ?? today).map((e) => [e.eventId, e.revenue]));
+  // Reschedule detection (MVP4 P3): the event's last-known date vs its current schedule date.
+  const prevDates = getLatestSnapshotDates();
+  for (const ev of readiness) {
+    const prev = prevDates.get(ev.eventId);
+    if (prev && prev !== ev.date) {
+      logChange({
+        source: "goodshuffle",
+        entity: "event",
+        entityId: ev.eventId,
+        eventId: ev.eventId,
+        kind: "event_rescheduled",
+        field: ev.label,
+        fromValue: prev,
+        toValue: ev.date,
+        changeKey: `rescheduled|${ev.eventId}|${prev}|${ev.date}`,
+      });
+    }
+  }
   for (const ev of readiness) {
     const affecting = allFindings.filter((f) => f.date === ev.date && (!f.routeId || f.routeId === ev.routeId));
     captureEventSnapshot(

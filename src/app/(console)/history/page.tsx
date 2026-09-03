@@ -31,6 +31,12 @@ function describe(c: ChangeRow): { icon: React.ReactNode; text: React.ReactNode;
       return { icon: truck, tone: "text-muted-foreground", text: <>Driver cleared from <b>{c.entityId}</b>{c.fromValue ? ` (was ${c.fromValue})` : ""}</> };
     case "stop_removed":
       return { icon: pkg, tone: "text-muted-foreground", text: <>Stop pulled from route <b>{c.fromValue}</b></> };
+    case "event_rescheduled":
+      return { icon: dot, tone: "text-sky-300", text: <>Event rescheduled — <b>{target}</b> {c.fromValue} → <b>{c.toValue}</b></> };
+    case "booking_value_changed":
+      return { icon: dot, tone: "text-emerald-300", text: <>Booking value changed — <b>{target}</b> ${c.fromValue} → <b>${c.toValue}</b></> };
+    case "event_completed":
+      return { icon: pkg, tone: c.toValue === "complete" ? "text-emerald-300" : "text-amber-300", text: <>Event closed — <b>{target}</b> {c.field}</> };
     default:
       return { icon: dot, tone: "text-muted-foreground", text: <>{c.kind} — {target}</> };
   }

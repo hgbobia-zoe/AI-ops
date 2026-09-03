@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { captureEventSnapshot, logChange, getEventTimeline, getRecentChanges, type SnapshotInput } from "./store";
+import {
+  captureEventSnapshot,
+  logChange,
+  getEventTimeline,
+  getRecentChanges,
+  getLatestSnapshotDates,
+  recordEventOutcome,
+  getRecentOutcomes,
+  type SnapshotInput,
+} from "./store";
 
 // DATABASE_PATH is ":memory:" in tests.
 const base: SnapshotInput = {
@@ -47,5 +56,25 @@ describe("history — change log is append-only + idempotent", () => {
     logChange({ source: "risk", entity: "risk", entityId: "sigB", kind: "risk_escalated", fromValue: "MEDIUM", toValue: "HIGH", changeKey: "escalated|sigB|HIGH" });
     logChange({ source: "risk", entity: "risk", entityId: "sigB", kind: "risk_escalated", fromValue: "HIGH", toValue: "CRITICAL", changeKey: "escalated|sigB|CRITICAL" });
     expect(getRecentChanges().filter((c) => c.entityId === "sigB")).toHaveLength(2);
+  });
+});
+
+describe("history — reschedule detection + outcomes (MVP4 P3)", () => {
+  it("getLatestSnapshotDates reflects the newest date, and a date change makes a new snapshot", () => {
+    captureEventSnapshot({ ...base, eventId: "TX-R", eventDate: "2026-09-10" });
+    expect(getLatestSnapshotDates().get("TX-R")).toBe("2026-09-10");
+    // Same everything but a new date → reschedule → new snapshot (date is in the signature).
+    expect(captureEventSnapshot({ ...base, eventId: "TX-R", eventDate: "2026-09-17" })).toBe(true);
+    expect(getLatestSnapshotDates().get("TX-R")).toBe("2026-09-17");
+    expect(getEventTimeline("TX-R").snapshots).toHaveLength(2);
+  });
+
+  it("records an event outcome and marks all_completed correctly, idempotent per (event,route)", () => {
+    recordEventOutcome({ eventId: "TX-O", routeId: "R1", date: "2026-09-05", totalStops: 2, completedStops: 1 });
+    recordEventOutcome({ eventId: "TX-O", routeId: "R1", date: "2026-09-05", totalStops: 2, completedStops: 2 }); // refresh
+    const outs = getRecentOutcomes().filter((o) => o.eventId === "TX-O");
+    expect(outs).toHaveLength(1); // upsert, not duplicate
+    expect(outs[0].allCompleted).toBe(true);
+    expect(outs[0].completedStops).toBe(2);
   });
 });

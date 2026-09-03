@@ -3,6 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "./index";
+import { logChange } from "@/lib/history/store";
 import type { Route, RouteStatus, Stop, StopState } from "@/lib/types";
 
 interface StopRow {
@@ -101,6 +102,12 @@ export function getRoute(truckId: string): Route | null {
   const row = getDb()
     .prepare("SELECT * FROM routes WHERE truck_id = ? ORDER BY updated_at DESC LIMIT 1")
     .get(truckId) as RouteRow | undefined;
+  return row ? buildRoute(row) : null;
+}
+
+/** A route by its id, with stops. */
+export function getRouteById(routeId: string): Route | null {
+  const row = getDb().prepare("SELECT * FROM routes WHERE route_id = ?").get(routeId) as RouteRow | undefined;
   return row ? buildRoute(row) : null;
 }
 
@@ -539,10 +546,25 @@ function toBookingView(r: Record<string, unknown>): BookingView {
   };
 }
 
-/** Upsert bookings (from a searchProjects pull), keyed by Goodshuffle project id. */
+/** Upsert bookings (from a searchProjects pull), keyed by Goodshuffle project id. Logs a
+ *  financial-plan change to Operational History when an existing booking's revenue changes. */
 export function saveBookings(items: BookingRecord[]): void {
   const db = getDb();
   const now = new Date().toISOString();
+
+  // Prior revenue per booking, for change detection (MVP4 P3).
+  const prior = new Map<string, number | null>();
+  const ids = items.map((i) => i.bookingId);
+  if (ids.length > 0) {
+    const ph = ids.map(() => "?").join(",");
+    for (const r of db.prepare(`SELECT booking_id, grand_total FROM bookings WHERE booking_id IN (${ph})`).all(...ids) as {
+      booking_id: string;
+      grand_total: number | null;
+    }[]) {
+      prior.set(String(r.booking_id), r.grand_total == null ? null : Number(r.grand_total));
+    }
+  }
+
   const up = db.prepare(
     `INSERT INTO bookings (booking_id, event_name, event_date, status_label, signed, contract_total,
        grand_total, amount_paid, amount_due, client_name, client_email, updated_at)
@@ -571,6 +593,25 @@ export function saveBookings(items: BookingRecord[]): void {
       });
   });
   tx();
+
+  // Log revenue changes on already-known bookings (financial-plan change).
+  for (const i of items) {
+    const before = prior.get(i.bookingId);
+    const after = i.grandTotal ?? null;
+    if (before != null && after != null && before !== after) {
+      logChange({
+        source: "goodshuffle",
+        entity: "financial",
+        entityId: i.bookingId,
+        eventId: i.bookingId,
+        kind: "booking_value_changed",
+        field: i.eventName,
+        fromValue: String(before),
+        toValue: String(after),
+        changeKey: `bookingval|${i.bookingId}|${after}`,
+      });
+    }
+  }
 }
 
 /** Booked events on/after `startYmd`, soonest first (the forward pipeline). Dated only. */

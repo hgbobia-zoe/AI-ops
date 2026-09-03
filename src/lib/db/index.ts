@@ -270,6 +270,20 @@ CREATE TABLE IF NOT EXISTS bookings (
 );
 CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(event_date);
 
+-- Post-event outcomes (MVP4 Phase 3) — captured when a route is closed. How the event actually
+-- went vs plan, the factual basis for postmortems. One row per (event, route).
+CREATE TABLE IF NOT EXISTS event_outcomes (
+  event_id        TEXT NOT NULL,
+  route_id        TEXT NOT NULL,
+  date            TEXT,
+  total_stops     INTEGER,
+  completed_stops INTEGER,
+  all_completed   INTEGER,
+  closed_at       TEXT NOT NULL,
+  PRIMARY KEY (event_id, route_id)
+);
+CREATE INDEX IF NOT EXISTS idx_event_outcomes_closed ON event_outcomes(closed_at DESC);
+
 -- Per-event readiness score (0-100) + component breakdown, recomputed each scan.
 CREATE TABLE IF NOT EXISTS event_readiness (
   event_id                   TEXT PRIMARY KEY,
