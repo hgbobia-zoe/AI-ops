@@ -8,7 +8,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CircleX, Check } from "lucide-react";
 
-export function CloseRouteButton({ truckId }: { truckId: string }) {
+export function CloseRouteButton({ routeId }: { routeId: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -20,7 +20,7 @@ export function CloseRouteButton({ truckId }: { truckId: string }) {
       const r = await fetch("/api/route/close", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ truckId }),
+        body: JSON.stringify({ routeId }),
       });
       if (r.ok) {
         // Show closed immediately so there's no "did it work?" gap while the board

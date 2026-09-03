@@ -6,8 +6,10 @@
 //         dayOfPhone?, plannedWindow?, eta? }, ...] }
 
 import { NextResponse } from "next/server";
-import { getRoute, writeRoute } from "@/lib/db/repo";
+import { getRouteForDate, writeRoute, saveEventRevenue, type EventFinancialRecord } from "@/lib/db/repo";
 import { todayInOpsTz } from "@/lib/dates";
+import { alertRouteRisks } from "@/lib/notify/routeRisk";
+import { scheduleScanSoon } from "@/lib/risk/scan";
 import type { Stop } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +32,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   let body: {
     truckId?: string;
     date?: string;
+    gsRouteId?: string;
     stops?: Array<Partial<Stop>>;
   };
   try {
@@ -55,6 +58,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     state: "Waiting",
     custName: s.custName ?? "",
     custFirstName: s.custFirstName ?? undefined,
+    custLastName: s.custLastName ?? undefined,
     kind: s.kind === "pickup" ? "pickup" : s.kind === "delivery" ? "delivery" : undefined,
     custPhone: s.custPhone ?? "",
     address: s.address ?? "",
@@ -63,6 +67,8 @@ export async function POST(req: Request): Promise<NextResponse> {
     plannedWindow: s.plannedWindow,
     eta: s.eta,
     items: Array.isArray(s.items) ? s.items : undefined,
+    txId: s.txId ?? undefined,
+    contactId: s.contactId ?? undefined,
   });
 
   // Overlay the mutable customer/address fields of an incoming stop onto an existing
@@ -74,6 +80,7 @@ export async function POST(req: Request): Promise<NextResponse> {
           ...existingStop,
           custName: incoming.custName ?? existingStop.custName,
           custFirstName: incoming.custFirstName ?? existingStop.custFirstName,
+          custLastName: incoming.custLastName ?? existingStop.custLastName,
           kind: incoming.kind ?? existingStop.kind,
           custPhone: incoming.custPhone ?? existingStop.custPhone,
           address: incoming.address ?? existingStop.address,
@@ -82,6 +89,8 @@ export async function POST(req: Request): Promise<NextResponse> {
           plannedWindow: incoming.plannedWindow ?? existingStop.plannedWindow,
           eta: incoming.eta ?? existingStop.eta,
           items: incoming.items ?? existingStop.items,
+          txId: incoming.txId ?? existingStop.txId,
+          contactId: incoming.contactId ?? existingStop.contactId,
         }
       : existingStop;
 
@@ -95,7 +104,9 @@ export async function POST(req: Request): Promise<NextResponse> {
   // yet arrived): that's exactly the emergency case — a corrected address must reach
   // the driver — so we overlay its contact/address fields from the matching incoming
   // stop while keeping it the active EnRoute stop.
-  const existing = getRoute(truckId);
+  // Reconcile against the SAME date's route (not the truck's latest, which may be another
+  // day) — otherwise importing a past/future date tries to re-insert another route's stops.
+  const existing = getRouteForDate(truckId, date);
   const actioned: Stop[] = [];
   for (const s of existing?.stops ?? []) {
     if (s.state === "Waiting") break;
@@ -118,7 +129,38 @@ export async function POST(req: Request): Promise<NextResponse> {
     stops = stopsIn.map(mkStop);
   }
 
-  writeRoute({ routeId, date, truckId, status: "ready", stops });
+  writeRoute({ routeId, date, truckId, status: "ready", gsRouteId: body.gsRouteId, stops });
+
+  // Forward any Goodshuffle contract totals captured with this pull into event_financials
+  // (Financial Intelligence). Cents → dollars; keyed by txId; one record per distinct event.
+  // Only the incoming stops carry totals (frozen/kept stops keep their prior revenue).
+  const revenueByTx = new Map<string, EventFinancialRecord>();
+  for (const s of stopsIn) {
+    const tx = s.txId;
+    const cents = s.grandTotalCents;
+    if (!tx || typeof cents !== "number" || !Number.isFinite(cents)) continue;
+    const revenue = Math.round(cents) / 100;
+    const collected = typeof s.paidCents === "number" && Number.isFinite(s.paidCents) ? Math.round(s.paidCents) / 100 : null;
+    revenueByTx.set(tx, {
+      eventId: tx,
+      date,
+      label: s.custName || undefined,
+      routeId,
+      revenue,
+      revenueStatus: collected != null && collected >= revenue ? "COLLECTED" : "SIGNED",
+      collected,
+    });
+  }
+  if (revenueByTx.size > 0) saveEventRevenue([...revenueByTx.values()]);
+
+  // Proactive Slack heads-up for business/office stops scheduled outside open hours
+  // (so a truck doesn't roll up while the place is closed). Fire-and-forget; throttled.
+  void alertRouteRisks({ routeId, date, truckId, status: "ready", stops }, truckId);
+
+  // Route data just changed → refresh the Event Risk queue. Debounced so the 3 AM all-trucks
+  // pull (a burst of imports) settles into ONE scan; runScan itself is throttled to 5 min.
+  scheduleScanSoon();
+
   return NextResponse.json(
     {
       ok: true,

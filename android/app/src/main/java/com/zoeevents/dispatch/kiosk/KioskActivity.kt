@@ -56,6 +56,8 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
         loadContent(savedInstanceState)
         scheduleOtaChecks()
         scheduleSessionChecks()
+        scheduleOutboxDrain()
+        scheduleDailyPull()
     }
 
     // ── OTA self-update ────────────────────────────────────────────────────────
@@ -71,6 +73,150 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
     /** Check for a newer native shell now (a few seconds after launch) and every 6h. */
     private fun scheduleOtaChecks() {
         otaHandler.postDelayed(otaTick, 8_000)
+    }
+
+    // ── Goodshuffle write-back drain ─────────────────────────────────────────────
+    // The office "pulls" a stop off a route in Dispatch; that queues a removal in our
+    // server's gs_outbox. Our server can't call Goodshuffle (Cloudflare), so this kiosk —
+    // which HAS a logged-in Goodshuffle session — drains the queue: every minute it fires a
+    // self-contained script into the Goodshuffle WebView that fetches the pending removals
+    // (CORS-open for pro.goodshuffle.com), unschedules each waypoint, and acks our server.
+    // Fire-and-forget + self-acking, so it needs no result plumbing. Replaces the manual
+    // sync bookmarklet. Idempotent: an already-removed waypoint is acked without re-calling.
+
+    private val drainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val drainTick = object : Runnable {
+        override fun run() {
+            drainGoodshuffleOutbox()
+            drainHandler.postDelayed(this, DRAIN_INTERVAL_MS)
+        }
+    }
+
+    /** Start draining ~15s after launch (WebViews loaded), then every minute. */
+    private fun scheduleOutboxDrain() {
+        drainHandler.postDelayed(drainTick, 15_000)
+    }
+
+    private fun drainGoodshuffleOutbox() {
+        // Skip while the operator is signing into Ignition (Goodshuffle pane may be hidden).
+        if (isIgnitionVisible()) return
+        binding.gsproWebView.evaluateJavascript(buildDrainScript(), null)
+    }
+
+    private fun buildDrainScript(): String {
+        val api = BuildConfig.APP_URL.trimEnd('/')
+        val apiLit = org.json.JSONObject.quote(api)
+        return """
+        (function(){
+          try {
+            var API = $apiLit;
+            if (location.hostname.indexOf("goodshuffle.com") < 0) return;
+            var p = location.pathname.toLowerCase();
+            if (p.indexOf("auth")>=0 || p.indexOf("login")>=0 || p.indexOf("signin")>=0) return; // not signed in
+            fetch(API + "/api/gs/outbox", { credentials:"omit" })
+              .then(function(r){ return r.json(); })
+              .then(function(j){
+                var ops = (j.ops||[]).filter(function(o){ return o.op === "remove_waypoint"; });
+                ops.forEach(function(op){
+                  fetch("/app/routing/getRoute?routeID=" + op.gsRouteId + "&includeAttributes=true", { headers:{accept:"application/json"}, credentials:"include" })
+                    .then(function(r){ return r.json(); })
+                    .then(function(full){
+                      var w = (full.waypoints||[]).filter(function(x){ return String(x.transactionID) === String(op.transactionId); })[0];
+                      function ack(ok, err){ return fetch(API + "/api/gs/outbox", { method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({ id: op.id, ok: ok, error: err }) }); }
+                      if (!w) { return ack(true); } // already off the route
+                      return fetch("/app/routing/unscheduleWaypoint", { method:"POST", headers:{"content-type":"application/json","x-requested-with":"XMLHttpRequest"}, credentials:"include", body: JSON.stringify({ waypointID: w.id }) })
+                        .then(function(rr){ return ack(rr.ok, rr.ok ? undefined : ("HTTP " + rr.status)); });
+                    })
+                    .catch(function(e){ /* leave pending; retry next tick */ });
+                });
+              })
+              .catch(function(e){});
+          } catch(e){}
+        })();
+        """.trimIndent()
+    }
+
+    // ── Daily route refresh ──────────────────────────────────────────────────────
+    // Goodshuffle is the source of truth for scheduling: when the office reschedules a stop
+    // to another day, they change it in Goodshuffle. To reflect overnight day-changes, the
+    // kiosk re-pulls ALL trucks' routes for the new day at 3 AM Eastern — a self-posting
+    // script fired into the logged-in Goodshuffle WebView (same pull the bookmarklet does),
+    // so the board is fresh before drivers start. (During the day, the driver page's 5-min
+    // auto re-pull already keeps an active route current.)
+
+    private val dailyPullHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val dailyPullTick = object : Runnable {
+        override fun run() {
+            runDailyPull()
+            dailyPullHandler.postDelayed(this, msUntilNext3amEastern())
+        }
+    }
+
+    private fun scheduleDailyPull() {
+        dailyPullHandler.postDelayed(dailyPullTick, msUntilNext3amEastern())
+    }
+
+    /** Milliseconds until the next 3:00 AM America/New_York (handles DST via the calendar). */
+    private fun msUntilNext3amEastern(): Long {
+        val tz = java.util.TimeZone.getTimeZone("America/New_York")
+        val now = java.util.Calendar.getInstance(tz)
+        val next = (now.clone() as java.util.Calendar).apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 3)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+            if (!after(now)) add(java.util.Calendar.DAY_OF_MONTH, 1)
+        }
+        return next.timeInMillis - now.timeInMillis
+    }
+
+    private fun runDailyPull() {
+        if (isIgnitionVisible()) return
+        binding.gsproWebView.evaluateJavascript(buildDailyPullScript(), null)
+    }
+
+    private fun buildDailyPullScript(): String {
+        val api = BuildConfig.APP_URL.trimEnd('/')
+        val apiLit = org.json.JSONObject.quote(api)
+        return """
+        (function(){
+          try {
+            var API = $apiLit;
+            if (location.hostname.indexOf("goodshuffle.com") < 0) return;
+            var p = location.pathname.toLowerCase();
+            if (p.indexOf("auth")>=0 || p.indexOf("login")>=0 || p.indexOf("signin")>=0) return;
+            function truckIdFor(title){ var t=(title||"").toLowerCase();
+              if(t.indexOf("ford")>=0||t.indexOf("e450")>=0||t.indexOf("e-450")>=0) return "E450";
+              if(t.indexOf("isuzu")>=0||t.indexOf("npr")>=0) return t.indexOf("2")>=0 ? "NPR-2" : "NPR-1";
+              if(t.indexOf("2")>=0) return "NPR-2";
+              if(t.indexOf("1")>=0) return "NPR-1";
+              return null; }
+            function fetchEvent(txID){ var H={headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}; var out={items:undefined,contactId:undefined,grandTotalCents:undefined,paidCents:undefined};
+              var pI=fetch("/app/vendorTransaction/initContractView?transactionID="+txID,H).then(function(r){return r.json();})
+                .then(function(cv){ if(cv&&cv.contactID!=null)out.contactId=String(cv.contactID); var g=(cv&&cv.lineItemGroupsToLoad)||[]; return Promise.all(g.map(function(x){ return fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID="+x.id+"&transactionID="+txID,H).then(function(r){return r.json();}).catch(function(){return null;}); })); })
+                .then(function(lists){ var items=[]; function w(o,d){ if(!o||typeof o!=="object"||d>7)return; if(Object.prototype.toString.call(o)==="[object Array]"){for(var i=0;i<o.length;i++)w(o[i],d+1);return;} if(o.itemTitle)items.push({name:o.itemTitle,quantity:o.quantityBooked}); for(var k in o)w(o[k],d+1);} (lists||[]).forEach(function(gj){w(gj,0);}); if(items.length)out.items=items; })
+                .catch(function(){});
+              var pR=fetch("/app/vendorPayment/loadPaymentHistoryAndContractTotals?transactionID="+txID,H).then(function(r){return r.json();})
+                .then(function(pt){ if(pt&&typeof pt.grandTotal==="number")out.grandTotalCents=pt.grandTotal; var ph=pt&&pt.paymentHistory; if(ph&&typeof ph.totalContractApplicablePaid==="number")out.paidCents=ph.totalContractApplicablePaid; })
+                .catch(function(){});
+              return Promise.all([pI,pR]).then(function(){return out;}); }
+            function extractStops(route){ var wps=(route.waypoints||[]).filter(function(w){return !w.isOriginWarehouse&&!w.isDestinationWarehouse;}); wps.sort(function(a,b){return (a.waypointIndex||0)-(b.waypointIndex||0);});
+              return wps.map(function(w){ var tl=(w.logisticRelation&&w.logisticRelation.targetLocation)||{}; var tx=w.transaction||{}; var line=[tl.streetAddressLine1,tl.streetAddressLine2].filter(Boolean).join(" "); var cs=[tl.city,tl.state].filter(Boolean).join(", "); var address=[line,cs,tl.zipCode].filter(Boolean).join(", "); var r=tx.renter||{}; var sv=r.smsValidation||{}; var name=tl.contactName||(tx.eventName?String(tx.eventName).split(" - ")[0].trim():"")||r.name; var doc=tx.dayOfContact||null;
+                var s={custName:name||"",custFirstName:r.firstName||undefined,custLastName:r.lastName||undefined,kind:(w.waypointType==="PICK_UP"?"pickup":"delivery"),custPhone:sv.e164PhoneNumber||r.phone||tl.contactPhoneNumber||"",address:address,plannedWindow:w.scheduledArrivalTime||undefined,eta:w.scheduledArrivalTime||undefined};
+                if(doc){s.dayOfName=doc.name||doc.fullName||undefined;s.dayOfPhone=doc.phoneNumber||doc.phone||undefined;}
+                s._txID=w.transactionID||(tx&&tx.id)||null; if(s._txID)s.txId=String(s._txID); return s; }); }
+            function attachItems(stops){ return Promise.all(stops.map(function(s){ if(!s._txID){delete s._txID;return Promise.resolve();} return fetchEvent(s._txID).then(function(ev){ if(ev){ if(ev.items&&ev.items.length)s.items=ev.items; if(ev.contactId)s.contactId=ev.contactId; if(ev.grandTotalCents!=null)s.grandTotalCents=ev.grandTotalCents; if(ev.paidCents!=null)s.paidCents=ev.paidCents; } delete s._txID; }); })).then(function(){return stops;}); }
+            var now=new Date(); var start=new Date(now.getFullYear(),now.getMonth(),now.getDate(),0,0,0); var end=new Date(start.getTime()+24*3600*1000);
+            var body={from:start.toISOString(),to:end.toISOString(),warehouseCanonicalIDs:null,crew:null,vehicles:null,statuses:null};
+            fetch("/app/routing/listRoutes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),credentials:"include"}).then(function(r){return r.json();}).then(function(routes){
+              var byTruck={}, gsBy={}, chain=Promise.resolve();
+              (routes||[]).forEach(function(rt){ chain=chain.then(function(){ var tid=truckIdFor(rt.vehicle&&rt.vehicle.title); if(!tid)return;
+                return fetch("/app/routing/getRoute?routeID="+rt.id+"&includeAttributes=true",{headers:{accept:"application/json"},credentials:"include"}).then(function(r){return r.json();}).then(function(full){ return attachItems(extractStops(full)).then(function(stops){ byTruck[tid]=(byTruck[tid]||[]).concat(stops); if(!gsBy[tid])gsBy[tid]=String(rt.id); }); }); }); });
+              chain.then(function(){ Object.keys(byTruck).forEach(function(tid){ var st=byTruck[tid]; if(!st.length)return; fetch(API+"/api/route/import",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({truckId:tid,stops:st,gsRouteId:gsBy[tid]})}).catch(function(){}); }); });
+            }).catch(function(){});
+          } catch(e){}
+        })();
+        """.trimIndent()
     }
 
     // ── WebView wiring ─────────────────────────────────────────────────────────
@@ -507,7 +653,7 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
           window.__gsRoute = window.__gsRoute || {};
           var ID = $idLit;
           function fail(m){ try { window.__gsRoute[ID] = {ok:false, error:String(m).slice(0,300)}; } catch(x){} }
-          function done(stops, routes, total, matched){ window.__gsRoute[ID] = {ok:true, stops:stops, routeNames:routes, total:total, matched:matched}; }
+          function done(stops, routes, total, matched, gsRouteId){ window.__gsRoute[ID] = {ok:true, stops:stops, routeNames:routes, total:total, matched:matched, gsRouteId:gsRouteId}; }
           try {
             var MATCH = $matchLit;
             var now = new Date();
@@ -535,6 +681,7 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
                 var s = {
                   custName: name || "",
                   custFirstName: renter.firstName || undefined,
+                  custLastName: renter.lastName || undefined,
                   kind: (w.waypointType === "PICK_UP" ? "pickup" : "delivery"),
                   custPhone: sv.e164PhoneNumber || renter.phone || tl.contactPhoneNumber || "",
                   address: address,
@@ -543,16 +690,19 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
                 };
                 if (doc) { s.dayOfName = doc.name || doc.fullName || undefined; s.dayOfPhone = doc.phoneNumber || doc.phone || undefined; }
                 s._txID = w.transactionID || (tx && tx.id) || null;
+                if (s._txID) s.txId = String(s._txID); // match key for Goodshuffle write-back (survives attachItems)
                 return s;
               });
             }
-            // Event line items for a stop's transaction (name = itemTitle, qty =
-            // quantityBooked) — drives the crew-size (tent) rules + quote review.
-            function fetchItems(txID){
+            // Per-event enrichment: line items (crew rules + quote review), client contactID
+            // (stable customer identity), and contract $ totals (revenue → FI). Best-effort.
+            function fetchEvent(txID){
               var H = { headers:{"x-requested-with":"XMLHttpRequest", accept:"application/json"}, credentials:"include" };
-              return fetch("/app/vendorTransaction/initContractView?transactionID=" + txID, H)
+              var out = { items:undefined, contactId:undefined, grandTotalCents:undefined, paidCents:undefined };
+              var pItems = fetch("/app/vendorTransaction/initContractView?transactionID=" + txID, H)
                 .then(function(r){ return r.json(); })
                 .then(function(cv){
+                  if (cv && cv.contactID != null) out.contactId = String(cv.contactID);
                   var groups = (cv && cv.lineItemGroupsToLoad) || [];
                   return Promise.all(groups.map(function(g){
                     return fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID=" + g.id + "&transactionID=" + txID, H)
@@ -563,14 +713,31 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
                   var items = [];
                   function walk(o,d){ if(!o||typeof o!=="object"||d>7) return; if(Object.prototype.toString.call(o)==="[object Array]"){ for(var i=0;i<o.length;i++) walk(o[i],d+1); return; } if(o.itemTitle) items.push({name:o.itemTitle, quantity:o.quantityBooked}); for(var k in o) walk(o[k],d+1); }
                   (lists||[]).forEach(function(gj){ walk(gj,0); });
-                  return items;
+                  if (items.length) out.items = items;
                 })
-                .catch(function(){ return undefined; });
+                .catch(function(){});
+              var pRev = fetch("/app/vendorPayment/loadPaymentHistoryAndContractTotals?transactionID=" + txID, H)
+                .then(function(r){ return r.json(); })
+                .then(function(pt){
+                  if (pt && typeof pt.grandTotal === "number") out.grandTotalCents = pt.grandTotal;
+                  var ph = pt && pt.paymentHistory;
+                  if (ph && typeof ph.totalContractApplicablePaid === "number") out.paidCents = ph.totalContractApplicablePaid;
+                })
+                .catch(function(){});
+              return Promise.all([pItems, pRev]).then(function(){ return out; });
             }
             function attachItems(stops){
               return Promise.all(stops.map(function(s){
                 if (!s._txID) { delete s._txID; return Promise.resolve(); }
-                return fetchItems(s._txID).then(function(it){ if (it && it.length) s.items = it; delete s._txID; });
+                return fetchEvent(s._txID).then(function(ev){
+                  if (ev){
+                    if (ev.items && ev.items.length) s.items = ev.items;
+                    if (ev.contactId) s.contactId = ev.contactId;
+                    if (ev.grandTotalCents != null) s.grandTotalCents = ev.grandTotalCents;
+                    if (ev.paidCents != null) s.paidCents = ev.paidCents;
+                  }
+                  delete s._txID;
+                });
               })).then(function(){ return stops; });
             }
 
@@ -587,7 +754,8 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
                 })).then(function(full){
                   var stops = []; var names = [];
                   full.forEach(function(route){ names.push(route.name); stops = stops.concat(extractStops(route)); });
-                  attachItems(stops).then(function(){ done(stops, names, total, mine.length); });
+                  var gsRouteId = (full[0] && full[0].id) ? String(full[0].id) : undefined; // hint; executor re-resolves by txId
+                  attachItems(stops).then(function(){ done(stops, names, total, mine.length, gsRouteId); });
                 });
               })
               .catch(function(e){ fail(e); });
@@ -889,6 +1057,8 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
     override fun onDestroy() {
         otaHandler.removeCallbacks(otaTick)
         sessionHandler.removeCallbacks(sessionTick)
+        drainHandler.removeCallbacks(drainTick)
+        dailyPullHandler.removeCallbacks(dailyPullTick)
         popupWebView?.destroy()
         binding.dispatchWebView.destroy()
         binding.gsproWebView.destroy()
@@ -899,6 +1069,7 @@ class KioskActivity : AppCompatActivity(), KioskJsBridge.BridgeHost {
     companion object {
         private const val TAG = "ZoeKioskActivity"
         private const val OTA_INTERVAL_MS = 6L * 60 * 60 * 1000 // 6 hours
+        private const val DRAIN_INTERVAL_MS = 60_000L // drain the Goodshuffle write-back queue every minute
         private const val ETA_GRAPHQL_URL =
             "https://wrfalckup5gc3flo7bizcsfmiq.appsync-api.us-east-1.amazonaws.com/graphql"
         private const val WEB_RESULT_POLL_MS = 500L

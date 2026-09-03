@@ -243,6 +243,8 @@ export async function createEtaLinkViaKiosk(
 // Shape the kiosk returns per stop (matches /api/route/import's expected fields).
 export interface ImportedStop {
   custName?: string;
+  custFirstName?: string;
+  custLastName?: string;
   custPhone?: string;
   address?: string;
   dayOfName?: string;
@@ -250,6 +252,8 @@ export interface ImportedStop {
   plannedWindow?: string;
   eta?: string;
   items?: { name: string; quantity?: number }[];
+  /** Goodshuffle waypoint transactionID — match key for write-back (stop removal). */
+  txId?: string;
 }
 
 export interface ImportResult {
@@ -259,6 +263,7 @@ export interface ImportResult {
   error?: string;
   total?: number; // routes Goodshuffle returned for today (any vehicle)
   matched?: number; // of those, how many were assigned to this truck
+  gsRouteId?: string; // Goodshuffle routeID (hint for write-back)
 }
 
 // Which Goodshuffle vehicle.title substring this truck maps to.
@@ -275,6 +280,7 @@ type GsResult = {
   error?: string;
   total?: number;
   matched?: number;
+  gsRouteId?: string;
 };
 
 /**
@@ -294,7 +300,7 @@ function goodshuffleExtractionScript(key: string, match: string): string {
     window.__gsRoute = window.__gsRoute || {};
     var KEY = ${KEY}, MATCH = ${MATCH};
     function fail(m){ try { window.__gsRoute[KEY] = {ok:false, error:String(m).slice(0,300)}; } catch(x){} }
-    function done(stops, routes, total, matched){ window.__gsRoute[KEY] = {ok:true, stops:stops, routeNames:routes, total:total, matched:matched}; }
+    function done(stops, routes, total, matched, gsRouteId){ window.__gsRoute[KEY] = {ok:true, stops:stops, routeNames:routes, total:total, matched:matched, gsRouteId:gsRouteId}; }
     try {
       var now = new Date();
       var startLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0,0,0);
@@ -316,6 +322,7 @@ function goodshuffleExtractionScript(key: string, match: string): string {
           var s = {
             custName: name || "",
             custFirstName: renter.firstName || undefined,
+            custLastName: renter.lastName || undefined,
             kind: (w.waypointType === "PICK_UP" ? "pickup" : "delivery"),
             custPhone: sv.e164PhoneNumber || renter.phone || tl.contactPhoneNumber || "",
             address: address,
@@ -324,16 +331,20 @@ function goodshuffleExtractionScript(key: string, match: string): string {
           };
           if (doc) { s.dayOfName = doc.name || doc.fullName || undefined; s.dayOfPhone = doc.phoneNumber || doc.phone || undefined; }
           s._txID = w.transactionID || (tx && tx.id) || null;
+          if (s._txID) s.txId = String(s._txID); // match key for Goodshuffle write-back (survives attachItems)
           return s;
         });
       }
-      // Event line items for a stop's transaction (name = itemTitle, qty = quantityBooked)
-      // — drives the crew-size (tent) rules + quote review. Best-effort; never blocks.
-      function fetchItems(txID){
+      // Per-event enrichment for a stop's transaction: line items (crew-size rules + quote
+      // review), the client contactID (stable customer identity), and contract $ totals
+      // (revenue → Financial Intelligence). Best-effort; never blocks the pull.
+      function fetchEvent(txID){
         var H = { headers:{"x-requested-with":"XMLHttpRequest", accept:"application/json"}, credentials:"include" };
-        return fetch("/app/vendorTransaction/initContractView?transactionID=" + txID, H)
+        var out = { items: undefined, contactId: undefined, grandTotalCents: undefined, paidCents: undefined };
+        var pItems = fetch("/app/vendorTransaction/initContractView?transactionID=" + txID, H)
           .then(function(r){ return r.json(); })
           .then(function(cv){
+            if (cv && cv.contactID != null) out.contactId = String(cv.contactID);
             var groups = (cv && cv.lineItemGroupsToLoad) || [];
             return Promise.all(groups.map(function(g){
               return fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID=" + g.id + "&transactionID=" + txID, H)
@@ -344,14 +355,32 @@ function goodshuffleExtractionScript(key: string, match: string): string {
             var items = [];
             function walk(o,d){ if(!o||typeof o!=="object"||d>7) return; if(Object.prototype.toString.call(o)==="[object Array]"){ for(var i=0;i<o.length;i++) walk(o[i],d+1); return; } if(o.itemTitle) items.push({name:o.itemTitle, quantity:o.quantityBooked}); for(var k in o) walk(o[k],d+1); }
             (lists||[]).forEach(function(gj){ walk(gj,0); });
-            return items;
+            if (items.length) out.items = items;
           })
-          .catch(function(){ return undefined; });
+          .catch(function(){});
+        // Contract totals (revenue). CENTS. paymentHistory.totalContractApplicablePaid = collected.
+        var pRev = fetch("/app/vendorPayment/loadPaymentHistoryAndContractTotals?transactionID=" + txID, H)
+          .then(function(r){ return r.json(); })
+          .then(function(pt){
+            if (pt && typeof pt.grandTotal === "number") out.grandTotalCents = pt.grandTotal;
+            var ph = pt && pt.paymentHistory;
+            if (ph && typeof ph.totalContractApplicablePaid === "number") out.paidCents = ph.totalContractApplicablePaid;
+          })
+          .catch(function(){});
+        return Promise.all([pItems, pRev]).then(function(){ return out; });
       }
       function attachItems(stops){
         return Promise.all(stops.map(function(s){
           if (!s._txID) { delete s._txID; return Promise.resolve(); }
-          return fetchItems(s._txID).then(function(it){ if (it && it.length) s.items = it; delete s._txID; });
+          return fetchEvent(s._txID).then(function(ev){
+            if (ev){
+              if (ev.items && ev.items.length) s.items = ev.items;
+              if (ev.contactId) s.contactId = ev.contactId;
+              if (ev.grandTotalCents != null) s.grandTotalCents = ev.grandTotalCents;
+              if (ev.paidCents != null) s.paidCents = ev.paidCents;
+            }
+            delete s._txID;
+          });
         })).then(function(){ return stops; });
       }
       fetch("/app/routing/listRoutes", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body), credentials:"include" })
@@ -367,7 +396,8 @@ function goodshuffleExtractionScript(key: string, match: string): string {
           })).then(function(full){
             var stops = []; var names = [];
             full.forEach(function(route){ names.push(route.name); stops = stops.concat(extractStops(route)); });
-            attachItems(stops).then(function(){ done(stops, names, total, mine.length); });
+            var gsRouteId = (full[0] && full[0].id) ? String(full[0].id) : undefined; // hint; executor re-resolves by txId
+            attachItems(stops).then(function(){ done(stops, names, total, mine.length, gsRouteId); });
           });
         })
         .catch(function(e){ fail(e); });
@@ -424,6 +454,7 @@ export async function importGoodshuffleRouteViaKiosk(truckId: string): Promise<I
           error: res.error,
           total: res.total,
           matched: res.matched,
+          gsRouteId: res.gsRouteId,
         }
       : { inKiosk: true, ok: false, stops: [], error: fallbackError };
 

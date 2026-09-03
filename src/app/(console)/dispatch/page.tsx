@@ -6,7 +6,11 @@
 import { AlertTriangle, CircleCheck, MessageSquare, Truck as TruckIcon, ExternalLink } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { ReopenButton } from "@/components/ReopenButton";
+import { RemoveStopButton } from "@/components/RemoveStopButton";
 import { CloseRouteButton } from "@/components/CloseRouteButton";
+import { ReopenRouteButton } from "@/components/ReopenRouteButton";
+import { DriverAssign } from "@/components/DriverAssign";
+import { QuoteReviewButton } from "@/components/QuoteReviewButton";
 import { ResolveExceptionButton } from "@/components/ResolveExceptionButton";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
@@ -16,6 +20,7 @@ import {
   getRouteForDate,
 } from "@/lib/db/repo";
 import { DISPLAY_TZ, todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
+import { reviewStopAddress } from "@/lib/addressReview";
 import { getSettings } from "@/lib/settings";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { STATE_VISUAL } from "@/lib/stateVisual";
@@ -133,14 +138,21 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
         ) : (
           <div className="divide-y divide-white/5 rounded-xl border border-white/10">
             {messages.map((m, i) => (
-              <div key={i} className="flex items-center gap-3 p-3 text-sm">
-                <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
-                <span className="w-32 shrink-0 tabular-nums text-muted-foreground">
-                  {m.toPhone}
-                </span>
-                <span className="flex-1 truncate">{m.body}</span>
-                <StatusTag status={m.status} />
-              </div>
+              <details key={i} className="group [&_summary]:list-none">
+                <summary className="flex cursor-pointer items-center gap-3 p-3 text-sm hover:bg-white/[0.03]">
+                  <MessageSquare className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
+                  <span className="w-36 shrink-0 truncate text-muted-foreground" title={m.toPhone ?? undefined}>
+                    {m.recipientName ?? m.toPhone}
+                  </span>
+                  <span className="flex-1 truncate group-open:hidden">{m.body}</span>
+                  <span className="hidden flex-1 group-open:inline">&nbsp;</span>
+                  <span className="w-32 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                    {fmtTime(m.sentAt)}
+                  </span>
+                  <StatusTag status={m.status} />
+                </summary>
+                <div className="whitespace-pre-wrap px-3 pb-3 pl-10 text-sm">{m.body}</div>
+              </details>
             ))}
           </div>
         )}
@@ -262,9 +274,35 @@ function TruckCard({
       {total > 0 && route && (
         <ul className="space-y-2">
           {stops.map((s) => (
-            <StopLine key={s.stopId} stop={s} truckId={route.truckId} routeId={route.routeId} />
+            <StopLine
+              key={s.stopId}
+              stop={s}
+              truckId={route.truckId}
+              routeId={route.routeId}
+              routeDone={route.status === "done"}
+            />
           ))}
         </ul>
+      )}
+
+      {/* AI quote review (crew-size rules + LLM) — when the route's stops carry line items. */}
+      {route &&
+        route.status !== "done" &&
+        (() => {
+          const items = (route.stops ?? []).flatMap((s) => s.items ?? []);
+          return items.length > 0 ? (
+            <div className="border-t border-white/5 pt-3">
+              <QuoteReviewButton items={items} eventName={`${route.truckId} route`} />
+            </div>
+          ) : null;
+        })()}
+
+      {/* Driver assignment (feeds the Event Risk Engine's staffing checks). */}
+      {route && route.status !== "done" && (
+        <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-3">
+          <span className="text-xs text-muted-foreground">Driver</span>
+          <DriverAssign routeId={route.routeId} date={route.date} driverName={route.driverName} />
+        </div>
       )}
 
       {/* Office control: force-close a route the driver couldn't finish on the tablet. */}
@@ -272,12 +310,16 @@ function TruckCard({
         <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-3">
           {route.status === "done" ? (
             <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-              <CircleCheck className="size-3.5" /> Route closed — loads fresh on next pull
+              <CircleCheck className="size-3.5" /> Route closed — reopen to adjust stops
             </span>
           ) : (
             <span className="text-xs text-muted-foreground">Tablet down / dead battery?</span>
           )}
-          {route.status !== "done" && <CloseRouteButton truckId={route.truckId} />}
+          {route.status === "done" ? (
+            <ReopenRouteButton routeId={route.routeId} />
+          ) : (
+            <CloseRouteButton routeId={route.routeId} />
+          )}
         </div>
       )}
     </div>
@@ -288,12 +330,20 @@ function StopLine({
   stop,
   truckId,
   routeId,
+  routeDone,
 }: {
   stop: Stop;
   truckId: string;
   routeId: string;
+  routeDone: boolean;
 }) {
   const hasProof = (stop.photoIds?.length ?? 0) > 0 || Boolean(stop.signatureId);
+  const finished = stop.state === "Completed" || stop.state === "Returned";
+  // Dispatch can pull an upcoming/unfinished stop off the route (and Goodshuffle). Not
+  // offered on finished stops (keeps their proof-of-delivery) or a closed route.
+  const canPull = !routeDone && !finished;
+  // Business/office stops with restricted hours — so a truck doesn't show up while closed.
+  const addr = reviewStopAddress({ address: stop.address, name: stop.custName, whenIso: stop.plannedWindow || stop.eta });
   return (
     <li className="rounded-lg border border-white/5 p-2.5">
       <div className="flex items-center gap-2">
@@ -304,11 +354,32 @@ function StopLine({
             Pickup
           </span>
         )}
+        {addr.class === "business" && (
+          <span
+            title={addr.note}
+            className={`shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+              addr.hoursRisk ? "bg-red-500/90 text-white" : "border border-amber-400/60 text-amber-300"
+            }`}
+          >
+            {addr.hoursRisk ? "May be closed" : "Business"}
+          </span>
+        )}
         <StateBadge state={stop.state} />
         {stop.state === "Completed" && (
           <ReopenButton truckId={truckId} routeId={routeId} stopId={stop.stopId} />
         )}
+        {canPull && (
+          <RemoveStopButton
+            routeId={routeId}
+            stopId={stop.stopId}
+            custName={stop.custName}
+            gsLinked={Boolean(stop.txId)}
+          />
+        )}
       </div>
+      {addr.hoursRisk && (
+        <div className="mt-1 pl-7 text-[11px] text-red-300">⚠ {addr.note}</div>
+      )}
       {hasProof && (
         <div className="mt-2 flex flex-wrap items-center gap-2 pl-7">
           {stop.photoIds?.map((id) => (

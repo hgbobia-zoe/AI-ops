@@ -106,7 +106,35 @@ Mechanics + gotchas:
   Capture their exact request from ONE real user interaction, and use **browser-level**
   network capture — the contact panel reloads the page, wiping any in-page fetch/XHR hook.
 
-### Highest-value next write: sync stop/route status BACK
+### Two-way stop removal (Dispatch → Goodshuffle) — FULLY WIRED (endpoint captured 2026-09-02)
+Dispatch can "Pull" a stop off a route (`RemoveStopButton` → `POST /api/route/stop/remove`).
+That removes it from OUR board immediately and, when the stop carries its Goodshuffle ids,
+queues a write-back in the **`gs_outbox`** table (`op: "remove_waypoint"`, with the stop's
+`transactionID` + the route's `gsRouteID`). Our server can't call Goodshuffle, so a
+logged-in session drains the queue:
+- `GET  /api/gs/outbox`            → pending ops (CORS-open to pro.goodshuffle.com)
+- `POST /api/gs/outbox {id, ok}`   → ack one done/failed
+- `scratchpad/sync-goodshuffle-removals.js` — the drain bookmarklet.
+
+**The remove endpoint (captured live from route #55821, drag-a-stop-to-Unscheduled):**
+```
+POST /app/routing/unscheduleWaypoint      (JSON, same-origin session cookies)
+body: { "waypointID": <waypoint.id> }
+```
+Key gotchas: (1) the key is the waypoint's own **`id`** (e.g. 4408112) — NOT its
+`transactionID`; match the waypoint by `transactionID` then pass its `.id`. (2) Route-planner
+mutations go through the app's **Angular service worker (ngsw)**, so they do NOT appear in a
+CDP/page network monitor — capture them with an in-page `fetch`/XHR hook or the Performance
+resource timeline. (3) Removing = "unschedule" (the stop moves back to Unscheduled, it is
+NOT deleted), so it's reversible: re-add with `POST /app/routing/scheduleWaypoint`
+`{ vehicleID, routeID, routeColor, waypointID, logisticID, arrivalTime, departureTime }`.
+
+For write-back to work the pull must persist the ids: `Stop.txId` (waypoint transactionID)
+and `Route.gsRouteId` — all three extractors now emit them (bookmarklet, kioskBridge
+web-eval, native `buildGoodshuffleScript`; APK v1.0.20). Routes pulled before v1.0.20 have
+no ids, so their stops remove locally only (the API reports `gsSkippedReason`).
+
+### Other next write: sync stop/route status BACK
 Goodshuffle models progress: `route.status` (`SCHEDULED` → `IN_PROGRESS` → …) and each
 waypoint's `status`. Our transitions (EnRoute / Arrived / Completed) can drive those,
 keeping Goodshuffle in sync with the tablet. This is **button-driven** (not autocomplete),
@@ -117,3 +145,40 @@ To build: capture the `Start Route` / `mark stop` `POST /app/routing/…` mutati
 throwaway/test route, then call it from the kiosk bridge on ARRIVED / HEADING_NEXT /
 COMPLETE, matching waypoint by `transactionID`. Always test on TEST 1/2/3 first; add a
 confirm + idempotency (writes mutate real data).
+
+## Revenue + customer identity — CAPTURED & PROVEN (2026-09-03)
+
+Both keyed by the **same `transactionID`** we already store as `stops.tx_id` — no id-guessing.
+
+### Revenue (contract $) — the FI source
+`GET /app/vendorPayment/loadPaymentHistoryAndContractTotals?transactionID=<tx>` (same-origin,
+logged-in). Returns 200 JSON. **All amounts are in CENTS** (verified by arithmetic: across
+projects paid + remaining = total; deposit ≈ 50% of grand). Fields we use:
+- `grandTotal` / `contractTotal` — signed contract value (cents). e.g. 43949 = **$439.49**.
+- Subtotals: `contractProductRentalsSubTotal`, `contractServiceSubTotal`,
+  `contractLogisticsSubTotal` (delivery), `contractDiscountSubTotal`, `contractTaxableSubTotal`.
+- `paymentHistory.totalContractApplicablePaid` — collected (cents).
+- `paymentHistory.calculatedDepositAmount` — deposit (cents).
+- `paymentHistory.transactionID` — **equals our tx_id** (join proof).
+
+**Bulk alternative:** `GET /app/project/searchProjects` → `projectSearch.results[]`
+(30/page; `totalResultCount`/`page`/`totalPages`), each with `id`, `contract_total`,
+`grand_total`, `amount_paid`, `remaining_balance`, `amount_due` (cents) + `client_name/email/phone`,
+`signed`, `statusLabel`, `logistics_start_date`. Good for a bulk sweep; per-event endpoint above
+is the unambiguous per-tx join.
+
+### Customer identity (for MVP6, replaces name-based matching)
+From `GET /app/vendorTransaction/initContractView?transactionID=<tx>` (200 JSON):
+- `contactID` — stable **person** id (e.g. 1178477906).
+- `business:{id,name,email,addressLabel}` — **company** id.
+(searchProjects also gives `client_email` — a decent stable-ish key.)
+
+### Wiring status
+- **Server ingest DONE + deployed:** `POST /api/finance/revenue` (guarded by `x-publish-token`
+  = KIOSK_PUBLISH_TOKEN; body `{items:[{transactionId, grandTotalCents, paidCents?}]}`; converts
+  cents→dollars, derives date/label from our stops via `getEventStub`, saves via `saveEventRevenue`,
+  status SIGNED/COLLECTED). **Proven live** (backfilled tx 231505509 → /finance shows $439).
+- **TODO — automate per-pull capture:** the pull extractors (web + bookmarklet + native APK)
+  already fetch per-event via `initContractView`; add a `loadPaymentHistoryAndContractTotals`
+  fetch there and POST `{transactionId, grandTotalCents, paidCents}` (and capture `contactID`)
+  so every pull populates revenue + identity. Native path needs an APK build+OTA.

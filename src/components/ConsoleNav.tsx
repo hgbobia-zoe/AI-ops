@@ -7,8 +7,15 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
+  Radar,
   Truck,
   ShieldAlert,
+  Users,
+  DollarSign,
+  TrendingUp,
+  UserRound,
+  History,
+  Workflow,
   Settings,
   Sparkles,
   type LucideIcon,
@@ -23,8 +30,15 @@ interface Blade {
 // Add a feature → add a blade.
 const BLADES: Blade[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/ops", label: "Ops Manager", icon: Radar },
   { href: "/dispatch", label: "Dispatch", icon: Truck },
   { href: "/risk", label: "Event Risk", icon: ShieldAlert },
+  { href: "/staffing", label: "Staffing", icon: Users },
+  { href: "/finance", label: "Financial", icon: DollarSign },
+  { href: "/sales", label: "Sales", icon: TrendingUp },
+  { href: "/customers", label: "Customers", icon: UserRound },
+  { href: "/history", label: "History", icon: History },
+  { href: "/automation", label: "Automation", icon: Workflow },
 ];
 
 const BOTTOM: Blade[] = [{ href: "/admin", label: "Settings", icon: Settings }];

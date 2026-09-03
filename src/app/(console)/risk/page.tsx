@@ -1,74 +1,72 @@
-// Event Risk — matches how Zoe actually runs: items are prepped & LOADED THE DAY BEFORE
-// (warehouse associates + event asset processors), and the DRIVER is scheduled on the
-// event day. So for each day's routes we check two days: is prep/load crew on the
-// schedule the day before, and is a driver on the schedule that day. Data: routes
-// (Goodshuffle → our DB) + crew with roles (Connecteam "Title" field).
+// Event Risk Engine (MVP2) — the actionable management queue. On load it runs a (throttled)
+// scan: assess the horizon → persist risks with lifecycle → recompute readiness → Slack only
+// what changed. Then it renders a daily report + the CRITICAL/HIGH/MEDIUM/READY queue. A
+// manager should grasp "what's at risk, why, who, and how urgent" in under 30 seconds.
 
 import Link from "next/link";
-import {
-  ShieldAlert,
-  ShieldCheck,
-  UserRound,
-  Truck,
-  PackageCheck,
-  AlertTriangle,
-  ChevronLeft,
-  ChevronRight,
-  CalendarDays,
-} from "lucide-react";
+import { ShieldAlert, ShieldCheck, AlertTriangle, RotateCcw, Clock, CircleDot, Check } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
-import { QuoteReviewButton } from "@/components/QuoteReviewButton";
-import {
-  getCrewForDate,
-  connecteamConfigured,
-  type CrewShift,
-  type CrewMember,
-  type CrewRole,
-} from "@/lib/connecteam";
-import { getActiveVehicles } from "@/lib/vehicles";
-import { getRouteForDate } from "@/lib/db/repo";
-import { crewForRoute, type CrewNeed } from "@/lib/crewRules";
-import { todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
-import type { Route } from "@/lib/types";
+import { RiskActions } from "@/components/RiskActions";
+import { runScan } from "@/lib/risk/scan";
+import { getRiskQueue, type StoredRisk } from "@/lib/risk/store";
+import { getEventReadiness, getUnfinishedStops, type ReadinessView } from "@/lib/db/repo";
+import { getEventTimeline } from "@/lib/history/store";
+import { SEVERITY_RANK, type RiskSeverity } from "@/lib/risk/types";
+import { todayInOpsTz, formatYmdLong } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
 
-export default async function EventRiskPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ date?: string }>;
-}) {
-  const sp = await searchParams;
+// A CRITICAL/HIGH event never shows a "green" score — severity dominates the number so a
+// high readiness value can't imply "good to go" over an operational failure.
+function scoreColor(score: number, riskLevel: string): string {
+  if (riskLevel === "CRITICAL") return "text-red-300";
+  if (riskLevel === "HIGH") return "text-amber-300";
+  return score >= 85 ? "text-emerald-300" : score >= 60 ? "text-amber-300" : "text-red-300";
+}
+
+function daysUntilLabel(date: string, today: string): string {
+  const a = Date.parse(`${date}T00:00:00Z`);
+  const b = Date.parse(`${today}T00:00:00Z`);
+  const d = Math.round((a - b) / 86_400_000);
+  if (Number.isNaN(d)) return "";
+  if (d < 0) return `${-d}d ago`;
+  if (d === 0) return "today";
+  if (d === 1) return "tomorrow";
+  return `in ${d}d`;
+}
+
+const SEV_STYLE: Record<RiskSeverity, string> = {
+  CRITICAL: "bg-red-500/90 text-white",
+  HIGH: "bg-amber-400 text-black",
+  MEDIUM: "border border-amber-400/60 text-amber-300",
+  LOW: "border border-white/20 text-muted-foreground",
+};
+
+export default async function EventRiskPage(): Promise<React.JSX.Element> {
+  // Refresh the persisted queue (throttled). Never let a scan hiccup break the page — fall
+  // back to the last-known queue from the DB.
+  try {
+    await runScan();
+  } catch (e) {
+    console.error("[risk] scan failed:", e);
+  }
   const today = todayInOpsTz();
-  const date = sp?.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : today;
-  const dayBefore = shiftYmd(date, -1);
-  const isToday = date === today;
+  const queue = getRiskQueue();
+  const readiness = getEventReadiness();
+  const unfinished = getUnfinishedStops();
 
-  const trucks = getActiveVehicles();
-  const routes = trucks
-    .map((t) => getRouteForDate(t.truckId, date))
-    .filter((r): r is Route => Boolean(r) && r!.status !== "done");
-
-  const configured = connecteamConfigured();
-  const [crewD, crewPrev] = configured
-    ? await Promise.all([getCrewForDate(date), getCrewForDate(dayBefore)])
-    : [[], []];
-
-  const driversD = distinctByRole(crewD, "driver");
-  const prepPrev = distinctByRole(crewPrev, "prep");
-  const prepD = distinctByRole(crewD, "prep");
-  const openShifts = [...crewD, ...crewPrev].filter((s) => s.isOpen).length;
-
-  // Crew each route needs from its line items (tent → 2, 40x60 → 3). All trucks roll the
-  // same day, so the day needs the SUM across routes.
-  const routeNeeds = routes.map((r) => ({ route: r, need: crewForRoute(r.stops.map((s) => s.items ?? [])) }));
-  const totalCrewNeeded = routeNeeds.reduce((sum, x) => sum + x.need.crew, 0);
-
-  const flags = computeFlags({ routes, date, dayBefore, driversD, prepPrev, prepD, openShifts, totalCrewNeeded, routeNeeds, configured });
+  const counts = {
+    CRITICAL: queue.filter((r) => r.severity === "CRITICAL").length,
+    HIGH: queue.filter((r) => r.severity === "HIGH").length,
+    MEDIUM: queue.filter((r) => r.severity === "MEDIUM").length + queue.filter((r) => r.severity === "LOW").length,
+    READY: readiness.filter((r) => r.riskLevel === "READY").length,
+  };
+  const top = queue.slice(0, 5);
+  const bySev = (sev: RiskSeverity) => queue.filter((r) => r.severity === sev);
 
   return (
-    <main className="mx-auto max-w-3xl p-5 pb-16 md:p-8">
-      {isToday && <AutoRefresh seconds={60} />}
+    <main className="mx-auto max-w-4xl p-5 pb-16 md:p-8">
+      <AutoRefresh seconds={60} />
 
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -76,245 +74,231 @@ export default async function EventRiskPage({
             <ShieldAlert className="size-7" /> Event Risk
           </h1>
           <p className="text-sm text-muted-foreground">
-            {routes.length} route{routes.length === 1 ? "" : "s"} · {driversD.length} driver
-            {driversD.length === 1 ? "" : "s"} · {prepPrev.length} prep crew (day before)
+            Are we operationally ready for the next 14 days? {queue.length} open risk{queue.length === 1 ? "" : "s"}.
           </p>
         </div>
-        <DateNav date={date} today={today} />
       </header>
 
-      {/* Risk flags */}
-      <section className="mb-8">
-        {flags.length === 0 ? (
-          <div className="flex items-center gap-2 border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-200">
-            <ShieldCheck className="size-5 shrink-0" />
-            {configured
-              ? "Prep the day before and a driver on the day — no staffing risks flagged."
-              : "Connect Connecteam to check staffing coverage."}
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {flags.map((f, i) => (
-              <div
-                key={i}
-                className={`flex items-start gap-2.5 border p-4 text-sm ${
-                  f.severity === "high"
-                    ? "border-red-500/30 bg-red-500/10 text-red-200"
-                    : "border-amber-500/30 bg-amber-500/10 text-amber-200"
-                }`}
-              >
-                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                <span>{f.text}</span>
+      {queue.some((r) => r.riskType === "staffing_unverified") && (
+        <div className="mb-6 flex items-start gap-2.5 border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-200">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          <span>
+            <strong>Staffing data is unavailable</strong> (Connecteam) for one or more days — those staffing checks are
+            marked <em>unverified</em>, not confirmed clear. Reconnect Connecteam and re-scan for a complete picture.
+          </span>
+        </div>
+      )}
+
+      {/* Daily report — the 30-second read */}
+      <section className="mb-8 grid grid-cols-4 gap-2">
+        <Tally label="Critical" value={counts.CRITICAL} className="border-red-500/40 bg-red-500/10 text-red-200" />
+        <Tally label="High" value={counts.HIGH} className="border-amber-400/40 bg-amber-400/10 text-amber-200" />
+        <Tally label="Medium" value={counts.MEDIUM} className="border-white/15 bg-white/[0.04]" />
+        <Tally label="Ready" value={counts.READY} className="border-emerald-500/30 bg-emerald-500/10 text-emerald-200" />
+      </section>
+
+      {top.length > 0 && (
+        <section className="mb-8">
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">Top priorities</h2>
+          <ol className="space-y-1.5">
+            {top.map((r, i) => (
+              <li key={r.id} className="flex items-center gap-3 border border-white/5 bg-white/[0.02] p-2.5 text-sm">
+                <span className="w-4 text-center font-bold text-muted-foreground">{i + 1}</span>
+                <SevChip sev={r.severity} />
+                <span className="flex-1 truncate">{r.title}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {r.date ? `${formatYmdLong(r.date)} · ${daysUntilLabel(r.date, today)}` : "—"}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+
+      {queue.length === 0 && (
+        <div className="mb-8 flex items-center gap-2 border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-200">
+          <ShieldCheck className="size-5 shrink-0" /> No open risks in the next 14 days.
+        </div>
+      )}
+
+      {(["CRITICAL", "HIGH", "MEDIUM", "LOW"] as RiskSeverity[])
+        .filter((sev) => bySev(sev).length > 0)
+        .map((sev) => (
+          <RiskGroup key={sev} sev={sev} risks={bySev(sev)} today={today} />
+        ))}
+
+      {/* Needs rescheduling — closed routes left with an unfinished stop (operational exception) */}
+      {unfinished.length > 0 && (
+        <section className="mb-8 space-y-2">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <RotateCcw className="size-4" /> Needs rescheduling
+            <span className="bg-red-500/80 px-1.5 py-0.5 text-[10px] font-bold text-white">{unfinished.length}</span>
+          </h2>
+          <div className="space-y-1.5">
+            {unfinished.map((s) => (
+              <div key={s.stopId} className="flex flex-wrap items-center justify-between gap-2 border border-red-500/25 bg-red-500/[0.07] p-3 text-sm">
+                <div>
+                  <div className="font-medium">Stop #{s.sequence} · {s.custName || "—"}</div>
+                  <div className="text-xs text-muted-foreground">{s.truckId} · {formatYmdLong(s.date)} · {s.state}</div>
+                </div>
+                <Link href="/dispatch" className="border border-white/15 px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground">
+                  Open dispatch
+                </Link>
               </div>
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
-      {/* Prep & load — the day before */}
-      <RoleSection
-        icon={<PackageCheck className="size-4" />}
-        title="Prep & load"
-        when={`Day before · ${formatYmdLong(dayBefore)}`}
-        crew={prepPrev}
-        emptyText={
-          configured ? "No warehouse / asset crew scheduled the day before." : "Connecteam not connected."
-        }
-      />
-
-      {/* Drivers — event day */}
-      <RoleSection
-        icon={<Truck className="size-4" />}
-        title="Drivers"
-        when={`Event day · ${isToday ? "Today" : formatYmdLong(date)}`}
-        crew={driversD}
-        emptyText={configured ? "No driver scheduled." : "Connecteam not connected."}
-      />
-
-      {/* Routes */}
-      <section className="mb-2 space-y-2">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          <Truck className="size-4" /> Routes
-        </h2>
-        {routeNeeds.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No active routes for {isToday ? "today" : formatYmdLong(date)}.</p>
-        ) : (
-          routeNeeds.map(({ route: r, need }) => {
-            const first = earliestStopOfRoute(r);
-            const items = r.stops.flatMap((s) => s.items ?? []);
-            return (
-              <div key={r.routeId} className="surface space-y-3 border border-white/5 p-3">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <span className="btn-hero flex size-8 items-center justify-center">
-                      <Truck className="size-4" />
-                    </span>
-                    <div>
-                      <div className="font-medium">{r.truckId}</div>
-                      <div className="text-xs text-muted-foreground">{r.stops.length} stops</div>
-                    </div>
+      {/* Readiness by event — expand any row to see WHY (the operational checklist behind the score) */}
+      {readiness.length > 0 && (
+        <section className="space-y-2">
+          <h2 className="text-lg font-semibold">Event readiness</h2>
+          <div className="space-y-1.5">
+            {readiness.map((e) => (
+              <details key={e.eventId} className="border border-white/5 bg-white/[0.02] [&_summary]:list-none">
+                <summary className="flex cursor-pointer items-center justify-between gap-3 p-2.5 text-sm hover:bg-white/[0.03]">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{e.label || `Event ${e.eventId}`}</div>
+                    <div className="text-xs text-muted-foreground">{e.date ? formatYmdLong(e.date) : "—"} · why ▾</div>
                   </div>
-                  <div className="flex items-center gap-5">
-                    <div>
-                      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Crew needed</div>
-                      <div className="flex items-center gap-1.5 font-semibold tabular-nums">
-                        {need.crew}
-                        {need.hasTent && (
-                          <span className="bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-black">
-                            {need.reasons[need.reasons.length - 1] ?? "tent"}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">First stop</div>
-                      <div className="font-semibold tabular-nums">{first ? formatClockTime(first) : "—"}</div>
-                    </div>
+                  <div className="flex items-center gap-2">
+                    {e.riskLevel !== "READY" && <SevChip sev={e.riskLevel as RiskSeverity} />}
+                    <span className={`font-bold tabular-nums ${scoreColor(e.score, e.riskLevel)}`}>{e.score}</span>
                   </div>
+                </summary>
+                <div className="border-t border-white/5 p-2.5">
+                  <ReadinessChecklist event={e} queue={queue} />
+                  <HistoryTrend eventId={e.eventId} />
                 </div>
-                {items.length > 0 && <QuoteReviewButton items={items} eventName={`${r.truckId} route`} />}
-              </div>
-            );
-          })
-        )}
-      </section>
+              </details>
+            ))}
+          </div>
+        </section>
+      )}
     </main>
   );
 }
 
-interface Flag {
-  severity: "high" | "warn";
-  text: string;
-}
+// The operational checklist behind a readiness score — each area is ✓ unless an active risk
+// affecting the event maps to it. This is the "why" the score is what it is.
+const CHECK_AREAS: { label: string; types: Set<string> }[] = [
+  {
+    label: "Driver & helper (event day)",
+    types: new Set(["route_no_driver", "driver_not_scheduled", "driver_shift_gap", "driver_double_booked", "driver_tight_buffer", "driver_shortage"]),
+  },
+  { label: "Prep & load crew (day before)", types: new Set(["warehouse_shortage"]) },
+  { label: "Setup / install crew", types: new Set(["setup_crew_shortage"]) },
+  { label: "Unload & clean (after pickup)", types: new Set(["unload_shortage"]) },
+  { label: "Schedule & info", types: new Set(["route_schedule_unverified", "staffing_unverified"]) },
+];
 
-function computeFlags(a: {
-  routes: Route[];
-  date: string;
-  dayBefore: string;
-  driversD: CrewMember[];
-  prepPrev: CrewMember[];
-  prepD: CrewMember[];
-  openShifts: number;
-  totalCrewNeeded: number;
-  routeNeeds: { route: Route; need: CrewNeed }[];
-  configured: boolean;
-}): Flag[] {
-  const flags: Flag[] = [];
-  if (!a.configured || a.routes.length === 0) return flags;
-
-  // Driver on the event day + enough people for the day's crew-size needs (tent rules).
-  if (a.driversD.length === 0) {
-    flags.push({ severity: "high", text: `No driver scheduled for ${formatYmdLong(a.date)} — the route can't roll.` });
-  } else if (a.driversD.length < a.totalCrewNeeded) {
-    const tentRoutes = a.routeNeeds.filter((x) => x.need.hasTent);
-    const detail = tentRoutes.length
-      ? ` — incl. ${tentRoutes.map((x) => `${x.route.truckId} (${x.need.reasons.join(", ")})`).join("; ")}`
-      : "";
-    flags.push({
-      severity: tentRoutes.length ? "high" : "warn",
-      text: `Today's routes need ~${a.totalCrewNeeded} crew on the trucks${detail}, but only ${a.driversD.length} driver${a.driversD.length === 1 ? "" : "s"} scheduled.`,
-    });
-  }
-
-  // Prep & load the day before.
-  if (a.prepPrev.length === 0) {
-    if (a.prepD.length > 0) {
-      flags.push({
-        severity: "warn",
-        text: `Prep/load crew is only scheduled same-day, not the day before (${formatYmdLong(a.dayBefore)}) — items may not be loaded before departure.`,
-      });
-    } else {
-      flags.push({
-        severity: "high",
-        text: `No warehouse / asset crew scheduled the day before (${formatYmdLong(a.dayBefore)}) to prep & load.`,
-      });
-    }
-  }
-
-  if (a.openShifts > 0) {
-    flags.push({ severity: "warn", text: `${a.openShifts} open shift${a.openShifts === 1 ? "" : "s"} unassigned.` });
-  }
-  return flags;
-}
-
-function distinctByRole(shifts: CrewShift[], role: CrewRole): CrewMember[] {
-  const m = new Map<number, CrewMember>();
-  for (const s of shifts) for (const a of s.assignees) if (a.role === role) m.set(a.userId, a);
-  return [...m.values()];
-}
-
-function earliestStopOfRoute(r: Route): string | null {
-  let best: string | null = null;
-  let bestT = Infinity;
-  for (const s of r.stops) {
-    const raw = s.plannedWindow || s.eta;
-    if (!raw) continue;
-    const t = Date.parse(raw);
-    if (Number.isNaN(t) || t >= bestT) continue;
-    bestT = t;
-    best = raw;
-  }
-  return best;
-}
-
-function RoleSection({
-  icon,
-  title,
-  when,
-  crew,
-  emptyText,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  when: string;
-  crew: CrewMember[];
-  emptyText: string;
-}) {
+function ReadinessChecklist({ event, queue }: { event: ReadinessView; queue: StoredRisk[] }): React.JSX.Element {
+  const affecting = queue.filter((r) => r.date === event.date && (!r.routeId || r.routeId === event.routeId));
   return (
-    <section className="mb-8 space-y-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          {icon} {title}
-        </h2>
-        <span className="text-xs text-muted-foreground">{when}</span>
-      </div>
-      {crew.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{emptyText}</p>
-      ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {crew.map((c) => (
-            <span
-              key={c.userId}
-              className="inline-flex items-center gap-1.5 border border-white/10 bg-white/5 px-2.5 py-1 text-sm"
-            >
-              <UserRound className="size-3.5 text-muted-foreground" />
-              {c.name}
-              {c.title && <span className="text-[11px] text-muted-foreground">· {c.title}</span>}
+    <ul className="space-y-1.5 text-sm">
+      {CHECK_AREAS.map((area) => {
+        const hits = affecting
+          .filter((r) => area.types.has(r.riskType))
+          .sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]);
+        const worst = hits[0];
+        return (
+          <li key={area.label} className="flex items-start gap-2">
+            {worst ? (
+              <span className={`mt-0.5 size-3.5 shrink-0 rounded-full ${worst.severity === "CRITICAL" ? "bg-red-500" : worst.severity === "HIGH" ? "bg-amber-400" : "bg-amber-400/60"}`} />
+            ) : (
+              <Check className="mt-0.5 size-3.5 shrink-0 text-emerald-400" />
+            )}
+            <span className={worst ? "" : "text-muted-foreground"}>
+              {area.label}
+              {worst ? (
+                <span className="text-muted-foreground">
+                  {" — "}
+                  {worst.title}
+                  {hits.length > 1 ? ` (+${hits.length - 1})` : ""}
+                </span>
+              ) : (
+                <span className="text-emerald-300/70"> — OK</span>
+              )}
             </span>
-          ))}
-        </div>
-      )}
-    </section>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
-function DateNav({ date, today }: { date: string; today: string }) {
-  const prev = shiftYmd(date, -1);
-  const next = shiftYmd(date, 1);
-  const isToday = date === today;
-  const href = (d: string) => (d === today ? "/risk" : `/risk?date=${d}`);
+// Operational History (MVP4) — how this event's readiness/risk trended as it approached, from
+// the deduped snapshot series. Only shows once there's more than one distinct snapshot.
+function HistoryTrend({ eventId }: { eventId: string }): React.JSX.Element | null {
+  const { snapshots } = getEventTimeline(eventId);
+  if (snapshots.length < 2) return null;
   return (
-    <div className="flex items-center gap-1.5">
-      <Link href={href(prev)} aria-label="Previous day" className="flex size-9 items-center justify-center border border-white/10 text-muted-foreground hover:text-foreground">
-        <ChevronLeft className="size-4" />
-      </Link>
-      <span className="inline-flex items-center gap-2 border border-white/10 px-3 py-1.5 text-sm font-medium">
-        <CalendarDays className="size-4 text-muted-foreground" />
-        {isToday ? "Today" : formatYmdLong(date)}
-      </span>
-      <Link href={href(next)} aria-label="Next day" className="flex size-9 items-center justify-center border border-white/10 text-muted-foreground hover:text-foreground">
-        <ChevronRight className="size-4" />
-      </Link>
+    <div className="mt-2 border-t border-white/5 pt-2 text-xs text-muted-foreground">
+      <span className="font-medium text-foreground/80">Trend:</span>{" "}
+      {snapshots.map((sn, i) => (
+        <span key={sn.id}>
+          {i > 0 && " → "}
+          {sn.daysOut >= 0 ? `${sn.daysOut}d out` : "event day"}: {sn.riskLevel}
+          {sn.readinessScore != null ? ` (${sn.readinessScore})` : ""}
+        </span>
+      ))}
     </div>
+  );
+}
+
+function Tally({ label, value, className }: { label: string; value: number; className: string }): React.JSX.Element {
+  return (
+    <div className={`border p-3 text-center ${className}`}>
+      <div className="text-2xl font-bold tabular-nums">{value}</div>
+      <div className="text-[11px] uppercase tracking-wide">{label}</div>
+    </div>
+  );
+}
+
+function SevChip({ sev }: { sev: RiskSeverity }): React.JSX.Element {
+  return <span className={`shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${SEV_STYLE[sev]}`}>{sev}</span>;
+}
+
+function RiskGroup({ sev, risks, today }: { sev: RiskSeverity; risks: StoredRisk[]; today: string }): React.JSX.Element {
+  return (
+    <section className="mb-6 space-y-2">
+      <h2 className="flex items-center gap-2 text-lg font-semibold">
+        {sev === "CRITICAL" ? <AlertTriangle className="size-4 text-red-400" /> : <CircleDot className="size-4 text-muted-foreground" />}
+        {sev[0] + sev.slice(1).toLowerCase()} <span className="text-sm font-normal text-muted-foreground">({risks.length})</span>
+      </h2>
+      <div className="space-y-2">
+        {risks.map((r) => (
+          <div key={r.id} className="surface space-y-2 border border-white/5 p-3.5">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <SevChip sev={r.severity} />
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{r.category}</span>
+                {r.status !== "OPEN" && (
+                  <span className="border border-white/15 px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">{r.status}</span>
+                )}
+              </div>
+              <span className="text-xs text-muted-foreground">
+                {r.date ? `${formatYmdLong(r.date)} · ${daysUntilLabel(r.date, today)}` : "—"}
+              </span>
+            </div>
+            <div className="font-medium">{r.title}</div>
+            <p className="text-sm text-muted-foreground">{r.description}</p>
+            {r.recommendedAction && (
+              <p className="text-sm">
+                <span className="text-muted-foreground">→ </span>
+                {r.recommendedAction}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                <Clock className="size-3" /> first seen {new Date(r.firstDetectedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+              </span>
+              <RiskActions id={r.id} status={r.status} actionTarget={r.actionTarget} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

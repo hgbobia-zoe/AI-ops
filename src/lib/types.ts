@@ -116,6 +116,9 @@ export interface Stop {
   /** The customer's real first name (from Goodshuffle's renter), used to personalize
    *  texts. custName may be an event/last-name label, so greetings prefer this. */
   custFirstName?: string;
+  /** The customer's real last name (Goodshuffle renter). With custFirstName this gives a
+   *  proper "First Last" for the messages log, independent of the messy event label. */
+  custLastName?: string;
   /** Whether this stop is a delivery (drop-off) or a pickup (collection). From
    *  Goodshuffle's waypointType. Drives which message template is used. Defaults to
    *  "delivery" when unknown. */
@@ -131,6 +134,17 @@ export interface Stop {
   /** Goodshuffle line items for this stop's event (name + qty). Drives crew-size rules
    *  (tent → 2, 40x60 → 3) and, later, LLM quote review. Optional; absent on old pulls. */
   items?: { name: string; quantity?: number }[];
+  /** Goodshuffle waypoint transaction id — the match key for writing back to Goodshuffle
+   *  (e.g. removing this stop's waypoint from its route). Absent on manual/old pulls. */
+  txId?: string;
+  /** Goodshuffle client contact id (renter's person id). Stable customer identity for
+   *  Customer Intelligence — better than name matching. Absent on manual/old pulls. */
+  contactId?: string;
+  /** Pull-time ONLY (not persisted on the stop): the event's Goodshuffle contract total and
+   *  amount paid, in CENTS, captured alongside line items. The import forwards these to
+   *  `event_financials` (revenue) via saveEventRevenue, keyed by txId. */
+  grandTotalCents?: number;
+  paidCents?: number;
   arrivedAt?: string;
   completedAt?: string;
   trackingLinkId?: string;
@@ -151,7 +165,12 @@ export interface Route {
   date: string;
   truckId: string;
   driverId?: string;
+  /** Display name of the Dispatch-assigned driver (a Connecteam person). */
+  driverName?: string;
   status: RouteStatus;
+  /** Goodshuffle's own routeID for this route, when the route came from a Goodshuffle
+   *  pull. The write-back target for two-way sync (e.g. removing a waypoint). */
+  gsRouteId?: string;
   stops: Stop[];
 }
 

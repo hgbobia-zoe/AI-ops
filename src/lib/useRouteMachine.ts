@@ -159,7 +159,7 @@ export function useRouteMachine(truckId: string): RouteMachine {
           await fetch("/api/route/import", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ truckId, stops: res.stops }),
+            body: JSON.stringify({ truckId, stops: res.stops, gsRouteId: res.gsRouteId }),
           });
           loadedRef.current = false;
           await refresh(true);
@@ -202,6 +202,34 @@ export function useRouteMachine(truckId: string): RouteMachine {
   }, [truckId, refresh]);
   // Keep a live ref so the toast's "Try again" always calls the latest startRoute.
   startRouteRef.current = startRoute;
+
+  // Silent auto re-pull (Goodshuffle → app). Keeps a LOADED route fresh so a change made in
+  // Goodshuffle mid-day flows in on its own. Unlike startRoute this is quiet: no toasts, and
+  // any failure is swallowed so background sync can never disrupt the driver. The server
+  // import reconciles (keeps started/finished stops, refreshes only the upcoming tail), so
+  // adopting the re-pulled route via a forced refresh is safe.
+  const rePullingRef = useRef(false);
+  const rePull = useCallback(async () => {
+    if (rePullingRef.current || !loadedRef.current) return; // only refresh an active route
+    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+    rePullingRef.current = true;
+    try {
+      const res = await importGoodshuffleRouteViaKiosk(truckId);
+      if (res.inKiosk && res.ok && res.stops.length) {
+        await fetch("/api/route/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ truckId, stops: res.stops, gsRouteId: res.gsRouteId }),
+        });
+        await refresh(true); // adopt the reconciled route
+      }
+      // Non-kiosk, or a pull that returned nothing/failed: keep the current route silently.
+    } catch {
+      /* auto sync must never surface an error to the driver */
+    } finally {
+      rePullingRef.current = false;
+    }
+  }, [truckId, refresh]);
 
   // Manual fallback when the scrape fails: dispatch enters stops by hand. Persists
   // to the server (so actions → SMS work), then adopts the server route.
@@ -254,6 +282,14 @@ export function useRouteMachine(truckId: string): RouteMachine {
     const id = setInterval(() => void refresh(), appConfig.routePollMs);
     return () => clearInterval(id);
   }, [refresh]);
+
+  // Auto re-pull the route FROM Goodshuffle on an interval, so edits made in Goodshuffle
+  // (add/remove/reschedule/re-address an upcoming stop) show up in the app without anyone
+  // re-pulling by hand. Silent; only acts on a loaded route in the kiosk.
+  useEffect(() => {
+    const id = setInterval(() => void rePull(), appConfig.routeRepullMs);
+    return () => clearInterval(id);
+  }, [rePull]);
 
   // While a scrape is running, poll fast so "Loading route…" flips to the stops
   // as soon as ingestion finishes, instead of waiting a full poll interval.
