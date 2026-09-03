@@ -62,7 +62,7 @@ function overlaps(a: RouteWindow, b: RouteWindow): boolean {
 
 /** Max number of route windows overlapping at any instant = min distinct drivers needed. Back-to-back
  *  routes (one ends as the next starts) count as 1, since the same driver can run both. */
-function peakConcurrency(wins: RouteWindow[]): number {
+export function peakConcurrency(wins: RouteWindow[]): number {
   const events: Array<[number, number]> = [];
   for (const w of wins) {
     events.push([w.startUnix, 1]);

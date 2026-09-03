@@ -4,13 +4,15 @@
 // ONLY meaningful changes (new HIGH/CRITICAL, escalations, resolutions, regressions).
 
 import { getActiveVehicles } from "@/lib/vehicles";
-import { getRouteForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds } from "@/lib/db/repo";
+import { getRouteForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity } from "@/lib/db/repo";
 import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/history/store";
 import { getCrewForDateSafe, connecteamConfigured, type CrewShift, type CrewRole } from "@/lib/connecteam";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { slackNotify } from "@/lib/notify/slack";
 import { recordPull, logImport } from "@/lib/pull/state";
-import { assessDay, daysUntil } from "./engine";
+import { classifyCapacity, type CapacityResult } from "@/lib/capacity/capacity";
+import { assessDay, daysUntil, routeWindow, peakConcurrency } from "./engine";
+import { DEFAULT_RISK_CONFIG, SEVERITY_RANK } from "./types";
 import { reconcileRisks, getRiskQueue, type RiskChanges } from "./store";
 import { computeReadiness } from "./readiness";
 import type { EngineRoute, EngineShift, RiskFinding } from "./types";
@@ -100,6 +102,7 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   const allFindings: RiskFinding[] = [];
   const driverByRoute = new Map<string, string | undefined>(); // for history snapshots
   const unverifiedStaffingDates = new Set<string>(); // dates Connecteam couldn't confirm — freeze, don't resolve
+  const capacityResults: CapacityResult[] = [];
   for (const date of dates) {
     const routes: EngineRoute[] = trucks
       .map((t) => getRouteForDate(t.truckId, date))
@@ -145,19 +148,43 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
       unloadCovered = sameDayLate || nextDay;
     }
 
-    allFindings.push(
-      ...assessDay({
+    const driverShifts = shiftsForRole(crewD.shifts, "driver");
+    const dayFindings = assessDay({
+      date,
+      routes,
+      driverShifts,
+      warehouseShifts: shiftsForRole(crewPrev.shifts, "prep"),
+      fieldCrewScheduled: distinctFieldCrew(crewD.shifts),
+      unloadCovered,
+      staffingVerified,
+      now,
+    });
+    allFindings.push(...dayFindings);
+
+    // Capacity verdict for the day (surface-only). Peak simultaneous routes = min drivers needed.
+    const windows = routes.map((r) => routeWindow(r, DEFAULT_RISK_CONFIG)).filter((w): w is NonNullable<typeof w> => Boolean(w));
+    const scheduledDrivers = new Set(driverShifts.map((s) => String(s.userId))).size;
+    const staffingCats = new Set(["STAFFING", "DRIVER", "WAREHOUSE", "SETUP"]);
+    const worst = dayFindings
+      .filter((f) => staffingCats.has(f.category) && !f.unverified)
+      .reduce<"CRITICAL" | "HIGH" | "MEDIUM" | null>((m, f) => {
+        const sev = f.severity === "CRITICAL" || f.severity === "HIGH" || f.severity === "MEDIUM" ? f.severity : null;
+        if (!sev) return m;
+        return m == null || SEVERITY_RANK[sev] > SEVERITY_RANK[m] ? sev : m;
+      }, null);
+    capacityResults.push(
+      classifyCapacity({
         date,
-        routes,
-        driverShifts: shiftsForRole(crewD.shifts, "driver"),
-        warehouseShifts: shiftsForRole(crewPrev.shifts, "prep"),
-        fieldCrewScheduled: distinctFieldCrew(crewD.shifts),
-        unloadCovered,
+        fleetSize: trucks.length,
+        trucksRouted: routes.length,
+        peakConcurrentRoutes: peakConcurrency(windows),
+        scheduledDrivers,
         staffingVerified,
-        now,
+        worstStaffingSeverity: worst,
       }),
     );
   }
+  saveDayCapacity(capacityResults);
 
   // Persist lifecycle + readiness.
   const changes = reconcileRisks(allFindings, dates, now, unverifiedStaffingDates);

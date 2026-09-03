@@ -299,6 +299,14 @@ CREATE TABLE IF NOT EXISTS labor_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_labor_snapshots_week ON labor_snapshots(week_start, captured_at);
 
+-- Per-day capacity verdict (can we execute the day?) — recomputed each scan.
+CREATE TABLE IF NOT EXISTS day_capacity (
+  date        TEXT PRIMARY KEY,
+  verdict     TEXT NOT NULL,    -- AVAILABLE | TIGHT | CONSTRAINED | UNVERIFIED
+  reasons     TEXT,             -- JSON string[]
+  computed_at TEXT NOT NULL
+);
+
 -- Import ledger (Data Health keystone) — one row per pull/ingest attempt, so we can answer
 -- "did last night's pull get everything?" and reconstruct STALE / RETRIEVAL-FAILED / INCOMPLETE.
 CREATE TABLE IF NOT EXISTS import_log (

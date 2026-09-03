@@ -712,6 +712,42 @@ export function getAllBookings(): BookingView[] {
   return (getDb().prepare("SELECT * FROM bookings ORDER BY event_date").all() as Record<string, unknown>[]).map(toBookingView);
 }
 
+// ── Capacity (per-day verdict) ───────────────────────────────────────────────
+
+export interface DayCapacityRecord {
+  date: string;
+  verdict: string;
+  reasons: string[];
+}
+
+export function saveDayCapacity(items: DayCapacityRecord[]): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const up = db.prepare(
+    `INSERT INTO day_capacity (date, verdict, reasons, computed_at) VALUES (@date,@verdict,@reasons,@now)
+     ON CONFLICT(date) DO UPDATE SET verdict=@verdict, reasons=@reasons, computed_at=@now`,
+  );
+  const tx = db.transaction(() => {
+    for (const i of items) up.run({ date: i.date, verdict: i.verdict, reasons: JSON.stringify(i.reasons), now });
+  });
+  tx();
+}
+
+export interface DayCapacityView {
+  date: string;
+  verdict: string;
+  reasons: string[];
+}
+
+/** Capacity verdicts for upcoming dates (>= today), soonest first. */
+export function getUpcomingCapacity(today: string): DayCapacityView[] {
+  return (getDb().prepare("SELECT * FROM day_capacity WHERE date >= ? ORDER BY date").all(today) as Record<string, unknown>[]).map((r) => ({
+    date: String(r.date),
+    verdict: String(r.verdict),
+    reasons: (safeJson(String(r.reasons ?? "[]")) as string[]) ?? [],
+  }));
+}
+
 export function saveEventReadiness(items: ReadinessRecord[]): void {
   const db = getDb();
   const now = new Date().toISOString();

@@ -9,7 +9,7 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { RiskActions } from "@/components/RiskActions";
 import { runScan } from "@/lib/risk/scan";
 import { getRiskQueue, type StoredRisk } from "@/lib/risk/store";
-import { getEventReadiness, getUnfinishedStops, type ReadinessView } from "@/lib/db/repo";
+import { getEventReadiness, getUnfinishedStops, getUpcomingCapacity, type ReadinessView } from "@/lib/db/repo";
 import { getEventTimeline } from "@/lib/history/store";
 import { SEVERITY_RANK, type RiskSeverity } from "@/lib/risk/types";
 import { todayInOpsTz, formatYmdLong } from "@/lib/dates";
@@ -54,6 +54,7 @@ export default async function EventRiskPage(): Promise<React.JSX.Element> {
   const queue = getRiskQueue();
   const readiness = getEventReadiness();
   const unfinished = getUnfinishedStops();
+  const capacity = getUpcomingCapacity(today).filter((v) => v.verdict !== "AVAILABLE");
 
   const counts = {
     CRITICAL: queue.filter((r) => r.severity === "CRITICAL").length,
@@ -126,6 +127,30 @@ export default async function EventRiskPage(): Promise<React.JSX.Element> {
         .map((sev) => (
           <RiskGroup key={sev} sev={sev} risks={bySev(sev)} today={today} />
         ))}
+
+      {/* Capacity — can we physically execute each upcoming day? (surface-only) */}
+      {capacity.length > 0 && (
+        <section className="mb-8 space-y-2">
+          <h2 className="text-lg font-semibold">Capacity outlook</h2>
+          <div className="flex flex-wrap gap-2">
+            {capacity.map((c) => {
+              const cls =
+                c.verdict === "CONSTRAINED"
+                  ? "border-red-500/40 text-red-300"
+                  : c.verdict === "TIGHT"
+                    ? "border-amber-500/40 text-amber-300"
+                    : "border-white/15 text-muted-foreground";
+              return (
+                <div key={c.date} className={`border px-2.5 py-1.5 text-xs ${cls}`} title={c.reasons.join("; ")}>
+                  <span className="font-semibold">{c.date}</span> · {c.verdict}
+                  {c.reasons.length ? <span className="text-muted-foreground"> — {c.reasons[0]}</span> : null}
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-muted-foreground">Derived from fleet, routes, windows &amp; crew. UNVERIFIED = Connecteam couldn&apos;t be checked; never blocks sales.</p>
+        </section>
+      )}
 
       {/* Needs rescheduling — closed routes left with an unfinished stop (operational exception) */}
       {unfinished.length > 0 && (

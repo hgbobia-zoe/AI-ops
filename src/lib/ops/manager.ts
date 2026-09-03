@@ -42,6 +42,8 @@ export interface OpsInputs {
     alertPct: number; // threshold fraction
   };
   dormantCount: number;
+  /** Days classified CONSTRAINED by the capacity engine (can't clearly execute what's booked). */
+  capacityConstrained?: { date: string; reasons: string[] }[];
 }
 
 const SEV_BASE: Record<RiskSignal["severity"], { score: number; priority: Priority }> = {
@@ -119,6 +121,18 @@ export function buildAttention(inp: OpsInputs): AttentionItem[] {
       detail: "Actual labor is running above the scheduled plan this period. Review hours vs. what was booked.",
       source: "finance",
       href: "/finance",
+    });
+  }
+
+  for (const c of inp.capacityConstrained ?? []) {
+    items.push({
+      key: `capacity|${c.date}`,
+      priority: "high",
+      score: 64,
+      title: `Capacity constrained — ${c.date}`,
+      detail: `${c.reasons.join("; ")}. Can we execute everything booked that day?`,
+      source: "risk",
+      href: "/risk",
     });
   }
 
