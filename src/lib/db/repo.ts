@@ -712,6 +712,80 @@ export function getAllBookings(): BookingView[] {
   return (getDb().prepare("SELECT * FROM bookings ORDER BY event_date").all() as Record<string, unknown>[]).map(toBookingView);
 }
 
+/** Row counts for the Data Health view — so "no freshness signal" isn't shown as "no data at all"
+ *  when the tables actually hold (stale) rows from an earlier pull. */
+export function getDataCounts(): { bookings: number; routes: number } {
+  const db = getDb();
+  return {
+    bookings: (db.prepare("SELECT COUNT(*) AS n FROM bookings").get() as { n: number }).n,
+    routes: (db.prepare("SELECT COUNT(*) AS n FROM routes").get() as { n: number }).n,
+  };
+}
+
+// ── Direct cost entries + event-level economics ──────────────────────────────
+
+/** Upsert cost entries, idempotent by source_ref (a re-scan re-derives the same driver-labor rows). */
+export function saveCostEntries(items: import("@/lib/finance/allocation").CostEntryInput[]): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const up = db.prepare(
+    `INSERT INTO cost_entries (id, type, class, event_id, route_id, day, amount, amount_status, hours, rate, source, source_ref, note, captured_at)
+     VALUES (@id,@type,@klass,@eventId,@routeId,@day,@amount,@amountStatus,@hours,@rate,@source,@sourceRef,@note,@now)
+     ON CONFLICT(source_ref) DO UPDATE SET amount=@amount, amount_status=@amountStatus, hours=@hours, rate=@rate, note=@note, captured_at=@now`,
+  );
+  const tx = db.transaction(() => {
+    for (const i of items)
+      up.run({
+        id: `CE-${randomUUID()}`,
+        type: i.type,
+        klass: i.class,
+        eventId: i.eventId ?? null,
+        routeId: i.routeId ?? null,
+        day: i.day ?? null,
+        amount: i.amount,
+        amountStatus: i.amountStatus,
+        hours: i.hours ?? null,
+        rate: i.rate ?? null,
+        source: i.source,
+        sourceRef: i.sourceRef,
+        note: i.note ?? null,
+        now,
+      });
+  });
+  tx();
+}
+
+export interface EventCost {
+  labor: number | null; // ACTUAL direct labor ($), or null when unknown
+  laborStatus: "ACTUAL" | "UNAVAILABLE" | "NONE";
+}
+
+/** Per-event direct cost (labor only, today). ACTUAL when resolved; UNAVAILABLE when labor was
+ *  expected but a rate/shift was missing; NONE when no cost data exists for the event. */
+export function getEventDirectCosts(ids: string[]): Map<string, EventCost> {
+  const out = new Map<string, EventCost>();
+  if (ids.length === 0) return out;
+  const ph = ids.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(`SELECT event_id, amount, amount_status FROM cost_entries WHERE class='DIRECT' AND event_id IN (${ph})`)
+    .all(...ids) as { event_id: string; amount: number | null; amount_status: string }[];
+  const agg = new Map<string, { sum: number; anyActual: boolean; anyUnavail: boolean }>();
+  for (const r of rows) {
+    const a = agg.get(r.event_id) ?? { sum: 0, anyActual: false, anyUnavail: false };
+    if (r.amount_status === "ACTUAL" && r.amount != null) {
+      a.sum += r.amount;
+      a.anyActual = true;
+    } else if (r.amount_status === "UNAVAILABLE") {
+      a.anyUnavail = true;
+    }
+    agg.set(r.event_id, a);
+  }
+  for (const [id, a] of agg)
+    out.set(id, a.anyActual ? { labor: Math.round(a.sum * 100) / 100, laborStatus: "ACTUAL" } : a.anyUnavail ? { labor: null, laborStatus: "UNAVAILABLE" } : { labor: null, laborStatus: "NONE" });
+  for (const id of ids) if (!out.has(id)) out.set(id, { labor: null, laborStatus: "NONE" });
+  return out;
+}
+
 // ── Inventory demand (booked line items) ─────────────────────────────────────
 
 export interface ItemStop {

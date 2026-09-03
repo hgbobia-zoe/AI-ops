@@ -4,9 +4,10 @@
 // ONLY meaningful changes (new HIGH/CRITICAL, escalations, resolutions, regressions).
 
 import { getActiveVehicles } from "@/lib/vehicles";
-import { getRouteForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity } from "@/lib/db/repo";
+import { getRouteForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity, saveCostEntries } from "@/lib/db/repo";
 import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/history/store";
-import { getCrewForDateSafe, connecteamConfigured, type CrewShift, type CrewRole } from "@/lib/connecteam";
+import { getCrewForDateSafe, connecteamConfigured, getPayRates, rateForUserOn, type CrewShift, type CrewRole } from "@/lib/connecteam";
+import { allocateDriverLabor, type CostEntryInput } from "@/lib/finance/allocation";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { slackNotify } from "@/lib/notify/slack";
 import { recordPull, logImport } from "@/lib/pull/state";
@@ -98,33 +99,34 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   const dates = getRouteDates().filter((d) => d >= today && d <= last).sort();
   const trucks = getActiveVehicles();
   const ctOn = connecteamConfigured();
+  // Pay rates for the horizon — for event-level driver-labor cost allocation.
+  const payRates = ctOn ? await getPayRates(dates[0] ?? today, dates[dates.length - 1] ?? today) : new Map();
 
   const allFindings: RiskFinding[] = [];
+  const costEntries: CostEntryInput[] = [];
   const driverByRoute = new Map<string, string | undefined>(); // for history snapshots
   const unverifiedStaffingDates = new Set<string>(); // dates Connecteam couldn't confirm — freeze, don't resolve
   const capacityResults: CapacityResult[] = [];
   for (const date of dates) {
-    const routes: EngineRoute[] = trucks
-      .map((t) => getRouteForDate(t.truckId, date))
-      .filter((r): r is NonNullable<typeof r> => Boolean(r))
-      .map((r) => ({
-        routeId: r.routeId,
-        truckId: r.truckId,
-        date: r.date,
-        status: r.status,
-        gsRouteId: r.gsRouteId,
-        driverId: r.driverId,
-        driverName: r.driverName,
-        stops: r.stops.map((s) => ({
-          sequence: s.sequence,
-          custName: s.custName,
-          kind: s.kind,
-          plannedWindow: s.plannedWindow,
-          eta: s.eta,
-          items: s.items,
-        })),
-      }));
-    if (routes.length === 0) continue;
+    const rawRoutes = trucks.map((t) => getRouteForDate(t.truckId, date)).filter((r): r is NonNullable<typeof r> => Boolean(r));
+    if (rawRoutes.length === 0) continue;
+    const routes: EngineRoute[] = rawRoutes.map((r) => ({
+      routeId: r.routeId,
+      truckId: r.truckId,
+      date: r.date,
+      status: r.status,
+      gsRouteId: r.gsRouteId,
+      driverId: r.driverId,
+      driverName: r.driverName,
+      stops: r.stops.map((s) => ({
+        sequence: s.sequence,
+        custName: s.custName,
+        kind: s.kind,
+        plannedWindow: s.plannedWindow,
+        eta: s.eta,
+        items: s.items,
+      })),
+    }));
     for (const r of routes) driverByRoute.set(r.routeId, r.driverName);
 
     // Connecteam: driver shifts on the event day; warehouse (prep) shifts the day BEFORE (Zoe
@@ -183,8 +185,21 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
         worstStaffingSeverity: worst,
       }),
     );
+
+    // Event-level driver-labor cost (only when Connecteam is verified — else rates/shifts are unknown).
+    if (staffingVerified) {
+      costEntries.push(
+        ...allocateDriverLabor(
+          rawRoutes.map((r) => ({ routeId: r.routeId, date: r.date, driverId: r.driverId, driverName: r.driverName, stops: r.stops.map((s) => ({ txId: s.txId })) })),
+          driverShifts.map((s) => ({ userId: String(s.userId), startUnix: s.startUnix, endUnix: s.endUnix })),
+          (uid) => rateForUserOn(payRates, Number(uid), date),
+          date,
+        ),
+      );
+    }
   }
   saveDayCapacity(capacityResults);
+  if (costEntries.length > 0) saveCostEntries(costEntries);
 
   // Persist lifecycle + readiness.
   const changes = reconcileRisks(allFindings, dates, now, unverifiedStaffingDates);

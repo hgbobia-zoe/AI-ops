@@ -3,7 +3,7 @@
 // executive scorecard. RULES CALCULATE — every figure is deterministic or explicitly UNAVAILABLE.
 
 import { getPlannedHours, getActualHours, getPayRates, rateForUserOn } from "@/lib/connecteam";
-import { getBookingsRevenueInRange, getBookingsInRange, type EventFinancialView } from "@/lib/db/repo";
+import { getBookingsRevenueInRange, getBookingsInRange, getEventDirectCosts } from "@/lib/db/repo";
 import { saveLaborSnapshot, getLaborTrajectory, type LaborSnapshotRow } from "./laborHistory";
 import { financeConfig } from "./config";
 import { computeVariance, laborPctOfRevenue, contribution, contributionMargin, type Variance, type MoneyStatus } from "./calc";
@@ -38,9 +38,23 @@ export interface FinanceSummary {
     marginPct: number | null;
     status: MoneyStatus;
   };
-  events: EventFinancialView[];
+  events: EventEconomics[];
   /** planned→revised→actual labor over time for this week (empty for non-week periods). */
   laborTrajectory: LaborSnapshotRow[];
+}
+
+/** Per-event economics: revenue − direct cost (labor today). Contribution UNAVAILABLE unless the
+ *  labor is resolved (ACTUAL) — never revenue-with-zeroed-cost. */
+export interface EventEconomics {
+  eventId: string;
+  date: string;
+  label: string;
+  revenue: number | null;
+  revenueStatus: string; // SIGNED | QUOTE
+  labor: number | null; // direct labor $ (ACTUAL only)
+  laborStatus: "ACTUAL" | "UNAVAILABLE" | "NONE";
+  contribution: number | null;
+  contribStatus: "ACTUAL" | "UNAVAILABLE";
 }
 
 function sumHoursCost(hours: Map<number, number>, rateAt: (uid: number) => number | null): { cost: number | null; missing: number; anyRate: boolean } {
@@ -127,17 +141,30 @@ export async function financeForPeriod(period: Period): Promise<FinanceSummary> 
       // UNAVAILABLE unless BOTH revenue and a real labor cost exist — never a costs-zeroed figure.
       status: contributionVal == null ? "UNAVAILABLE" : "PROJECTED",
     },
-    events: getBookingsInRange(start, end).map(
-      (b): EventFinancialView => ({
-        eventId: b.bookingId,
-        date: b.eventDate ?? "",
-        label: b.eventName || `Booking ${b.bookingId}`,
-        revenue: b.grandTotal,
-        revenueStatus: b.signed ? "SIGNED" : "QUOTE",
-      }),
-    ),
+    events: eventsEconomics(start, end),
     laborTrajectory,
   };
+}
+
+function eventsEconomics(start: string, end: string): EventEconomics[] {
+  const bookings = getBookingsInRange(start, end);
+  const costs = getEventDirectCosts(bookings.map((b) => b.bookingId));
+  return bookings.map((b) => {
+    const c = costs.get(b.bookingId);
+    const labor = c?.laborStatus === "ACTUAL" ? c.labor : null;
+    const contribution = b.grandTotal != null && labor != null ? Math.round((b.grandTotal - labor) * 100) / 100 : null;
+    return {
+      eventId: b.bookingId,
+      date: b.eventDate ?? "",
+      label: b.eventName || `Booking ${b.bookingId}`,
+      revenue: b.grandTotal,
+      revenueStatus: b.signed ? "SIGNED" : "QUOTE",
+      labor,
+      laborStatus: c?.laborStatus ?? "NONE",
+      contribution,
+      contribStatus: contribution != null ? "ACTUAL" : "UNAVAILABLE",
+    };
+  });
 }
 
 function sumMap(m: Map<number, number>): number {

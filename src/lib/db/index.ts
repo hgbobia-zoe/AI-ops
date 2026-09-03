@@ -299,6 +299,28 @@ CREATE TABLE IF NOT EXISTS labor_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_labor_snapshots_week ON labor_snapshots(week_start, captured_at);
 
+-- Direct cost entries (event-level economics, NOT accounting). One row per cost, associable at the
+-- finest grain known (event > route > day > company). Contribution = revenue − DIRECT costs. Absent
+-- cost = UNAVAILABLE, never 0. Idempotent derived writes via source_ref.
+CREATE TABLE IF NOT EXISTS cost_entries (
+  id            TEXT PRIMARY KEY,
+  type          TEXT NOT NULL,   -- labor | vehicle | fuel | subcontractor | sub_rental | consumables | event_expense | other
+  class         TEXT NOT NULL,   -- DIRECT | OVERHEAD
+  event_id      TEXT,            -- Goodshuffle tx/booking id (most specific)
+  route_id      TEXT,
+  day           TEXT,            -- YYYY-MM-DD
+  amount        REAL,            -- dollars
+  amount_status TEXT NOT NULL,   -- ACTUAL | ESTIMATED | UNAVAILABLE
+  hours         REAL,            -- labor rows: lets cost recompute if a rate is backfilled
+  rate          REAL,
+  source        TEXT,            -- connecteam | goodshuffle | manual | derived
+  source_ref    TEXT UNIQUE,     -- idempotency key
+  note          TEXT,
+  captured_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cost_entries_event ON cost_entries(event_id);
+CREATE INDEX IF NOT EXISTS idx_cost_entries_day ON cost_entries(day);
+
 -- Per-day capacity verdict (can we execute the day?) — recomputed each scan.
 CREATE TABLE IF NOT EXISTS day_capacity (
   date        TEXT PRIMARY KEY,

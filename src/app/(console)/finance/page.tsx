@@ -187,8 +187,12 @@ export default async function FinancePage({
                     <td className="p-2.5">{e.label || `Event ${e.eventId}`}</td>
                     <td className="p-2.5 text-muted-foreground">{e.date}</td>
                     <td className="p-2.5 text-right tabular-nums">{e.revenue == null ? <Unavail /> : money(e.revenue)}</td>
-                    <td className="p-2.5 text-right text-muted-foreground">not allocated</td>
-                    <td className="p-2.5 text-right text-muted-foreground">—</td>
+                    <td className="p-2.5 text-right tabular-nums">
+                      {e.labor != null ? money(e.labor) : <span className="text-muted-foreground">{e.laborStatus === "UNAVAILABLE" ? "unavailable" : "—"}</span>}
+                    </td>
+                    <td className="p-2.5 text-right tabular-nums">
+                      {e.contribution != null ? <span className={e.contribution >= 0 ? "text-emerald-300" : "text-red-300"}>{money(e.contribution)}</span> : <span className="text-muted-foreground">—</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -196,8 +200,10 @@ export default async function FinancePage({
           </div>
         )}
         <p className="text-[11px] text-muted-foreground">
-          Revenue comes from Goodshuffle contract totals. Per-event labor isn&apos;t allocated yet (Connecteam shifts aren&apos;t tied to
-          specific events) — labor is tracked at the period level above.
+          Per-event <b>driver labor</b> is allocated from Connecteam (assigned driver × that day&apos;s shift hours × rate,
+          split across the route&apos;s events). Contribution = signed revenue − direct cost; it stays <b>unavailable</b> until
+          labor resolves (no driver assigned, or no rate on file) — never revenue with a zeroed cost. Other direct costs
+          (vehicle, fuel, sub-rentals, subcontractors) aren&apos;t captured yet.
         </p>
       </section>
     </main>
