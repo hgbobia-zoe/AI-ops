@@ -5,8 +5,10 @@
 import Link from "next/link";
 import { Radar, ShieldAlert, TrendingUp, DollarSign, UserRound, ArrowRight, CheckCircle2 } from "lucide-react";
 import { opsOverview } from "@/lib/ops/service";
-import type { AttentionItem, Priority } from "@/lib/ops/manager";
+import { summarize, opsBrief, type AttentionItem, type Priority } from "@/lib/ops/manager";
 import { formatYmdLong } from "@/lib/dates";
+import { viewerRole } from "@/lib/auth/getSession";
+import { canSeeFinancials } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -51,7 +53,13 @@ function AttentionRow({ item }: { item: AttentionItem }): React.JSX.Element {
 }
 
 export default async function OpsPage(): Promise<React.JSX.Element> {
-  const o = await opsOverview();
+  const showMoney = canSeeFinancials(await viewerRole());
+  const full = await opsOverview();
+  // Members don't see $ — drop finance-sourced items and recompute the brief/summary from the rest.
+  const items = showMoney ? full.items : full.items.filter((i) => i.source !== "finance");
+  const summary = showMoney ? full.summary : summarize(items);
+  const brief = showMoney ? full.brief : opsBrief(items, summary);
+  const o = { ...full, items, summary, brief };
 
   return (
     <main className="mx-auto max-w-3xl p-5 pb-16 md:p-8">

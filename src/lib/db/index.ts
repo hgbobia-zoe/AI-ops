@@ -299,6 +299,19 @@ CREATE TABLE IF NOT EXISTS labor_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_labor_snapshots_week ON labor_snapshots(week_start, captured_at);
 
+-- Team members with roles (Owner / Admin / Member) — the access matrix. Passwords are scrypt
+-- hashes (never plaintext). Role gates financials, settings, and user management.
+CREATE TABLE IF NOT EXISTS users (
+  id            TEXT PRIMARY KEY,
+  username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name          TEXT,
+  role          TEXT NOT NULL,        -- owner | admin | member
+  password_hash TEXT NOT NULL,        -- scrypt$<saltHex>$<hashHex>
+  active        INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL,
+  last_login_at TEXT
+);
+
 -- Per-event readiness score (0-100) + component breakdown, recomputed each scan.
 CREATE TABLE IF NOT EXISTS event_readiness (
   event_id                   TEXT PRIMARY KEY,

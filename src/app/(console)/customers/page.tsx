@@ -4,6 +4,8 @@
 import { Users, Repeat, DollarSign, Moon } from "lucide-react";
 import { customerOverview } from "@/lib/customer/service";
 import type { CustomerAgg } from "@/lib/customer/calc";
+import { viewerRole } from "@/lib/auth/getSession";
+import { canSeeFinancials } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +27,9 @@ function StatusPill({ c }: { c: CustomerAgg }): React.JSX.Element {
 }
 
 export default async function CustomersPage(): Promise<React.JSX.Element> {
+  const showMoney = canSeeFinancials(await viewerRole());
   const s = customerOverview();
+  const topList = showMoney ? s.topByRevenue : s.topByBookings;
 
   return (
     <main className="mx-auto max-w-4xl p-5 pb-16 md:p-8">
@@ -37,7 +41,7 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
       </header>
 
       {/* Scorecard */}
-      <section className="mb-6 grid gap-3 md:grid-cols-4">
+      <section className={`mb-6 grid gap-3 ${showMoney ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
         <div className="surface border border-white/5 p-4">
           <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><Users className="size-4" /> Customers</div>
           <div className="text-3xl font-bold tabular-nums">{s.total}</div>
@@ -47,11 +51,13 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
           <div className="text-3xl font-bold tabular-nums">{s.repeatCount}</div>
           <p className="mt-1 text-[11px] text-muted-foreground">{pct(s.repeatRate)} of customers</p>
         </div>
-        <div className="surface border border-white/5 p-4">
-          <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><DollarSign className="size-4" /> Revenue</div>
-          <div className="text-2xl font-bold tabular-nums">{money(s.totalRevenue)}</div>
-          <p className="mt-1 text-[11px] text-muted-foreground">across all bookings</p>
-        </div>
+        {showMoney && (
+          <div className="surface border border-white/5 p-4">
+            <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><DollarSign className="size-4" /> Revenue</div>
+            <div className="text-2xl font-bold tabular-nums">{money(s.totalRevenue)}</div>
+            <p className="mt-1 text-[11px] text-muted-foreground">across all bookings</p>
+          </div>
+        )}
         <div className="surface border border-white/5 p-4">
           <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><Moon className="size-4" /> Dormant</div>
           <div className="text-3xl font-bold tabular-nums">{s.dormant.length}</div>
@@ -59,10 +65,10 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
         </div>
       </section>
 
-      {/* Top customers by revenue */}
+      {/* Top customers */}
       <section className="mb-8 space-y-2">
-        <h2 className="text-lg font-semibold">Top customers by revenue</h2>
-        {s.topByRevenue.length === 0 ? (
+        <h2 className="text-lg font-semibold">Top customers by {showMoney ? "revenue" : "bookings"}</h2>
+        {topList.length === 0 ? (
           <p className="text-sm text-muted-foreground">No bookings yet — pull from Settings → Pull Routes.</p>
         ) : (
           <div className="overflow-x-auto border border-white/10">
@@ -70,17 +76,17 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
               <thead>
                 <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="p-2.5">Customer</th>
-                  <th className="p-2.5 text-right">Revenue</th>
+                  {showMoney && <th className="p-2.5 text-right">Revenue</th>}
                   <th className="p-2.5 text-right">Bookings</th>
                   <th className="p-2.5">Last</th>
                   <th className="p-2.5">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
-                {s.topByRevenue.map((c) => (
+                {topList.map((c) => (
                   <tr key={c.key}>
                     <td className="p-2.5 font-medium">{c.name}</td>
-                    <td className="p-2.5 text-right tabular-nums">{money(c.totalRevenue)}</td>
+                    {showMoney && <td className="p-2.5 text-right tabular-nums">{money(c.totalRevenue)}</td>}
                     <td className="p-2.5 text-right tabular-nums">{c.bookings}</td>
                     <td className="p-2.5 text-muted-foreground">{fmtDate(c.lastSeen)}</td>
                     <td className="p-2.5"><StatusPill c={c} /></td>
@@ -102,7 +108,7 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
               <thead>
                 <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="p-2.5">Customer</th>
-                  <th className="p-2.5 text-right">Past revenue</th>
+                  {showMoney && <th className="p-2.5 text-right">Past revenue</th>}
                   <th className="p-2.5 text-right">Bookings</th>
                   <th className="p-2.5">Last booking</th>
                 </tr>
@@ -111,7 +117,7 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
                 {s.dormant.slice(0, 20).map((c) => (
                   <tr key={c.key}>
                     <td className="p-2.5 font-medium">{c.name}</td>
-                    <td className="p-2.5 text-right tabular-nums">{money(c.totalRevenue)}</td>
+                    {showMoney && <td className="p-2.5 text-right tabular-nums">{money(c.totalRevenue)}</td>}
                     <td className="p-2.5 text-right tabular-nums">{c.bookings}</td>
                     <td className="p-2.5 text-muted-foreground">{fmtDate(c.lastSeen)}</td>
                   </tr>

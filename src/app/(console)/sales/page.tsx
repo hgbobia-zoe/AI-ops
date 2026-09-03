@@ -3,12 +3,15 @@
 
 import { TrendingUp, CalendarClock, DollarSign, AlertTriangle } from "lucide-react";
 import { salesOverview } from "@/lib/sales/service";
+import { viewerRole } from "@/lib/auth/getSession";
+import { canSeeFinancials } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
 
 export default async function SalesPage(): Promise<React.JSX.Element> {
+  const showMoney = canSeeFinancials(await viewerRole());
   const s = salesOverview(8);
   const gaps = s.pipeline.filter((b) => b.nearTermGap);
   const maxRev = s.pipeline.reduce((m, b) => Math.max(m, b.revenue ?? 0), 0);
@@ -19,26 +22,30 @@ export default async function SalesPage(): Promise<React.JSX.Element> {
         <h1 className="flex items-center gap-2 text-3xl font-bold tracking-tight">
           <TrendingUp className="size-7" /> Sales Intelligence
         </h1>
-        <p className="text-sm text-muted-foreground">Booked events &amp; revenue across the next {s.horizonWeeks} weeks (from Goodshuffle bookings).</p>
+        <p className="text-sm text-muted-foreground">Booked events{showMoney ? " & revenue" : ""} across the next {s.horizonWeeks} weeks (from Goodshuffle bookings).</p>
       </header>
 
       {/* Scorecard */}
-      <section className="mb-6 grid gap-3 md:grid-cols-3">
+      <section className={`mb-6 grid gap-3 ${showMoney ? "md:grid-cols-3" : "md:grid-cols-1"}`}>
         <div className="surface border border-white/5 p-4">
           <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><CalendarClock className="size-4" /> Booked events</div>
           <div className="text-3xl font-bold tabular-nums">{s.totalBooked}</div>
           <p className="mt-1 text-[11px] text-muted-foreground">Next {s.horizonWeeks} weeks.</p>
         </div>
-        <div className="surface border border-white/5 p-4">
-          <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><DollarSign className="size-4" /> Revenue pipeline</div>
-          <div className="text-3xl font-bold tabular-nums">{money(s.totalRevenue)}</div>
-          <p className="mt-1 text-[11px] text-muted-foreground">Contract value booked in the horizon.</p>
-        </div>
-        <div className="surface border border-white/5 p-4">
-          <div className="mb-2 flex items-center gap-2 text-sm font-semibold">Weekly target</div>
-          <div className="text-2xl font-bold tabular-nums">{s.weeklyRevenueTarget == null ? <span className="text-muted-foreground">Not set</span> : money(s.weeklyRevenueTarget)}</div>
-          <p className="mt-1 text-[11px] text-muted-foreground">Goal per week — compare against the bars below.</p>
-        </div>
+        {showMoney && (
+          <div className="surface border border-white/5 p-4">
+            <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><DollarSign className="size-4" /> Revenue pipeline</div>
+            <div className="text-3xl font-bold tabular-nums">{money(s.totalRevenue)}</div>
+            <p className="mt-1 text-[11px] text-muted-foreground">Contract value booked in the horizon.</p>
+          </div>
+        )}
+        {showMoney && (
+          <div className="surface border border-white/5 p-4">
+            <div className="mb-2 flex items-center gap-2 text-sm font-semibold">Weekly target</div>
+            <div className="text-2xl font-bold tabular-nums">{s.weeklyRevenueTarget == null ? <span className="text-muted-foreground">Not set</span> : money(s.weeklyRevenueTarget)}</div>
+            <p className="mt-1 text-[11px] text-muted-foreground">Goal per week — compare against the bars below.</p>
+          </div>
+        )}
       </section>
 
       {gaps.length > 0 && (
@@ -57,20 +64,23 @@ export default async function SalesPage(): Promise<React.JSX.Element> {
         <div className="border border-white/10">
           {s.pipeline.map((b) => {
             const target = s.weeklyRevenueTarget;
-            const pctWidth = maxRev > 0 && b.revenue != null ? Math.round((b.revenue / maxRev) * 100) : 0;
-            const hitTarget = target != null && b.revenue != null && b.revenue >= target;
+            // $ users: scale bars by revenue. Members: scale by event count (no $ leak).
+            const pctWidth = showMoney
+              ? maxRev > 0 && b.revenue != null ? Math.round((b.revenue / maxRev) * 100) : 0
+              : s.maxWeekCount > 0 ? Math.round((b.count / s.maxWeekCount) * 100) : 0;
+            const hitTarget = showMoney && target != null && b.revenue != null && b.revenue >= target;
             return (
               <div key={b.weekStart} className="flex items-center gap-3 border-b border-white/5 px-3 py-2.5 last:border-b-0">
                 <div className="w-24 shrink-0 text-sm text-muted-foreground">{b.label}</div>
                 <div className="flex h-5 flex-1 items-center">
                   <div
                     className={`h-full ${b.nearTermGap ? "bg-amber-500/30" : hitTarget ? "bg-emerald-500/40" : "bg-white/20"}`}
-                    style={{ width: `${b.revenue ? Math.max(pctWidth, 4) : 0}%` }}
+                    style={{ width: `${b.count === 0 ? 0 : Math.max(pctWidth, 4)}%` }}
                   />
                   {b.count === 0 && <span className="pl-1 text-xs text-muted-foreground">{b.nearTermGap ? "open" : "—"}</span>}
                 </div>
                 <div className="w-16 shrink-0 text-right text-sm tabular-nums text-muted-foreground">{b.count} ev</div>
-                <div className="w-20 shrink-0 text-right text-sm font-semibold tabular-nums">{money(b.revenue)}</div>
+                {showMoney && <div className="w-20 shrink-0 text-right text-sm font-semibold tabular-nums">{money(b.revenue)}</div>}
               </div>
             );
           })}

@@ -3,11 +3,13 @@
 // /route, /select) and customer (/track) pages live outside this group — no shell.
 
 import { ConsoleNav } from "@/components/ConsoleNav";
+import { viewerRole } from "@/lib/auth/getSession";
 
-export default function ConsoleLayout({ children }: { children: React.ReactNode }) {
+export default async function ConsoleLayout({ children }: { children: React.ReactNode }) {
+  const role = await viewerRole();
   return (
     <div className="flex min-h-dvh flex-col md:flex-row">
-      <ConsoleNav />
+      <ConsoleNav role={role} />
       <div className="min-w-0 flex-1">{children}</div>
     </div>
   );
