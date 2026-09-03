@@ -390,9 +390,24 @@ function open(): DB {
   const db = new Database(DB_PATH);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  // Wait (not throw SQLITE_BUSY) if a second connection holds a lock — e.g. a backup tool,
+  // litestream, a WAL checkpoint, or a CLI session.
+  db.pragma("busy_timeout = 5000");
   db.exec(SCHEMA);
   migrate(db);
+  ensureIndexes(db);
   return db;
+}
+
+// Indexes on hot filter/sort columns. Run AFTER migrate() because some (stops.tx_id, contact_id)
+// are added by the additive migrations, so they don't exist when SCHEMA runs.
+function ensureIndexes(db: DB): void {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_stops_tx ON stops(tx_id);
+    CREATE INDEX IF NOT EXISTS idx_stops_contact ON stops(contact_id);
+    CREATE INDEX IF NOT EXISTS idx_routes_date ON routes(date);
+    CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at DESC);
+  `);
 }
 
 export function getDb(): DB {

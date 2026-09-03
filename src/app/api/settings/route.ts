@@ -9,8 +9,10 @@ import { getSettings, saveSettings, type AppSettings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
-function adminPin(): string {
-  return process.env.ADMIN_PIN || process.env.NEXT_PUBLIC_ADMIN_PIN || "0000";
+function adminPin(): string | null {
+  // ADMIN_PIN only (no NEXT_PUBLIC fallback '' that would ship to the client, no "0000" default).
+  // Null = not configured; the route is already gated by the role-based access matrix (proxy).
+  return process.env.ADMIN_PIN || null;
 }
 
 export function GET(): NextResponse {
@@ -64,7 +66,8 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  if ((req.headers.get("x-admin-pin") || "") !== adminPin()) {
+  const _pin = adminPin();
+  if (_pin && (req.headers.get("x-admin-pin") || "") !== _pin) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   let body: unknown;
