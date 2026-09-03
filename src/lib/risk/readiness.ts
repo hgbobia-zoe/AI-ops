@@ -75,7 +75,9 @@ function findingAffects(f: RiskFinding, ev: ReadinessInput): boolean {
 
 export function computeReadiness(events: ReadinessInput[], findings: RiskFinding[]): EventReadiness[] {
   return events.map((ev) => {
-    const mine = findings.filter((f) => findingAffects(f, ev));
+    // UNVERIFIED findings (e.g. Connecteam unreachable) are UNKNOWNS, not deficiencies — they must
+    // never dock the score or set a risk level, or an infra outage would silently lower readiness.
+    const mine = findings.filter((f) => findingAffects(f, ev) && !f.unverified);
     const worstByComponent = new Map<Component, RiskSeverity>();
     for (const f of mine) {
       const c = CATEGORY_TO_COMPONENT[f.category];

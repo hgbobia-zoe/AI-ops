@@ -17,12 +17,25 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
 
+  const submittedPhotos = body.photos ?? [];
   const photoIds: string[] = [];
-  for (const dataUrl of body.photos ?? []) {
+  for (const dataUrl of submittedPhotos) {
     const id = savePodImage(dataUrl);
     if (id) photoIds.push(id);
   }
   const signatureId = body.signature ? savePodImage(body.signature) ?? undefined : undefined;
+
+  // Proof-of-delivery is not something to silently lose. If any submitted image failed to save,
+  // fail the request (with what DID save) so the caller can retry rather than mark the stop done
+  // with missing proof.
+  const photosLost = submittedPhotos.length - photoIds.length;
+  const signatureLost = Boolean(body.signature) && !signatureId;
+  if (photosLost > 0 || signatureLost) {
+    return NextResponse.json(
+      { error: "pod_save_incomplete", photosLost, signatureLost, photoIds, signatureId },
+      { status: 502 },
+    );
+  }
 
   return NextResponse.json({ photoIds, signatureId });
 }

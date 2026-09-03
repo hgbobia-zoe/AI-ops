@@ -96,21 +96,26 @@ function assessDrivers(
 
   if (assignmentInUse) {
     for (const r of active) {
-      // "No driver assigned" is a DISPATCH fact — valid to flag even without Connecteam.
       if (!r.driverId) {
-        out.push({
-          signature: `route_no_driver|${r.routeId}`,
-          riskType: "route_no_driver",
-          category: "DRIVER",
-          severity: "CRITICAL",
-          title: `No driver assigned — ${r.truckId}`,
-          description: `Route ${r.truckId} on ${date} has no driver assigned. A route cannot roll without a driver.`,
-          date,
-          routeId: r.routeId,
-          truckId: r.truckId,
-          recommendedAction: "Assign a driver to this route.",
-          actionTarget: "dispatch",
-        });
+        // "No driver assigned" only becomes a flag once Zoe has adopted driver assignment as
+        // policy (cfg.driverAssignmentEnabled). Otherwise, assigning a driver to ONE truck would
+        // instantly mark every other truck that day CRITICAL — a false-alarm cliff during rollout.
+        // (Validating an ASSIGNED driver below always runs, per-route, regardless of the flag.)
+        if (cfg.driverAssignmentEnabled) {
+          out.push({
+            signature: `route_no_driver|${r.routeId}`,
+            riskType: "route_no_driver",
+            category: "DRIVER",
+            severity: "CRITICAL",
+            title: `No driver assigned — ${r.truckId}`,
+            description: `Route ${r.truckId} on ${date} has no driver assigned. A route cannot roll without a driver.`,
+            date,
+            routeId: r.routeId,
+            truckId: r.truckId,
+            recommendedAction: "Assign a driver to this route.",
+            actionTarget: "dispatch",
+          });
+        }
         continue;
       }
       // Everything below needs Connecteam. If staffing is unverified, DON'T guess — the
@@ -249,6 +254,7 @@ function unverifiedSchedule(r: EngineRoute, date: string): RiskFinding {
     truckId: r.truckId,
     recommendedAction: "Add delivery/pickup windows in Goodshuffle.",
     actionTarget: "goodshuffle",
+    unverified: true,
   };
 }
 
@@ -380,6 +386,7 @@ export function assessDay(input: AssessDayInput): RiskFinding[] {
       date: input.date,
       recommendedAction: "Check the Connecteam connection, then re-scan.",
       actionTarget: "connecteam",
+      unverified: true,
     });
   }
   return out;

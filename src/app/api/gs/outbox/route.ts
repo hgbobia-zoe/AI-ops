@@ -39,6 +39,11 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (!body.id) {
     return NextResponse.json({ error: "id required" }, { status: 400, headers: CORS });
   }
-  ackGsOp(body.id, body.ok !== false, body.error);
+  // Require an EXPLICIT ok. A missing/ambiguous ack must not silently mark a Goodshuffle write-back
+  // as done (which would leave our board and Goodshuffle diverged with no error). Absent = failed.
+  if (typeof body.ok !== "boolean") {
+    return NextResponse.json({ error: "explicit boolean ok required" }, { status: 400, headers: CORS });
+  }
+  ackGsOp(body.id, body.ok, body.error);
   return NextResponse.json({ ok: true }, { headers: CORS });
 }

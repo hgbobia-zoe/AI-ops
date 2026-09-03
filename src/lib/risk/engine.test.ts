@@ -373,3 +373,56 @@ describe("Event Risk engine — hardening edge cases", () => {
     expect(has(f, "driver_shift_gap")).toBe(false);
   });
 });
+
+// The PRODUCTION default is driverAssignmentEnabled=false. These lock in that path (previously
+// only the flag-on path was tested) and the fix for the partial-adoption CRITICAL cliff.
+describe("Event Risk engine — driver-assignment DEFAULT (flag off, prod behavior)", () => {
+  it("no drivers assigned → NO route_no_driver (no false CRITICAL flood)", () => {
+    const f = assessDay({
+      date: DATE,
+      routes: [route("R1", "NPR-1", { stopHour: 9 }), route("R2", "E450", { stopHour: 9 })],
+      driverShifts: [],
+      warehouseShifts: warehouseOk,
+      fieldCrewScheduled: 2,
+      now: NOW,
+    });
+    expect(has(f, "route_no_driver")).toBe(false);
+  });
+
+  it("assigning ONE driver does NOT flag the other unassigned route (no adoption cliff)", () => {
+    const f = assessDay({
+      date: DATE,
+      routes: [route("R1", "NPR-1", { driverId: "1", driverName: "Al", stopHour: 9 }), route("R2", "E450", { stopHour: 9 })],
+      driverShifts: [shift(1, "Al", 7, 18)],
+      warehouseShifts: warehouseOk,
+      fieldCrewScheduled: 2,
+      now: NOW,
+    });
+    expect(has(f, "route_no_driver")).toBe(false); // E450 unassigned, but not flagged with flag off
+  });
+
+  it("an ASSIGNED driver is still validated with the flag off (shift gap caught)", () => {
+    const f = assessDay({
+      date: DATE,
+      routes: [route("R1", "NPR-1", { driverId: "1", driverName: "Al", stopHour: 9 })],
+      driverShifts: [shift(1, "Al", 7, 8)], // doesn't cover the route
+      warehouseShifts: warehouseOk,
+      fieldCrewScheduled: 1,
+      now: NOW,
+    });
+    expect(has(f, "driver_shift_gap", "HIGH")).toBe(true);
+  });
+
+  it("flag ON → an unassigned route IS flagged route_no_driver (deliberate rollout)", () => {
+    const f = assessDay({
+      date: DATE,
+      routes: [route("R1", "NPR-1", { stopHour: 9 })],
+      driverShifts: [],
+      warehouseShifts: warehouseOk,
+      fieldCrewScheduled: 1,
+      now: NOW,
+      config: enabled,
+    });
+    expect(has(f, "route_no_driver", "CRITICAL")).toBe(true);
+  });
+});

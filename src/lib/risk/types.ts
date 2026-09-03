@@ -48,6 +48,9 @@ export interface RiskFinding {
   recommendedAction?: string;
   /** Where to go fix it: "connecteam" | "dispatch" | "goodshuffle". */
   actionTarget?: "connecteam" | "dispatch" | "goodshuffle";
+  /** True = we couldn't VERIFY this area (e.g. Connecteam unreachable). An unknown, NOT a
+   *  deficiency — it must never dock a readiness score or auto-resolve a real risk. */
+  unverified?: boolean;
   metadata?: Record<string, unknown>;
 }
 

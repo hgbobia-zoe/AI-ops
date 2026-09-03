@@ -14,11 +14,13 @@ export interface FinanceSummary {
   /** True only when Connecteam labor data was actually retrieved. */
   laborVerified: boolean;
   revenue: {
-    signed: number | null;
+    signed: number | null; // committed (signed contracts only)
+    pipeline: number | null; // unsigned quotes — potential, not revenue
+    pipelineCount: number;
     target: number | null;
     status: MoneyStatus;
     vsTarget: Variance;
-    events: number;
+    events: number; // signed event count
   };
   labor: {
     plannedHours: number | null;
@@ -76,8 +78,11 @@ export async function financeForPeriod(period: Period): Promise<FinanceSummary> 
   const ac = laborVerified ? sumHoursCost(actual.hours, rateAt) : { cost: null, missing: 0, anyRate: false };
   const rateStatus: MoneyStatus = !laborVerified || !(pc.anyRate || ac.anyRate) ? "UNAVAILABLE" : "ACTUAL";
 
-  // Revenue — Goodshuffle BOOKINGS (searchProjects), the commercial pipeline. Null until a pull runs.
-  const { revenue: signed, count: events } = getBookingsRevenueInRange(start, end);
+  // Revenue — Goodshuffle BOOKINGS (searchProjects). SIGNED = committed contracts only; a quote is
+  // not revenue (tracked separately as pipeline). Null until a pull runs.
+  const rev = getBookingsRevenueInRange(start, end);
+  const signed = rev.signed;
+  const events = rev.signedCount;
   const target = period.isWeek ? cfg.weeklyRevenueTarget : null;
   const revenueStatus: MoneyStatus = signed == null ? "UNAVAILABLE" : "SIGNED";
 
@@ -98,6 +103,8 @@ export async function financeForPeriod(period: Period): Promise<FinanceSummary> 
     laborVerified,
     revenue: {
       signed,
+      pipeline: rev.pipeline,
+      pipelineCount: rev.pipelineCount,
       target,
       status: revenueStatus,
       vsTarget: computeVariance(target, signed, "revenue"),
@@ -117,7 +124,8 @@ export async function financeForPeriod(period: Period): Promise<FinanceSummary> 
     contribution: {
       value: contributionVal,
       marginPct,
-      status: signed == null ? "UNAVAILABLE" : "PROJECTED",
+      // UNAVAILABLE unless BOTH revenue and a real labor cost exist — never a costs-zeroed figure.
+      status: contributionVal == null ? "UNAVAILABLE" : "PROJECTED",
     },
     events: getBookingsInRange(start, end).map(
       (b): EventFinancialView => ({

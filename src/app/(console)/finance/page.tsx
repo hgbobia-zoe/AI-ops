@@ -90,7 +90,10 @@ export default async function FinancePage({
           <dl className="mt-3 space-y-1 text-sm">
             <Row label="Target">{s.revenue.target == null ? <span className="text-muted-foreground">Not configured</span> : money(s.revenue.target)}</Row>
             <Row label="vs target"><VarianceTag v={s.revenue.vsTarget} kind="money" /></Row>
-            <Row label="Priced events">{s.revenue.events || "—"}</Row>
+            <Row label="Signed events">{s.revenue.events || "—"}</Row>
+            <Row label="Pipeline (quotes)">
+              {s.revenue.pipeline == null ? <span className="text-muted-foreground">—</span> : <span className="text-muted-foreground">{money(s.revenue.pipeline)} · {s.revenue.pipelineCount}</span>}
+            </Row>
           </dl>
         </div>
 
@@ -124,7 +127,7 @@ export default async function FinancePage({
           <div className="text-2xl font-bold tabular-nums">{s.contribution.value == null ? <Unavail /> : money(s.contribution.value)}</div>
           <dl className="mt-3 space-y-1 text-sm">
             <Row label="Margin">{s.contribution.marginPct == null ? <Unavail /> : pct(s.contribution.marginPct)}</Row>
-            <Row label="Revenue − labor">{s.contribution.value == null ? "needs revenue" : money(s.contribution.value)}</Row>
+            <Row label="Signed rev − labor">{s.contribution.value == null ? <span className="text-muted-foreground">needs signed revenue + labor cost</span> : money(s.contribution.value)}</Row>
           </dl>
         </div>
       </section>

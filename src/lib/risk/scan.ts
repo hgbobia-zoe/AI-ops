@@ -98,6 +98,7 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
 
   const allFindings: RiskFinding[] = [];
   const driverByRoute = new Map<string, string | undefined>(); // for history snapshots
+  const unverifiedStaffingDates = new Set<string>(); // dates Connecteam couldn't confirm — freeze, don't resolve
   for (const date of dates) {
     const routes: EngineRoute[] = trucks
       .map((t) => getRouteForDate(t.truckId, date))
@@ -129,6 +130,7 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
     const crewD = await getCrewForDateSafe(date);
     const crewPrev = await getCrewForDateSafe(shiftYmd(date, -1));
     const staffingVerified = crewD.ok && crewPrev.ok;
+    if (!staffingVerified) unverifiedStaffingDates.add(date);
 
     // Unload coverage after a pickup day: a prep shift still on the clock when the trucks
     // return (same-day evening), OR any next-day prep shift. Only checked when verified.
@@ -157,7 +159,7 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   }
 
   // Persist lifecycle + readiness.
-  const changes = reconcileRisks(allFindings, dates, now);
+  const changes = reconcileRisks(allFindings, dates, now, unverifiedStaffingDates);
   const events = getEventsInRange(dates);
   const readiness = computeReadiness(events, allFindings);
   saveEventReadiness(

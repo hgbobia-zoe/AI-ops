@@ -11,6 +11,7 @@ import { todayInOpsTz } from "@/lib/dates";
 import { alertRouteRisks } from "@/lib/notify/routeRisk";
 import { scheduleScanSoon } from "@/lib/risk/scan";
 import { recordPullSuccess } from "@/lib/pull/state";
+import { reconcileStops } from "@/lib/ingest/reconcile";
 import type { Stop } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -51,84 +52,12 @@ export async function POST(req: Request): Promise<NextResponse> {
   const date = body.date || todayInOpsTz();
   const routeId = `R-${date}-${truckId}`;
 
-  const mkStop = (s: Partial<Stop>, i: number): Stop => ({
-    stopId: `${routeId}-S${i + 1}`,
-    routeId,
-    customerId: `${routeId}-C${i + 1}`,
-    sequence: i + 1,
-    state: "Waiting",
-    custName: s.custName ?? "",
-    custFirstName: s.custFirstName ?? undefined,
-    custLastName: s.custLastName ?? undefined,
-    kind: s.kind === "pickup" ? "pickup" : s.kind === "delivery" ? "delivery" : undefined,
-    custPhone: s.custPhone ?? "",
-    address: s.address ?? "",
-    dayOfName: s.dayOfName,
-    dayOfPhone: s.dayOfPhone,
-    plannedWindow: s.plannedWindow,
-    eta: s.eta,
-    items: Array.isArray(s.items) ? s.items : undefined,
-    txId: s.txId ?? undefined,
-    contactId: s.contactId ?? undefined,
-  });
-
-  // Overlay the mutable customer/address fields of an incoming stop onto an existing
-  // one, preserving its identity, state, and timestamps. Used to push a correction
-  // onto the stop the driver is already EnRoute to.
-  const overlay = (existingStop: Stop, incoming?: Partial<Stop>): Stop =>
-    incoming
-      ? {
-          ...existingStop,
-          custName: incoming.custName ?? existingStop.custName,
-          custFirstName: incoming.custFirstName ?? existingStop.custFirstName,
-          custLastName: incoming.custLastName ?? existingStop.custLastName,
-          kind: incoming.kind ?? existingStop.kind,
-          custPhone: incoming.custPhone ?? existingStop.custPhone,
-          address: incoming.address ?? existingStop.address,
-          dayOfName: incoming.dayOfName ?? existingStop.dayOfName,
-          dayOfPhone: incoming.dayOfPhone ?? existingStop.dayOfPhone,
-          plannedWindow: incoming.plannedWindow ?? existingStop.plannedWindow,
-          eta: incoming.eta ?? existingStop.eta,
-          items: incoming.items ?? existingStop.items,
-          txId: incoming.txId ?? existingStop.txId,
-          contactId: incoming.contactId ?? existingStop.contactId,
-        }
-      : existingStop;
-
-  // Reconcile: if the driver has already started this route, keep the stops they've
-  // acted on (the leading non-Waiting prefix) and only replace the UPCOMING (Waiting)
-  // tail with the newly-imported stops — so dispatch can push an overnight / mid-day
-  // change without erasing progress. First run (nothing started) = full replace.
-  //
-  // Completed / Arrived / in-progress stops are frozen (their data is historical).
-  // The one exception is a stop the driver is currently EnRoute to (on the way, not
-  // yet arrived): that's exactly the emergency case — a corrected address must reach
-  // the driver — so we overlay its contact/address fields from the matching incoming
-  // stop while keeping it the active EnRoute stop.
-  // Reconcile against the SAME date's route (not the truck's latest, which may be another
-  // day) — otherwise importing a past/future date tries to re-insert another route's stops.
+  // Reconcile the fresh pull against the SAME date's existing route (not the truck's latest, which
+  // may be another day) — preserving every acted-on stop, matching by Goodshuffle txId (never array
+  // position), and overlaying the active EnRoute stop with any corrected address. Pure + tested in
+  // src/lib/ingest/reconcile.ts.
   const existing = getRouteForDate(truckId, date);
-  const actioned: Stop[] = [];
-  for (const s of existing?.stops ?? []) {
-    if (s.state === "Waiting") break;
-    actioned.push(s);
-  }
-
-  let stops: Stop[];
-  let reconciled = false;
-  if (existing && actioned.length > 0) {
-    const upcoming = stopsIn
-      .slice(actioned.length)
-      .map((s, i) => mkStop(s, actioned.length + i));
-    const kept = actioned.map((s, i) => {
-      const base = s.state === "EnRoute" ? overlay(s, stopsIn[i]) : s;
-      return { ...base, sequence: i + 1 };
-    });
-    stops = [...kept, ...upcoming];
-    reconciled = true;
-  } else {
-    stops = stopsIn.map(mkStop);
-  }
+  const { stops, keptCount } = reconcileStops(existing?.stops ?? [], stopsIn, routeId);
 
   writeRoute({ routeId, date, truckId, status: "ready", gsRouteId: body.gsRouteId, stops });
 
@@ -170,7 +99,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       ok: true,
       routeId,
       stops: stops.length,
-      kept: reconciled ? actioned.length : 0,
+      kept: keptCount,
       firstStopId: stops[0]?.stopId,
     },
     { headers: CORS },

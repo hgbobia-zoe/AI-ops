@@ -68,15 +68,16 @@ export function laborPctOfRevenue(laborCost: number | null, revenue: number | nu
   return round4(laborCost / revenue);
 }
 
-/** Contribution profit = revenue − direct costs. Unavailable if revenue is unknown. */
+/** Contribution profit = revenue − direct costs. Unavailable if EITHER side is unknown — an unknown
+ *  cost is NOT zero. (Zeroing a missing cost yields a fake 100%-margin figure; forbidden.) */
 export function contribution(revenue: number | null, directCosts: number | null): number | null {
-  if (revenue == null) return null;
-  return round2(revenue - (directCosts ?? 0));
+  if (revenue == null || directCosts == null) return null;
+  return round2(revenue - directCosts);
 }
 
-/** Contribution margin % = contribution / revenue. Null when revenue is 0/unknown. */
+/** Contribution margin % = contribution / revenue. Null when revenue is 0/unknown or costs unknown. */
 export function contributionMargin(revenue: number | null, directCosts: number | null): number | null {
-  if (revenue == null || revenue === 0) return null;
+  if (revenue == null || revenue === 0 || directCosts == null) return null;
   const c = contribution(revenue, directCosts);
   return c == null ? null : round4(c / revenue);
 }

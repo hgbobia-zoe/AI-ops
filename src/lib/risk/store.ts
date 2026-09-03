@@ -100,8 +100,20 @@ export interface RiskChanges {
  * - existing & DISMISSED → leave dismissed (respect the human), just touch last_seen
  * - active item on a scanned date but NOT in findings → RESOLVED
  * Only rows whose `date` is in scannedDates are considered, so risks outside the horizon are untouched.
+ *
+ * `unverifiedStaffingDates`: dates where Connecteam was unreachable, so staffing wasn't re-assessed.
+ * Active staffing-derived risks on those dates are FROZEN (touched, not resolved) — absence of a
+ * finding on an unverified date means "unknown", never "fixed". Prevents false "✅ Resolved" Slacks
+ * on an infra blip (and the REGRESSED churn when Connecteam returns).
  */
-export function reconcileRisks(findings: RiskFinding[], scannedDates: string[], now: Date = new Date()): RiskChanges {
+const STAFFING_DERIVED = new Set(["STAFFING", "DRIVER", "WAREHOUSE", "SETUP"]);
+
+export function reconcileRisks(
+  findings: RiskFinding[],
+  scannedDates: string[],
+  now: Date = new Date(),
+  unverifiedStaffingDates: Set<string> = new Set(),
+): RiskChanges {
   const db = getDb();
   const ts = now.toISOString();
   const changes: RiskChanges = { created: [], escalated: [], resolved: [], regressed: [] };
@@ -191,10 +203,14 @@ export function reconcileRisks(findings: RiskFinding[], scannedDates: string[], 
       .prepare(`SELECT * FROM risk_items WHERE status IN ${ACTIVE_STATES} AND date IN (${placeholders})`)
       .all(...scannedDates) as Row[];
     for (const r of openRows) {
-      if (!seen.has(r.signature)) {
-        resolve.run({ id: r.id, now: ts });
-        changes.resolved.push({ ...toStored(r), status: "RESOLVED", resolvedAt: ts });
+      if (seen.has(r.signature)) continue;
+      // Don't resolve a staffing-derived risk on a date we couldn't verify — freeze it instead.
+      if (STAFFING_DERIVED.has(r.category) && unverifiedStaffingDates.has(r.date ?? "")) {
+        touch.run({ id: r.id, now: ts });
+        continue;
       }
+      resolve.run({ id: r.id, now: ts });
+      changes.resolved.push({ ...toStored(r), status: "RESOLVED", resolvedAt: ts });
     }
   });
   tx();

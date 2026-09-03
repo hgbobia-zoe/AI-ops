@@ -396,7 +396,11 @@ export interface EventFinancialRecord {
   collected?: number | null;
 }
 
-/** Upsert an event's revenue (from Goodshuffle) — keyed by transactionID, no duplicates. */
+/** Upsert an event's revenue (from Goodshuffle) — keyed by transactionID, no duplicates.
+ *  The per-event payment fetch is best-effort, so a re-pull can arrive with `collected` null even
+ *  though we previously knew the event was paid. NEVER downgrade: keep the prior collected amount
+ *  (COALESCE) and re-derive COLLECTED from the effective collected, so a paid event can't flap back
+ *  to unpaid on a transient payment-endpoint hiccup. */
 export function saveEventRevenue(items: EventFinancialRecord[]): void {
   const db = getDb();
   const now = new Date().toISOString();
@@ -404,8 +408,12 @@ export function saveEventRevenue(items: EventFinancialRecord[]): void {
     `INSERT INTO event_financials (event_id, date, label, route_id, revenue, revenue_status, collected, calculated_at)
      VALUES (@eventId,@date,@label,@routeId,@revenue,@revenueStatus,@collected,@now)
      ON CONFLICT(event_id) DO UPDATE SET date=@date, label=COALESCE(@label,label),
-       route_id=COALESCE(@routeId,route_id), revenue=@revenue, revenue_status=@revenueStatus,
-       collected=@collected, calculated_at=@now`,
+       route_id=COALESCE(@routeId,route_id), revenue=@revenue,
+       collected=COALESCE(@collected, collected),
+       revenue_status=CASE
+         WHEN COALESCE(@collected, collected) IS NOT NULL AND COALESCE(@collected, collected) >= @revenue THEN 'COLLECTED'
+         ELSE @revenueStatus END,
+       calculated_at=@now`,
   );
   const tx = db.transaction(() => {
     for (const i of items)
@@ -623,14 +631,35 @@ export function getUpcomingBookings(startYmd: string): BookingView[] {
   ).map(toBookingView);
 }
 
-/** Revenue (sum of grand_total, dollars) for bookings dated in [start,end]. null if none priced. */
-export function getBookingsRevenueInRange(start: string, end: string): { revenue: number | null; count: number } {
+export interface RevenueSplit {
+  signed: number | null; // committed revenue — signed contracts only ($). null if none.
+  signedCount: number;
+  pipeline: number | null; // unsigned quotes ($) — potential, NOT revenue. null if none.
+  pipelineCount: number;
+}
+
+/** Revenue for bookings dated in [start,end], split into SIGNED (committed) vs PIPELINE (unsigned
+ *  quotes) — a quote is not revenue. Cancelled/lost bookings are excluded from both. Dollars. */
+export function getBookingsRevenueInRange(start: string, end: string): RevenueSplit {
   const row = getDb()
     .prepare(
-      "SELECT SUM(grand_total) AS total, COUNT(grand_total) AS n FROM bookings WHERE event_date >= ? AND event_date <= ? AND grand_total IS NOT NULL",
+      `SELECT
+         SUM(CASE WHEN signed = 1 THEN grand_total ELSE 0 END) AS signed_total,
+         COUNT(CASE WHEN signed = 1 THEN grand_total END) AS signed_n,
+         SUM(CASE WHEN signed = 0 THEN grand_total ELSE 0 END) AS pipeline_total,
+         COUNT(CASE WHEN signed = 0 THEN grand_total END) AS pipeline_n
+       FROM bookings
+       WHERE event_date >= ? AND event_date <= ? AND grand_total IS NOT NULL
+         AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
+         AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'`,
     )
-    .get(start, end) as { total: number | null; n: number };
-  return { revenue: row.n > 0 ? row.total : null, count: row.n };
+    .get(start, end) as { signed_total: number | null; signed_n: number; pipeline_total: number | null; pipeline_n: number };
+  return {
+    signed: row.signed_n > 0 ? row.signed_total : null,
+    signedCount: row.signed_n,
+    pipeline: row.pipeline_n > 0 ? row.pipeline_total : null,
+    pipelineCount: row.pipeline_n,
+  };
 }
 
 /** Per-booking rows dated in [start,end] (for the finance event table). */

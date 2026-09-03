@@ -69,4 +69,15 @@ describe("risk store — lifecycle (spec S10–S12)", () => {
     expect(other.resolved.some((r) => r.signature === "sigOther")).toBe(false);
     expect(getRiskQueue().some((r) => r.signature === "sigOther")).toBe(true);
   });
+
+  it("does NOT resolve a staffing-derived risk on a Connecteam-unverified date — freezes it", () => {
+    reconcileRisks([finding("sigFreeze", "HIGH")], [DATE]); // a DRIVER risk exists
+    // Next scan: Connecteam was unreachable for DATE, so no findings — but it must NOT resolve.
+    const outage = reconcileRisks([], [DATE], new Date(), new Set([DATE]));
+    expect(outage.resolved.some((r) => r.signature === "sigFreeze")).toBe(false);
+    expect(getRiskQueue().some((r) => r.signature === "sigFreeze")).toBe(true); // still open (frozen)
+    // Connecteam returns and the risk is genuinely gone → now it resolves.
+    const recovered = reconcileRisks([], [DATE]);
+    expect(recovered.resolved.some((r) => r.signature === "sigFreeze")).toBe(true);
+  });
 });

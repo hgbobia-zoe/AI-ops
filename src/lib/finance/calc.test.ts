@@ -60,11 +60,17 @@ describe("finance calc — margins & sums", () => {
     expect(laborPctOfRevenue(1000, 0)).toBeNull();
     expect(laborPctOfRevenue(1000, null)).toBeNull();
   });
-  it("contribution & margin unavailable when revenue unknown", () => {
+  it("contribution & margin unavailable when revenue OR cost is unknown (never zero a missing cost)", () => {
     expect(contribution(5000, 1500)).toBe(3500);
     expect(contributionMargin(5000, 1500)).toBe(0.7);
     expect(contribution(null, 1500)).toBeNull();
     expect(contributionMargin(null, 1500)).toBeNull();
+    // A missing cost must NOT collapse to 100% margin — it's unknown, not zero.
+    expect(contribution(5000, null)).toBeNull();
+    expect(contributionMargin(5000, null)).toBeNull();
+    // A genuine zero cost is still a real 100% margin.
+    expect(contribution(5000, 0)).toBe(5000);
+    expect(contributionMargin(5000, 0)).toBe(1);
   });
   it("sumKnown ignores nulls but returns null when ALL unknown", () => {
     expect(sumKnown([100, null, 50])).toBe(150);
