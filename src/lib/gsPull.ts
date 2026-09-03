@@ -25,9 +25,11 @@ export function buildOfficePullScript(apiBase: string): string {
     // ---- Bookings feed (projects) → Sales / Finance / Customer ----
     function pullProjects(){
       var all={};
-      function fetchPage(pg){ return fetch("/app/project/searchProjects"+(pg>1?("?page="+pg):""),H).then(function(r){return r.json();}).then(function(b){ var ps=b&&b.projectSearch; if(!ps)return {added:0,total:0}; var res=ps.results||[]; var added=0; res.forEach(function(p){ if(p&&p.id!=null&&!all[p.id]){all[p.id]=p;added++;} }); return {added:added,total:ps.totalResultCount||0}; }).catch(function(){return {added:0,total:0};}); }
-      function loop(pg){ return fetchPage(pg).then(function(r){ var have=Object.keys(all).length; if(r.added>0 && have<(r.total||have) && pg<12) return loop(pg+1); return null; }); }
-      return loop(1).then(function(){
+      // searchProjects paginates ?page=N, 0-indexed (no param == page 0). Walk pages until one
+      // returns nothing new (end reached), with a safety cap.
+      function fetchPage(pg){ return fetch("/app/project/searchProjects?page="+pg,H).then(function(r){return r.json();}).then(function(b){ var ps=b&&b.projectSearch; if(!ps)return {added:0,count:0}; var res=ps.results||[]; var added=0; res.forEach(function(p){ if(p&&p.id!=null&&!all[p.id]){all[p.id]=p;added++;} }); return {added:added,count:res.length}; }).catch(function(){return {added:0,count:0};}); }
+      function loop(pg){ return fetchPage(pg).then(function(r){ if(r.count>0 && pg<20) return loop(pg+1); return null; }); }
+      return loop(0).then(function(){
         var recs=Object.keys(all).map(function(id){ var p=all[id]; var d=null; try{ if(p.logistics_start_date){ var dt=new Date(p.logistics_start_date); if(!isNaN(dt)) d=new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,10); } }catch(e){}
           return { bookingId:String(p.id), eventName:p.eventName||"", eventDate:d, statusLabel:p.statusLabel||"", signed:!!p.signed, grandTotalCents:p.grand_total, contractTotalCents:p.contract_total, amountPaidCents:p.amount_paid, amountDueCents:p.amount_due, clientName:p.client_name||"", clientEmail:p.client_email||"" }; });
         if(!recs.length) return 0;
