@@ -712,6 +712,31 @@ export function getAllBookings(): BookingView[] {
   return (getDb().prepare("SELECT * FROM bookings ORDER BY event_date").all() as Record<string, unknown>[]).map(toBookingView);
 }
 
+// ── Inventory demand (booked line items) ─────────────────────────────────────
+
+export interface ItemStop {
+  date: string;
+  eventId: string; // tx_id — so an event's items count once even across delivery+pickup
+  items: { name: string; quantity?: number }[];
+}
+
+/** Delivery stops carrying line items, dated on/after `startYmd` — the raw booked-demand signal.
+ *  Pickup stops are excluded so an event's items aren't counted twice. */
+export function getUpcomingItemStops(startYmd: string): ItemStop[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT r.date AS date, s.tx_id AS event_id, s.items AS items
+       FROM stops s JOIN routes r ON s.route_id = r.route_id
+       WHERE r.date >= ? AND s.items IS NOT NULL AND s.items != '' AND (s.kind IS NULL OR s.kind != 'pickup')`,
+    )
+    .all(startYmd) as Array<{ date: string; event_id: string | null; items: string }>;
+  return rows.map((r) => ({
+    date: r.date,
+    eventId: r.event_id ?? "",
+    items: (safeJson(r.items) as { name: string; quantity?: number }[]) ?? [],
+  }));
+}
+
 // ── Capacity (per-day verdict) ───────────────────────────────────────────────
 
 export interface DayCapacityRecord {

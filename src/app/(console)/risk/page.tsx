@@ -9,7 +9,8 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { RiskActions } from "@/components/RiskActions";
 import { runScan } from "@/lib/risk/scan";
 import { getRiskQueue, type StoredRisk } from "@/lib/risk/store";
-import { getEventReadiness, getUnfinishedStops, getUpcomingCapacity, type ReadinessView } from "@/lib/db/repo";
+import { getEventReadiness, getUnfinishedStops, getUpcomingCapacity, getUpcomingItemStops, type ReadinessView } from "@/lib/db/repo";
+import { peakItemDemand } from "@/lib/inventory/inventory";
 import { getEventTimeline } from "@/lib/history/store";
 import { SEVERITY_RANK, type RiskSeverity } from "@/lib/risk/types";
 import { todayInOpsTz, formatYmdLong } from "@/lib/dates";
@@ -55,6 +56,7 @@ export default async function EventRiskPage(): Promise<React.JSX.Element> {
   const readiness = getEventReadiness();
   const unfinished = getUnfinishedStops();
   const capacity = getUpcomingCapacity(today).filter((v) => v.verdict !== "AVAILABLE");
+  const itemDemand = peakItemDemand(getUpcomingItemStops(today)).slice(0, 8);
 
   const counts = {
     CRITICAL: queue.filter((r) => r.severity === "CRITICAL").length,
@@ -149,6 +151,34 @@ export default async function EventRiskPage(): Promise<React.JSX.Element> {
             })}
           </div>
           <p className="text-[11px] text-muted-foreground">Derived from fleet, routes, windows &amp; crew. UNVERIFIED = Connecteam couldn&apos;t be checked; never blocks sales.</p>
+        </section>
+      )}
+
+      {/* Inventory demand — concurrent booked quantity per item. Over-booking UNVERIFIED (no owned master). */}
+      {itemDemand.length > 0 && (
+        <section className="mb-8 space-y-2">
+          <h2 className="text-lg font-semibold">Inventory demand · <span className="text-xs font-normal uppercase tracking-wide text-muted-foreground">capacity unverified</span></h2>
+          <div className="overflow-x-auto border border-white/10">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="p-2.5">Item</th>
+                  <th className="p-2.5 text-right">Peak booked / day</th>
+                  <th className="p-2.5">Peak date</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {itemDemand.map((it) => (
+                  <tr key={it.name}>
+                    <td className="p-2.5">{it.name}</td>
+                    <td className="p-2.5 text-right font-semibold tabular-nums">{it.peakQty}</td>
+                    <td className="p-2.5 text-muted-foreground">{it.peakDate}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-muted-foreground">Concurrent quantity booked out per day from Goodshuffle line items. We can&apos;t flag over-booking without a verified owned-inventory count — this is demand, not a shortage.</p>
         </section>
       )}
 
