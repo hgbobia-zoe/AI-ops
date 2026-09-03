@@ -24,6 +24,11 @@ export interface RiskSignal {
   date?: string;
   daysUntil?: number | null;
   signature: string;
+  /** The event's booked revenue ($), when known — raises a risk's priority (a $15k event at risk
+   *  deserves attention over a minor issue on a $300 one). Null/absent = no financial weight. */
+  revenue?: number | null;
+  /** True when the event's customer is a high-value repeat — a small extra nudge. */
+  highValueCustomer?: boolean;
 }
 
 export interface OpsInputs {
@@ -56,6 +61,17 @@ function urgencyBonus(daysUntil: number | null | undefined): number {
   return 0;
 }
 
+/** Financial weight — a risk on a bigger booking outranks the same risk on a small one. Bounded so
+ *  it augments severity/urgency rather than swamping them. */
+export function financialBonus(revenue: number | null | undefined): number {
+  if (revenue == null || revenue <= 0) return 0;
+  if (revenue >= 15000) return 25;
+  if (revenue >= 7500) return 18;
+  if (revenue >= 4000) return 12;
+  if (revenue >= 1500) return 6;
+  return 2;
+}
+
 /** Rank all signals into one attention feed (highest score first). */
 export function buildAttention(inp: OpsInputs): AttentionItem[] {
   const items: AttentionItem[] = [];
@@ -65,7 +81,7 @@ export function buildAttention(inp: OpsInputs): AttentionItem[] {
     items.push({
       key: `risk|${r.signature}`,
       priority: base.priority,
-      score: base.score + urgencyBonus(r.daysUntil),
+      score: base.score + urgencyBonus(r.daysUntil) + financialBonus(r.revenue) + (r.highValueCustomer ? 5 : 0),
       title: r.title,
       detail: r.recommendedAction ? `${r.description} → ${r.recommendedAction}` : r.description,
       source: "risk",

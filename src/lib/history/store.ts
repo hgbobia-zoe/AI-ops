@@ -212,6 +212,20 @@ export interface OutcomeRow {
   closedAt: string;
 }
 
+export function getEventOutcome(eventId: string): OutcomeRow | null {
+  const r = getDb().prepare("SELECT * FROM event_outcomes WHERE event_id = ? ORDER BY closed_at DESC LIMIT 1").get(eventId) as Record<string, unknown> | undefined;
+  if (!r) return null;
+  return {
+    eventId: String(r.event_id),
+    routeId: String(r.route_id),
+    date: String(r.date ?? ""),
+    totalStops: Number(r.total_stops ?? 0),
+    completedStops: Number(r.completed_stops ?? 0),
+    allCompleted: Number(r.all_completed ?? 0) === 1,
+    closedAt: String(r.closed_at),
+  };
+}
+
 export function getRecentOutcomes(limit = 100): OutcomeRow[] {
   return (getDb().prepare("SELECT * FROM event_outcomes ORDER BY closed_at DESC LIMIT ?").all(limit) as Record<string, unknown>[]).map((r) => ({
     eventId: String(r.event_id),

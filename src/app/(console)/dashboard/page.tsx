@@ -1,169 +1,100 @@
-// Main dashboard — the platform's at-a-glance home. Pulls today's real state from every
-// module (routes, exceptions, crew) and links into each blade.
+// Command center — the 60-second "what do I need to know?" home. Surfaces the ranked management
+// attention feed the Ops Manager computes, plus one number per module. Money is Owner/Admin only.
 
 import Link from "next/link";
-import { Truck, ShieldAlert, Users, AlertTriangle, CheckCircle2, ArrowRight } from "lucide-react";
+import { Truck, AlertTriangle, ArrowRight, DollarSign, TrendingUp, Users, Radar, Download } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRouteForDate, getOpenExceptions } from "@/lib/db/repo";
-import { getCrewForDate, connecteamConfigured } from "@/lib/connecteam";
+import { opsOverview } from "@/lib/ops/service";
+import { salesOverview } from "@/lib/sales/service";
+import { customerOverview } from "@/lib/customer/service";
+import { getPullState } from "@/lib/pull/state";
 import { todayInOpsTz, formatYmdLong } from "@/lib/dates";
+import { viewerRole } from "@/lib/auth/getSession";
+import { canSeeFinancials } from "@/lib/auth/roles";
+import type { Priority } from "@/lib/ops/manager";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
+const money = (n: number | null | undefined): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
+const P_TONE: Record<Priority, string> = { critical: "border-l-red-500", high: "border-l-orange-500", medium: "border-l-amber-500", info: "border-l-white/20" };
+
+export default async function DashboardPage(): Promise<React.JSX.Element> {
+  const showMoney = canSeeFinancials(await viewerRole());
   const today = todayInOpsTz();
+
   const trucks = getActiveVehicles();
-  const fleet = trucks.map((t) => ({ truck: t, route: getRouteForDate(t.truckId, today) }));
-  const activeRoutes = fleet.filter((f) => f.route && f.route.status !== "done");
-  const stops = fleet.flatMap((f) => f.route?.stops ?? []);
+  const fleet = trucks.map((t) => getRouteForDate(t.truckId, today));
+  const activeRoutes = fleet.filter((r) => r && r.status !== "done").length;
+  const stops = fleet.flatMap((r) => r?.stops ?? []);
   const done = stops.filter((s) => s.state === "Completed" || s.state === "Returned").length;
   const exceptions = getOpenExceptions();
 
-  const crew = connecteamConfigured() ? await getCrewForDate(today) : [];
-  const crewPeople = new Set(crew.flatMap((s) => s.assignees.map((a) => a.userId))).size;
-  const openShifts = crew.filter((s) => s.isOpen).length;
+  const o = await opsOverview();
+  const attention = (showMoney ? o.items : o.items.filter((i) => i.source !== "finance")).slice(0, 5);
+  const sales = salesOverview(8);
+  const custs = customerOverview();
+  const pull = getPullState();
+  const routeAts = Object.entries(pull.sources ?? {}).filter(([k]) => k.startsWith("route:")).map(([, v]) => Date.parse(v.at));
+  const routesAgeH = routeAts.length ? Math.round((Date.now() - Math.max(...routeAts)) / 3_600_000) : null;
 
   return (
     <main className="mx-auto max-w-5xl p-5 pb-16 md:p-8">
-      <AutoRefresh seconds={60} />
-
-      <header className="mb-8">
+      <AutoRefresh seconds={120} />
+      <header className="mb-6">
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
         <p className="text-sm text-muted-foreground">{formatYmdLong(today)}</p>
       </header>
 
-      {/* Stat row */}
-      <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat label="Active routes" value={activeRoutes.length} sub={`${trucks.length} trucks`} />
-        <Stat label="Stops done" value={stops.length ? `${done}/${stops.length}` : "—"} sub="today" />
-        <Stat
-          label="Open exceptions"
-          value={exceptions.length}
-          sub={exceptions.length ? "need attention" : "all clear"}
-          tone={exceptions.length ? "warn" : "ok"}
-        />
-        <Stat
-          label="Crew today"
-          value={connecteamConfigured() ? crewPeople : "—"}
-          sub={connecteamConfigured() ? `${crew.length} shifts` : "not connected"}
-        />
-      </section>
-
-      {/* Module cards */}
-      <section className="mt-8 grid gap-4 md:grid-cols-3">
-        <ModuleCard
-          href="/dispatch"
-          icon={<Truck className="size-5" />}
-          title="Dispatch"
-          body={
-            activeRoutes.length
-              ? `${activeRoutes.length} route${activeRoutes.length === 1 ? "" : "s"} in progress`
-              : "No active routes"
-          }
-        />
-        <ModuleCard
-          href="/risk"
-          icon={<ShieldAlert className="size-5" />}
-          title="Event Risk"
-          body={
-            openShifts
-              ? `${openShifts} open shift${openShifts === 1 ? "" : "s"} to fill`
-              : connecteamConfigured()
-                ? "Crew scheduled — no open shifts"
-                : "Connect Connecteam"
-          }
-          tone={openShifts ? "warn" : "ok"}
-        />
-        <ModuleCard
-          href="/risk"
-          icon={<Users className="size-5" />}
-          title="Crew"
-          body={connecteamConfigured() ? `${crewPeople} on the schedule` : "not connected"}
-        />
-      </section>
-
-      {/* Exceptions preview */}
-      {exceptions.length > 0 && (
-        <section className="mt-8">
-          <h2 className="mb-2 flex items-center gap-2 text-lg font-semibold">
-            <AlertTriangle className="size-4" /> Open exceptions
-          </h2>
-          <div className="space-y-2">
-            {exceptions.slice(0, 4).map((x) => (
-              <div
-                key={x.exceptionId}
-                className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm"
-              >
-                <span className="font-medium">{x.truckId ?? "—"}</span> · {x.type}
-                {x.reason ? <span className="text-muted-foreground"> — {x.reason}</span> : null}
-              </div>
+      {/* Management attention — the whole point */}
+      <section className="mb-8">
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-lg font-semibold"><Radar className="size-4" /> Needs attention</h2>
+          <Link href="/ops" className="text-xs text-muted-foreground hover:text-foreground">Ops Manager →</Link>
+        </div>
+        {attention.length === 0 ? (
+          <div className="border border-emerald-500/30 bg-emerald-500/[0.06] p-4 text-sm text-emerald-200">All clear — nothing needs attention right now.</div>
+        ) : (
+          <div className="space-y-1.5">
+            {attention.map((i) => (
+              <Link key={i.key} href={i.href} className={`flex items-center justify-between gap-3 border border-l-2 border-white/10 bg-white/[0.02] px-3 py-2 text-sm hover:bg-white/[0.05] ${P_TONE[i.priority]}`}>
+                <span className="min-w-0 flex-1 truncate">{i.title}</span>
+                {i.daysUntil != null && <span className="shrink-0 text-[11px] text-muted-foreground">{i.daysUntil <= 0 ? "today" : `in ${i.daysUntil}d`}</span>}
+                <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" />
+              </Link>
             ))}
           </div>
-          <Link href="/dispatch" className="mt-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-            View in Dispatch <ArrowRight className="size-3.5" />
-          </Link>
+        )}
+      </section>
+
+      {/* One number per module */}
+      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Tile href="/dispatch" icon={<Truck className="size-4" />} label="Active routes" value={activeRoutes} sub={stops.length ? `${done}/${stops.length} stops done` : `${trucks.length} trucks`} />
+        <Tile href="/dispatch" icon={<AlertTriangle className="size-4" />} label="Exceptions" value={exceptions.length} sub={exceptions.length ? "need attention" : "all clear"} warn={exceptions.length > 0} />
+        <Tile href="/sales" icon={<TrendingUp className="size-4" />} label="Booked (8wk)" value={sales.totalBooked} sub={showMoney ? `${money(sales.totalRevenue)} pipeline` : "events"} />
+        <Tile href="/customers" icon={<Users className="size-4" />} label="Customers" value={custs.total} sub={`${custs.repeatCount} repeat · ${custs.dormant.length} dormant`} />
+      </section>
+
+      {/* Money — Owner/Admin only */}
+      {showMoney && o.finance && (
+        <section className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <Tile href="/finance" icon={<DollarSign className="size-4" />} label="Revenue (wk)" value={money(o.finance.revenue.signed)} sub={o.finance.revenue.target ? `target ${money(o.finance.revenue.target)}` : "signed"} />
+          <Tile href="/finance" icon={<DollarSign className="size-4" />} label="Labor (wk)" value={money(o.finance.labor.actualCost ?? o.finance.labor.plannedCost)} sub={o.finance.labor.actualCost == null ? "planned" : "actual"} />
+          <Tile href="/finance" icon={<DollarSign className="size-4" />} label="Contribution" value={money(o.finance.contribution.value)} sub={o.finance.contribution.value == null ? "needs labor" : "signed − labor"} />
+          <Tile href="/admin/pull" icon={<Download className="size-4" />} label="Data freshness" value={routesAgeH == null ? "—" : `${routesAgeH}h`} sub="since last route pull" warn={routesAgeH != null && routesAgeH >= 26} />
         </section>
       )}
     </main>
   );
 }
 
-function Stat({
-  label,
-  value,
-  sub,
-  tone,
-}: {
-  label: string;
-  value: string | number;
-  sub?: string;
-  tone?: "ok" | "warn";
-}) {
+function Tile({ href, icon, label, value, sub, warn }: { href: string; icon: React.ReactNode; label: string; value: string | number; sub?: string; warn?: boolean }): React.JSX.Element {
   return (
-    <div className="surface rounded-2xl border border-white/5 p-4">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-1 text-3xl font-bold tabular-nums">{value}</div>
-      {sub && (
-        <div
-          className={`mt-0.5 flex items-center gap-1 text-xs ${
-            tone === "warn" ? "text-amber-400" : tone === "ok" ? "text-emerald-400" : "text-muted-foreground"
-          }`}
-        >
-          {tone === "ok" && <CheckCircle2 className="size-3.5" />}
-          {sub}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ModuleCard({
-  href,
-  icon,
-  title,
-  body,
-  tone,
-}: {
-  href: string;
-  icon: React.ReactNode;
-  title: string;
-  body: string;
-  tone?: "ok" | "warn";
-}) {
-  return (
-    <Link
-      href={href}
-      className="surface group flex flex-col gap-3 rounded-2xl border border-white/5 p-5 transition-colors hover:border-white/15"
-    >
-      <span className="btn-hero flex size-10 items-center justify-center rounded-xl">{icon}</span>
-      <div>
-        <div className="flex items-center gap-1.5 font-semibold">
-          {title}
-          <ArrowRight className="size-4 opacity-0 transition-opacity group-hover:opacity-60" />
-        </div>
-        <div className={`text-sm ${tone === "warn" ? "text-amber-400" : "text-muted-foreground"}`}>{body}</div>
-      </div>
+    <Link href={href} className="surface rounded-2xl border border-white/5 p-4 transition-colors hover:border-white/15">
+      <div className="mb-1 flex items-center gap-1.5 text-xs uppercase tracking-wide text-muted-foreground">{icon} {label}</div>
+      <div className="text-2xl font-bold tabular-nums">{value}</div>
+      {sub && <div className={`mt-0.5 text-xs ${warn ? "text-amber-400" : "text-muted-foreground"}`}>{sub}</div>}
     </Link>
   );
 }

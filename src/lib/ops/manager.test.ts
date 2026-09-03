@@ -38,6 +38,24 @@ describe("ops manager — attention ranking", () => {
     expect(favorable.find((i) => i.source === "finance")).toBeFalsy();
   });
 
+  it("weights by financial impact — same severity, bigger booking ranks higher", () => {
+    const items = buildAttention({
+      ...base,
+      risks: [
+        { severity: "MEDIUM", title: "small", description: "d", signature: "s1", daysUntil: 5, revenue: 200 },
+        { severity: "MEDIUM", title: "big", description: "d", signature: "s2", daysUntil: 5, revenue: 15000 },
+      ],
+    });
+    expect(items[0].title).toBe("big"); // $15k MEDIUM outranks $200 MEDIUM
+    expect(items[0].score).toBeGreaterThan(items[1].score);
+  });
+
+  it("a high-value repeat customer adds a small nudge", () => {
+    const plain = buildAttention({ ...base, risks: [{ severity: "MEDIUM", title: "x", description: "d", signature: "s", daysUntil: 5 }] });
+    const vip = buildAttention({ ...base, risks: [{ severity: "MEDIUM", title: "x", description: "d", signature: "s", daysUntil: 5, highValueCustomer: true }] });
+    expect(vip[0].score).toBeGreaterThan(plain[0].score);
+  });
+
   it("summarize + brief reflect the counts, and an empty feed reads as all-clear", () => {
     const empty = buildAttention(base);
     expect(summarize(empty).total).toBe(0);

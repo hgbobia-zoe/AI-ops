@@ -2,6 +2,7 @@
 // what changed and when: risks detected/escalated/resolved, drivers assigned, stops pulled.
 // Read-only observer of the other systems — it never decides anything, it just remembers.
 
+import Link from "next/link";
 import { History, ShieldAlert, Truck, Package, CircleDot } from "lucide-react";
 import { getRecentChanges, type ChangeRow } from "@/lib/history/store";
 
@@ -90,13 +91,25 @@ export default async function HistoryPage(): Promise<React.JSX.Element> {
               <ul className="space-y-px overflow-hidden border border-white/10">
                 {g.items.map((c) => {
                   const d = describe(c);
-                  return (
-                    <li key={c.id} className="flex items-start gap-3 bg-white/[0.02] px-3 py-2.5 text-sm">
+                  const inner = (
+                    <>
                       <span className={`mt-0.5 shrink-0 ${d.tone}`}>{d.icon}</span>
                       <span className="min-w-0 flex-1">{d.text}</span>
                       <time className="shrink-0 tabular-nums text-xs text-muted-foreground" dateTime={c.ts}>
                         {time(c.ts)}
                       </time>
+                    </>
+                  );
+                  const cls = "flex items-start gap-3 bg-white/[0.02] px-3 py-2.5 text-sm";
+                  return (
+                    <li key={c.id}>
+                      {c.eventId ? (
+                        <Link href={`/history/${c.eventId}`} className={`${cls} hover:bg-white/[0.05]`}>
+                          {inner}
+                        </Link>
+                      ) : (
+                        <div className={cls}>{inner}</div>
+                      )}
                     </li>
                   );
                 })}
