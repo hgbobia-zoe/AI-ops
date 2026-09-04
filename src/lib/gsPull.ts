@@ -28,17 +28,20 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
 
     // ---- Bookings feed (projects) → Sales / Finance / Customer ----
     function pullProjects(){
-      var all={}, total=0, pErr=false;
-      // searchProjects paginates ?page=N, 0-indexed (no param == page 0). Walk pages until one
-      // returns nothing (end), with a safety cap. A FETCH ERROR (not an empty page) marks the pull
-      // partial so the server won't treat a truncated pipeline as complete/fresh.
-      function fetchPage(pg){ return fetch("/app/project/searchProjects?page="+pg,H).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(b){ var ps=b&&b.projectSearch; if(!ps)return {count:0}; if(ps.totalResultCount)total=ps.totalResultCount; var res=ps.results||[]; res.forEach(function(p){ if(p&&p.id!=null&&!all[p.id])all[p.id]=p; }); return {count:res.length}; }).catch(function(){ pErr=true; return {count:0}; }); }
-      function loop(pg){ return fetchPage(pg).then(function(r){ if(!pErr && r.count>0 && pg<40) return loop(pg+1); return null; }); }
+      var all={}, pErr=false;
+      // searchProjects paginates ?page=N (0-indexed). allProjects=true is the archive-inclusive flag
+      // the new GS UI uses — it returns the FULL history (won + archived + lost, all years), not just
+      // the ~90 active projects. Walk pages until one returns nothing (end), big pageSize to keep it
+      // to a handful of requests. A FETCH ERROR (not an empty page) marks the pull partial. We do NOT
+      // send totalReported: the count query over-reports vs the paginated set, which would falsely
+      // flag every complete pull as partial.
+      function fetchPage(pg){ return fetch("/app/project/searchProjects?page="+pg+"&pageSize=500&allProjects=true&sortColumn=logistics_start_date&sortDirection=desc&useV2DateHandling=true",H).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(b){ var ps=b&&b.projectSearch; if(!ps)return {count:0}; var res=ps.results||[]; res.forEach(function(p){ if(p&&p.id!=null&&!all[p.id])all[p.id]=p; }); return {count:res.length}; }).catch(function(){ pErr=true; return {count:0}; }); }
+      function loop(pg){ return fetchPage(pg).then(function(r){ if(!pErr && r.count>0 && pg<60) return loop(pg+1); return null; }); }
       return loop(0).then(function(){
         var recs=Object.keys(all).map(function(id){ var p=all[id]; var d=null; try{ if(p.logistics_start_date){ var dt=new Date(p.logistics_start_date); if(!isNaN(dt)) d=new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,10); } }catch(e){}
           return { bookingId:String(p.id), eventName:p.eventName||"", eventDate:d, statusLabel:p.statusLabel||"", signed:!!p.signed, grandTotalCents:p.grand_total, contractTotalCents:p.contract_total, amountPaidCents:p.amount_paid, amountDueCents:p.amount_due, clientName:p.client_name||"", clientEmail:p.client_email||"" }; });
         if(!recs.length) return { saved:0, partial:pErr };
-        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr,totalReported:total})}).then(function(r){return r.json();}).then(function(j){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial) }; }).catch(function(){ return { saved:0, partial:true }; });
+        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr})}).then(function(r){return r.json();}).then(function(j){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial) }; }).catch(function(){ return { saved:0, partial:true }; });
       });
     }
 
