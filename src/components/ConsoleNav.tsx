@@ -36,7 +36,7 @@ interface Blade {
 
 // Add a feature → add a blade.
 const BLADES: Blade[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/dashboard", label: "Command Center", icon: LayoutDashboard },
   { href: "/ops", label: "Ops Manager", icon: Radar },
   { href: "/dispatch", label: "Dispatch", icon: Truck },
   { href: "/risk", label: "Event Risk", icon: ShieldAlert },

@@ -722,6 +722,46 @@ export function getBookingsRevenueInRange(start: string, end: string): RevenueSp
   };
 }
 
+export interface PipelineBreakdown {
+  signed: { count: number; value: number | null }; // committed contracts
+  quote: { count: number; value: number | null }; // open quotes — action needed
+  lost: { count: number; value: number | null }; // lost/cancelled
+}
+
+/** The real 3-way status split for upcoming bookings (event_date >= today): committed contracts vs
+ *  open quotes vs lost/cancelled. Goodshuffle exposes only these status classes — NOT finer sales
+ *  stages — so the command center shows this honest split, not fabricated pipeline stages. */
+export function getPipelineBreakdown(today: string): PipelineBreakdown {
+  const rows = getDb()
+    .prepare(
+      `SELECT
+         CASE
+           WHEN LOWER(COALESCE(status_label,'')) LIKE '%lost%'
+             OR LOWER(COALESCE(status_label,'')) LIKE '%cancel%' THEN 'lost'
+           WHEN signed = 1 THEN 'signed'
+           ELSE 'quote'
+         END AS cls,
+         COUNT(*) AS n,
+         SUM(grand_total) AS total,
+         COUNT(grand_total) AS priced
+       FROM bookings
+       WHERE event_date IS NOT NULL AND event_date >= ?
+       GROUP BY cls`,
+    )
+    .all(today) as { cls: string; n: number; total: number | null; priced: number }[];
+  const out: PipelineBreakdown = {
+    signed: { count: 0, value: null },
+    quote: { count: 0, value: null },
+    lost: { count: 0, value: null },
+  };
+  for (const r of rows) {
+    const bucket = r.cls === "signed" ? out.signed : r.cls === "lost" ? out.lost : out.quote;
+    bucket.count = r.n;
+    bucket.value = r.priced > 0 ? r.total : null;
+  }
+  return out;
+}
+
 /** Per-booking rows dated in [start,end] (for the finance event table). */
 export function getBookingsInRange(start: string, end: string): BookingView[] {
   return (
