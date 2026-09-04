@@ -11,27 +11,36 @@ export interface SalesOverview {
   today: string;
   horizonWeeks: number;
   pipeline: WeekBucket[];
-  totalBooked: number; // events booked within the horizon
-  totalRevenue: number | null; // $ booked within the horizon (null if none priced)
+  totalBooked: number; // live pipeline = signed + action-needed (lost/cancelled excluded)
+  totalSignedCount: number; // committed contracts only
+  totalActionNeededCount: number; // open quotes still to win
+  totalRevenue: number | null; // $ across the live pipeline (signed + action-needed)
+  totalSignedRevenue: number | null; // committed $ only
+  totalActionNeededRevenue: number | null; // potential $ still to win
   maxWeekCount: number; // for bar scaling
   weeklyRevenueTarget: number | null; // $ (configured) — the weekly goal line
 }
 
+const sumOrNull = (vals: (number | null)[]): number | null => {
+  const known = vals.filter((v): v is number => v != null);
+  return known.length > 0 ? known.reduce((s, v) => s + v, 0) : null;
+};
+
 export function salesOverview(weeks = 8): SalesOverview {
   const today = todayInOpsTz();
-  const bookings = getUpcomingBookings(today).map((b) => ({ date: b.eventDate as string, revenue: b.grandTotal }));
+  const bookings = getUpcomingBookings(today).map((b) => ({ date: b.eventDate as string, revenue: b.grandTotal, signed: b.signed }));
   const pipeline = bookingPipeline(bookings, today, { weeks, nearTermWeeks: 2 });
-  const totalBooked = pipeline.reduce((n, b) => n + b.count, 0);
-  const revenueVals = pipeline.map((b) => b.revenue).filter((v): v is number => v != null);
-  const totalRevenue = revenueVals.length > 0 ? revenueVals.reduce((s, v) => s + v, 0) : null;
-  const maxWeekCount = pipeline.reduce((m, b) => Math.max(m, b.count), 0);
   return {
     today,
     horizonWeeks: weeks,
     pipeline,
-    totalBooked,
-    totalRevenue,
-    maxWeekCount,
+    totalBooked: pipeline.reduce((n, b) => n + b.count, 0),
+    totalSignedCount: pipeline.reduce((n, b) => n + b.signedCount, 0),
+    totalActionNeededCount: pipeline.reduce((n, b) => n + b.actionNeededCount, 0),
+    totalRevenue: sumOrNull(pipeline.map((b) => b.revenue)),
+    totalSignedRevenue: sumOrNull(pipeline.map((b) => b.signedRevenue)),
+    totalActionNeededRevenue: sumOrNull(pipeline.map((b) => b.actionNeededRevenue)),
+    maxWeekCount: pipeline.reduce((m, b) => Math.max(m, b.count), 0),
     weeklyRevenueTarget: financeConfig().weeklyRevenueTarget,
   };
 }

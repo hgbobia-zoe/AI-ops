@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import { weekStartOf, bookingPipeline } from "./calc";
 
 describe("sales — week bucketing", () => {
-  it("weekStartOf returns the containing Sunday", () => {
-    expect(weekStartOf("2026-09-02")).toBe("2026-08-30"); // Wed → prior Sunday
-    expect(weekStartOf("2026-08-30")).toBe("2026-08-30"); // Sunday → itself
-    expect(weekStartOf("2026-09-05")).toBe("2026-08-30"); // Saturday → same week's Sunday
+  it("weekStartOf returns the containing Monday (Mon–Sun weeks)", () => {
+    expect(weekStartOf("2026-09-02")).toBe("2026-08-31"); // Wed → that week's Monday
+    expect(weekStartOf("2026-08-31")).toBe("2026-08-31"); // Monday → itself
+    expect(weekStartOf("2026-09-06")).toBe("2026-08-31"); // Sunday → same week's Monday
   });
 
   it("buckets events into the right upcoming weeks and counts each once", () => {
@@ -37,6 +37,25 @@ describe("sales — week bucketing", () => {
     expect(p[0].revenue).toBe(1500); // week 0 sums both
     expect(p[1].revenue).toBe(null); // week 1 booked but no known revenue
     expect(p[2].revenue).toBe(null); // empty week
+  });
+
+  it("splits signed contracts from open quotes per week", () => {
+    const today = "2026-09-02";
+    const p = bookingPipeline(
+      [
+        { date: "2026-09-02", revenue: 5000, signed: true },
+        { date: "2026-09-04", revenue: 500, signed: true },
+        { date: "2026-09-04", revenue: 690, signed: false }, // open quote
+      ],
+      today,
+      { weeks: 8, nearTermWeeks: 2 },
+    );
+    expect(p[0].count).toBe(3);
+    expect(p[0].signedCount).toBe(2);
+    expect(p[0].signedRevenue).toBe(5500); // signed only
+    expect(p[0].actionNeededCount).toBe(1); // the open quote
+    expect(p[0].actionNeededRevenue).toBe(690); // potential $ to win
+    expect(p[0].revenue).toBe(6190); // total incl. the quote
   });
 
   it("flags a near-term empty week, but not a far-out empty week", () => {

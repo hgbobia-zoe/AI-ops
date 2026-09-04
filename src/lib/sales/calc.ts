@@ -5,21 +5,27 @@
 import { shiftYmd } from "@/lib/dates";
 
 export interface WeekBucket {
-  weekStart: string; // Sunday, YYYY-MM-DD
-  weekEnd: string; // Saturday
+  weekStart: string; // Monday, YYYY-MM-DD
+  weekEnd: string; // Sunday
   label: string; // "Sep 7 – 13"
-  count: number;
-  /** Sum of known booking revenue ($) in the week; null when no booking in the week carried a value. */
-  revenue: number | null;
+  // The live pipeline = SIGNED (committed contracts) + ACTION-NEEDED (open quotes to chase).
+  // Lost/cancelled are excluded upstream, so count === signedCount + actionNeededCount.
+  count: number; // signed + action-needed
+  revenue: number | null; // total $ (signed + action-needed); null when none carried a value
+  signedCount: number; // committed contracts only
+  signedRevenue: number | null; // committed $ only
+  actionNeededCount: number; // open quotes still to win
+  actionNeededRevenue: number | null; // potential $ still to win
   /** Near-term week with zero bookings — the one honest "attention" signal we can give from
    *  counts alone (far-out empties are normal and NOT flagged). */
   nearTermGap: boolean;
 }
 
-/** Sunday that starts the week containing `ymd`. */
+/** MONDAY that starts the week containing `ymd` (weeks run Monday–Sunday). */
 export function weekStartOf(ymd: string): string {
-  const dow = new Date(`${ymd}T00:00:00Z`).getUTCDay();
-  return shiftYmd(ymd, -dow);
+  const dow = new Date(`${ymd}T00:00:00Z`).getUTCDay(); // 0=Sun … 6=Sat
+  const offsetToMonday = (dow + 6) % 7; // Mon→0, Sun→6
+  return shiftYmd(ymd, -offsetToMonday);
 }
 
 function weekLabel(start: string, end: string): string {
@@ -36,9 +42,9 @@ export interface PipelineOptions {
   nearTermWeeks: number;
 }
 
-/** Bucket booked events into `weeks` upcoming Sun–Sat weeks starting from today's week. */
+/** Bucket booked events into `weeks` upcoming Mon–Sun weeks starting from today's week. */
 export function bookingPipeline(
-  events: { date: string; revenue?: number | null }[],
+  events: { date: string; revenue?: number | null; signed?: boolean }[],
   today: string,
   opts: PipelineOptions = { weeks: 8, nearTermWeeks: 2 },
 ): WeekBucket[] {
@@ -47,13 +53,21 @@ export function bookingPipeline(
   for (let i = 0; i < opts.weeks; i++) {
     const ws = shiftYmd(start0, i * 7);
     const we = shiftYmd(ws, 6);
-    buckets.push({ weekStart: ws, weekEnd: we, label: weekLabel(ws, we), count: 0, revenue: null, nearTermGap: false });
+    buckets.push({ weekStart: ws, weekEnd: we, label: weekLabel(ws, we), count: 0, revenue: null, signedCount: 0, signedRevenue: null, actionNeededCount: 0, actionNeededRevenue: null, nearTermGap: false });
   }
   for (const e of events) {
     for (const b of buckets) {
       if (e.date >= b.weekStart && e.date <= b.weekEnd) {
         b.count++;
-        if (typeof e.revenue === "number") b.revenue = (b.revenue ?? 0) + e.revenue;
+        const hasRev = typeof e.revenue === "number";
+        if (hasRev) b.revenue = (b.revenue ?? 0) + (e.revenue as number);
+        if (e.signed) {
+          b.signedCount++;
+          if (hasRev) b.signedRevenue = (b.signedRevenue ?? 0) + (e.revenue as number);
+        } else {
+          b.actionNeededCount++;
+          if (hasRev) b.actionNeededRevenue = (b.actionNeededRevenue ?? 0) + (e.revenue as number);
+        }
         break;
       }
     }

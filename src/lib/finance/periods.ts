@@ -1,4 +1,4 @@
-// Financial Intelligence — reporting periods, in the ops timezone. Weeks are Sun–Sat.
+// Financial Intelligence — reporting periods, in the ops timezone. Weeks are Monday–Sunday.
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 
 export type PeriodKey = "today" | "thisWeek" | "nextWeek" | "thisMonth" | "lastMonth";
@@ -24,8 +24,8 @@ function monthBounds(ymd: string, monthOffset: number): { start: string; end: st
 }
 
 export function getPeriod(key: PeriodKey, today: string = todayInOpsTz()): Period {
-  const dow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0 = Sunday
-  const weekStart = shiftYmd(today, -dow);
+  const dow = new Date(`${today}T00:00:00Z`).getUTCDay(); // 0=Sun … 6=Sat
+  const weekStart = shiftYmd(today, -((dow + 6) % 7)); // Monday of this week (Mon–Sun weeks)
   switch (key) {
     case "today":
       return { key, label: "Today", start: today, end: today, isWeek: false };

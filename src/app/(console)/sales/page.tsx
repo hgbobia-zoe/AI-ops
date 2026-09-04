@@ -28,15 +28,22 @@ export default async function SalesPage(): Promise<React.JSX.Element> {
       {/* Scorecard */}
       <section className={`mb-6 grid gap-3 ${showMoney ? "md:grid-cols-3" : "md:grid-cols-1"}`}>
         <div className="surface border border-white/5 p-4">
-          <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><CalendarClock className="size-4" /> Booked events</div>
-          <div className="text-3xl font-bold tabular-nums">{s.totalBooked}</div>
-          <p className="mt-1 text-[11px] text-muted-foreground">Next {s.horizonWeeks} weeks.</p>
+          <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><CalendarClock className="size-4" /> Events (next {s.horizonWeeks}wk)</div>
+          <div className="text-3xl font-bold tabular-nums">
+            {s.totalSignedCount}
+            <span className="text-lg font-medium text-muted-foreground"> signed</span>
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            <span className="text-amber-300">{s.totalActionNeededCount} action needed</span> · {s.totalBooked} live pipeline
+          </p>
         </div>
         {showMoney && (
           <div className="surface border border-white/5 p-4">
-            <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><DollarSign className="size-4" /> Revenue pipeline</div>
-            <div className="text-3xl font-bold tabular-nums">{money(s.totalRevenue)}</div>
-            <p className="mt-1 text-[11px] text-muted-foreground">Contract value booked in the horizon.</p>
+            <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><DollarSign className="size-4" /> Revenue</div>
+            <div className="text-3xl font-bold tabular-nums text-emerald-300">{money(s.totalSignedRevenue)}<span className="text-lg font-medium text-muted-foreground"> signed</span></div>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              <span className="text-amber-300">+ {money(s.totalActionNeededRevenue)} action needed</span> · {money(s.totalRevenue)} total pipeline
+            </p>
           </div>
         )}
         {showMoney && (
@@ -63,27 +70,39 @@ export default async function SalesPage(): Promise<React.JSX.Element> {
         <h2 className="text-lg font-semibold">Booking pipeline</h2>
         <div className="border border-white/10">
           {s.pipeline.map((b) => {
-            const target = s.weeklyRevenueTarget;
-            // $ users: scale bars by revenue. Members: scale by event count (no $ leak).
-            const pctWidth = showMoney
-              ? maxRev > 0 && b.revenue != null ? Math.round((b.revenue / maxRev) * 100) : 0
-              : s.maxWeekCount > 0 ? Math.round((b.count / s.maxWeekCount) * 100) : 0;
-            const hitTarget = showMoney && target != null && b.revenue != null && b.revenue >= target;
+            // Two-segment bar: SIGNED (emerald, committed) + ACTION-NEEDED (amber, open quotes to
+            // chase). $ users scale by revenue; Members scale by count (no $ leak).
+            const denom = showMoney ? maxRev : s.maxWeekCount;
+            const total = showMoney ? b.revenue ?? 0 : b.count;
+            const signed = showMoney ? b.signedRevenue ?? 0 : b.signedCount;
+            const signedW = denom > 0 ? (signed / denom) * 100 : 0;
+            const actionW = denom > 0 ? Math.max(0, (total - signed) / denom) * 100 : 0;
+            const action = b.actionNeededCount;
             return (
               <div key={b.weekStart} className="flex items-center gap-3 border-b border-white/5 px-3 py-2.5 last:border-b-0">
                 <div className="w-24 shrink-0 text-sm text-muted-foreground">{b.label}</div>
                 <div className="flex h-5 flex-1 items-center">
-                  <div
-                    className={`h-full ${b.nearTermGap ? "bg-amber-500/30" : hitTarget ? "bg-emerald-500/40" : "bg-white/20"}`}
-                    style={{ width: `${b.count === 0 ? 0 : Math.max(pctWidth, 4)}%` }}
-                  />
+                  <div className="h-full bg-emerald-500/60" style={{ width: `${signedW}%` }} title="signed" />
+                  <div className="h-full bg-amber-500/50" style={{ width: `${actionW}%` }} title="action needed" />
                   {b.count === 0 && <span className="pl-1 text-xs text-muted-foreground">{b.nearTermGap ? "open" : "—"}</span>}
                 </div>
-                <div className="w-16 shrink-0 text-right text-sm tabular-nums text-muted-foreground">{b.count} ev</div>
-                {showMoney && <div className="w-20 shrink-0 text-right text-sm font-semibold tabular-nums">{money(b.revenue)}</div>}
+                <div className="w-24 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                  <span className="text-emerald-300">{b.signedCount} signed</span>
+                  {action > 0 ? <span className="text-amber-300"> · {action} to win</span> : ""}
+                </div>
+                {showMoney && (
+                  <div className="w-24 shrink-0 text-right tabular-nums">
+                    <div className="text-sm font-semibold text-emerald-300">{money(b.signedRevenue)}</div>
+                    {b.revenue != null && b.revenue !== (b.signedRevenue ?? 0) && <div className="text-[10px] text-muted-foreground">{money(b.revenue)} total</div>}
+                  </div>
+                )}
               </div>
             );
           })}
+        </div>
+        <div className="flex items-center gap-4 px-1 text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 bg-emerald-500/60" /> Signed (committed)</span>
+          <span className="flex items-center gap-1.5"><span className="inline-block h-2.5 w-2.5 bg-amber-500/50" /> Action needed (open quote to win)</span>
         </div>
       </section>
 
