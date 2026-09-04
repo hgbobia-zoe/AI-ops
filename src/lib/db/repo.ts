@@ -642,13 +642,53 @@ export function saveBookings(items: BookingRecord[]): void {
   }
 }
 
-/** Booked events on/after `startYmd`, soonest first (the forward pipeline). Dated only. */
+/** Booked events on/after `startYmd`, soonest first (the forward pipeline). Dated only. Excludes
+ *  cancelled/lost — those aren't pipeline. Each row carries `signed` so the UI can split committed
+ *  contracts from open quotes. */
 export function getUpcomingBookings(startYmd: string): BookingView[] {
   return (
     getDb()
-      .prepare("SELECT * FROM bookings WHERE event_date IS NOT NULL AND event_date >= ? ORDER BY event_date ASC")
+      .prepare(
+        `SELECT * FROM bookings
+         WHERE event_date IS NOT NULL AND event_date >= ?
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
+         ORDER BY event_date ASC`,
+      )
       .all(startYmd) as Record<string, unknown>[]
   ).map(toBookingView);
+}
+
+/** Booked events in [start,end], soonest first, EXCLUDING cancelled/lost (the live pipeline).
+ *  Ranged sibling of getUpcomingBookings — used for a full-year (or any-period) pipeline view. */
+export function getPipelineBookingsInRange(start: string, end: string): BookingView[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM bookings
+         WHERE event_date IS NOT NULL AND event_date >= ? AND event_date <= ?
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
+         ORDER BY event_date ASC`,
+      )
+      .all(start, end) as Record<string, unknown>[]
+  ).map(toBookingView);
+}
+
+/** Distinct calendar years that have at least one non-cancelled/lost booking, ascending — for the
+ *  Sales year navigator so we only offer years that actually hold data. */
+export function getBookingYears(): number[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT DISTINCT CAST(substr(event_date,1,4) AS INTEGER) AS yr
+         FROM bookings
+        WHERE event_date IS NOT NULL AND length(event_date) >= 4
+          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
+          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
+        ORDER BY yr ASC`,
+    )
+    .all() as { yr: number }[];
+  return rows.map((r) => r.yr).filter((y) => y > 1900);
 }
 
 export interface RevenueSplit {

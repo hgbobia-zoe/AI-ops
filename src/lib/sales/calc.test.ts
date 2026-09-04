@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { weekStartOf, bookingPipeline } from "./calc";
+import { weekStartOf, bookingPipeline, monthlyPipeline } from "./calc";
 
 describe("sales — week bucketing", () => {
   it("weekStartOf returns the containing Monday (Mon–Sun weeks)", () => {
@@ -56,6 +56,28 @@ describe("sales — week bucketing", () => {
     expect(p[0].actionNeededCount).toBe(1); // the open quote
     expect(p[0].actionNeededRevenue).toBe(690); // potential $ to win
     expect(p[0].revenue).toBe(6190); // total incl. the quote
+  });
+
+  it("buckets a year into 12 months, splitting signed vs action-needed and ignoring other years", () => {
+    const m = monthlyPipeline(
+      [
+        { date: "2025-01-10", revenue: 1000, signed: true },
+        { date: "2025-01-20", revenue: 400, signed: false }, // action needed
+        { date: "2025-03-05", revenue: 800, signed: true },
+        { date: "2024-12-31", revenue: 999, signed: true }, // different year → ignored
+      ],
+      2025,
+    );
+    expect(m).toHaveLength(12);
+    expect(m[0].label).toBe("Jan");
+    expect(m[0].signedCount).toBe(1);
+    expect(m[0].signedRevenue).toBe(1000);
+    expect(m[0].actionNeededCount).toBe(1);
+    expect(m[0].actionNeededRevenue).toBe(400);
+    expect(m[0].revenue).toBe(1400);
+    expect(m[2].signedRevenue).toBe(800); // March
+    expect(m[11].count).toBe(0); // Dec 2024 not counted in 2025
+    expect(m.reduce((n, b) => n + b.count, 0)).toBe(3);
   });
 
   it("flags a near-term empty week, but not a far-out empty week", () => {

@@ -36,6 +36,52 @@ function weekLabel(start: string, end: string): string {
   return `${fmt(start)} – ${fmt(end)}`;
 }
 
+export interface MonthBucket {
+  month: number; // 1–12
+  label: string; // "Jan"
+  count: number; // signed + action-needed
+  revenue: number | null; // total $
+  signedCount: number;
+  signedRevenue: number | null;
+  actionNeededCount: number;
+  actionNeededRevenue: number | null;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Bucket a calendar year's booked events into 12 months. Same signed / action-needed split as the
+ *  weekly pipeline; lost/cancelled are excluded upstream. */
+export function monthlyPipeline(events: { date: string; revenue?: number | null; signed?: boolean }[], year: number): MonthBucket[] {
+  const buckets: MonthBucket[] = MONTHS.map((label, i) => ({
+    month: i + 1,
+    label,
+    count: 0,
+    revenue: null,
+    signedCount: 0,
+    signedRevenue: null,
+    actionNeededCount: 0,
+    actionNeededRevenue: null,
+  }));
+  const yr = String(year);
+  for (const e of events) {
+    if (e.date.slice(0, 4) !== yr) continue;
+    const m = Number(e.date.slice(5, 7)) - 1;
+    if (m < 0 || m > 11) continue;
+    const b = buckets[m];
+    const hasRev = typeof e.revenue === "number";
+    b.count++;
+    if (hasRev) b.revenue = (b.revenue ?? 0) + (e.revenue as number);
+    if (e.signed) {
+      b.signedCount++;
+      if (hasRev) b.signedRevenue = (b.signedRevenue ?? 0) + (e.revenue as number);
+    } else {
+      b.actionNeededCount++;
+      if (hasRev) b.actionNeededRevenue = (b.actionNeededRevenue ?? 0) + (e.revenue as number);
+    }
+  }
+  return buckets;
+}
+
 export interface PipelineOptions {
   weeks: number;
   /** How many leading weeks count as "near-term" for the empty-week flag. */
