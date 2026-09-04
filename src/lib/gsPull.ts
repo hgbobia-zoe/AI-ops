@@ -12,21 +12,19 @@
  *  `publishToken` (when the KIOSK_PUBLISH_TOKEN secret is set) is sent as x-publish-token so the
  *  now-gated ingest endpoints accept the write — only logged-in users can see /admin/pull, so the
  *  token isn't exposed publicly. */
-export function buildOfficePullScript(apiBase: string, publishToken?: string): string {
+export function buildOfficePullScript(apiBase: string, publishToken?: string, autoMs = 0): string {
   const API = JSON.stringify(apiBase.replace(/\/+$/, ""));
   const PUB = JSON.stringify(publishToken ?? "");
+  const AUTO = Math.max(0, Math.floor(autoMs)); // >0 → self-repeating auto-pull (no more manual clicks)
   return `(function(){
-    var PUB=${PUB};
+    var PUB=${PUB}; var AUTO=${AUTO};
     function POSTH(){ return PUB ? {"content-type":"application/json","x-publish-token":PUB} : {"content-type":"application/json"}; }
   function banner(msg,color){ try{ var id="__zoePull"; var e=document.getElementById(id); if(!e){e=document.createElement("div");e.id=id;e.style.cssText="position:fixed;z-index:2147483647;top:14px;right:14px;padding:11px 15px;border-radius:8px;font:600 13px system-ui,sans-serif;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:360px";document.body.appendChild(e);} e.style.background=color; e.textContent=msg; }catch(x){} }
   function done(){ setTimeout(function(){var e=document.getElementById("__zoePull");if(e)e.remove();},7000); }
   try{
     if(location.hostname.indexOf("goodshuffle.com")<0){ alert("Open pro.goodshuffle.com (signed in) first, then click Pull Zoe Routes."); return; }
-    var pth=location.pathname.toLowerCase();
-    if(pth.indexOf("auth")>=0||pth.indexOf("login")>=0||pth.indexOf("signin")>=0){ banner("Sign in to Goodshuffle first, then click again.","#b45309"); return; }
     var API=${API};
     var H={headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"};
-    banner("Pulling Zoe data…","#334155");
 
     // ---- Bookings feed (projects) → Sales / Finance / Customer ----
     function pullProjects(){
@@ -80,15 +78,26 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string): s
       }).catch(function(){ return {stops:0,failed:1,unmatched:[]}; });
     }
 
-    Promise.all([pullRoutes(), pullProjects()]).then(function(res){
-      var r=res[0]||{stops:0,failed:0}, bk=res[1]||{saved:0,partial:false};
-      var unm=(r.unmatched&&r.unmatched.length)?" · ⚠ unrecognized truck(s): "+r.unmatched.join(", "):"";
-      if(r.failed) banner("⚠️ Bookings synced ("+bk.saved+"), but routes failed to save."+unm,"#b91c1c");
-      else if(bk.partial) banner("⚠️ Routes synced ("+r.stops+"), but bookings were INCOMPLETE ("+bk.saved+" saved) — a page failed. Try again."+unm,"#b45309");
-      else if(unm) banner("✅ Synced "+r.stops+" stops + "+bk.saved+" bookings"+unm,"#b45309");
-      else banner("✅ Synced "+r.stops+" route stops + "+bk.saved+" bookings → Zoe Ops","#15803d");
-      done();
-    }).catch(function(e){ banner("⚠️ Pull failed: "+String(e).slice(0,90),"#b91c1c"); done(); });
+    // Finish a cycle: one-shot fades the banner; auto keeps a persistent status with the last-run time.
+    function fin(msg,color){ if(AUTO){ var t=new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}); banner(msg+" · auto every "+Math.round(AUTO/60000)+"m (last "+t+")",color); } else { banner(msg,color); done(); } }
+    function runOnce(){
+      try{
+        var pth=location.pathname.toLowerCase();
+        if(pth.indexOf("auth")>=0||pth.indexOf("login")>=0||pth.indexOf("signin")>=0){ banner("Signed out of Goodshuffle — sign in to resume"+(AUTO?" (auto-pull paused).":", then click again."),"#b45309"); return; }
+        banner(AUTO?"Auto-pull: syncing…":"Pulling Zoe data…","#334155");
+        Promise.all([pullRoutes(), pullProjects()]).then(function(res){
+          var r=res[0]||{stops:0,failed:0}, bk=res[1]||{saved:0,partial:false};
+          var unm=(r.unmatched&&r.unmatched.length)?" · ⚠ unrecognized truck(s): "+r.unmatched.join(", "):"";
+          if(r.failed) fin("⚠️ Bookings synced ("+bk.saved+"), but routes failed to save."+unm,"#b91c1c");
+          else if(bk.partial) fin("⚠️ Routes synced ("+r.stops+"), but bookings INCOMPLETE ("+bk.saved+" saved) — will retry."+unm,"#b45309");
+          else if(unm) fin("✅ Synced "+r.stops+" stops + "+bk.saved+" bookings"+unm,"#b45309");
+          else fin("✅ Synced "+r.stops+" route stops + "+bk.saved+" bookings → Zoe Ops","#15803d");
+        }).catch(function(e){ fin("⚠️ Pull failed: "+String(e).slice(0,90),"#b91c1c"); });
+      }catch(e){ banner("⚠️ "+String(e).slice(0,110),"#b91c1c"); }
+    }
+    // Auto mode: install a single self-repeating timer (re-arming replaces any prior one), then run now.
+    if(AUTO){ if(window.__zoeAutoTimer){clearInterval(window.__zoeAutoTimer);} window.__zoeAutoTimer=setInterval(runOnce,AUTO); }
+    runOnce();
   }catch(e){ banner("⚠️ "+String(e).slice(0,110),"#b91c1c"); }
 })();`;
 }

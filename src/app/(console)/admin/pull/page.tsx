@@ -26,6 +26,8 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
   const proto = h.get("x-forwarded-proto") ?? "https";
   const base = `${proto}://${host}`;
   const script = buildOfficePullScript(base, process.env.GS_INGEST_TOKEN);
+  const AUTO_MIN = 10;
+  const autoScript = buildOfficePullScript(base, process.env.GS_INGEST_TOKEN, AUTO_MIN * 60 * 1000);
 
   const state = getPullState();
   const ageH = state.lastPullAt ? Math.round((Date.now() - Date.parse(state.lastPullAt)) / 3_600_000) : null;
@@ -71,6 +73,19 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
           <li>Click the <b>Pull Zoe Routes</b> bookmark.</li>
           <li>A banner appears top-right: &ldquo;Pulling…&rdquo; then &ldquo;✅ Pulled N stops.&rdquo; That&apos;s it — the board, risk, sales and finance update.</li>
         </ol>
+      </section>
+
+      {/* Auto-pull — the "no manual pull" path */}
+      <section className="mb-6 space-y-3 border border-emerald-500/30 bg-emerald-500/[0.05] p-4">
+        <h2 className="text-lg font-semibold">Hands-off: Auto-Pull (recommended)</h2>
+        <p className="text-sm text-muted-foreground">
+          Drag this <b>second</b> button to your bookmarks bar. On a computer that keeps <b>pro.goodshuffle.com</b> open
+          and signed in all day (the office machine), click it <b>once each morning</b>. It pulls immediately and then
+          <b> every {AUTO_MIN} minutes on its own</b> — routes, revenue and bookings stay fresh with no more clicking. A
+          small badge top-right shows it&apos;s running and the last sync time. (It runs as long as that Goodshuffle tab
+          stays open; if the browser restarts, click it again.)
+        </p>
+        <PullBookmarklet script={autoScript} label={`Auto-Pull Zoe (every ${AUTO_MIN}m)`} />
       </section>
 
       {/* Account note */}

@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Bookmark, Copy, Check } from "lucide-react";
 
-export function PullBookmarklet({ script }: { script: string }): React.JSX.Element {
+export function PullBookmarklet({ script, label = "Pull Zoe Routes" }: { script: string; label?: string }): React.JSX.Element {
   const ref = useRef<HTMLAnchorElement>(null);
   const [copied, setCopied] = useState(false);
   const href = "javascript:" + encodeURIComponent(script);
@@ -38,7 +38,7 @@ export function PullBookmarklet({ script }: { script: string }): React.JSX.Eleme
         className="btn-hero inline-flex cursor-grab items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold active:cursor-grabbing"
         title="Drag me to your bookmarks bar"
       >
-        <Bookmark className="size-4" /> Pull Zoe Routes
+        <Bookmark className="size-4" /> {label}
       </a>
       <button
         type="button"
