@@ -15,16 +15,22 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { ChecklistResult } from "@/lib/types";
 
-// Kept for API compatibility with callers; proof-of-delivery capture (photos +
-// signature) was removed from the driver flow, so this is always empty now.
+// Kept for API compatibility with callers; the field flow confirms proof was
+// captured (photos + signature checks below) rather than uploading it here, so
+// these refs stay empty.
 export interface ProofRefs {
   photoIds?: string[];
   signatureId?: string;
 }
 
-const ITEMS: { key: "equipment" | "siteClean"; label: string }[] = [
-  { key: "equipment", label: "Equipment counted" },
-  { key: "siteClean", label: "Site clean" },
+// The pre-departure checklist the driver confirms before leaving each stop. Order
+// mirrors the on-site sequence: count/test → photograph → get signature → tidy up.
+type CheckKey = "equipment" | "photos" | "signed" | "siteClean";
+const ITEMS: { key: CheckKey; label: string }[] = [
+  { key: "equipment", label: "Equipment counted and tested" },
+  { key: "photos", label: "Delivery photos taken" },
+  { key: "signed", label: "Customer signature collected" },
+  { key: "siteClean", label: "Site left clean" },
 ];
 
 export function ChecklistDialog({
@@ -38,29 +44,32 @@ export function ChecklistDialog({
   onConfirm: (result: ChecklistResult, proof?: ProofRefs) => void;
   confirmLabel?: string;
 }) {
-  const [checks, setChecks] = useState({ equipment: false, siteClean: false });
+  const [checks, setChecks] = useState<Record<CheckKey, boolean>>({
+    equipment: false,
+    photos: false,
+    signed: false,
+    siteClean: false,
+  });
   const [reason, setReason] = useState("");
 
   const allChecked = Object.values(checks).every(Boolean);
   const needsReason = !allChecked;
   const canConfirm = allChecked || reason.trim().length > 0;
 
-  function toggle(key: keyof typeof checks) {
+  function toggle(key: CheckKey) {
     setChecks((c) => ({ ...c, [key]: !c[key] }));
   }
 
   function reset() {
-    setChecks({ equipment: false, siteClean: false });
+    setChecks({ equipment: false, photos: false, signed: false, siteClean: false });
     setReason("");
   }
 
   function handleConfirm() {
     if (!canConfirm) return;
-    // signed/photos are no longer captured in the field; report them as satisfied
-    // so they never trigger an override reason.
     onConfirm({
-      signed: true,
-      photos: true,
+      signed: checks.signed,
+      photos: checks.photos,
       equipment: checks.equipment,
       siteClean: checks.siteClean,
       overrideReason: needsReason ? reason.trim() : undefined,
@@ -102,7 +111,7 @@ export function ChecklistDialog({
                 id="override-reason"
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                placeholder="e.g. Equipment count pending"
+                placeholder="e.g. Customer not on site to sign"
                 rows={2}
               />
             </div>
