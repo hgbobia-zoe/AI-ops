@@ -81,6 +81,34 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
       }).catch(function(){ return {stops:0,failed:1,unmatched:[]}; });
     }
 
+    // ---- Outbox drain: push queued DISPATCH → GOODSHUFFLE writes (delivery photos → Files tab) ----
+    // Delivery photos are captured in the driver app and stored on our volume; this replays each as a
+    // multipart upload to the project's Files tab (POST /app/files/uploadFileToProject?transactionID=…)
+    // from THIS logged-in session, then acks so it's never pushed twice.
+    function drainOutbox(){
+      return fetch(API+"/api/gs/outbox",{headers:POSTH()}).then(function(r){return r.json();}).then(function(j){
+        var ops=((j&&j.ops)||[]).filter(function(o){ return o.op==="photo_upload" && o.transactionId && o.payload && o.payload.photoIds && o.payload.photoIds.length; });
+        var pushed=0, failed=0, chain=Promise.resolve();
+        ops.forEach(function(o){
+          chain=chain.then(function(){
+            var ok=Promise.resolve(true);
+            o.payload.photoIds.forEach(function(pid){
+              ok=ok.then(function(soFar){ if(!soFar) return false;
+                return fetch(API+"/api/pod/"+encodeURIComponent(pid)).then(function(r){ if(!r.ok) throw 0; return r.blob(); }).then(function(blob){
+                  var fd=new FormData(); fd.append("file", blob, pid);
+                  return fetch("/app/files/uploadFileToProject?transactionID="+encodeURIComponent(o.transactionId),{method:"POST",body:fd,credentials:"include"}).then(function(r){ return r.ok; });
+                }).catch(function(){ return false; });
+              });
+            });
+            return ok.then(function(done){ if(done)pushed++; else failed++;
+              return fetch(API+"/api/gs/outbox",{method:"POST",headers:POSTH(),body:JSON.stringify({id:o.id, ok:done, error:done?undefined:"photo_upload_failed"})}).catch(function(){});
+            });
+          });
+        });
+        return chain.then(function(){ return {pushed:pushed, failed:failed}; });
+      }).catch(function(){ return {pushed:0, failed:0}; });
+    }
+
     // Finish a cycle: one-shot fades the banner; auto keeps a persistent status with the last-run time.
     function fin(msg,color){ if(AUTO){ var t=new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}); banner(msg+" · auto every "+Math.round(AUTO/60000)+"m (last "+t+")",color); } else { banner(msg,color); done(); } }
     function runOnce(){
@@ -88,13 +116,15 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var pth=location.pathname.toLowerCase();
         if(pth.indexOf("auth")>=0||pth.indexOf("login")>=0||pth.indexOf("signin")>=0){ banner("Signed out of Goodshuffle — sign in to resume"+(AUTO?" (auto-pull paused).":", then click again."),"#b45309"); return; }
         banner(AUTO?"Auto-pull: syncing…":"Pulling Zoe data…","#334155");
-        Promise.all([pullRoutes(), pullProjects()]).then(function(res){
-          var r=res[0]||{stops:0,failed:0}, bk=res[1]||{saved:0,partial:false};
+        Promise.all([pullRoutes(), pullProjects(), drainOutbox()]).then(function(res){
+          var r=res[0]||{stops:0,failed:0}, bk=res[1]||{saved:0,partial:false}, ph=res[2]||{pushed:0,failed:0};
           var unm=(r.unmatched&&r.unmatched.length)?" · ⚠ unrecognized truck(s): "+r.unmatched.join(", "):"";
+          var photoNote=ph.pushed?" · "+ph.pushed+" photo"+(ph.pushed===1?"":"s")+"→GS":"";
+          var photoErr=ph.failed?" · ⚠ "+ph.failed+" photo push(es) failed":"";
           if(r.failed) fin("⚠️ Bookings synced ("+bk.saved+"), but routes failed to save."+unm,"#b91c1c");
           else if(bk.partial) fin("⚠️ Routes synced ("+r.stops+"), but bookings INCOMPLETE ("+bk.saved+" saved) — will retry."+unm,"#b45309");
-          else if(unm) fin("✅ Synced "+r.stops+" stops + "+bk.saved+" bookings"+unm,"#b45309");
-          else fin("✅ Synced "+r.stops+" route stops + "+bk.saved+" bookings → Zoe Ops","#15803d");
+          else if(unm||photoErr) fin("✅ Synced "+r.stops+" stops + "+bk.saved+" bookings"+photoNote+unm+photoErr,"#b45309");
+          else fin("✅ Synced "+r.stops+" route stops + "+bk.saved+" bookings"+photoNote+" → Zoe Ops","#15803d");
         }).catch(function(e){ fin("⚠️ Pull failed: "+String(e).slice(0,90),"#b91c1c"); });
       }catch(e){ banner("⚠️ "+String(e).slice(0,110),"#b91c1c"); }
     }

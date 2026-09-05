@@ -965,6 +965,8 @@ export interface GsOutboxItem {
   status: "pending" | "done" | "failed";
   attempts: number;
   lastError?: string;
+  /** Structured op data (e.g. { photoIds } for a photo_upload). */
+  payload?: unknown;
   createdAt: string;
   updatedAt: string;
 }
@@ -977,6 +979,7 @@ interface GsOutboxRow {
   gs_route_id: string | null;
   transaction_id: string | null;
   label: string | null;
+  payload: string | null;
   status: string;
   attempts: number;
   last_error: string | null;
@@ -993,6 +996,7 @@ function toGsItem(r: GsOutboxRow): GsOutboxItem {
     gsRouteId: r.gs_route_id ?? undefined,
     transactionId: r.transaction_id ?? undefined,
     label: r.label ?? undefined,
+    payload: r.payload ? safeJson(r.payload) : undefined,
     status: r.status as GsOutboxItem["status"],
     attempts: r.attempts,
     lastError: r.last_error ?? undefined,

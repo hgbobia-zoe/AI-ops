@@ -10,6 +10,7 @@ import { NextResponse } from "next/server";
 import { isSideAction, resolveTransition } from "@/lib/stateMachine";
 import {
   advanceNextStop,
+  enqueueGsOp,
   getStop,
   insertEventIfNew,
   setStopProof,
@@ -72,6 +73,18 @@ export async function POST(req: Request): Promise<NextResponse<ActionResponse>> 
       const p = body.payload as { photoIds?: string[]; signatureId?: string } | undefined;
       if (p && (p.photoIds?.length || p.signatureId)) {
         setStopProof(body.stopId, { photoIds: p.photoIds, signatureId: p.signatureId });
+      }
+      // Queue the delivery photos to be pushed into the Goodshuffle project's Files tab. A logged-in
+      // Goodshuffle session (office pull / kiosk) drains the outbox and uploads them by transactionID.
+      if (p?.photoIds?.length && cur.txId) {
+        enqueueGsOp({
+          op: "photo_upload",
+          stopId: body.stopId,
+          routeId: body.routeId,
+          transactionId: cur.txId,
+          label: cur.custName,
+          payload: { photoIds: p.photoIds },
+        });
       }
       if (action === "HEADING_NEXT") nextStop = advanceNextStop(body.routeId, cur.sequence);
     } else {
