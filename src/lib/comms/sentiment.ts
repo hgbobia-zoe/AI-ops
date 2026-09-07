@@ -10,6 +10,15 @@
 
 import { chat, llmConfigured } from "@/lib/llm";
 
+// Call-tone LLM is a SEPARATE opt-in from the quote-review LLM: an Anthropic key may be set for quote
+// review while we still want call tone judged by the free deterministic heuristic (the owner's choice).
+// So the LLM path here is OFF unless CALL_SENTIMENT_LLM is explicitly enabled ("1"/"true"/"on"/"llm"/
+// "ollama"/"anthropic"). Unset ⇒ heuristic-only, no surprise model calls or cost.
+function sentimentLlmEnabled(): boolean {
+  const v = (process.env.CALL_SENTIMENT_LLM ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "on" || v === "llm" || v === "ollama" || v === "anthropic";
+}
+
 export interface Sentiment {
   label: "positive" | "neutral" | "negative";
   score: number; // 0..1 — negativity / frustration confidence
@@ -128,7 +137,7 @@ function extractJson(text: string): unknown {
 export async function analyzeSentiment(text: string | null | undefined): Promise<Sentiment> {
   const heuristic = heuristicSentiment(text);
   const t = (text ?? "").trim();
-  if (!llmConfigured() || !t) return heuristic;
+  if (!sentimentLlmEnabled() || !llmConfigured() || !t) return heuristic;
 
   const r = await chat(
     [
