@@ -5,7 +5,7 @@
 import { todayInOpsTz } from "@/lib/dates";
 import { getUpcomingBookings, getPipelineBookingsInRange, getBookingYears } from "@/lib/db/repo";
 import { financeConfig } from "@/lib/finance/config";
-import { bookingPipeline, monthlyPipeline, type WeekBucket, type MonthBucket } from "./calc";
+import { bookingPipeline, monthlyPipeline, weekStartOf, type WeekBucket, type MonthBucket } from "./calc";
 
 export interface SalesOverview {
   today: string;
@@ -79,7 +79,10 @@ export function salesYearOverview(year: number): SalesYearOverview {
 
 export function salesOverview(weeks = 8): SalesOverview {
   const today = todayInOpsTz();
-  const bookings = getUpcomingBookings(today).map((b) => ({ date: b.eventDate as string, revenue: b.grandTotal, signed: b.signed }));
+  // Start the window at the CURRENT week's Monday, not `today` — otherwise a week already in progress
+  // loses its already-passed days (e.g. on a Friday the Mon–Sun bucket drops Mon–Thu) and falsely
+  // reads as an empty "near-term gap". The pipeline is bucketed by week, so the whole current week counts.
+  const bookings = getUpcomingBookings(weekStartOf(today)).map((b) => ({ date: b.eventDate as string, revenue: b.grandTotal, signed: b.signed }));
   const pipeline = bookingPipeline(bookings, today, { weeks, nearTermWeeks: 2 });
   return {
     today,

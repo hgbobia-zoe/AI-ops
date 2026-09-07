@@ -45,10 +45,39 @@ const CAP_TONE: Record<string, string> = {
   AVAILABLE: "text-emerald-300 border-emerald-500/40 bg-emerald-500/10",
 };
 
-export default async function DashboardPage(): Promise<React.JSX.Element> {
+// Focus filters — clicking a tile or chip narrows the page to one lane for a clean, single-purpose
+// view. `null` = show everything. Each entry lists the section keys visible in that focus.
+type Focus = "all" | "attention" | "today" | "people" | "revenue";
+const FOCUS_GROUPS: Record<Focus, ReadonlySet<string> | null> = {
+  all: null,
+  attention: new Set(["attention"]),
+  today: new Set(["brief", "attention", "todayOps", "outlook"]),
+  people: new Set(["people", "capacity"]),
+  revenue: new Set(["revenue", "salesPipeline"]),
+};
+const FOCUS_KEYS: Focus[] = ["all", "attention", "today", "people", "revenue"];
+
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ focus?: string }>;
+}): Promise<React.JSX.Element> {
   const showMoney = canSeeFinancials(await viewerRole());
   const c = await commandCenter();
   const s = STATUS_META[c.status];
+
+  const sp = await searchParams;
+  let focus: Focus = FOCUS_KEYS.includes(sp.focus as Focus) ? (sp.focus as Focus) : "all";
+  if (focus === "revenue" && !showMoney) focus = "all"; // Members have no revenue lane
+  const show = (k: string): boolean => focus === "all" || Boolean(FOCUS_GROUPS[focus]?.has(k));
+  const chips: { key: Focus; label: string }[] = [
+    { key: "all", label: "Everything" },
+    { key: "attention", label: "Attention" },
+    { key: "today", label: "Today" },
+    { key: "people", label: "People" },
+    ...(showMoney ? [{ key: "revenue" as Focus, label: "Revenue" }] : []),
+  ];
+  const focusHref = (k: Focus): string => (k === "all" ? "/dashboard" : `/dashboard?focus=${k}`);
   const attention = (showMoney ? c.attention : c.attention.filter((i) => i.source !== "finance")).slice(0, 7);
 
   const wk = c.finance?.revenue;
@@ -70,8 +99,24 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
         </span>
       </header>
 
+      {/* Focus filter — click to declutter down to one lane (tiles below do the same) */}
+      <div className="mb-5 flex flex-wrap gap-2">
+        {chips.map((ch) => (
+          <Link
+            key={ch.key}
+            href={focusHref(ch.key)}
+            aria-current={focus === ch.key ? "page" : undefined}
+            className={`rounded-full border px-3 py-1 text-sm transition-colors ${
+              focus === ch.key ? "border-foreground bg-white/10 font-medium text-foreground" : "border-white/10 text-muted-foreground hover:bg-white/5"
+            }`}
+          >
+            {ch.label}
+          </Link>
+        ))}
+      </div>
+
       {/* AI Operations Summary — deterministic, from real system data */}
-      {c.brief && (
+      {c.brief && show("brief") && (
         <div className="mb-5 flex items-start gap-2.5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
           <Sparkles className="mt-0.5 size-4 shrink-0 text-sky-300" />
           <p className="text-sm leading-relaxed text-foreground/90">{c.brief}</p>
@@ -91,19 +136,21 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
               `${wkPct}% of ${money(wk.target)}${wkRemaining ? ` · ${money(wkRemaining)} to go` : " · target met"}`
             }
             tone={wkPct != null && wkPct >= 100 ? "good" : undefined}
-            href="/finance"
+            href={focusHref("revenue")}
+            active={focus === "revenue"}
           />
         ) : (
-          <PulseCard icon={<CalendarDays className="size-4" />} label="Events today" big={String(c.today_ops.events)} sub="scheduled" href="/dispatch" />
+          <PulseCard icon={<CalendarDays className="size-4" />} label="Events today" big={String(c.today_ops.events)} sub="scheduled" href={focusHref("today")} active={focus === "today"} />
         )}
         {showMoney && (
-          <PulseCard icon={<TrendingUp className="size-4" />} label={`${c.year} revenue`} big={moneyK(c.sales.totalSignedRevenue)} sub={`${c.sales.totalSignedCount} signed · ${moneyK(c.sales.totalActionNeededRevenue)} to win`} href="/sales" />
+          <PulseCard icon={<TrendingUp className="size-4" />} label={`${c.year} revenue`} big={moneyK(c.sales.totalSignedRevenue)} sub={`${c.sales.totalSignedCount} signed · ${moneyK(c.sales.totalActionNeededRevenue)} to win`} href={focusHref("revenue")} active={focus === "revenue"} />
         )}
-        <PulseCard icon={<Truck className="size-4" />} label="Today" big={`${c.today_ops.events}`} sub={`${c.today_ops.activeRoutes} routes · ${c.today_ops.trucksUsed}/${c.today_ops.fleetSize} trucks`} href="/dispatch" unit="events" />
-        <PulseCard icon={<Users className="size-4" />} label="Crew today" big={c.people.verified ? String(c.people.peopleCount) : "—"} sub={c.people.verified ? `${plural(c.people.drivers, "driver")} · ${c.people.prep} prep` : "not connected"} href="/staffing" warn={!c.people.verified} />
+        <PulseCard icon={<Truck className="size-4" />} label="Today" big={`${c.today_ops.events}`} sub={`${c.today_ops.activeRoutes} routes · ${c.today_ops.trucksUsed}/${c.today_ops.fleetSize} trucks`} href={focusHref("today")} active={focus === "today"} unit="events" />
+        <PulseCard icon={<Users className="size-4" />} label="Crew today" big={c.people.verified ? String(c.people.peopleCount) : "—"} sub={c.people.verified ? `${plural(c.people.drivers, "driver")} · ${c.people.prep} prep` : "not connected"} href={focusHref("people")} active={focus === "people"} warn={!c.people.verified} />
       </section>
 
       {/* SECTION 2 — Attention Required (dominant) */}
+      {show("attention") && (
       <section className="mb-6">
         <SectionHead icon={<Radar className="size-4" />} title="Attention required" href="/ops" hrefLabel="Ops Manager" />
         {attention.length === 0 ? (
@@ -126,9 +173,12 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
           </div>
         )}
       </section>
+      )}
 
       {/* SECTION 3 — Today's Operations + People */}
-      <div className="mb-6 grid gap-4 [&>section]:min-w-0 lg:grid-cols-2">
+      {(show("todayOps") || show("people")) && (
+      <div className={`mb-6 grid gap-4 [&>section]:min-w-0 ${show("todayOps") && show("people") ? "lg:grid-cols-2" : ""}`}>
+        {show("todayOps") && (
         <section>
           <SectionHead icon={<Truck className="size-4" />} title="Today's operations" href="/dispatch" hrefLabel="Dispatch" />
           <div className="rounded-2xl border border-white/10 p-4">
@@ -155,7 +205,9 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
             </div>
           </div>
         </section>
+        )}
 
+        {show("people") && (
         <section>
           <SectionHead icon={<Users className="size-4" />} title="People on schedule" href="/staffing" hrefLabel="Staffing" />
           <div className="rounded-2xl border border-white/10 p-4">
@@ -182,10 +234,14 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
             )}
           </div>
         </section>
+        )}
       </div>
+      )}
 
       {/* SECTION 4 — Capacity + 7-Day Outlook */}
-      <div className="mb-6 grid gap-4 [&>section]:min-w-0 lg:grid-cols-2">
+      {(show("capacity") || show("outlook")) && (
+      <div className={`mb-6 grid gap-4 [&>section]:min-w-0 ${show("capacity") && show("outlook") ? "lg:grid-cols-2" : ""}`}>
+        {show("capacity") && (
         <section>
           <SectionHead icon={<Gauge className="size-4" />} title="Upcoming capacity" href="/risk" hrefLabel="Event Risk" />
           <div className="rounded-2xl border border-white/10 p-4">
@@ -206,7 +262,9 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
             )}
           </div>
         </section>
+        )}
 
+        {show("outlook") && (
         <section>
           <SectionHead icon={<CalendarDays className="size-4" />} title="7-day outlook" href="/sales" hrefLabel="Sales" />
           <div className="rounded-2xl border border-white/10 p-2">
@@ -221,11 +279,14 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
             ))}
           </div>
         </section>
+        )}
       </div>
+      )}
 
       {/* SECTION 5 — Revenue Forecast + Sales Pipeline (money only) */}
-      {showMoney && (
-        <div className="grid gap-4 [&>section]:min-w-0 lg:grid-cols-2">
+      {showMoney && (show("revenue") || show("salesPipeline")) && (
+        <div className={`grid gap-4 [&>section]:min-w-0 ${show("revenue") && show("salesPipeline") ? "lg:grid-cols-2" : ""}`}>
+          {show("revenue") && (
           <section>
             <SectionHead icon={<DollarSign className="size-4" />} title="Revenue" href="/sales" hrefLabel="Sales" />
             <div className="rounded-2xl border border-white/10 p-4">
@@ -242,7 +303,9 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
               <p className="mt-3 text-[11px] text-muted-foreground">Probability-weighted forecast needs per-stage win rates — a future Goodshuffle-stage integration. Committed and pipeline above are live.</p>
             </div>
           </section>
+          )}
 
+          {show("salesPipeline") && (
           <section>
             <SectionHead icon={<Boxes className="size-4" />} title="Sales pipeline" href="/sales" hrefLabel="Sales" />
             <div className="rounded-2xl border border-white/10 p-4">
@@ -254,15 +317,20 @@ export default async function DashboardPage(): Promise<React.JSX.Element> {
               <p className="mt-3 text-[11px] text-muted-foreground">Upcoming bookings by Goodshuffle status. Finer stages (leads, follow-up, likely) aren&apos;t exposed by Goodshuffle — this is the real 3-way split.</p>
             </div>
           </section>
+          )}
         </div>
       )}
     </main>
   );
 }
 
-function PulseCard({ icon, label, big, sub, href, warn, tone, unit }: { icon: React.ReactNode; label: string; big: string; sub?: string; href: string; warn?: boolean; tone?: "good"; unit?: string }): React.JSX.Element {
+function PulseCard({ icon, label, big, sub, href, warn, tone, unit, active }: { icon: React.ReactNode; label: string; big: string; sub?: string; href: string; warn?: boolean; tone?: "good"; unit?: string; active?: boolean }): React.JSX.Element {
   return (
-    <Link href={href} className="surface rounded-2xl border border-white/5 p-4 transition-colors hover:border-white/15">
+    <Link
+      href={href}
+      aria-current={active ? "page" : undefined}
+      className={`surface rounded-2xl border p-4 transition-colors ${active ? "border-foreground/50 bg-white/[0.05]" : "border-white/5 hover:border-white/15"}`}
+    >
       <div className="mb-1.5 flex items-center gap-1.5 text-xs uppercase tracking-wide text-muted-foreground">{icon} {label}</div>
       <div className={`text-2xl font-bold tabular-nums md:text-3xl ${tone === "good" ? "text-emerald-300" : ""}`}>{big}{unit && <span className="ml-1 text-sm font-medium text-muted-foreground">{unit}</span>}</div>
       {sub && <div className={`mt-0.5 truncate text-xs ${warn ? "text-amber-400" : "text-muted-foreground"}`}>{sub}</div>}
