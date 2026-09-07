@@ -15,6 +15,8 @@ import { formatYmdLong } from "@/lib/dates";
 export interface OutreachResult {
   id: string;
   clientName: string;
+  clientPhone: string;
+  canText: boolean; // a phone is on file → the Send-via-Quo path is available
   eventName: string;
   stage: SalesStage;
   stageLabel: string;
@@ -112,6 +114,8 @@ export async function draftLeadOutreach(id: string): Promise<OutreachResult | nu
   return {
     id: l.id,
     clientName: l.clientName,
+    clientPhone: l.clientPhone,
+    canText: l.clientPhone.trim().length > 0,
     eventName: l.eventName,
     stage: l.stage,
     stageLabel: STAGE_LABEL[l.stage],

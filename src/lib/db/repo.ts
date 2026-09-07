@@ -1447,6 +1447,14 @@ export function insertEventIfNew(e: {
   return info.changes > 0;
 }
 
+/** Guard against accidental double-sends: was an identical SMS to this number sent very recently? */
+export function smsRecentlySent(toPhone: string, body: string, sinceIso: string): boolean {
+  const r = getDb()
+    .prepare("SELECT 1 FROM messages WHERE channel='sms' AND to_phone=? AND body=? AND sent_at > ? LIMIT 1")
+    .get(toPhone, body, sinceIso);
+  return !!r;
+}
+
 export function insertMessage(m: {
   stopId?: string;
   channel: string;

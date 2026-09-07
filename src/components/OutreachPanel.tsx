@@ -1,11 +1,11 @@
 "use client";
 
-// On-demand outreach drafter for a lead. Click → asks the server for a suggested next message + call
-// strategy (LLM-refined against the real Goodshuffle comms history, template fallback). Copy buttons;
-// nothing is sent from here — the rep reviews and sends it themselves.
+// On-demand outreach drafter for a lead. Click → suggested next message + call strategy (LLM-refined
+// against the real Goodshuffle comms history, template fallback). The rep can EDIT the text and Send it
+// via Quo (OpenPhone) — a per-message human approval + confirm; the send master-switch is server-side.
 
 import { useState } from "react";
-import { Sparkles, MessageSquare, Phone, Clock, AlertTriangle, Copy, Check } from "lucide-react";
+import { Sparkles, MessageSquare, Phone, Clock, AlertTriangle, Copy, Check, Send, X } from "lucide-react";
 
 interface Draft {
   sms: string;
@@ -16,9 +16,13 @@ interface Draft {
 }
 interface OutreachResult {
   draft: Draft;
+  clientName: string;
+  clientPhone: string;
+  canText: boolean;
   comms: { attempts: number; lastContact: string | null; channels: string[]; noResponse: boolean };
   llmModel?: string;
 }
+type SendState = { status: "idle" | "confirming" | "sending" | "sent" | "error"; message?: string };
 
 function CopyButton({ text }: { text: string }): React.JSX.Element {
   const [done, setDone] = useState(false);
@@ -43,20 +47,37 @@ function CopyButton({ text }: { text: string }): React.JSX.Element {
 
 export function OutreachPanel({ id }: { id: string }): React.JSX.Element {
   const [result, setResult] = useState<OutreachResult | null>(null);
+  const [smsText, setSmsText] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [send, setSend] = useState<SendState>({ status: "idle" });
 
   const draft = async (): Promise<void> => {
     setLoading(true);
     setError(null);
+    setSend({ status: "idle" });
     try {
       const res = await fetch("/api/salesos/outreach", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) });
       if (!res.ok) throw new Error(String(res.status));
-      setResult((await res.json()) as OutreachResult);
+      const data = (await res.json()) as OutreachResult;
+      setResult(data);
+      setSmsText(data.draft.sms);
     } catch {
       setError("Couldn't draft outreach. Try again.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const doSend = async (): Promise<void> => {
+    setSend({ status: "sending" });
+    try {
+      const res = await fetch("/api/salesos/send-sms", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, body: smsText }) });
+      const j = (await res.json()) as { ok?: boolean; disabled?: boolean; duplicate?: boolean; message?: string; error?: string };
+      if (j.ok) setSend({ status: "sent", message: j.duplicate ? j.message : "Sent via Quo" });
+      else setSend({ status: "error", message: j.error ?? "Send failed" });
+    } catch {
+      setSend({ status: "error", message: "Send failed" });
     }
   };
 
@@ -72,7 +93,7 @@ export function OutreachPanel({ id }: { id: string }): React.JSX.Element {
       </div>
 
       {!result && !error && (
-        <p className="text-sm text-muted-foreground">Draft a message and call plan for this lead, informed by the prior contact logged in Goodshuffle. You review and send it.</p>
+        <p className="text-sm text-muted-foreground">Draft a message and call plan for this lead, informed by the prior contact logged in Goodshuffle. You review, edit, and send.</p>
       )}
       {error && <p className="text-sm text-rose-300">{error}</p>}
 
@@ -86,10 +107,41 @@ export function OutreachPanel({ id }: { id: string }): React.JSX.Element {
 
           <div>
             <div className="mb-1 flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-xs font-medium"><MessageSquare className="size-3.5" /> Text message</span>
-              <CopyButton text={result.draft.sms} />
+              <span className="flex items-center gap-1.5 text-xs font-medium"><MessageSquare className="size-3.5" /> Text message {result.canText ? "" : "· no phone on file"}</span>
+              <CopyButton text={smsText} />
             </div>
-            <p className="border border-white/10 bg-white/[0.03] p-2.5 text-sm">{result.draft.sms}</p>
+            <textarea
+              value={smsText}
+              onChange={(e) => { setSmsText(e.target.value); if (send.status !== "idle") setSend({ status: "idle" }); }}
+              rows={4}
+              className="w-full resize-y border border-white/10 bg-white/[0.03] p-2.5 text-sm outline-none focus:border-white/30"
+            />
+            <div className="mt-0.5 text-right text-[10px] text-muted-foreground tabular-nums">{smsText.length} chars</div>
+
+            {/* Send via Quo — per-message human approval */}
+            {result.canText && (
+              <div className="mt-1 flex items-center gap-2">
+                {send.status === "idle" && (
+                  <button onClick={() => setSend({ status: "confirming" })} className="flex items-center gap-1.5 border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-100 hover:bg-emerald-500/20">
+                    <Send className="size-3.5" /> Send via Quo
+                  </button>
+                )}
+                {send.status === "confirming" && (
+                  <>
+                    <span className="text-xs text-muted-foreground">Send to {result.clientName || "this lead"} at {result.clientPhone}?</span>
+                    <button onClick={doSend} className="flex items-center gap-1 border border-emerald-500/50 bg-emerald-500/20 px-2.5 py-1 text-xs text-emerald-100"><Check className="size-3" /> Confirm</button>
+                    <button onClick={() => setSend({ status: "idle" })} className="flex items-center gap-1 border border-white/15 px-2.5 py-1 text-xs text-muted-foreground"><X className="size-3" /> Cancel</button>
+                  </>
+                )}
+                {send.status === "sending" && <span className="text-xs text-muted-foreground">Sending…</span>}
+                {send.status === "sent" && <span className="flex items-center gap-1 text-xs text-emerald-300"><Check className="size-3.5" /> {send.message}</span>}
+                {send.status === "error" && (
+                  <span className="flex items-center gap-2 text-xs text-rose-300">
+                    {send.message} <button onClick={() => setSend({ status: "confirming" })} className="underline">retry</button>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {result.draft.callStrategy && (
@@ -106,7 +158,7 @@ export function OutreachPanel({ id }: { id: string }): React.JSX.Element {
           )}
 
           <p className="text-[11px] text-muted-foreground">
-            {result.draft.source === "ai" ? `AI-drafted${result.llmModel ? ` · ${result.llmModel}` : ""}` : "Template"} · reviewed & sent by you.
+            {result.draft.source === "ai" ? `AI-drafted${result.llmModel ? ` · ${result.llmModel}` : ""}` : "Template"} · you review, edit &amp; send.
             {result.comms.attempts > 0 && ` Based on ${result.comms.attempts} logged contact${result.comms.attempts === 1 ? "" : "s"}${result.comms.lastContact ? `, last ${result.comms.lastContact}` : ""}.`}
           </p>
         </div>
