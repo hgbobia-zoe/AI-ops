@@ -52,7 +52,13 @@ function AttentionRow({ item }: { item: AttentionItem }): React.JSX.Element {
   );
 }
 
-export default async function OpsPage(): Promise<React.JSX.Element> {
+const PRIORITIES: Priority[] = ["critical", "high", "medium", "info"];
+
+export default async function OpsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ p?: string }>;
+}): Promise<React.JSX.Element> {
   const showMoney = canSeeFinancials(await viewerRole());
   const full = await opsOverview();
   // Members don't see $ — drop finance-sourced items and recompute the brief/summary from the rest.
@@ -60,6 +66,11 @@ export default async function OpsPage(): Promise<React.JSX.Element> {
   const summary = showMoney ? full.summary : summarize(items);
   const brief = showMoney ? full.brief : opsBrief(items, summary);
   const o = { ...full, items, summary, brief };
+
+  // Clicking a severity tile filters the feed to that priority (?p=…). Clicking the active tile clears.
+  const sp = await searchParams;
+  const filterP: Priority | null = PRIORITIES.includes(sp.p as Priority) ? (sp.p as Priority) : null;
+  const shown = filterP ? o.items.filter((i) => i.priority === filterP) : o.items;
 
   return (
     <main className="mx-auto max-w-3xl p-5 pb-16 md:p-8">
@@ -76,32 +87,49 @@ export default async function OpsPage(): Promise<React.JSX.Element> {
         <p className="text-base leading-relaxed">{o.brief}</p>
       </div>
 
-      {/* Summary chips */}
+      {/* Summary chips — click to filter the feed by severity */}
       <section className="mb-6 grid grid-cols-4 gap-2">
         {([
           ["critical", o.summary.critical],
           ["high", o.summary.high],
           ["medium", o.summary.medium],
           ["info", o.summary.info],
-        ] as [Priority, number][]).map(([p, n]) => (
-          <div key={p} className="surface border border-white/5 p-3 text-center">
-            <div className="text-2xl font-bold tabular-nums">{n}</div>
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{PRIORITY_STYLE[p].label}</div>
-          </div>
-        ))}
+        ] as [Priority, number][]).map(([p, n]) => {
+          const on = filterP === p;
+          return (
+            <Link
+              key={p}
+              href={on ? "/ops" : `/ops?p=${p}`}
+              aria-current={on ? "page" : undefined}
+              className={`surface border p-3 text-center transition-colors ${on ? "border-foreground/50 bg-white/[0.06]" : "border-white/5 hover:border-white/20"}`}
+            >
+              <div className="text-2xl font-bold tabular-nums">{n}</div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{PRIORITY_STYLE[p].label}</div>
+            </Link>
+          );
+        })}
       </section>
 
       {/* Attention feed */}
       <section className="space-y-2">
-        <h2 className="text-lg font-semibold">What needs attention</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">What needs attention{filterP ? ` · ${PRIORITY_STYLE[filterP].label}` : ""}</h2>
+          {filterP && (
+            <Link href="/ops" className="text-xs text-muted-foreground hover:text-foreground">Show all →</Link>
+          )}
+        </div>
         {o.items.length === 0 ? (
           <div className="flex items-center gap-3 border border-emerald-500/30 bg-emerald-500/[0.06] p-6 text-sm text-emerald-200">
             <CheckCircle2 className="size-5 shrink-0" />
             <span>All clear — no active risks, near-term booking gaps, or labor overruns right now.</span>
           </div>
+        ) : shown.length === 0 ? (
+          <div className="border border-white/10 bg-white/[0.02] p-6 text-sm text-muted-foreground">
+            No {PRIORITY_STYLE[filterP!].label.toLowerCase()} items right now. <Link href="/ops" className="underline">Show all →</Link>
+          </div>
         ) : (
           <div className="space-y-2">
-            {o.items.map((i) => (
+            {shown.map((i) => (
               <AttentionRow key={i.key} item={i} />
             ))}
           </div>
