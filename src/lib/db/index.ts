@@ -396,6 +396,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "stops", column: "day_of_phone", type: "TEXT" },
   { table: "stops", column: "photos_ref", type: "TEXT" }, // JSON array of POD photo ids
   { table: "stops", column: "signature_ref", type: "TEXT" }, // POD signature image id
+  { table: "bookings", column: "quote_sent_date", type: "TEXT" }, // YYYY-MM-DD — when the quote was sent (Sales OS quote age)
+  { table: "bookings", column: "date_created", type: "TEXT" }, // YYYY-MM-DD — lead/project created (lead age)
+  { table: "bookings", column: "client_phone", type: "TEXT" }, // customer phone (Sales OS SMS/call)
 ];
 
 function migrate(db: DB): void {

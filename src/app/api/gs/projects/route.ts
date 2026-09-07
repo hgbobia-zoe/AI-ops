@@ -35,6 +35,9 @@ interface InProject {
   amountDueCents?: number;
   clientName?: string;
   clientEmail?: string;
+  clientPhone?: string;
+  quoteSentDate?: string | null;
+  dateCreated?: string | null;
 }
 
 const dollars = (cents: number | undefined): number | null =>
@@ -72,6 +75,9 @@ export async function POST(req: Request): Promise<NextResponse> {
       amountDue: dollars(p.amountDueCents),
       clientName: p.clientName,
       clientEmail: p.clientEmail,
+      clientPhone: p.clientPhone,
+      quoteSentDate: ymd(p.quoteSentDate),
+      dateCreated: ymd(p.dateCreated),
     });
   }
   if (records.length > 0) saveBookings(records);

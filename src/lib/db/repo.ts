@@ -524,6 +524,9 @@ export interface BookingRecord {
   amountDue?: number | null;
   clientName?: string;
   clientEmail?: string;
+  clientPhone?: string;
+  quoteSentDate?: string | null; // YYYY-MM-DD
+  dateCreated?: string | null; // YYYY-MM-DD
 }
 
 export interface BookingView {
@@ -537,6 +540,9 @@ export interface BookingView {
   amountDue: number | null;
   clientName: string;
   clientEmail: string;
+  clientPhone: string;
+  quoteSentDate: string | null;
+  dateCreated: string | null;
 }
 
 function toBookingView(r: Record<string, unknown>): BookingView {
@@ -551,6 +557,9 @@ function toBookingView(r: Record<string, unknown>): BookingView {
     amountDue: r.amount_due == null ? null : Number(r.amount_due),
     clientName: String(r.client_name ?? ""),
     clientEmail: String(r.client_email ?? ""),
+    clientPhone: String(r.client_phone ?? ""),
+    quoteSentDate: (r.quote_sent_date as string) ?? null,
+    dateCreated: (r.date_created as string) ?? null,
   };
 }
 
@@ -578,12 +587,14 @@ export function saveBookings(items: BookingRecord[]): void {
 
   const up = db.prepare(
     `INSERT INTO bookings (booking_id, event_name, event_date, status_label, signed, contract_total,
-       grand_total, amount_paid, amount_due, client_name, client_email, updated_at)
+       grand_total, amount_paid, amount_due, client_name, client_email, client_phone, quote_sent_date,
+       date_created, updated_at)
      VALUES (@bookingId,@eventName,@eventDate,@statusLabel,@signed,@contractTotal,@grandTotal,
-       @amountPaid,@amountDue,@clientName,@clientEmail,@now)
+       @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@now)
      ON CONFLICT(booking_id) DO UPDATE SET event_name=@eventName, event_date=@eventDate,
        status_label=@statusLabel, signed=@signed, contract_total=@contractTotal, grand_total=@grandTotal,
        amount_paid=@amountPaid, amount_due=@amountDue, client_name=@clientName, client_email=@clientEmail,
+       client_phone=@clientPhone, quote_sent_date=@quoteSentDate, date_created=@dateCreated,
        updated_at=@now`,
   );
   const tx = db.transaction(() => {
@@ -600,6 +611,9 @@ export function saveBookings(items: BookingRecord[]): void {
         amountDue: i.amountDue ?? null,
         clientName: i.clientName ?? null,
         clientEmail: i.clientEmail ?? null,
+        clientPhone: i.clientPhone ?? null,
+        quoteSentDate: i.quoteSentDate ?? null,
+        dateCreated: i.dateCreated ?? null,
         now,
       });
   });
@@ -790,6 +804,30 @@ export function getBookingRevenueByIds(ids: string[]): Map<string, number | null
 /** All bookings (for Customer Intelligence aggregation). */
 export function getAllBookings(): BookingView[] {
   return (getDb().prepare("SELECT * FROM bookings ORDER BY event_date").all() as Record<string, unknown>[]).map(toBookingView);
+}
+
+/** Open leads for the Sales OS — UNSIGNED, non-cancelled/lost bookings whose event is still ahead
+ *  (or undated). These are the quotes a human still has to win. Soonest event first; undated last. */
+export function getOpenLeads(todayYmd: string): BookingView[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM bookings
+         WHERE signed = 0
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%dead%'
+           AND (event_date IS NULL OR event_date >= ?)
+         ORDER BY COALESCE(event_date,'9999-12-31') ASC`,
+      )
+      .all(todayYmd) as Record<string, unknown>[]
+  ).map(toBookingView);
+}
+
+/** A single booking by Goodshuffle project id — for the Sales OS lead detail. */
+export function getBookingById(id: string): BookingView | null {
+  const r = getDb().prepare("SELECT * FROM bookings WHERE booking_id = ?").get(id) as Record<string, unknown> | undefined;
+  return r ? toBookingView(r) : null;
 }
 
 /** Row counts for the Data Health view — so "no freshness signal" isn't shown as "no data at all"

@@ -22,6 +22,7 @@ import {
   HeartPulse,
   LogOut,
   Sparkles,
+  Target,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -43,6 +44,7 @@ const BLADES: Blade[] = [
   { href: "/staffing", label: "Staffing", icon: Users },
   { href: "/finance", label: "Financial", icon: DollarSign, financial: true },
   { href: "/sales", label: "Sales", icon: TrendingUp },
+  { href: "/salesos", label: "Sales OS", icon: Target },
   { href: "/customers", label: "Customers", icon: UserRound },
   { href: "/history", label: "History", icon: History },
   { href: "/automation", label: "Automation", icon: Workflow },
