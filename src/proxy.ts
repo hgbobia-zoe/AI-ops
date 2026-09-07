@@ -22,6 +22,7 @@ const PUBLIC: string[] = [
   "/api/route/import",
   "/api/gs/projects",
   "/api/gs/outbox",
+  "/api/openphone/webhook", // OpenPhone → us; authenticates by HMAC signature, not a session
 ];
 
 function isPublicPath(pathname: string): boolean {

@@ -374,6 +374,28 @@ CREATE TABLE IF NOT EXISTS event_readiness (
   risk_level                 TEXT,
   calculated_at              TEXT
 );
+
+CREATE TABLE IF NOT EXISTS call_events (
+  id            TEXT PRIMARY KEY,
+  provider_id   TEXT UNIQUE,   -- OpenPhone call/event id (idempotency)
+  event_type    TEXT,          -- OpenPhone webhook type (call.completed, call.summary.completed, …)
+  direction     TEXT,          -- incoming | outgoing
+  from_phone    TEXT,
+  to_phone      TEXT,
+  contact_name  TEXT,          -- best-known caller name, if any
+  duration_sec  INTEGER,
+  transcript    TEXT,          -- full transcript text when available
+  summary       TEXT,          -- OpenPhone AI summary when available
+  sentiment     TEXT,          -- verdict: positive | neutral | negative
+  score         REAL,          -- 0..1 negativity confidence
+  method        TEXT,          -- llm | heuristic — HOW the verdict was reached (honesty)
+  reasons       TEXT,          -- JSON string[] — why it was flagged
+  llm_model     TEXT,          -- model id when method=llm
+  alerted_at    TEXT,          -- when a Slack alert fired (null = not alerted)
+  occurred_at   TEXT,          -- call time (from OpenPhone), if known
+  ts            TEXT NOT NULL  -- when we recorded it
+);
+CREATE INDEX IF NOT EXISTS idx_call_events_ts ON call_events(ts DESC);
 `;
 
 type DB = InstanceType<typeof Database>;

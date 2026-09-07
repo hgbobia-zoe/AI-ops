@@ -1,0 +1,81 @@
+// Call-sentiment orchestration: take a parsed OpenPhone call event, record it, obtain the best text
+// we can (transcript preferred, then AI summary), judge the customer's tone (Ollama-first, heuristic
+// fallback), and — only when the customer is genuinely frustrated — post ONE alert to the dedicated
+// customer-alerts Slack channel. Idempotent: one alert per call, ever.
+
+import {
+  insertCallEventIfNew,
+  getCallEventByProviderId,
+  updateCallContent,
+  setCallSentiment,
+  markCallAlerted,
+  type CallEventInput,
+} from "@/lib/db/repo";
+import { analyzeSentiment } from "./sentiment";
+import { getCallTranscript, getCallSummary } from "./openphone";
+import { slackNotifyAlert } from "@/lib/notify/slack";
+
+export interface IngestCallInput extends CallEventInput {
+  callId: string; // OpenPhone call id — the idempotency key across a call's several webhook events
+}
+
+export interface IngestResult {
+  recorded: boolean;
+  analyzed: boolean;
+  alerted: boolean;
+  sentiment?: string;
+  skippedReason?: string;
+}
+
+function fmtPhoneName(name: string | null | undefined, phone: string | null | undefined): string {
+  const n = (name ?? "").trim();
+  const p = (phone ?? "").trim();
+  if (n && p) return `${n} (${p})`;
+  return n || p || "unknown caller";
+}
+
+/** Record a call event and, if the customer sounds frustrated, alert Slack once. Safe to call for
+ *  every webhook delivery — deduped on the call id, and it never alerts a call twice. */
+export async function ingestCallEvent(input: IngestCallInput): Promise<IngestResult> {
+  const callId = input.callId;
+  if (!callId) return { recorded: false, analyzed: false, alerted: false, skippedReason: "no call id" };
+
+  // Upsert one row per call. First event inserts; later events (transcript/summary) update it.
+  const record: CallEventInput = { ...input, providerId: callId };
+  let id = insertCallEventIfNew(record);
+  const existing = id ? null : getCallEventByProviderId(callId);
+  if (!id && existing) id = existing.id;
+  if (!id) return { recorded: false, analyzed: false, alerted: false, skippedReason: "insert failed" };
+
+  // Already alerted on a prior event for this call — nothing more to do.
+  if (existing?.alertedAt) return { recorded: true, analyzed: true, alerted: false, skippedReason: "already alerted" };
+
+  // Obtain the best available text: payload transcript → fetched transcript → payload/fetched summary.
+  let transcript = (input.transcript ?? "").trim() || null;
+  if (!transcript) transcript = await getCallTranscript(callId);
+  let summary = (input.summary ?? "").trim() || null;
+  if (!transcript && !summary) summary = await getCallSummary(callId);
+  updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: input.contactName, eventType: input.eventType });
+
+  const text = transcript ?? summary;
+  if (!text) return { recorded: true, analyzed: false, alerted: false, skippedReason: "no transcript/summary yet" };
+
+  const s = await analyzeSentiment(text);
+  setCallSentiment(id, { sentiment: s.label, score: s.score, method: s.method, reasons: s.reasons, llmModel: s.llmModel });
+  if (!s.isNegative) return { recorded: true, analyzed: true, alerted: false, sentiment: s.label };
+
+  // Frustrated customer → alert the dedicated channel, once.
+  const who = fmtPhoneName(input.contactName, input.direction === "outgoing" ? input.toPhone : input.fromPhone);
+  const confidence = Math.round(s.score * 100);
+  const conf = s.method === "llm" ? `${confidence}% (LLM${s.llmModel ? ` · ${s.llmModel}` : ""})` : `${confidence}% (keyword heuristic — no transcript LLM read)`;
+  const reasons = s.reasons.length ? `\n> ${s.reasons.join(" · ")}` : "";
+  const src = transcript ? "transcript" : "AI summary";
+  const msg =
+    `:rotating_light: *Frustrated caller* — ${who}\n` +
+    `Negative tone on a ${input.direction === "outgoing" ? "call we made" : "call in"} (from the ${src}). Confidence ${conf}.${reasons}\n` +
+    `_Review the call in OpenPhone and consider a follow-up._`;
+
+  const res = await slackNotifyAlert(msg);
+  if (res.ok) markCallAlerted(id);
+  return { recorded: true, analyzed: true, alerted: res.ok, sentiment: s.label, skippedReason: res.ok ? undefined : res.skipped ? "alert channel not configured" : res.error };
+}

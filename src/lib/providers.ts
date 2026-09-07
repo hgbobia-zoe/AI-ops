@@ -90,6 +90,7 @@ const openphone: SmsProviderDef = {
   fields: [
     { key: "apiKey", label: "API key", secret: true },
     { key: "fromNumber", label: "From number (E.164)", secret: false, placeholder: "+13012915296" },
+    { key: "signingKey", label: "Webhook signing key", secret: true, help: "For inbound call-sentiment alerts — from the OpenPhone webhook you create (base64)." },
   ],
   async send(to, body, cfg) {
     const miss = need(cfg, ["apiKey", "fromNumber"]);

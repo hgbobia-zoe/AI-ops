@@ -1,0 +1,80 @@
+// OpenPhone ("Quo") inbound webhook — the real-time feed of call events. On a completed call (or its
+// transcript/summary), we record it and, if the customer sounds frustrated, alert the dedicated
+// customer-alerts Slack channel. Fast-ACK: verify + parse, kick the analysis async, return 200 so
+// OpenPhone doesn't retry. Public path (cross-origin) — it authenticates itself by HMAC signature.
+
+import { NextResponse } from "next/server";
+import { verifyOpenphoneSignature, openphoneSigningKey } from "@/lib/comms/openphone";
+import { ingestCallEvent, type IngestCallInput } from "@/lib/comms/service";
+
+export const dynamic = "force-dynamic";
+
+interface OpObject {
+  id?: string;
+  callId?: string;
+  object?: string;
+  direction?: string;
+  from?: string;
+  to?: string;
+  duration?: number;
+  createdAt?: string;
+  completedAt?: string;
+  answeredAt?: string;
+  dialogue?: { content?: string; identifier?: string }[];
+  summary?: string[] | string;
+}
+interface OpEvent {
+  id?: string;
+  type?: string;
+  createdAt?: string;
+  data?: { object?: OpObject };
+}
+
+function joinDialogue(d: OpObject["dialogue"]): string | null {
+  if (!Array.isArray(d) || d.length === 0) return null;
+  return d.map((x) => (x.identifier ? `${x.identifier}: ${x.content ?? ""}` : x.content ?? "")).join("\n").trim() || null;
+}
+
+export async function POST(req: Request): Promise<NextResponse> {
+  const raw = await req.text();
+
+  // Authenticate: enforce the HMAC signature when a signing key is configured. Until it's set (setup
+  // window), accept — matching the repo's fail-open ingest convention — but never once a key exists.
+  const sig = verifyOpenphoneSignature(raw, req.headers.get("openphone-signature"));
+  if (openphoneSigningKey() && !sig.verified) {
+    return NextResponse.json({ error: "bad signature" }, { status: 401 });
+  }
+
+  let payload: OpEvent;
+  try {
+    payload = JSON.parse(raw) as OpEvent;
+  } catch {
+    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+  }
+
+  const type = payload.type ?? "";
+  const obj = payload.data?.object ?? {};
+  // Only call-related events carry customer tone. Ack everything else without work.
+  if (!type.startsWith("call")) return NextResponse.json({ ok: true, ignored: type || "unknown" });
+
+  const callId = (obj.callId ?? obj.id ?? "").trim();
+  if (!callId) return NextResponse.json({ ok: true, ignored: "no call id" });
+
+  const input: IngestCallInput = {
+    callId,
+    providerId: callId,
+    eventType: type,
+    direction: obj.direction,
+    fromPhone: obj.from,
+    toPhone: obj.to,
+    durationSec: typeof obj.duration === "number" ? obj.duration : null,
+    transcript: joinDialogue(obj.dialogue),
+    summary: Array.isArray(obj.summary) ? obj.summary.join(" ") : typeof obj.summary === "string" ? obj.summary : null,
+    occurredAt: obj.completedAt ?? obj.createdAt ?? payload.createdAt ?? null,
+  };
+
+  // Fire-and-forget: transcript fetch + LLM can take seconds; don't make OpenPhone wait.
+  void ingestCallEvent(input).catch(() => {});
+
+  return NextResponse.json({ ok: true, received: type });
+}

@@ -1509,3 +1509,161 @@ export function getTracking(token: string): TrackingView | null {
 export function expireTracking(stopId: string): void {
   getDb().prepare("UPDATE tracking_links SET active = 0 WHERE stop_id = ?").run(stopId);
 }
+
+// ── Call events (OpenPhone) — inbound call metadata + sentiment for the customer-alerts feature ──
+
+export interface CallEventInput {
+  providerId: string; // OpenPhone call/event id (idempotency key)
+  eventType?: string;
+  direction?: string;
+  fromPhone?: string;
+  toPhone?: string;
+  contactName?: string;
+  durationSec?: number | null;
+  transcript?: string | null;
+  summary?: string | null;
+  occurredAt?: string | null;
+}
+
+export interface CallEventView {
+  id: string;
+  providerId: string;
+  eventType: string | null;
+  direction: string | null;
+  fromPhone: string | null;
+  toPhone: string | null;
+  contactName: string | null;
+  durationSec: number | null;
+  transcript: string | null;
+  summary: string | null;
+  sentiment: string | null;
+  score: number | null;
+  method: string | null;
+  reasons: string[];
+  llmModel: string | null;
+  alertedAt: string | null;
+  occurredAt: string | null;
+  ts: string;
+}
+
+function toCallEvent(r: Record<string, unknown>): CallEventView {
+  let reasons: string[] = [];
+  try {
+    reasons = r.reasons ? (JSON.parse(String(r.reasons)) as string[]) : [];
+  } catch {
+    reasons = [];
+  }
+  return {
+    id: String(r.id),
+    providerId: String(r.provider_id ?? ""),
+    eventType: (r.event_type as string) ?? null,
+    direction: (r.direction as string) ?? null,
+    fromPhone: (r.from_phone as string) ?? null,
+    toPhone: (r.to_phone as string) ?? null,
+    contactName: (r.contact_name as string) ?? null,
+    durationSec: r.duration_sec == null ? null : Number(r.duration_sec),
+    transcript: (r.transcript as string) ?? null,
+    summary: (r.summary as string) ?? null,
+    sentiment: (r.sentiment as string) ?? null,
+    score: r.score == null ? null : Number(r.score),
+    method: (r.method as string) ?? null,
+    reasons,
+    llmModel: (r.llm_model as string) ?? null,
+    alertedAt: (r.alerted_at as string) ?? null,
+    occurredAt: (r.occurred_at as string) ?? null,
+    ts: String(r.ts),
+  };
+}
+
+/** Insert a call event if its OpenPhone id is new (idempotent). Returns the row id, or null if a
+ *  row with that provider id already exists (duplicate webhook delivery — OpenPhone retries). */
+export function insertCallEventIfNew(e: CallEventInput): string | null {
+  const id = `CALL-${randomUUID()}`;
+  const info = getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO call_events (id, provider_id, event_type, direction, from_phone, to_phone,
+        contact_name, duration_sec, transcript, summary, occurred_at, ts)
+       VALUES (@id, @providerId, @eventType, @direction, @fromPhone, @toPhone, @contactName,
+        @durationSec, @transcript, @summary, @occurredAt, @ts)`,
+    )
+    .run({
+      id,
+      providerId: e.providerId,
+      eventType: e.eventType ?? null,
+      direction: e.direction ?? null,
+      fromPhone: e.fromPhone ?? null,
+      toPhone: e.toPhone ?? null,
+      contactName: e.contactName ?? null,
+      durationSec: e.durationSec ?? null,
+      transcript: e.transcript ?? null,
+      summary: e.summary ?? null,
+      occurredAt: e.occurredAt ?? null,
+      ts: new Date().toISOString(),
+    });
+  return info.changes > 0 ? id : null;
+}
+
+/** Look up a call event by its OpenPhone call id (several webhook events share one call). */
+export function getCallEventByProviderId(providerId: string): CallEventView | null {
+  const r = getDb().prepare("SELECT * FROM call_events WHERE provider_id = ?").get(providerId) as
+    | Record<string, unknown>
+    | undefined;
+  return r ? toCallEvent(r) : null;
+}
+
+/** Fill in call content that arrives on a later event (transcript/summary/duration), non-null only. */
+export function updateCallContent(
+  id: string,
+  c: { transcript?: string | null; summary?: string | null; durationSec?: number | null; contactName?: string | null; eventType?: string | null },
+): void {
+  getDb()
+    .prepare(
+      `UPDATE call_events SET
+         transcript   = COALESCE(@transcript, transcript),
+         summary      = COALESCE(@summary, summary),
+         duration_sec = COALESCE(@durationSec, duration_sec),
+         contact_name = COALESCE(@contactName, contact_name),
+         event_type   = COALESCE(@eventType, event_type)
+       WHERE id = @id`,
+    )
+    .run({
+      id,
+      transcript: c.transcript ?? null,
+      summary: c.summary ?? null,
+      durationSec: c.durationSec ?? null,
+      contactName: c.contactName ?? null,
+      eventType: c.eventType ?? null,
+    });
+}
+
+/** Attach the sentiment verdict to a call event. */
+export function setCallSentiment(
+  id: string,
+  v: { sentiment: string; score: number | null; method: string; reasons: string[]; llmModel?: string | null },
+): void {
+  getDb()
+    .prepare(
+      `UPDATE call_events SET sentiment=@sentiment, score=@score, method=@method, reasons=@reasons,
+        llm_model=@llmModel WHERE id=@id`,
+    )
+    .run({
+      id,
+      sentiment: v.sentiment,
+      score: v.score,
+      method: v.method,
+      reasons: JSON.stringify(v.reasons ?? []),
+      llmModel: v.llmModel ?? null,
+    });
+}
+
+/** Mark that a Slack alert was sent for this call (so we never double-alert). */
+export function markCallAlerted(id: string): void {
+  getDb().prepare("UPDATE call_events SET alerted_at=? WHERE id=?").run(new Date().toISOString(), id);
+}
+
+/** Most-recent call events (for a future Customer-alerts view / debugging). */
+export function getRecentCallEvents(limit = 50): CallEventView[] {
+  return (
+    getDb().prepare("SELECT * FROM call_events ORDER BY ts DESC LIMIT ?").all(limit) as Record<string, unknown>[]
+  ).map(toCallEvent);
+}
