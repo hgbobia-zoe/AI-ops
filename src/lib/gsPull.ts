@@ -40,7 +40,8 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
       return loop(0).then(function(){
         function d2(s){ try{ if(!s) return null; var dt=new Date(s); if(isNaN(dt)) return null; return new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,10); }catch(e){ return null; } }
         var recs=Object.keys(all).map(function(id){ var p=all[id];
-          return { bookingId:String(p.id), eventName:p.eventName||"", eventDate:d2(p.logistics_start_date), statusLabel:p.statusLabel||"", signed:!!p.signed, grandTotalCents:p.grand_total, contractTotalCents:p.contract_total, amountPaidCents:p.amount_paid, amountDueCents:p.amount_due, clientName:p.client_name||"", clientEmail:p.client_email||"", clientPhone:p.client_phone||"", quoteSentDate:d2(p.quote_sent_date), dateCreated:d2(p.date_created) }; });
+          // NB: Goodshuffle's searchProjects field is contract_subtotal (there is no contract_total).
+          return { bookingId:String(p.id), eventName:p.eventName||"", eventDate:d2(p.logistics_start_date), statusLabel:p.statusLabel||"", signed:!!p.signed, grandTotalCents:p.grand_total, contractTotalCents:p.contract_subtotal, amountPaidCents:p.amount_paid, amountDueCents:p.amount_due, clientName:p.client_name||"", clientEmail:p.client_email||"", clientPhone:p.client_phone||"", quoteSentDate:d2(p.quote_sent_date), dateCreated:d2(p.date_created) }; });
         if(!recs.length) return { saved:0, partial:pErr };
         return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr})}).then(function(r){return r.json();}).then(function(j){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial) }; }).catch(function(){ return { saved:0, partial:true }; });
       });
