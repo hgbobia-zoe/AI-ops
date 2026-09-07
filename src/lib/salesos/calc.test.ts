@@ -1,7 +1,37 @@
 import { describe, it, expect } from "vitest";
-import { deriveSalesState, nextBestAction, priorityScore, DEFAULT_THRESHOLDS, type LeadSignals } from "./calc";
+import { deriveSalesState, nextBestAction, priorityScore, sentFromStatus, DEFAULT_THRESHOLDS, type LeadSignals } from "./calc";
 
 const base: LeadSignals = { daysToEvent: 40, quoteAgeDays: 1, everSent: true, hasPhone: true, hasEmail: true, value: 3000 };
+
+describe("salesos — sentFromStatus (Goodshuffle status is the authority)", () => {
+  it("reads the real Zoe production statuses correctly", () => {
+    expect(sentFromStatus("Quote Sent")).toBe(true); // the 53 open leads — genuinely sent
+    expect(sentFromStatus("New Project")).toBe(false); // a draft, not sent
+    expect(sentFromStatus("Unsigned Changes")).toBe(true); // out with the client
+  });
+
+  it("returns null for an unknown/blank status so dates decide instead of guessing", () => {
+    expect(sentFromStatus("")).toBeNull();
+    expect(sentFromStatus(null)).toBeNull();
+    expect(sentFromStatus("Some New Label")).toBe(false); // contains "new" → treated as not sent
+  });
+
+  it("a Quote-Sent lead with no quote_sent_date is NOT mislabeled 'Not sent'", () => {
+    // Reproduces the production bug: quote_sent_date null, but Goodshuffle says "Quote Sent".
+    const everSent = sentFromStatus("Quote Sent") ?? false; // ?? !!quoteSentDate(null)
+    const stage = deriveSalesState({
+      daysToEvent: 40,
+      quoteAgeDays: null,
+      everSent,
+      hasPhone: false,
+      hasEmail: true,
+      value: 2000,
+    });
+    expect(everSent).toBe(true);
+    expect(stage).not.toBe("unsent"); // was wrongly "unsent" before the fix
+    expect(stage).toBe("follow_up"); // sent but undatable → needs a follow-up
+  });
+});
 
 describe("salesos — deriveSalesState", () => {
   it("an imminent event beats everything else (closing window)", () => {

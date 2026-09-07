@@ -22,10 +22,26 @@ export const STAGE_LABEL: Record<SalesStage, string> = {
 export interface LeadSignals {
   daysToEvent: number | null; // event_date − today; null when undated; negative if event already passed
   quoteAgeDays: number | null; // days since the quote was sent (or created, if never sent); null if unknown
-  everSent: boolean; // quote_sent_date present
+  everSent: boolean; // did the client receive the quote — from Goodshuffle status (authority) or quote_sent_date
   hasPhone: boolean;
   hasEmail: boolean;
   value: number | null; // potential $ (grand_total) — POTENTIAL, not committed revenue
+}
+
+/** Did the client actually receive this quote? Goodshuffle's OWN status is the authority — it knows
+ *  "Quote Sent" vs "New Project"/"Draft" even when we don't yet hold a quote_sent_date. Returns
+ *  true (sent), false (still a draft/lead), or null (status unknown → let dates decide).
+ *
+ *  Real Zoe statuses seen in production: "Quote Sent", "New Project", "Contract Signed" (won),
+ *  "Unsigned Changes", "Lost". We match on substrings so new label variants still resolve. */
+export function sentFromStatus(statusLabel?: string | null): boolean | null {
+  const s = (statusLabel ?? "").toLowerCase().trim();
+  if (!s) return null;
+  // Working/not-yet-sent states first (so "New Project" never trips a "sent" match).
+  if (/\b(new project|new|draft|lead|template|working|building)\b/.test(s)) return false;
+  // States that mean the client has the quote / it's out.
+  if (/(quote sent|sent|proposal|quote|reserved|pending|deposit|invoice|unsigned|await)/.test(s)) return true;
+  return null;
 }
 
 export interface SalesThresholds {

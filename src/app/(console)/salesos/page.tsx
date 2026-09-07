@@ -138,6 +138,11 @@ export default async function SalesOsPage({
                     <div className="flex items-center gap-2">
                       <span className="truncate font-semibold">{l.eventName || l.clientName || `Project ${l.id}`}</span>
                       <span className={`shrink-0 border px-1.5 py-0.5 text-[10px] font-medium ${STAGE_STYLE[l.stage]}`}>{STAGE_LABEL[l.stage]}</span>
+                      {l.statusLabel && (
+                        <span className="shrink-0 border border-white/10 px-1.5 py-0.5 text-[10px] text-muted-foreground" title="Goodshuffle status">
+                          {l.statusLabel}
+                        </span>
+                      )}
                     </div>
                     <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                       <span className={`inline-block size-1.5 rounded-full ${URGENCY_DOT[l.action.urgency]}`} />

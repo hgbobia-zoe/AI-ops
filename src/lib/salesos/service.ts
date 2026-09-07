@@ -12,6 +12,7 @@ import {
   deriveSalesState,
   nextBestAction,
   priorityScore,
+  sentFromStatus,
   DEFAULT_THRESHOLDS,
   type LeadSignals,
   type SalesStage,
@@ -47,7 +48,10 @@ export interface LeadView {
 
 /** Build a LeadView (signals + derived stage/action/score) from one booking row, relative to `today`. */
 export function toLeadView(b: BookingView, today: string): LeadView {
-  const everSent = !!b.quoteSentDate;
+  // Goodshuffle's own status is the authority on whether the quote went out (it knows "Quote Sent"
+  // vs "New Project" even before we hold a quote_sent_date). Fall back to the date only when the
+  // status is unrecognized.
+  const everSent = sentFromStatus(b.statusLabel) ?? !!b.quoteSentDate;
   const ageAnchor = b.quoteSentDate ?? b.dateCreated ?? null;
   const signals: LeadSignals = {
     daysToEvent: b.eventDate ? daysBetween(today, b.eventDate) : null,
