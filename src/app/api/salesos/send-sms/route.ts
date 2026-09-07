@@ -10,6 +10,7 @@ import { getBookingById, insertMessage, smsRecentlySent, enqueueGsOp } from "@/l
 import { sendSms } from "@/lib/notify/sms";
 import { getSettings } from "@/lib/settings";
 import { viewerInitials } from "@/lib/auth/getSession";
+import { openphoneUserInitials } from "@/lib/comms/openphone";
 import { salesOsNoteLine } from "@/lib/salesos/noteFormat";
 import { todayInOpsTz } from "@/lib/dates";
 
@@ -23,7 +24,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ ok: false, disabled: true, error: "SMS sending is off — set SMS_SEND_ENABLED=true to enable." });
   }
 
-  let body: { id?: string; body?: string };
+  let body: { id?: string; body?: string; userId?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -31,6 +32,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
   const id = (body.id ?? "").trim();
   const text = (body.body ?? "").trim();
+  const userId = (body.userId ?? "").trim() || undefined; // the "Send as" Quo rep, if picked
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
   if (!text) return NextResponse.json({ error: "message body required" }, { status: 400 });
   if (text.length > MAX_LEN) return NextResponse.json({ error: `message too long (max ${MAX_LEN})` }, { status: 400 });
@@ -45,7 +47,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ ok: true, duplicate: true, message: "That exact text was just sent — not sending again." });
   }
 
-  const res = await sendSms(phone, text);
+  const res = await sendSms(phone, text, { userId });
   insertMessage({
     channel: "sms",
     provider: getSettings().smsProvider,
@@ -60,7 +62,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     // Log the sent text back into the Goodshuffle project notes so the comms history stays complete.
     // Queued for a logged-in session to write (the server can't call Goodshuffle directly).
     try {
-      const line = salesOsNoteLine(await viewerInitials(), `Sent text: "${text}"`, todayInOpsTz());
+      // Initials: the picked Quo rep first (Quo's own record matches), then the signed-in user, else "SalesOS".
+      const initials = (userId ? await openphoneUserInitials(userId) : null) ?? (await viewerInitials());
+      const line = salesOsNoteLine(initials, `Sent text: "${text}"`, todayInOpsTz());
       enqueueGsOp({ op: "note_append", transactionId: id, label: "sms sent", payload: { line } });
     } catch {
       /* note is best-effort — never fail the send over it */

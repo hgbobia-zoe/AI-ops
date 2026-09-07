@@ -36,9 +36,12 @@ function withEnvFallback(providerId: string, cfg: Record<string, string>): Recor
   return cfg;
 }
 
-export async function sendSms(to: string, body: string): Promise<SmsResult> {
+export async function sendSms(to: string, body: string, opts: { userId?: string } = {}): Promise<SmsResult> {
   const provider = smsProviderById(getSettings().smsProvider);
   const cfg = withEnvFallback(provider.id, loadSmsConfig(provider.id));
+  // OpenPhone attributes the message to this user when set (the "Send as" rep) — so Quo's own record
+  // shows the right person, not just our note.
+  if (opts.userId) cfg.userId = opts.userId;
   const e164 = toE164(to);
   if (!e164) {
     return { ok: false, error: to ? `invalid recipient phone: ${to}` : "no recipient phone" };

@@ -98,7 +98,7 @@ const openphone: SmsProviderDef = {
     const r = await fetchJson("https://api.openphone.com/v1/messages", {
       method: "POST",
       headers: { authorization: cfg.apiKey, "content-type": "application/json" },
-      body: JSON.stringify({ from: cfg.fromNumber, to: [to], content: body }),
+      body: JSON.stringify({ from: cfg.fromNumber, to: [to], content: body, ...(cfg.userId ? { userId: cfg.userId } : {}) }),
     });
     if (r.error) return { ok: false, error: r.error };
     if (!r.ok) return { ok: false, error: `openphone ${r.status}: ${(r.json.message as string) ?? ""}`.trim() };

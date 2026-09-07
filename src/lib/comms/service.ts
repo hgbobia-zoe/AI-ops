@@ -15,7 +15,7 @@ import {
   type CallEventInput,
 } from "@/lib/db/repo";
 import { analyzeSentiment } from "./sentiment";
-import { getCallTranscript, getCallSummary } from "./openphone";
+import { getCallTranscript, getCallSummary, openphoneUserInitials } from "./openphone";
 import { slackNotifyAlert } from "@/lib/notify/slack";
 import { decideCallNote } from "@/lib/salesos/callNote";
 import { initialsOf, salesOsNoteLine } from "@/lib/salesos/noteFormat";
@@ -23,7 +23,8 @@ import { todayInOpsTz } from "@/lib/dates";
 
 export interface IngestCallInput extends CallEventInput {
   callId: string; // OpenPhone call id — the idempotency key across a call's several webhook events
-  agentName?: string; // the Zoe user who handled/made the call (for the note's initials), if known
+  agentUserId?: string; // Quo user id of who handled the call (mapped to initials — the reliable source)
+  agentName?: string; // fallback name, if the event carries one instead of an id
 }
 
 const last10 = (phone?: string | null): string | null => {
@@ -32,8 +33,9 @@ const last10 = (phone?: string | null): string | null => {
 };
 
 /** Log this call to the matching project's Goodshuffle notes (conversation summary, or a brief
- *  voicemail line). Independent of sentiment, once per call, and only when we can match the number. */
-function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLogged: boolean, summary: string | null): void {
+ *  voicemail line). Independent of sentiment, once per call, and only when we can match the number.
+ *  The rep initials come from Quo's user id (who handled the call) — the reliable source — else name. */
+async function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLogged: boolean, summary: string | null): Promise<void> {
   if (alreadyLogged) return;
   const comment = decideCallNote({
     eventType: input.eventType ?? "",
@@ -46,7 +48,8 @@ function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLogged: 
   const digits = last10(custPhone);
   const booking = digits ? getBookingByPhoneDigits(digits) : null;
   if (!booking) return; // can't attach a note to a project we can't identify
-  const line = salesOsNoteLine(initialsOf(input.agentName ?? null), comment, todayInOpsTz());
+  const initials = (await openphoneUserInitials(input.agentUserId)) ?? initialsOf(input.agentName ?? null);
+  const line = salesOsNoteLine(initials, comment, todayInOpsTz());
   enqueueGsOp({ op: "note_append", transactionId: booking.bookingId, label: "call logged", payload: { line } });
   markCallNoteLogged(rowId);
 }
@@ -90,7 +93,7 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: input.contactName, eventType: input.eventType });
 
   // Log the call to Goodshuffle notes (conversation summary or voicemail) — regardless of sentiment.
-  maybeLogCallNote(id, input, !!existing?.noteLoggedAt, summary);
+  await maybeLogCallNote(id, input, !!existing?.noteLoggedAt, summary);
 
   const text = transcript ?? summary;
   if (!text) return { recorded: true, analyzed: false, alerted: false, skippedReason: "no transcript/summary yet" };

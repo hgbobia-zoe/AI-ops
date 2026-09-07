@@ -6,6 +6,7 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getProviderConfig } from "@/lib/secrets";
+import { initialsOf } from "@/lib/salesos/noteFormat";
 
 export function openphoneApiKey(): string | null {
   return getProviderConfig("openphone", ["apiKey"]).apiKey ?? process.env.OPENPHONE_API_KEY ?? null;
@@ -80,4 +81,40 @@ export async function getCallSummary(callId: string): Promise<string | null> {
   if (!data) return null;
   const summary = Array.isArray(data.summary) ? data.summary.join(" ") : data.summary ?? "";
   return summary.trim() || null;
+}
+
+// ── Quo users → initials. Quo knows who made a call / sends a text; we map the user id to initials
+// for the Goodshuffle note tag. Cached (users change rarely) so we don't refetch on every event.
+
+export interface QuoUser {
+  id: string;
+  name: string;
+  initials: string; // may be "" if a name can't form initials
+}
+
+let usersCache: { at: number; users: QuoUser[] } | null = null;
+const USERS_TTL_MS = 10 * 60 * 1000;
+
+/** The workspace's OpenPhone users (Lisa, Jessie, …). Cached for 10 min; [] when not configured. */
+export async function getOpenphoneUsers(): Promise<QuoUser[]> {
+  if (usersCache && Date.now() - usersCache.at < USERS_TTL_MS) return usersCache.users;
+  const apiKey = openphoneApiKey();
+  if (!apiKey) return usersCache?.users ?? [];
+  const json = await opGet("/users", apiKey);
+  const data = (json?.data as { id?: string; firstName?: string; lastName?: string }[]) ?? [];
+  const users = data
+    .filter((u) => u.id)
+    .map((u) => {
+      const name = [u.firstName, u.lastName].filter(Boolean).join(" ");
+      return { id: String(u.id), name, initials: initialsOf(name) ?? "" };
+    });
+  if (users.length) usersCache = { at: Date.now(), users };
+  return usersCache?.users ?? users;
+}
+
+/** Initials for a Quo user id (e.g. the rep who handled a call), or null when unknown. */
+export async function openphoneUserInitials(userId?: string | null): Promise<string | null> {
+  if (!userId) return null;
+  const u = (await getOpenphoneUsers()).find((x) => x.id === userId);
+  return u && u.initials ? u.initials : null;
 }

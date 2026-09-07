@@ -22,11 +22,17 @@ interface OpObject {
   answeredAt?: string;
   dialogue?: { content?: string; identifier?: string }[];
   summary?: string[] | string;
-  user?: { name?: string; firstName?: string; lastName?: string };
-  answeredBy?: { name?: string };
+  userId?: string;
+  user?: { id?: string; name?: string; firstName?: string; lastName?: string };
+  answeredBy?: { id?: string; name?: string };
 }
 
-/** Best-effort name of the Zoe user who handled/made the call, for the note's initials. */
+/** Best-effort Quo user id of who handled/made the call — mapped to initials for the note tag. */
+function agentUserIdOf(o: OpObject): string | undefined {
+  return o.userId || o.user?.id || o.answeredBy?.id || undefined;
+}
+
+/** Fallback: a name, if the event carries one instead of (or as well as) an id. */
 function agentNameOf(o: OpObject): string | undefined {
   const u = o.user;
   const full = u?.name || [u?.firstName, u?.lastName].filter(Boolean).join(" ") || o.answeredBy?.name;
@@ -80,6 +86,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     transcript: joinDialogue(obj.dialogue),
     summary: Array.isArray(obj.summary) ? obj.summary.join(" ") : typeof obj.summary === "string" ? obj.summary : null,
     occurredAt: obj.completedAt ?? obj.createdAt ?? payload.createdAt ?? null,
+    agentUserId: agentUserIdOf(obj),
     agentName: agentNameOf(obj),
   };
 
