@@ -1,22 +1,30 @@
 # Deploy & Configure — Zoe Dispatch
 
-One self-contained container: the Next.js app + the Goodshuffle scraper
-(Playwright/Chromium, in-process) + the SQLite database + proof-of-delivery file
-storage + the notification/ETA integrations. It needs a **persistent volume**, so it
+One self-contained container: the Next.js app + the SQLite database + proof-of-delivery
+file storage + the notification/ETA integrations. It needs a **persistent volume**, so it
 runs on a container host (Fly.io), **not** Vercel.
 
+**Goodshuffle sync does NOT run on the server.** Cloudflare blocks datacenter-IP calls, so
+Goodshuffle data is pulled by a **logged-in browser** replaying Goodshuffle's own internal
+endpoints and POSTing to our ingest APIs — the office **Auto-Pull bookmarklet** (installed
+from `/admin/pull`, run once/day in a signed-in `pro.goodshuffle.com` tab) or the Android
+kiosk WebView. The in-repo Playwright scraper is a non-working legacy fallback.
+
 ```
-Tablet ──▶ Next.js app ──▶ SQLite + POD files  (on the /data volume)
-                │
-                ├─ Start Route ─▶ Playwright + Claude Computer Use ─▶ Goodshuffle
-                ├─ each action ─▶ OpenPhone SMS · Slack · /track/<token> link
-                └─ live ETA    ─▶ Zonar (truck GPS → drive time)
+Logged-in Goodshuffle browser (office Auto-Pull bookmarklet / kiosk WebView)
+   │  replays GS internal endpoints → POSTs routes + full bookings history + drains photo push-back
+   ▼
+Next.js app ──▶ SQLite + POD files  (on the /data volume)
+   ├─ each driver action ─▶ Quo / OpenPhone SMS · Slack · /track/<token> link
+   ├─ live ETA            ─▶ GPS TrackIt / Ignition (truck GPS → drive time)
+   └─ staffing            ─▶ Connecteam (crew on schedule)
+Blades: Command Center · Sales · Ops Manager · Event Risk · Staffing · Financial · Customers · History · Automation
 Dashboard (/dispatch) ─▶ split view with Ignition (fleet telematics)
 ```
 
 Everything is configured with **environment variables** — no code changes to turn
-features on. The app runs fully with them all **off** (mock routes; SMS/Slack logged
-as "would send"; planned ETA; full-width dashboard).
+features on. The app runs fully with them all **off** (SMS/Slack logged as "would send";
+planned ETA; full-width dashboard; auth open).
 
 ---
 
@@ -25,7 +33,9 @@ as "would send"; planned ETA; full-width dashboard).
 - **URL:** https://zoe-dispatch.fly.dev
 - **Fly app:** `zoe-dispatch` · org **Zoe Events** (`personal`) · region `iad`
 - **Machine:** 1 × shared-cpu-1x / 1 GB · **Volume:** `dispatch_data` (1 GB) at `/data`
-- **State today:** mock mode, **no app auth** (open). See _TODO_ at the bottom.
+- **State today:** live Goodshuffle + Connecteam data via the office Auto-Pull; all blades
+  operational. RBAC (Owner/Admin/Member, $ redacted for Members) is **built but not yet
+  activated** — set the auth secrets (§⑦) to turn it on. See _TODO_ at the bottom.
 
 ### Redeploy (after code changes)
 
@@ -71,12 +81,19 @@ secret): `PORT`, `DATABASE_PATH=/data/dispatch.db`, `GOODSHUFFLE_STORAGE_STATE`.
 
 ## The items — what, how to get it, which key
 
-### ① Real route scraping (replaces mock routes) — needs BOTH
-| Item | How to get it | Fly key / where |
+### ① Goodshuffle data (routes + bookings) — pulled from a logged-in browser
+Cloudflare blocks server-side calls, so there's nothing to "turn on" server-side. Instead:
+1. Sign into `pro.goodshuffle.com` with a **full-access** account (must see financials).
+2. In Zoe Dispatch open **/admin/pull** → drag the **Auto-Pull** button to the bookmarks bar.
+3. Click it once each morning in the Goodshuffle tab — it then pulls routes + full bookings
+   history and drains delivery-photo push-backs every ~10 min while that tab stays open.
+
+| Item | How to get it | Fly key |
 |---|---|---|
-| Anthropic API key | [console.anthropic.com](https://console.anthropic.com) → **API Keys** → Create Key (paid, usage-based) | secret `ANTHROPIC_API_KEY` |
-| Goodshuffle login | Capture it once (see **§ Goodshuffle login** below) | file at `/data/goodshuffle-auth.json` (path already set) |
-| Goodshuffle URL | Default is correct: the RMS dispatch dashboard | secret `GOODSHUFFLE_URL` (optional) |
+| Ingest token (gates the ingest APIs) | Any long random string; the bookmarklet carries it as `x-publish-token`. Until set, ingest is **open** (fail-open). | secret `GS_INGEST_TOKEN` |
+
+(The legacy in-repo Playwright scraper — `ANTHROPIC_API_KEY`, `/data/goodshuffle-auth.json`,
+`GOODSHUFFLE_URL` — is Cloudflare-blocked and **not** part of the working path.)
 
 ### ② Customer texts (Quo / OpenPhone)
 | Item | How to get it | Fly key |
@@ -98,13 +115,16 @@ any unexpected fan-out error. Skipped-because-unconfigured cases (e.g. SMS keys 
 are **not** alerted — only genuine failures. Identical failures are throttled per
 `ALERT_THROTTLE_SECONDS` above.
 
-### ④ Live drive-time ETA (Zonar)
+### ④ Live drive-time ETA (pluggable GPS provider — GPS TrackIt / Ignition)
+GPS is a switchable provider (`GPS_PROVIDER`); the current fleet is **GPS TrackIt** (also the
+Ignition fleet view). ETA/tracking links are minted from the kiosk's logged-in Ignition session,
+with the customer-notify number forced to the Zoe main line.
 | Item | How to get it | Fly key |
 |---|---|---|
-| Zonar account creds | From your Zonar account / rep: customer id + API username + password | `ZONAR_CUSTOMER`, `ZONAR_USERNAME`, `ZONAR_PASSWORD` |
-| Truck → asset map | Your Zonar asset/GPS ids per truck | `ZONAR_ASSETS_JSON` — e.g. `{"NPR-1":"1234","NPR-2":"1235"}` |
-| ETA action name | From Zonar API docs/support (their docs are login-gated; confirm the `showeta`-style action) | `ZONAR_ETA_ACTION` |
-| Timezone | For arrival clock times (default America/New_York) | `ETA_TIMEZONE` |
+| Provider select | e.g. `gpstrackit` | `GPS_PROVIDER` |
+| GPS TrackIt API key | From your GPS TrackIt / Ignition account | `GPSTRACKIT_API_KEY` (+ optional `GPSTRACKIT_BASE_URL`) |
+| Truck → unit map | Your GPS unit ids per truck | `GPSTRACKIT_UNITS_JSON` — e.g. `{"NPR-1":"200149626","E450":"200149627"}` |
+| Timezone | Arrival clock times (default America/New_York) | `ETA_TIMEZONE` |
 
 ### ⑤ Dashboard split view (Ignition)
 | Item | How to get it | Fly key |
@@ -117,11 +137,31 @@ are **not** alerted — only genuine failures. Identical failures are throttled 
 |---|---|---|
 | Google Maps key | [console.cloud.google.com](https://console.cloud.google.com) → new project → enable **Geocoding API** + **Directions API** → **Credentials** → API key (billing required) | `GOOGLE_MAPS_API_KEY` |
 
+### ⑦ App authentication / RBAC (Owner · Admin · Member)
+Set these to turn on sign-in + role-based financial redaction (Members see no $; Owner/Admin do):
+| Item | How to get it | Fly key |
+|---|---|---|
+| Session-signing secret | Any long random string (`openssl rand -hex 32`) | `APP_SESSION_TOKEN` |
+| First Owner | Pick a username + strong password; the app bootstraps this Owner on boot | `OWNER_USERNAME`, `OWNER_PASSWORD` |
+
+Then add teammates in **/admin/users**. `GS_INGEST_TOKEN` (§①) additionally gates the ingest APIs.
+
+### ⑧ Staffing (Connecteam)
+| Item | How to get it | Fly key |
+|---|---|---|
+| Connecteam API key | Connecteam → Settings → Developer / API → generate | `CONNECTEAM_API_KEY` |
+
+Powers **People on Schedule** + the staffing/capacity risk signals. Unset ⇒ staffing shows
+**UNVERIFIED** (never assumed empty).
+
 Full list with inline notes: [.env.example](.env.example).
 
 ---
 
-## Goodshuffle login (the storage-state file)
+## Goodshuffle login (the storage-state file) — legacy scraper only
+
+> Not needed for the working browser-pull path (§①); this is only for the Cloudflare-blocked
+> in-repo Playwright scraper. Keep for reference.
 
 `GOODSHUFFLE_STORAGE_STATE` is **not** a pasted secret — it's a saved browser session
 (cookies + local storage) so the scraper starts already logged in, without a password
@@ -217,12 +257,13 @@ npm test          # Vitest — state machine, parsers, DB dedupe/roundtrip
 
 ---
 
-## TODO before real customer traffic
+## TODO / activation
 
-- **App authentication** — the app is currently open (anyone with the URL can drive
-  state / trigger texts). Add sign-in before wiring OpenPhone with a real key.
-- Point the truck tablets at `https://zoe-dispatch.fly.dev` (Add to Home Screen for
-  the full-screen PWA).
+- **Turn on auth** — RBAC is built but open by default; set `APP_SESSION_TOKEN` +
+  `OWNER_USERNAME`/`OWNER_PASSWORD` (§⑦) to require sign-in before wiring real SMS keys.
+- **Owned-inventory master** — until it exists, item over-booking checks stay UNVERIFIED
+  (never inferred from bookings).
+- Point the truck tablets at `https://zoe-dispatch.fly.dev` (Add to Home Screen for the PWA).
 
 ## Local dev
 
