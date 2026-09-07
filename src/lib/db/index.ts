@@ -429,6 +429,7 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "client_notes", type: "TEXT" }, // GS clientVisibleNotes — client-facing context (e.g. "on leave")
   { table: "bookings", column: "last_sent_date", type: "TEXT" }, // GS dateLastSent — when the quote/contract was last emailed
   { table: "bookings", column: "notes_updated_at", type: "TEXT" }, // when we last captured this lead's notes
+  { table: "call_events", column: "note_logged_at", type: "TEXT" }, // when we queued a GS note for this call (dedupe)
 ];
 
 function migrate(db: DB): void {

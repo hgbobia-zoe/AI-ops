@@ -97,11 +97,14 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
     // Delivery photos are captured in the driver app and stored on our volume; this replays each as a
     // multipart upload to the project's Files tab (POST /app/files/uploadFileToProject?transactionID=…)
     // from THIS logged-in session, then acks so it's never pushed twice.
+    function ackOp(id,ok,err){ return fetch(API+"/api/gs/outbox",{method:"POST",headers:POSTH(),body:JSON.stringify({id:id, ok:ok, error:ok?undefined:err})}).catch(function(){}); }
     function drainOutbox(){
       return fetch(API+"/api/gs/outbox",{headers:POSTH()}).then(function(r){return r.json();}).then(function(j){
-        var ops=((j&&j.ops)||[]).filter(function(o){ return o.op==="photo_upload" && o.transactionId && o.payload && o.payload.photoIds && o.payload.photoIds.length; });
-        var pushed=0, failed=0, chain=Promise.resolve();
-        ops.forEach(function(o){
+        var all=((j&&j.ops)||[]);
+        var photoOps=all.filter(function(o){ return o.op==="photo_upload" && o.transactionId && o.payload && o.payload.photoIds && o.payload.photoIds.length; });
+        var noteOps=all.filter(function(o){ return o.op==="note_append" && o.transactionId && o.payload && o.payload.line; });
+        var pushed=0, failed=0, notes=0, chain=Promise.resolve();
+        photoOps.forEach(function(o){
           chain=chain.then(function(){
             var ok=Promise.resolve(true);
             o.payload.photoIds.forEach(function(pid){
@@ -112,13 +115,22 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
                 }).catch(function(){ return false; });
               });
             });
-            return ok.then(function(done){ if(done)pushed++; else failed++;
-              return fetch(API+"/api/gs/outbox",{method:"POST",headers:POSTH(),body:JSON.stringify({id:o.id, ok:done, error:done?undefined:"photo_upload_failed"})}).catch(function(){});
-            });
+            return ok.then(function(done){ if(done)pushed++; else failed++; return ackOp(o.id,done,"photo_upload_failed"); });
           });
         });
-        return chain.then(function(){ return {pushed:pushed, failed:failed}; });
-      }).catch(function(){ return {pushed:0, failed:0}; });
+        // note_append: read the project's current notes, append our line to internalNotes, save it back.
+        noteOps.forEach(function(o){
+          chain=chain.then(function(){
+            return fetch("/app/vendorTransaction/initContractView?transactionID="+encodeURIComponent(o.transactionId),{headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(cv){
+              var cur=(cv.internalNotes||"");
+              var newInt=(cur ? cur+"\n\n" : "")+o.payload.line;
+              var body=new URLSearchParams({ transactionID:String(o.transactionId), clientVisibleNotes:(cv.clientVisibleNotes||""), internalNotes:newInt, fulfillmentNotes:(cv.fulfillmentNotes||"") });
+              return fetch("/app/vendorTransaction/saveEventNotes",{method:"POST",headers:{"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"},credentials:"include",body:body}).then(function(r){ return r.ok; });
+            }).then(function(ok){ if(ok)notes++; else failed++; return ackOp(o.id,ok,"note_append_failed"); }).catch(function(){ failed++; return ackOp(o.id,false,"note_append_error"); });
+          });
+        });
+        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes}; });
+      }).catch(function(){ return {pushed:0, failed:0, notes:0}; });
     }
 
     // Finish a cycle: one-shot fades the banner; auto keeps a persistent status with the last-run time.

@@ -9,14 +9,46 @@ import {
   updateCallContent,
   setCallSentiment,
   markCallAlerted,
+  markCallNoteLogged,
+  getBookingByPhoneDigits,
+  enqueueGsOp,
   type CallEventInput,
 } from "@/lib/db/repo";
 import { analyzeSentiment } from "./sentiment";
 import { getCallTranscript, getCallSummary } from "./openphone";
 import { slackNotifyAlert } from "@/lib/notify/slack";
+import { decideCallNote } from "@/lib/salesos/callNote";
+import { initialsOf, salesOsNoteLine } from "@/lib/salesos/noteFormat";
+import { todayInOpsTz } from "@/lib/dates";
 
 export interface IngestCallInput extends CallEventInput {
   callId: string; // OpenPhone call id — the idempotency key across a call's several webhook events
+  agentName?: string; // the Zoe user who handled/made the call (for the note's initials), if known
+}
+
+const last10 = (phone?: string | null): string | null => {
+  const d = (phone ?? "").replace(/\D/g, "");
+  return d.length >= 10 ? d.slice(-10) : null;
+};
+
+/** Log this call to the matching project's Goodshuffle notes (conversation summary, or a brief
+ *  voicemail line). Independent of sentiment, once per call, and only when we can match the number. */
+function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLogged: boolean, summary: string | null): void {
+  if (alreadyLogged) return;
+  const comment = decideCallNote({
+    eventType: input.eventType ?? "",
+    direction: input.direction ?? null,
+    durationSec: input.durationSec ?? null,
+    summary,
+  });
+  if (!comment) return;
+  const custPhone = input.direction === "outgoing" ? input.toPhone : input.fromPhone;
+  const digits = last10(custPhone);
+  const booking = digits ? getBookingByPhoneDigits(digits) : null;
+  if (!booking) return; // can't attach a note to a project we can't identify
+  const line = salesOsNoteLine(initialsOf(input.agentName ?? null), comment, todayInOpsTz());
+  enqueueGsOp({ op: "note_append", transactionId: booking.bookingId, label: "call logged", payload: { line } });
+  markCallNoteLogged(rowId);
 }
 
 export interface IngestResult {
@@ -56,6 +88,9 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   let summary = (input.summary ?? "").trim() || null;
   if (!transcript && !summary) summary = await getCallSummary(callId);
   updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: input.contactName, eventType: input.eventType });
+
+  // Log the call to Goodshuffle notes (conversation summary or voicemail) — regardless of sentiment.
+  maybeLogCallNote(id, input, !!existing?.noteLoggedAt, summary);
 
   const text = transcript ?? summary;
   if (!text) return { recorded: true, analyzed: false, alerted: false, skippedReason: "no transcript/summary yet" };

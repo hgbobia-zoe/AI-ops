@@ -22,6 +22,15 @@ interface OpObject {
   answeredAt?: string;
   dialogue?: { content?: string; identifier?: string }[];
   summary?: string[] | string;
+  user?: { name?: string; firstName?: string; lastName?: string };
+  answeredBy?: { name?: string };
+}
+
+/** Best-effort name of the Zoe user who handled/made the call, for the note's initials. */
+function agentNameOf(o: OpObject): string | undefined {
+  const u = o.user;
+  const full = u?.name || [u?.firstName, u?.lastName].filter(Boolean).join(" ") || o.answeredBy?.name;
+  return full || undefined;
 }
 interface OpEvent {
   id?: string;
@@ -71,6 +80,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     transcript: joinDialogue(obj.dialogue),
     summary: Array.isArray(obj.summary) ? obj.summary.join(" ") : typeof obj.summary === "string" ? obj.summary : null,
     occurredAt: obj.completedAt ?? obj.createdAt ?? payload.createdAt ?? null,
+    agentName: agentNameOf(obj),
   };
 
   // Fire-and-forget: transcript fetch + LLM can take seconds; don't make OpenPhone wait.

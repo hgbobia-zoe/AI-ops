@@ -902,6 +902,21 @@ export function getBookingById(id: string): BookingView | null {
   return r ? toBookingView(r) : null;
 }
 
+/** Best booking match for a phone number (last 10 digits), preferring an open lead then the most
+ *  recent — so a call can be attached to the right project. Null if no booking has that number. */
+export function getBookingByPhoneDigits(digits10: string): BookingView | null {
+  if (!/^\d{10}$/.test(digits10)) return null;
+  const r = getDb()
+    .prepare(
+      `SELECT * FROM bookings
+       WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(client_phone,''),'(',''),')',''),'-',''),' ',''),'+',''),'.','') LIKE '%' || ?
+       ORDER BY (signed = 0) DESC, COALESCE(event_date,'') DESC
+       LIMIT 1`,
+    )
+    .get(digits10) as Record<string, unknown> | undefined;
+  return r ? toBookingView(r) : null;
+}
+
 /** Row counts for the Data Health view — so "no freshness signal" isn't shown as "no data at all"
  *  when the tables actually hold (stale) rows from an earlier pull. */
 export function getDataCounts(): { bookings: number; routes: number } {
@@ -1622,6 +1637,7 @@ export interface CallEventView {
   reasons: string[];
   llmModel: string | null;
   alertedAt: string | null;
+  noteLoggedAt: string | null;
   occurredAt: string | null;
   ts: string;
 }
@@ -1650,9 +1666,15 @@ function toCallEvent(r: Record<string, unknown>): CallEventView {
     reasons,
     llmModel: (r.llm_model as string) ?? null,
     alertedAt: (r.alerted_at as string) ?? null,
+    noteLoggedAt: (r.note_logged_at as string) ?? null,
     occurredAt: (r.occurred_at as string) ?? null,
     ts: String(r.ts),
   };
+}
+
+/** Mark that we've queued a Goodshuffle note for this call — so a duplicate webhook never double-logs. */
+export function markCallNoteLogged(id: string): void {
+  getDb().prepare("UPDATE call_events SET note_logged_at=? WHERE id=?").run(new Date().toISOString(), id);
 }
 
 /** Insert a call event if its OpenPhone id is new (idempotent). Returns the row id, or null if a

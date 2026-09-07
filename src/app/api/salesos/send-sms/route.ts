@@ -6,9 +6,12 @@
 // logged to the messages table.
 
 import { NextResponse } from "next/server";
-import { getBookingById, insertMessage, smsRecentlySent } from "@/lib/db/repo";
+import { getBookingById, insertMessage, smsRecentlySent, enqueueGsOp } from "@/lib/db/repo";
 import { sendSms } from "@/lib/notify/sms";
 import { getSettings } from "@/lib/settings";
+import { viewerInitials } from "@/lib/auth/getSession";
+import { salesOsNoteLine } from "@/lib/salesos/noteFormat";
+import { todayInOpsTz } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +56,16 @@ export async function POST(req: Request): Promise<NextResponse> {
     error: res.error,
   });
 
-  if (res.ok) return NextResponse.json({ ok: true, providerMsgId: res.providerMsgId });
+  if (res.ok) {
+    // Log the sent text back into the Goodshuffle project notes so the comms history stays complete.
+    // Queued for a logged-in session to write (the server can't call Goodshuffle directly).
+    try {
+      const line = salesOsNoteLine(await viewerInitials(), `Sent text: "${text}"`, todayInOpsTz());
+      enqueueGsOp({ op: "note_append", transactionId: id, label: "sms sent", payload: { line } });
+    } catch {
+      /* note is best-effort — never fail the send over it */
+    }
+    return NextResponse.json({ ok: true, providerMsgId: res.providerMsgId });
+  }
   return NextResponse.json({ ok: false, error: res.error ?? "send failed", skipped: res.skipped });
 }

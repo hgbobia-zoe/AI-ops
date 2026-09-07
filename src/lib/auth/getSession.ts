@@ -6,6 +6,8 @@
 
 import { cookies } from "next/headers";
 import { verifySession, SESSION_COOKIE, type Session } from "./session";
+import { getUser } from "./users";
+import { initialsOf } from "@/lib/salesos/noteFormat";
 import type { Role } from "./roles";
 
 export function authEnabled(): boolean {
@@ -23,4 +25,16 @@ export async function getSession(): Promise<Session | null> {
 export async function viewerRole(): Promise<Role> {
   if (!authEnabled()) return "owner";
   return (await getSession())?.role ?? "member";
+}
+
+/** The signed-in rep's initials (for tagging automated Goodshuffle notes), or null when unknown
+ *  (auth disabled, or no name on the account) — callers fall back to a generic "SalesOS" tag. */
+export async function viewerInitials(): Promise<string | null> {
+  const s = await getSession();
+  if (!s) return null;
+  try {
+    return initialsOf(getUser(s.uid)?.name ?? null);
+  } catch {
+    return null;
+  }
 }
