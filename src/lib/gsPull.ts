@@ -43,7 +43,17 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
           // NB: Goodshuffle's searchProjects field is contract_subtotal (there is no contract_total).
           return { bookingId:String(p.id), eventName:p.eventName||"", eventDate:d2(p.logistics_start_date), statusLabel:p.statusLabel||"", signed:!!p.signed, grandTotalCents:p.grand_total, contractTotalCents:p.contract_subtotal, amountPaidCents:p.amount_paid, amountDueCents:p.amount_due, clientName:p.client_name||"", clientEmail:p.client_email||"", clientPhone:p.client_phone||"", quoteSentDate:d2(p.quote_sent_date), dateCreated:d2(p.date_created), venue:p.venueLabel||"", location:p.cityStateZipCounty||"" }; });
         if(!recs.length) return { saved:0, partial:pErr };
-        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr})}).then(function(r){return r.json();}).then(function(j){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial) }; }).catch(function(){ return { saved:0, partial:true }; });
+        // OPEN leads (unsigned, not lost, future/undated) get their comms history captured too — the
+        // team's call/text/email log lives in each project's internalNotes (via initContractView).
+        var todayY=new Date().toISOString().slice(0,10);
+        var openIds=Object.keys(all).filter(function(id){ var p=all[id]; if(p.signed) return false; var s=(p.statusLabel||"").toLowerCase(); if(s.indexOf("lost")>=0||s.indexOf("cancel")>=0||s.indexOf("dead")>=0) return false; var d=d2(p.logistics_start_date); return !d || d>=todayY; }).slice(0,80);
+        function pullNotes(){
+          var notes=[];
+          function one(i){ if(i>=openIds.length) return Promise.resolve(); var id=openIds[i];
+            return fetch("/app/vendorTransaction/initContractView?transactionID="+id,H).then(function(r){ if(!r.ok) return; return r.json().then(function(j){ notes.push({ bookingId:String(id), internalNotes:(j.internalNotes||"").trim(), clientNotes:(j.clientVisibleNotes||"").trim(), lastSentDate:null }); }); }).catch(function(){}).then(function(){ return one(i+1); }); }
+          return one(0).then(function(){ if(!notes.length) return {updated:0}; return fetch(API+"/api/gs/notes",{method:"POST",headers:POSTH(),body:JSON.stringify({notes:notes})}).then(function(r){return r.json();}).catch(function(){return {updated:0};}); });
+        }
+        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr})}).then(function(r){return r.json();}).then(function(j){ return pullNotes().then(function(nj){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:(nj&&nj.updated)||0 }; }); }).catch(function(){ return { saved:0, partial:true }; });
       });
     }
 
