@@ -3,7 +3,7 @@
 // act like a seasoned one: what to touch first, and exactly what to do. RULES CALCULATE — no LLM here.
 
 import Link from "next/link";
-import { Sparkles, Phone, MessageSquare, Mail, HelpCircle, ChevronRight, AlertTriangle, EyeOff, TrendingDown, Scale } from "lucide-react";
+import { Sparkles, Phone, MessageSquare, Mail, HelpCircle, ChevronRight, AlertTriangle, EyeOff, TrendingDown, Scale, CalendarRange } from "lucide-react";
 import { salesLeads } from "@/lib/salesos/service";
 import { STAGE_LABEL, type SalesStage, type ActionChannel } from "@/lib/salesos/calc";
 import { viewerRole } from "@/lib/auth/getSession";
@@ -66,6 +66,12 @@ export default async function SalesOsPage({
             <Sparkles className="size-7" /> Sales OS
           </h1>
           <div className="mt-1 flex shrink-0 items-center gap-2">
+            <Link
+              href="/salesos/trends"
+              className="flex items-center gap-1.5 border border-white/10 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
+            >
+              <CalendarRange className="size-3.5" /> Trends
+            </Link>
             {showMoney && (
               <Link
                 href="/salesos/bid"

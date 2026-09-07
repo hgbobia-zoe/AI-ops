@@ -527,6 +527,8 @@ export interface BookingRecord {
   clientPhone?: string;
   quoteSentDate?: string | null; // YYYY-MM-DD
   dateCreated?: string | null; // YYYY-MM-DD
+  venue?: string | null;
+  location?: string | null; // city/state/zip/county string
 }
 
 export interface BookingView {
@@ -544,6 +546,8 @@ export interface BookingView {
   quoteSentDate: string | null;
   dateCreated: string | null;
   lossReason: string | null;
+  venue: string | null;
+  location: string | null;
 }
 
 function toBookingView(r: Record<string, unknown>): BookingView {
@@ -562,6 +566,8 @@ function toBookingView(r: Record<string, unknown>): BookingView {
     quoteSentDate: (r.quote_sent_date as string) ?? null,
     dateCreated: (r.date_created as string) ?? null,
     lossReason: (r.loss_reason as string) ?? null,
+    venue: (r.venue as string) ?? null,
+    location: (r.location as string) ?? null,
   };
 }
 
@@ -590,14 +596,14 @@ export function saveBookings(items: BookingRecord[]): void {
   const up = db.prepare(
     `INSERT INTO bookings (booking_id, event_name, event_date, status_label, signed, contract_total,
        grand_total, amount_paid, amount_due, client_name, client_email, client_phone, quote_sent_date,
-       date_created, updated_at)
+       date_created, venue, location, updated_at)
      VALUES (@bookingId,@eventName,@eventDate,@statusLabel,@signed,@contractTotal,@grandTotal,
-       @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@now)
+       @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@venue,@location,@now)
      ON CONFLICT(booking_id) DO UPDATE SET event_name=@eventName, event_date=@eventDate,
        status_label=@statusLabel, signed=@signed, contract_total=@contractTotal, grand_total=@grandTotal,
        amount_paid=@amountPaid, amount_due=@amountDue, client_name=@clientName, client_email=@clientEmail,
        client_phone=@clientPhone, quote_sent_date=@quoteSentDate, date_created=@dateCreated,
-       updated_at=@now`,
+       venue=@venue, location=@location, updated_at=@now`,
   );
   const tx = db.transaction(() => {
     for (const i of items)
@@ -616,6 +622,8 @@ export function saveBookings(items: BookingRecord[]): void {
         clientPhone: i.clientPhone ?? null,
         quoteSentDate: i.quoteSentDate ?? null,
         dateCreated: i.dateCreated ?? null,
+        venue: i.venue ?? null,
+        location: i.location ?? null,
         now,
       });
   });

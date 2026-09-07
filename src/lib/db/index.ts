@@ -423,6 +423,8 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "client_phone", type: "TEXT" }, // customer phone (Sales OS SMS/call)
   { table: "bookings", column: "loss_reason", type: "TEXT" }, // team-tagged reason a quote was lost (Goodshuffle has none)
   { table: "bookings", column: "loss_reason_at", type: "TEXT" }, // when the loss reason was recorded
+  { table: "bookings", column: "venue", type: "TEXT" }, // Goodshuffle venueLabel — for win-rate-by-venue
+  { table: "bookings", column: "location", type: "TEXT" }, // Goodshuffle cityStateZipCounty — for win-rate-by-area (DC/MD/VA)
 ];
 
 function migrate(db: DB): void {

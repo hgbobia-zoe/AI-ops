@@ -38,6 +38,8 @@ interface InProject {
   clientPhone?: string;
   quoteSentDate?: string | null;
   dateCreated?: string | null;
+  venue?: string | null;
+  location?: string | null;
 }
 
 const dollars = (cents: number | undefined): number | null =>
@@ -78,6 +80,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       clientPhone: p.clientPhone,
       quoteSentDate: ymd(p.quoteSentDate),
       dateCreated: ymd(p.dateCreated),
+      venue: p.venue?.trim() || null,
+      location: p.location?.trim() || null,
     });
   }
   if (records.length > 0) saveBookings(records);
