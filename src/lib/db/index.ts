@@ -421,6 +421,8 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "quote_sent_date", type: "TEXT" }, // YYYY-MM-DD — when the quote was sent (Sales OS quote age)
   { table: "bookings", column: "date_created", type: "TEXT" }, // YYYY-MM-DD — lead/project created (lead age)
   { table: "bookings", column: "client_phone", type: "TEXT" }, // customer phone (Sales OS SMS/call)
+  { table: "bookings", column: "loss_reason", type: "TEXT" }, // team-tagged reason a quote was lost (Goodshuffle has none)
+  { table: "bookings", column: "loss_reason_at", type: "TEXT" }, // when the loss reason was recorded
 ];
 
 function migrate(db: DB): void {

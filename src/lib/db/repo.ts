@@ -543,6 +543,7 @@ export interface BookingView {
   clientPhone: string;
   quoteSentDate: string | null;
   dateCreated: string | null;
+  lossReason: string | null;
 }
 
 function toBookingView(r: Record<string, unknown>): BookingView {
@@ -560,6 +561,7 @@ function toBookingView(r: Record<string, unknown>): BookingView {
     clientPhone: String(r.client_phone ?? ""),
     quoteSentDate: (r.quote_sent_date as string) ?? null,
     dateCreated: (r.date_created as string) ?? null,
+    lossReason: (r.loss_reason as string) ?? null,
   };
 }
 
@@ -822,6 +824,29 @@ export function getOpenLeads(todayYmd: string): BookingView[] {
       )
       .all(todayYmd) as Record<string, unknown>[]
   ).map(toBookingView);
+}
+
+/** Lost/cancelled quotes (the post-mortem set for the Lost Quotes tracker), most recent event first. */
+export function getLostQuotes(): BookingView[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM bookings
+         WHERE LOWER(COALESCE(status_label,'')) LIKE '%lost%'
+            OR LOWER(COALESCE(status_label,'')) LIKE '%cancel%'
+            OR LOWER(COALESCE(status_label,'')) LIKE '%dead%'
+         ORDER BY COALESCE(event_date, date_created, '') DESC`,
+      )
+      .all() as Record<string, unknown>[]
+  ).map(toBookingView);
+}
+
+/** Team-tag (or clear, with null) why a quote was lost. Goodshuffle stores no reason, so this is how
+ *  the loss-reason dataset gets built. */
+export function setLossReason(id: string, reason: string | null): void {
+  getDb()
+    .prepare("UPDATE bookings SET loss_reason = ?, loss_reason_at = ? WHERE booking_id = ?")
+    .run(reason && reason.trim() ? reason.trim() : null, reason && reason.trim() ? new Date().toISOString() : null, id);
 }
 
 /** A single booking by Goodshuffle project id — for the Sales OS lead detail. */
