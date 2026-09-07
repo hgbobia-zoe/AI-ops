@@ -21,6 +21,7 @@ const PUBLIC: string[] = [
   "/api/finance/revenue", // own token; hit by the pull, not a person
   "/api/route/import",
   "/api/gs/projects",
+  "/api/gs/notes",
   "/api/gs/outbox",
   "/api/openphone/webhook", // OpenPhone → us; authenticates by HMAC signature, not a session
 ];

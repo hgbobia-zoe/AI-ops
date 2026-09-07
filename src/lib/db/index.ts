@@ -425,6 +425,10 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "loss_reason_at", type: "TEXT" }, // when the loss reason was recorded
   { table: "bookings", column: "venue", type: "TEXT" }, // Goodshuffle venueLabel — for win-rate-by-venue
   { table: "bookings", column: "location", type: "TEXT" }, // Goodshuffle cityStateZipCounty — for win-rate-by-area (DC/MD/VA)
+  { table: "bookings", column: "internal_notes", type: "TEXT" }, // GS internalNotes — the team's call/text/email log (comms history)
+  { table: "bookings", column: "client_notes", type: "TEXT" }, // GS clientVisibleNotes — client-facing context (e.g. "on leave")
+  { table: "bookings", column: "last_sent_date", type: "TEXT" }, // GS dateLastSent — when the quote/contract was last emailed
+  { table: "bookings", column: "notes_updated_at", type: "TEXT" }, // when we last captured this lead's notes
 ];
 
 function migrate(db: DB): void {

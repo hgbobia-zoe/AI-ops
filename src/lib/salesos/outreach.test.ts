@@ -1,0 +1,64 @@
+import { describe, it, expect } from "vitest";
+import { summarizeComms, templateOutreach, type OutreachLead } from "./outreach";
+
+const GRADY_NOTES = `8/28 - JM SENT THE QUOTE
+
+8/29 - JM MADE A FOLLOW-UP CALL - NO RESPONSE - SENT A MESSAGE - AN EMAIL
+
+9/1 - JM MADE A FOLLOW-UP CALL - NO RESPONSE - LEAVE A VOICEMAIL - SENT AN EMAIL
+
+9/2 - JM SENT A FOLLOW-UP MESSAGE & EMAIL
+
+9/8 - JM MADE A FOLLOW-UP CALL - NO RESPONSE - LEAVE A VOICEMAIL - SENT A MESSAGE`;
+
+describe("outreach — summarizeComms", () => {
+  it("counts dated attempts, spots channels, and flags a no-response streak", () => {
+    const c = summarizeComms(GRADY_NOTES, "DEVIN IS ON PATERNITY LEAVE");
+    expect(c.attempts).toBe(5);
+    expect(c.lastContact).toBe("9/8");
+    expect(c.channels).toEqual(expect.arrayContaining(["call", "text", "email", "voicemail"]));
+    expect(c.noResponse).toBe(true);
+    expect(c.clientContext).toBe("DEVIN IS ON PATERNITY LEAVE");
+  });
+
+  it("is empty and honest when there are no notes", () => {
+    const c = summarizeComms(null, null);
+    expect(c.attempts).toBe(0);
+    expect(c.lastContact).toBeNull();
+    expect(c.channels).toEqual([]);
+    expect(c.noResponse).toBe(false);
+  });
+});
+
+const lead = (stage: OutreachLead["stage"]): OutreachLead => ({
+  firstName: "Devin Grady",
+  eventName: "UDC Banquet",
+  eventDateLong: "Saturday, Sep 20",
+  daysToEvent: 6,
+  stage,
+});
+
+describe("outreach — templateOutreach", () => {
+  it("uses the first name and event in the message", () => {
+    const d = templateOutreach(lead("follow_up"), summarizeComms(null, null));
+    expect(d.sms).toContain("Devin");
+    expect(d.sms).toContain("UDC Banquet");
+    expect(d.source).toBe("template");
+  });
+
+  it("surfaces a client-context caution when one exists", () => {
+    const d = templateOutreach(lead("cold"), summarizeComms(GRADY_NOTES, "DEVIN IS ON PATERNITY LEAVE"));
+    expect(d.caution).toMatch(/paternity leave/i);
+  });
+
+  it("warns to change approach after many unanswered attempts (no client note)", () => {
+    const d = templateOutreach(lead("cold"), summarizeComms(GRADY_NOTES, null));
+    expect(d.caution).toMatch(/change the approach/i);
+  });
+
+  it("an unsent lead is told to send the quote now", () => {
+    const d = templateOutreach(lead("unsent"), summarizeComms(null, null));
+    expect(d.cadence).toMatch(/now/i);
+    expect(d.callStrategy).toMatch(/send the quote/i);
+  });
+});

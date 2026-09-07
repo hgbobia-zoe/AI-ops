@@ -40,6 +40,9 @@ export interface LeadView {
   amountDue: number | null;
   quoteSentDate: string | null;
   dateCreated: string | null;
+  internalNotes: string | null; // GS comms log (calls/texts/emails)
+  clientNotes: string | null; // GS client-visible context
+  lastSentDate: string | null;
   signals: LeadSignals;
   stage: SalesStage;
   action: NextAction;
@@ -75,6 +78,9 @@ export function toLeadView(b: BookingView, today: string): LeadView {
     amountDue: b.amountDue,
     quoteSentDate: b.quoteSentDate,
     dateCreated: b.dateCreated,
+    internalNotes: b.internalNotes,
+    clientNotes: b.clientNotes,
+    lastSentDate: b.lastSentDate,
     signals,
     stage,
     action: nextBestAction(stage, signals),

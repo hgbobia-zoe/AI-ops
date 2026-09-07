@@ -548,6 +548,9 @@ export interface BookingView {
   lossReason: string | null;
   venue: string | null;
   location: string | null;
+  internalNotes: string | null;
+  clientNotes: string | null;
+  lastSentDate: string | null;
 }
 
 function toBookingView(r: Record<string, unknown>): BookingView {
@@ -568,7 +571,43 @@ function toBookingView(r: Record<string, unknown>): BookingView {
     lossReason: (r.loss_reason as string) ?? null,
     venue: (r.venue as string) ?? null,
     location: (r.location as string) ?? null,
+    internalNotes: (r.internal_notes as string) ?? null,
+    clientNotes: (r.client_notes as string) ?? null,
+    lastSentDate: (r.last_sent_date as string) ?? null,
   };
+}
+
+export interface LeadNotesRecord {
+  bookingId: string;
+  internalNotes?: string | null;
+  clientNotes?: string | null;
+  lastSentDate?: string | null; // YYYY-MM-DD
+}
+
+/** Attach captured Goodshuffle notes (comms history) to existing bookings, keyed by project id. Only
+ *  updates rows that already exist — notes ride on top of the projects pull. */
+export function saveLeadNotes(items: LeadNotesRecord[]): number {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const up = db.prepare(
+    `UPDATE bookings SET internal_notes=@internalNotes, client_notes=@clientNotes,
+       last_sent_date=@lastSentDate, notes_updated_at=@now WHERE booking_id=@bookingId`,
+  );
+  let n = 0;
+  const tx = db.transaction(() => {
+    for (const i of items) {
+      const r = up.run({
+        bookingId: i.bookingId,
+        internalNotes: i.internalNotes ?? null,
+        clientNotes: i.clientNotes ?? null,
+        lastSentDate: i.lastSentDate ?? null,
+        now,
+      });
+      n += r.changes;
+    }
+  });
+  tx();
+  return n;
 }
 
 /** Upsert bookings (from a searchProjects pull), keyed by Goodshuffle project id. Logs a

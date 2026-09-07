@@ -4,7 +4,8 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff } from "lucide-react";
+import { ArrowLeft, Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, MessagesSquare } from "lucide-react";
+import { OutreachPanel } from "@/components/OutreachPanel";
 import { getLead } from "@/lib/salesos/service";
 import { STAGE_LABEL, type SalesStage } from "@/lib/salesos/calc";
 import { formatYmdLong } from "@/lib/dates";
@@ -90,6 +91,22 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
           </a>
         </div>
       </section>
+
+      {/* Suggested outreach — message copy + call strategy, on demand */}
+      <OutreachPanel id={lead.id} />
+
+      {/* Prior contact — the Goodshuffle comms log the outreach is based on */}
+      {lead.internalNotes && (
+        <section className="surface mb-4 border border-white/10 p-4">
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+            <MessagesSquare className="size-3.5" /> Prior contact (from Goodshuffle)
+          </div>
+          {lead.clientNotes && (
+            <p className="mb-2 border border-amber-500/30 bg-amber-500/[0.07] p-2 text-xs text-amber-100">{lead.clientNotes}</p>
+          )}
+          <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap border border-white/5 bg-white/[0.02] p-2.5 text-xs text-muted-foreground">{lead.internalNotes}</pre>
+        </section>
+      )}
 
       {/* Why this priority — the explainable breakdown */}
       <section className="surface mb-4 border border-white/10 p-4">
