@@ -6,11 +6,11 @@
 import Link from "next/link";
 import {
   AlertTriangle, ArrowRight, DollarSign, TrendingUp, Users, Radar, Truck, Boxes,
-  CalendarDays, Gauge, Clock, CircleCheck, CircleDot, Sparkles,
+  CalendarDays, Gauge, Clock, CircleCheck, CircleDot, Sparkles, ListChecks,
 } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { commandCenter } from "@/lib/command/service";
-import { pctOfTarget, type OpStatus } from "@/lib/command/calc";
+import { type OpStatus, type RevenueStatus } from "@/lib/command/calc";
 import { formatYmdLong } from "@/lib/dates";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
@@ -18,10 +18,10 @@ import type { Priority } from "@/lib/ops/manager";
 
 export const dynamic = "force-dynamic";
 
+// Exact figures with thousands separators (whole dollars) — never abbreviated to $K/$M. Managers
+// want the real number; abbreviation loses precision they use for decisions.
 const money = (n: number | null | undefined): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
 const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? "" : "s"}`;
-const moneyK = (n: number | null | undefined): string =>
-  n == null ? "—" : Math.abs(n) >= 1000 ? "$" + (n / 1000).toFixed(1) + "K" : "$" + Math.round(n);
 
 const STATUS_META: Record<OpStatus, { label: string; cls: string }> = {
   quiet: { label: "Quiet", cls: "border-white/15 bg-white/5 text-muted-foreground" },
@@ -57,6 +57,23 @@ const FOCUS_GROUPS: Record<Focus, ReadonlySet<string> | null> = {
 };
 const FOCUS_KEYS: Focus[] = ["all", "attention", "today", "people", "revenue"];
 
+const REV_STATUS: Record<RevenueStatus, { label: string; pill: string; text: string }> = {
+  met: { label: "Target met", pill: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300", text: "text-emerald-300" },
+  likely: { label: "Target likely", pill: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300", text: "text-emerald-300" },
+  "at-risk": { label: "At risk", pill: "border-red-500/40 bg-red-500/10 text-red-300", text: "text-red-300" },
+  "no-target": { label: "No target set", pill: "border-white/15 bg-white/5 text-muted-foreground", text: "text-muted-foreground" },
+  "no-data": { label: "No data", pill: "border-white/15 bg-white/5 text-muted-foreground", text: "text-muted-foreground" },
+};
+
+/** Deterministic one-liner for the revenue status — prepended to the AI summary. Rules calculate. */
+function revenueSentence(r: { periodLabel: string; status: RevenueStatus; committed: number | null; target: number | null; pipeline: number | null; remaining: number | null; gapAfterPipeline: number | null }): string {
+  const m = (n: number | null | undefined) => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
+  if (r.status === "no-target" || r.status === "no-data") return "";
+  if (r.status === "met") return `${r.periodLabel} revenue has hit target (${m(r.committed)} of ${m(r.target)} committed).`;
+  if (r.status === "likely") return `${r.periodLabel} revenue is on track — ${m(r.committed)} of ${m(r.target)} committed, with ${m(r.pipeline)} in open quotes to cover the ${m(r.remaining)} gap.`;
+  return `${r.periodLabel} revenue is at risk — ${m(r.committed)} of ${m(r.target)} committed, still short ${m(r.gapAfterPipeline)} even if every open quote closes.`;
+}
+
 export default async function DashboardPage({
   searchParams,
 }: {
@@ -79,10 +96,18 @@ export default async function DashboardPage({
   ];
   const focusHref = (k: Focus): string => (k === "all" ? "/dashboard" : `/dashboard?focus=${k}`);
   const attention = (showMoney ? c.attention : c.attention.filter((i) => i.source !== "finance")).slice(0, 7);
-
-  const wk = c.finance?.revenue;
-  const wkPct = pctOfTarget(wk?.signed ?? null, wk?.target ?? null);
-  const wkRemaining = wk?.target != null && wk?.signed != null ? Math.max(0, wk.target - wk.signed) : null;
+  const rev = c.revenue;
+  // Management "next actions" — the recommended action from each ranked exception (the part after
+  // "→" when the ranker supplied one), deduped. Derived from real exceptions; never manufactured.
+  const nextActions = attention
+    .filter((i) => i.priority === "critical" || i.priority === "high" || i.priority === "medium")
+    .map((i) => {
+      const arrow = i.detail?.split("→")[1]?.trim();
+      return { key: i.key, priority: i.priority, href: i.href, text: arrow && arrow.length > 3 ? arrow : i.title };
+    })
+    .slice(0, 5);
+  // Deterministic revenue verdict, prepended to the AI interpretation (money roles only).
+  const summary = [showMoney ? revenueSentence(rev) : "", c.brief].filter(Boolean).join(" ");
 
   return (
     <main className="mx-auto max-w-6xl p-4 pb-16 md:p-8">
@@ -115,11 +140,11 @@ export default async function DashboardPage({
         ))}
       </div>
 
-      {/* AI Operations Summary — deterministic, from real system data */}
-      {c.brief && show("brief") && (
+      {/* AI Operations Summary — deterministic facts (revenue verdict + ops), then interpretation */}
+      {summary && show("brief") && (
         <div className="mb-5 flex items-start gap-2.5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
           <Sparkles className="mt-0.5 size-4 shrink-0 text-sky-300" />
-          <p className="text-sm leading-relaxed text-foreground/90">{c.brief}</p>
+          <p className="text-sm leading-relaxed text-foreground/90">{summary}</p>
         </div>
       )}
 
@@ -128,14 +153,14 @@ export default async function DashboardPage({
         {showMoney ? (
           <PulseCard
             icon={<DollarSign className="size-4" />}
-            label="Revenue this week"
-            big={money(wk?.signed ?? null)}
+            label={`${rev.periodLabel} vs target`}
+            big={money(rev.committed)}
             sub={
-              wk?.target == null ? "no target set" :
-              wkPct == null ? `target ${money(wk.target)}` :
-              `${wkPct}% of ${money(wk.target)}${wkRemaining ? ` · ${money(wkRemaining)} to go` : " · target met"}`
+              rev.target == null ? "no target set" :
+              `${rev.pctOfTarget ?? 0}% of ${money(rev.target)} · ${REV_STATUS[rev.status].label}`
             }
-            tone={wkPct != null && wkPct >= 100 ? "good" : undefined}
+            tone={rev.status === "met" || rev.status === "likely" ? "good" : undefined}
+            warn={rev.status === "at-risk"}
             href={focusHref("revenue")}
             active={focus === "revenue"}
           />
@@ -143,11 +168,27 @@ export default async function DashboardPage({
           <PulseCard icon={<CalendarDays className="size-4" />} label="Events today" big={String(c.today_ops.events)} sub="scheduled" href={focusHref("today")} active={focus === "today"} />
         )}
         {showMoney && (
-          <PulseCard icon={<TrendingUp className="size-4" />} label={`${c.year} revenue`} big={moneyK(c.sales.totalSignedRevenue)} sub={`${c.sales.totalSignedCount} signed · ${moneyK(c.sales.totalActionNeededRevenue)} to win`} href={focusHref("revenue")} active={focus === "revenue"} />
+          <PulseCard icon={<TrendingUp className="size-4" />} label={`${c.year} revenue`} big={money(c.sales.totalSignedRevenue)} sub={`${c.sales.totalSignedCount} signed · ${money(c.sales.totalActionNeededRevenue)} to win`} href={focusHref("revenue")} active={focus === "revenue"} />
         )}
         <PulseCard icon={<Truck className="size-4" />} label="Today" big={`${c.today_ops.events}`} sub={`${c.today_ops.activeRoutes} routes · ${c.today_ops.trucksUsed}/${c.today_ops.fleetSize} trucks`} href={focusHref("today")} active={focus === "today"} unit="events" />
         <PulseCard icon={<Users className="size-4" />} label="Crew today" big={c.people.verified ? String(c.people.peopleCount) : "—"} sub={c.people.verified ? `${plural(c.people.drivers, "driver")} · ${c.people.prep} prep` : "not connected"} href={focusHref("people")} active={focus === "people"} warn={!c.people.verified} />
       </section>
+
+      {/* Next actions — the recommended step from each ranked exception (empty ⇒ nothing to do) */}
+      {show("attention") && nextActions.length > 0 && (
+        <section className="mb-6">
+          <SectionHead icon={<ListChecks className="size-4" />} title="Next actions" href="/ops" hrefLabel="Ops Manager" />
+          <div className="rounded-2xl border border-white/10 p-1">
+            {nextActions.map((a) => (
+              <Link key={a.key} href={a.href} className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-white/[0.04]">
+                <span className={`size-1.5 shrink-0 rounded-full ${a.priority === "critical" ? "bg-red-500" : a.priority === "high" ? "bg-orange-500" : "bg-amber-500"}`} />
+                <span className="min-w-0 flex-1 truncate">{a.text}</span>
+                <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" />
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* SECTION 2 — Attention Required (dominant) */}
       {show("attention") && (
@@ -271,8 +312,8 @@ export default async function DashboardPage({
             {c.outlook.map((d) => (
               <div key={d.date} className={`flex items-center gap-3 rounded-lg px-2 py-1.5 ${d.isToday ? "bg-white/[0.04]" : ""}`}>
                 <span className="w-10 shrink-0 text-sm font-medium text-muted-foreground">{d.dow}</span>
-                <span className="w-10 shrink-0 text-sm tabular-nums">{d.jobs || "—"}<span className="text-[10px] text-muted-foreground"> jobs</span></span>
-                {showMoney && <span className="w-16 shrink-0 text-sm tabular-nums text-emerald-300">{d.revenue != null ? moneyK(d.revenue) : ""}</span>}
+                <span className="w-12 shrink-0 text-sm tabular-nums">{d.jobs || "—"}<span className="text-[10px] text-muted-foreground"> jobs</span></span>
+                {showMoney && <span className="w-24 shrink-0 text-sm tabular-nums text-emerald-300">{d.revenue != null ? money(d.revenue) : ""}</span>}
                 <span className="flex-1" />
                 {d.verdict && d.verdict !== "AVAILABLE" && <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold ${CAP_TONE[d.verdict] ?? CAP_TONE.UNVERIFIED}`}>{d.verdict}</span>}
               </div>
@@ -288,19 +329,37 @@ export default async function DashboardPage({
         <div className={`grid gap-4 [&>section]:min-w-0 ${show("revenue") && show("salesPipeline") ? "lg:grid-cols-2" : ""}`}>
           {show("revenue") && (
           <section>
-            <SectionHead icon={<DollarSign className="size-4" />} title="Revenue" href="/sales" hrefLabel="Sales" />
+            <SectionHead icon={<DollarSign className="size-4" />} title="Revenue vs target" href="/sales" hrefLabel="Sales" />
             <div className="rounded-2xl border border-white/10 p-4">
-              <div className="grid grid-cols-3 gap-3">
-                <MetricCol label="Committed" value={moneyK(c.sales.totalSignedRevenue)} tone="text-emerald-300" hint={`${c.sales.totalSignedCount} signed`} />
-                <MetricCol label="Open pipeline" value={moneyK(c.pipeline.quote.value)} tone="text-amber-300" hint={`${c.pipeline.quote.count} quotes`} />
-                <MetricCol label="Potential" value={moneyK((c.sales.totalSignedRevenue ?? 0) + (c.pipeline.quote.value ?? 0))} tone="text-foreground" hint="if all win" />
+              {/* Headline: committed / target + the deterministic status verdict */}
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <div>
+                  <div className="text-2xl font-bold tabular-nums text-emerald-300">
+                    {money(rev.committed)} <span className="text-base font-medium text-muted-foreground">/ {money(rev.target)}</span>
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">{rev.pctOfTarget ?? 0}% of {rev.periodLabel} target · {rev.pctElapsed}% of month elapsed</div>
+                </div>
+                <span className={`shrink-0 rounded-full border px-3 py-1 text-sm font-semibold ${REV_STATUS[rev.status].pill}`}>{REV_STATUS[rev.status].label}</span>
               </div>
-              {/* Real monthly signed-revenue trend for the year */}
+              {/* Path to target — committed vs what's still needed vs what could close it */}
+              <div className="mt-4 grid grid-cols-3 gap-3">
+                <MetricCol label="Remaining" value={money(rev.remaining)} tone="text-foreground" hint="to target" />
+                <MetricCol label="Open quotes" value={money(rev.pipeline)} tone="text-amber-300" hint="could still close" />
+                <MetricCol label="Best case" value={money(rev.ceiling)} tone="text-emerald-300" hint="if all close" />
+              </div>
+              <p className={`mt-3 text-xs ${REV_STATUS[rev.status].text}`}>
+                {rev.status === "met" ? `Committed bookings already cover the ${rev.periodLabel} target.`
+                  : rev.status === "likely" ? `The remaining ${money(rev.remaining)} can come from ${money(rev.pipeline)} in open quotes — keep them moving.`
+                  : rev.status === "at-risk" ? `Short ${money(rev.gapAfterPipeline)} even if every open quote closes — needs new bookings.`
+                  : "No monthly target set — add a weekly target in Settings."}
+              </p>
+              {/* Real monthly signed-revenue trend for the year, with the monthly target as a reference line */}
               <div className="mt-4">
-                <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">{c.year} signed revenue by month</div>
-                <MonthTrend months={c.sales.months} />
+                <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+                  {c.year} signed revenue by month{rev.target != null ? <span className="lowercase text-muted-foreground/60"> · dashed = monthly target</span> : null}
+                </div>
+                <MonthTrend months={c.sales.months} targetLine={rev.target} />
               </div>
-              <p className="mt-3 text-[11px] text-muted-foreground">Probability-weighted forecast needs per-stage win rates — a future Goodshuffle-stage integration. Committed and pipeline above are live.</p>
             </div>
           </section>
           )}
@@ -377,21 +436,32 @@ function MetricCol({ label, value, tone, hint }: { label: string; value: string;
   );
 }
 
-function MonthTrend({ months }: { months: { label: string; signedRevenue: number | null }[] }): React.JSX.Element {
-  const max = months.reduce((m, x) => Math.max(m, x.signedRevenue ?? 0), 0);
+function MonthTrend({ months, targetLine }: { months: { label: string; signedRevenue: number | null }[]; targetLine?: number | null }): React.JSX.Element {
+  const max = Math.max(months.reduce((m, x) => Math.max(m, x.signedRevenue ?? 0), 0), targetLine ?? 0, 1);
+  const tPct = targetLine != null && targetLine > 0 ? Math.min(100, (targetLine / max) * 100) : null;
   return (
-    <div className="flex h-16 items-end gap-1">
-      {months.map((m) => {
-        const h = max > 0 ? ((m.signedRevenue ?? 0) / max) * 100 : 0;
-        return (
-          <div key={m.label} className="flex flex-1 flex-col items-center gap-1" title={`${m.label}: ${m.signedRevenue == null ? "—" : "$" + Math.round(m.signedRevenue).toLocaleString()}`}>
-            <div className="flex w-full flex-1 items-end">
-              <div className="w-full rounded-sm bg-emerald-500/50" style={{ height: `${Math.max(h, m.signedRevenue ? 4 : 0)}%` }} />
-            </div>
-            <div className="text-[8px] text-muted-foreground">{m.label[0]}</div>
-          </div>
-        );
-      })}
+    <div>
+      <div className="relative flex h-16 items-end gap-1">
+        {months.map((m) => {
+          const h = ((m.signedRevenue ?? 0) / max) * 100;
+          return (
+            <div
+              key={m.label}
+              className="flex-1 rounded-sm bg-emerald-500/50"
+              style={{ height: `${Math.max(h, m.signedRevenue ? 4 : 0)}%` }}
+              title={`${m.label}: ${m.signedRevenue == null ? "—" : "$" + Math.round(m.signedRevenue).toLocaleString()}`}
+            />
+          );
+        })}
+        {tPct != null && (
+          <div className="pointer-events-none absolute inset-x-0 border-t border-dashed border-amber-400/60" style={{ bottom: `${tPct}%` }} />
+        )}
+      </div>
+      <div className="mt-1 flex gap-1">
+        {months.map((m) => (
+          <div key={m.label} className="flex-1 text-center text-[8px] text-muted-foreground">{m.label[0]}</div>
+        ))}
+      </div>
     </div>
   );
 }

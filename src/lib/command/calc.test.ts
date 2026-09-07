@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sevenDayOutlook, dayStatus, pctOfTarget } from "./calc";
+import { sevenDayOutlook, dayStatus, pctOfTarget, computeRevenueOutlook } from "./calc";
 
 describe("command center — calc", () => {
   it("builds a 7-day outlook, summing signed revenue and folding in capacity verdicts", () => {
@@ -33,5 +33,24 @@ describe("command center — calc", () => {
     expect(pctOfTarget(null, 5000)).toBeNull();
     expect(pctOfTarget(4280, null)).toBeNull();
     expect(pctOfTarget(4280, 0)).toBeNull();
+  });
+
+  it("classifies revenue path-to-target by coverage, not run-rate", () => {
+    const base = { periodLabel: "September", pctElapsed: 60 };
+    // committed already over target → met
+    expect(computeRevenueOutlook({ ...base, target: 300, committed: 320, pipeline: 40 }).status).toBe("met");
+    // committed short, but open quotes can close the gap → likely
+    const likely = computeRevenueOutlook({ ...base, target: 300, committed: 277, pipeline: 40 });
+    expect(likely.status).toBe("likely");
+    expect(likely.remaining).toBe(23);
+    expect(likely.ceiling).toBe(317);
+    expect(likely.gapAfterPipeline).toBeNull();
+    // short even if every quote closes → at-risk, with the residual gap surfaced
+    const risk = computeRevenueOutlook({ ...base, target: 300, committed: 200, pipeline: 50 });
+    expect(risk.status).toBe("at-risk");
+    expect(risk.gapAfterPipeline).toBe(50);
+    // no target / no data are explicit, never faked
+    expect(computeRevenueOutlook({ ...base, target: null, committed: 100, pipeline: 0 }).status).toBe("no-target");
+    expect(computeRevenueOutlook({ ...base, target: 300, committed: null, pipeline: 0 }).status).toBe("no-data");
   });
 });

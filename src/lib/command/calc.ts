@@ -54,3 +54,57 @@ export function pctOfTarget(actual: number | null, target: number | null): numbe
   if (actual == null || target == null || target <= 0) return null;
   return Math.round((actual / target) * 100);
 }
+
+// ── Revenue path-to-target ───────────────────────────────────────────────────
+// Answers "are we making our number?" deterministically. NOTE: we DON'T do a linear run-rate
+// "pace" projection — event-rental revenue is booked ahead (most of a month's revenue is signed
+// weeks before), so run-rate would mislead. Instead we frame it as target COVERAGE: committed vs
+// target, and whether the open quotes for the period can still close the gap.
+export type RevenueStatus = "met" | "likely" | "at-risk" | "no-target" | "no-data";
+
+export interface RevenueOutlook {
+  periodLabel: string;
+  target: number | null;
+  committed: number | null; // signed revenue for events IN the period
+  pipeline: number | null; // open (unsigned) quotes for events in the period — could still close
+  pctOfTarget: number | null;
+  pctElapsed: number; // 0–100, share of the calendar period elapsed (context, not a run-rate)
+  remaining: number | null; // target − committed, floored at 0
+  ceiling: number | null; // committed + pipeline = best case if every open quote closes
+  gapAfterPipeline: number | null; // > 0 ⇒ short even if all quotes close
+  status: RevenueStatus;
+}
+
+export function computeRevenueOutlook(inp: {
+  periodLabel: string;
+  target: number | null;
+  committed: number | null;
+  pipeline: number | null;
+  pctElapsed: number;
+}): RevenueOutlook {
+  const { target, committed, pipeline } = inp;
+  const pctT = pctOfTarget(committed, target);
+  const remaining = target != null && committed != null ? Math.max(0, target - committed) : null;
+  const ceiling = committed != null || pipeline != null ? (committed ?? 0) + (pipeline ?? 0) : null;
+  const gapAfter = target != null && ceiling != null ? Math.round(target - ceiling) : null;
+
+  let status: RevenueStatus;
+  if (target == null) status = "no-target";
+  else if (committed == null) status = "no-data";
+  else if (committed >= target) status = "met";
+  else if ((ceiling ?? 0) >= target) status = "likely"; // the gap can still be closed from open quotes
+  else status = "at-risk"; // short even if every open quote closes
+
+  return {
+    periodLabel: inp.periodLabel,
+    target,
+    committed,
+    pipeline,
+    pctOfTarget: pctT,
+    pctElapsed: Math.max(0, Math.min(100, Math.round(inp.pctElapsed))),
+    remaining,
+    ceiling,
+    gapAfterPipeline: gapAfter != null && gapAfter > 0 ? gapAfter : null,
+    status,
+  };
+}

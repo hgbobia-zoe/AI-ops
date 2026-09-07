@@ -11,15 +11,38 @@ import {
   getPipelineBookingsInRange,
   getUpcomingCapacity,
   getPipelineBreakdown,
+  getBookingsRevenueInRange,
   type PipelineBreakdown,
 } from "@/lib/db/repo";
 import { opsOverview } from "@/lib/ops/service";
 import { salesYearOverview, type SalesYearOverview } from "@/lib/sales/service";
 import { getCrewForDateSafe } from "@/lib/connecteam";
 import type { CrewRole } from "@/lib/connecteam";
+import { financeConfig } from "@/lib/finance/config";
+import { getPeriod } from "@/lib/finance/periods";
 import type { FinanceSummary } from "@/lib/finance/service";
 import type { AttentionItem } from "@/lib/ops/manager";
-import { sevenDayOutlook, dayStatus, type OutlookDay, type OpStatus } from "./calc";
+import { sevenDayOutlook, dayStatus, computeRevenueOutlook, type OutlookDay, type OpStatus, type RevenueOutlook } from "./calc";
+
+/** This-MONTH path-to-target — the managerial "are we making our number?" number. Deterministic:
+ *  signed vs a monthly target (derived from the weekly target) vs the open quotes that could close
+ *  the gap. Coverage-based (not run-rate) because rental revenue is booked ahead. */
+function monthRevenueOutlook(today: string): RevenueOutlook {
+  const period = getPeriod("thisMonth", today);
+  const rev = getBookingsRevenueInRange(period.start, period.end);
+  const [y, m, d] = today.split("-").map(Number);
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const monthName = new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-US", { month: "long", timeZone: "UTC" });
+  const weekly = financeConfig().weeklyRevenueTarget;
+  const target = weekly != null ? Math.round((weekly * daysInMonth) / 7) : null;
+  return computeRevenueOutlook({
+    periodLabel: monthName,
+    target,
+    committed: rev.signed,
+    pipeline: rev.pipeline,
+    pctElapsed: (d / daysInMonth) * 100,
+  });
+}
 
 export interface TodayOps {
   events: number; // booked events today
@@ -72,6 +95,7 @@ export interface CommandCenter {
   finance: FinanceSummary | null; // this-week revenue/labor/contribution (money-gated in the UI)
   laborVerified: boolean;
   sales: SalesYearOverview; // year revenue + monthly trend
+  revenue: RevenueOutlook; // this-month path-to-target (money-gated in the UI)
   pipeline: PipelineBreakdown; // real signed / quote / lost split (upcoming)
   capacity: CapacityDay[]; // upcoming non-AVAILABLE days (attention-worthy)
   outlook: OutlookDay[]; // next 7 days
@@ -133,6 +157,7 @@ export async function commandCenter(): Promise<CommandCenter> {
   const people: PeopleToday = { verified: crew.ok, peopleCount: seen.size, drivers, prep, other, openShifts, assignments };
 
   const sales = salesYearOverview(year);
+  const revenue = monthRevenueOutlook(today);
   const pipeline = getPipelineBreakdown(today);
 
   // Forward capacity — only the days that actually warrant attention (not the AVAILABLE ones).
@@ -163,6 +188,7 @@ export async function commandCenter(): Promise<CommandCenter> {
     finance: o.finance,
     laborVerified: o.laborVerified,
     sales,
+    revenue,
     pipeline,
     capacity,
     outlook,
