@@ -94,7 +94,8 @@ export function OutreachPanel({ id }: { id: string }): React.JSX.Element {
   const doSend = async (): Promise<void> => {
     setSend({ status: "sending" });
     try {
-      const res = await fetch("/api/salesos/send-sms", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, body: smsText, userId: sendAs || undefined }) });
+      const edited = !!result && smsText.trim() !== result.draft.sms.trim();
+      const res = await fetch("/api/salesos/send-sms", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, body: smsText, userId: sendAs || undefined, edited }) });
       const j = (await res.json()) as { ok?: boolean; disabled?: boolean; duplicate?: boolean; message?: string; error?: string };
       if (j.ok) setSend({ status: "sent", message: j.duplicate ? j.message : "Sent via Quo" });
       else setSend({ status: "error", message: j.error ?? "Send failed" });

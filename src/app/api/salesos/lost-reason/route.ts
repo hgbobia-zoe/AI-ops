@@ -5,6 +5,7 @@
 import { NextResponse } from "next/server";
 import { setLossReason } from "@/lib/db/repo";
 import { LOSS_REASONS } from "@/lib/salesos/lostService";
+import { logSalesEvent } from "@/lib/salesos/audit";
 
 export const dynamic = "force-dynamic";
 
@@ -23,5 +24,6 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "unknown reason" }, { status: 400 });
   }
   setLossReason(id, reason || null);
+  await logSalesEvent("LOSS_REASON_TAGGED", id, { reason: reason || "(cleared)" });
   return NextResponse.json({ ok: true, id, reason: reason || null });
 }

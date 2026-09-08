@@ -4,10 +4,11 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, MessagesSquare } from "lucide-react";
+import { ArrowLeft, Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, MessagesSquare, History } from "lucide-react";
 import { OutreachPanel } from "@/components/OutreachPanel";
 import { getLead } from "@/lib/salesos/service";
 import { STAGE_LABEL, type SalesStage } from "@/lib/salesos/calc";
+import { logLeadView, leadActivity } from "@/lib/salesos/audit";
 import { formatYmdLong } from "@/lib/dates";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
@@ -31,6 +32,9 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
   const showMoney = canSeeFinancials(await viewerRole());
   const lead = getLead(id);
   if (!lead) notFound();
+
+  await logLeadView(id); // audit trail: who viewed this lead (deduped per actor/30min)
+  const activity = leadActivity(id, 30);
 
   const { signals: s, action, priority } = lead;
   const dte = s.daysToEvent;
@@ -140,6 +144,27 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
           )}
         </dl>
       </section>
+
+      {/* Activity trail — who did what on this lead (attributable once login is on) */}
+      {activity.length > 0 && (
+        <section className="surface mb-4 border border-white/10 p-4">
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+            <History className="size-3.5" /> Activity
+          </div>
+          <ul className="space-y-1.5">
+            {activity.map((a, i) => (
+              <li key={i} className="flex items-baseline justify-between gap-3 text-xs">
+                <span>
+                  <span className="text-foreground">{a.actor}</span> <span className="text-muted-foreground">{a.actionLabel.toLowerCase()}</span>
+                  {a.detail?.source ? <span className="text-muted-foreground"> ({String(a.detail.source)})</span> : ""}
+                  {a.detail?.edited === true ? <span className="text-amber-300"> · edited</span> : ""}
+                </span>
+                <span className="shrink-0 tabular-nums text-muted-foreground">{new Date(a.ts).toLocaleString()}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
         <EyeOff className="mt-0.5 size-3 shrink-0" />

@@ -12,6 +12,7 @@ import { getSettings } from "@/lib/settings";
 import { viewerInitials, viewerQuoUserId } from "@/lib/auth/getSession";
 import { openphoneUserInitials } from "@/lib/comms/openphone";
 import { salesOsNoteLine } from "@/lib/salesos/noteFormat";
+import { logSalesEvent } from "@/lib/salesos/audit";
 import { todayInOpsTz } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ ok: false, disabled: true, error: "SMS sending is off — set SMS_SEND_ENABLED=true to enable." });
   }
 
-  let body: { id?: string; body?: string; userId?: string };
+  let body: { id?: string; body?: string; userId?: string; edited?: boolean };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -68,8 +69,10 @@ export async function POST(req: Request): Promise<NextResponse> {
       const initials = (userId ? await openphoneUserInitials(userId) : null) ?? (await viewerInitials());
       const line = salesOsNoteLine(initials, `Sent text: "${text}"`, todayInOpsTz());
       enqueueGsOp({ op: "note_append", transactionId: id, label: "sms sent", payload: { line } });
+      // Sales audit trail: who sent it, and whether they edited the AI draft first.
+      await logSalesEvent("MESSAGE_SENT", id, { chars: text.length, to: phone.slice(-4), sender: initials ?? "SalesOS", edited: Boolean(body.edited) });
     } catch {
-      /* note is best-effort — never fail the send over it */
+      /* note + audit are best-effort — never fail the send over them */
     }
     return NextResponse.json({ ok: true, providerMsgId: res.providerMsgId });
   }

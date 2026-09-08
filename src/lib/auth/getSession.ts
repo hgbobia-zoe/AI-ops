@@ -50,3 +50,22 @@ export async function viewerQuoUserId(): Promise<string | null> {
     return null;
   }
 }
+
+export interface Actor {
+  id: string; // user id, or "anon" when login is off
+  label: string; // human name for the audit trail
+}
+
+/** Who is performing an action, for the sales audit trail. When login is OFF we genuinely don't know
+ *  who — so we say "Unattributed", never a fabricated name. When ON, the signed-in user. */
+export async function currentActor(): Promise<Actor> {
+  if (!authEnabled()) return { id: "anon", label: "Unattributed (login off)" };
+  const s = await getSession();
+  if (!s) return { id: "anon", label: "Unattributed" };
+  try {
+    const u = getUser(s.uid);
+    return { id: s.uid, label: u?.name?.trim() || u?.username || s.uid };
+  } catch {
+    return { id: s.uid, label: s.uid };
+  }
+}

@@ -19,6 +19,7 @@ import { getCallTranscript, getCallSummary, openphoneUserInitials } from "./open
 import { slackNotifyAlert } from "@/lib/notify/slack";
 import { decideCallNote } from "@/lib/salesos/callNote";
 import { initialsOf, salesOsNoteLine } from "@/lib/salesos/noteFormat";
+import { logSalesEventBy } from "@/lib/salesos/audit";
 import { todayInOpsTz } from "@/lib/dates";
 
 export interface IngestCallInput extends CallEventInput {
@@ -52,6 +53,8 @@ async function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLo
   const line = salesOsNoteLine(initials, comment, todayInOpsTz());
   enqueueGsOp({ op: "note_append", transactionId: booking.bookingId, label: "call logged", payload: { line } });
   markCallNoteLogged(rowId);
+  // Sales audit trail: the call, attributed to the Quo rep who handled it.
+  logSalesEventBy("CALL_LOGGED", booking.bookingId, initials ?? "Quo", { outcome: comment, direction: input.direction ?? "unknown" });
 }
 
 export interface IngestResult {

@@ -1558,6 +1558,62 @@ export function insertAudit(a: {
     });
 }
 
+export interface AuditRow {
+  auditId: string;
+  actor: string;
+  action: string;
+  entity: string;
+  entityId: string;
+  detail: Record<string, unknown> | null; // parsed from `after`
+  ts: string;
+}
+
+function toAudit(r: Record<string, unknown>): AuditRow {
+  let detail: Record<string, unknown> | null = null;
+  try {
+    detail = r.after ? (JSON.parse(String(r.after)) as Record<string, unknown>) : null;
+  } catch {
+    detail = null;
+  }
+  return {
+    auditId: String(r.audit_id),
+    actor: String(r.actor ?? ""),
+    action: String(r.action ?? ""),
+    entity: String(r.entity ?? ""),
+    entityId: String(r.entity_id ?? ""),
+    detail,
+    ts: String(r.ts),
+  };
+}
+
+/** Audit entries for one entity (e.g. a lead), newest first — the per-lead activity trail. */
+export function getAuditForEntity(entity: string, entityId: string, limit = 50): AuditRow[] {
+  return (
+    getDb()
+      .prepare("SELECT * FROM audit_logs WHERE entity = ? AND entity_id = ? ORDER BY ts DESC LIMIT ?")
+      .all(entity, entityId, limit) as Record<string, unknown>[]
+  ).map(toAudit);
+}
+
+/** Recent audit entries across a set of actions (the global sales activity feed). */
+export function getRecentAudit(actions: string[], limit = 100): AuditRow[] {
+  if (actions.length === 0) return [];
+  const ph = actions.map(() => "?").join(",");
+  return (
+    getDb()
+      .prepare(`SELECT * FROM audit_logs WHERE action IN (${ph}) ORDER BY ts DESC LIMIT ?`)
+      .all(...actions, limit) as Record<string, unknown>[]
+  ).map(toAudit);
+}
+
+/** Was this action already logged for this entity by this actor recently? (view-spam dedupe). */
+export function auditExistsSince(entity: string, entityId: string, action: string, actor: string, sinceIso: string): boolean {
+  const r = getDb()
+    .prepare("SELECT 1 FROM audit_logs WHERE entity=? AND entity_id=? AND action=? AND actor=? AND ts > ? LIMIT 1")
+    .get(entity, entityId, action, actor, sinceIso);
+  return !!r;
+}
+
 export function createTracking(stopId: string, routeId: string, baseUrl: string): { token: string; url: string } {
   const token = randomUUID().replace(/-/g, "").slice(0, 20);
   const url = `${baseUrl.replace(/\/$/, "")}/track/${token}`;
