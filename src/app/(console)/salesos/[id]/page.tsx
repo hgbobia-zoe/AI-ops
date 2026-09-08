@@ -4,11 +4,14 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, MessagesSquare, History } from "lucide-react";
+import { ArrowLeft, Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, MessagesSquare, History, AlertTriangle } from "lucide-react";
 import { OutreachPanel } from "@/components/OutreachPanel";
 import { getLead } from "@/lib/salesos/service";
-import { getCommsForLead } from "@/lib/db/repo";
+import { getCommsForLead, getBookingById, getCustomerState } from "@/lib/db/repo";
 import { STAGE_LABEL, type SalesStage } from "@/lib/salesos/calc";
+import { resolveDeterministic, fromStored, replyMinutesAgo } from "@/lib/salesos/stateService";
+import { nextBestAction, NBA_LABEL } from "@/lib/salesos/nba";
+import { STATE_LABEL as STATE_LABEL_V2 } from "@/lib/salesos/state";
 import { logLeadView, leadActivity } from "@/lib/salesos/audit";
 import { formatYmdLong } from "@/lib/dates";
 import { viewerRole } from "@/lib/auth/getSession";
@@ -38,7 +41,14 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
   const activity = leadActivity(id, 30);
   const conversation = getCommsForLead(id, 20); // inbound + outbound SMS timeline
 
-  const { signals: s, action, priority } = lead;
+  // Evidence-driven state (stored AI-refined if we have it, else instant deterministic) + NBA v2.
+  const booking = getBookingById(id);
+  const stored = getCustomerState(id);
+  const cstate = stored ? fromStored(stored) : booking ? resolveDeterministic(booking) : null;
+  const repliedMinutesAgo = replyMinutesAgo(id);
+  const nba = cstate ? nextBestAction({ state: cstate.state, value: lead.value, daysToEvent: lead.signals.daysToEvent, repliedMinutesAgo }) : null;
+
+  const { signals: s, priority } = lead;
   const dte = s.daysToEvent;
   const eventWhen =
     dte == null ? "No event date on file" : dte < 0 ? `${Math.abs(dte)} days ago` : dte === 0 ? "Today" : dte === 1 ? "Tomorrow" : `In ${dte} days`;
@@ -64,13 +74,38 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
         </div>
       </header>
 
-      {/* The recommendation */}
+      {/* Customer state (evidence-driven) + the recommended next step (NBA v2) */}
       <section className="surface mb-4 border border-white/10 p-4">
+        {cstate && (
+          <div className="mb-3 border-b border-white/5 pb-3">
+            <div className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-wide text-muted-foreground">
+              <span>Customer state</span>
+              <span className="tabular-nums">{Math.round(cstate.confidence * 100)}% confidence</span>
+            </div>
+            <div className="text-lg font-semibold">{STATE_LABEL_V2[cstate.state]}</div>
+            {cstate.reason && <p className="mt-0.5 text-xs text-muted-foreground">{cstate.reason}</p>}
+            {cstate.evidence && cstate.source === "inbound_reply" && (
+              <p className="mt-1 border-l-2 border-sky-500/40 pl-2 text-xs italic text-sky-200/90">“{cstate.evidence}”</p>
+            )}
+          </div>
+        )}
+
         <div className="mb-1 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
           <Sparkles className="size-3.5" /> Next best action
         </div>
-        <div className="text-lg font-semibold">{action.action}</div>
-        <p className="mt-1 text-sm text-muted-foreground">{action.reason}</p>
+        {nba ? (
+          <>
+            <div className="text-lg font-semibold">{NBA_LABEL[nba.action]}</div>
+            <p className="mt-1 text-sm">{nba.objective}</p>
+            {nba.doNot && (
+              <p className="mt-1 flex items-start gap-1.5 text-xs text-amber-200">
+                <AlertTriangle className="mt-0.5 size-3 shrink-0" /> Do not: {nba.doNot}
+              </p>
+            )}
+          </>
+        ) : (
+          <div className="text-lg font-semibold">Review this lead</div>
+        )}
 
         {/* One-tap contact — the human initiates. */}
         <div className="mt-3 flex flex-wrap gap-2">

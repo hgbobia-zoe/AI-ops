@@ -1,11 +1,13 @@
-// AI Sales OS (Phase 1) — the worklist. Every open (unsigned) lead, ranked by a deterministic
-// priority score, each with one recommended next action. Built to make an inexperienced salesperson
-// act like a seasoned one: what to touch first, and exactly what to do. RULES CALCULATE — no LLM here.
+// AI Sales OS — the Sales Command Center (Phase 7). Every open lead, ranked by what to do next:
+// the customer's evidence-driven STATE + the single Next Best Action, highest-value/most time-sensitive
+// on top. A big deal that just replied outranks a small one sitting untouched. RULES rank; the state is
+// AI-interpreted from real replies (labelled), never invented.
 
 import Link from "next/link";
-import { Sparkles, Phone, MessageSquare, Mail, HelpCircle, ChevronRight, AlertTriangle, EyeOff, TrendingDown, Scale, CalendarRange } from "lucide-react";
-import { salesLeads } from "@/lib/salesos/service";
-import { STAGE_LABEL, type SalesStage, type ActionChannel } from "@/lib/salesos/calc";
+import { Sparkles, ChevronRight, AlertTriangle, TrendingDown, Scale, CalendarRange, Zap, MessageCircle } from "lucide-react";
+import { salesCommandCenter, type QueueItem } from "@/lib/salesos/commandCenter";
+import { NBA_LABEL, type NbaAction } from "@/lib/salesos/nba";
+import { type CustomerState } from "@/lib/salesos/state";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 
@@ -13,50 +15,40 @@ export const dynamic = "force-dynamic";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
 
-const STAGE_STYLE: Record<SalesStage, string> = {
-  closing: "border-rose-500/40 bg-rose-500/10 text-rose-200",
-  unsent: "border-sky-500/40 bg-sky-500/10 text-sky-200",
-  follow_up: "border-amber-500/40 bg-amber-500/10 text-amber-200",
-  cold: "border-white/15 bg-white/5 text-muted-foreground",
-  awaiting: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+// Action visual weight — the urgent ones read hot.
+const ACTION_STYLE: Record<NbaAction, string> = {
+  CALL_NOW: "border-rose-500/50 bg-rose-500/15 text-rose-100",
+  HANDLE_OBJECTION: "border-amber-500/50 bg-amber-500/15 text-amber-100",
+  CLOSE: "border-emerald-500/50 bg-emerald-500/15 text-emerald-100",
+  ESCALATE: "border-fuchsia-500/50 bg-fuchsia-500/15 text-fuchsia-100",
+  VERIFY_AVAILABILITY: "border-sky-500/40 bg-sky-500/10 text-sky-100",
+  CONFIRM_LOGISTICS: "border-sky-500/40 bg-sky-500/10 text-sky-100",
+  ASK_DISCOVERY: "border-sky-500/40 bg-sky-500/10 text-sky-100",
+  REVIEW_QUOTE: "border-white/20 bg-white/5 text-foreground",
+  SEND_SMS: "border-sky-500/40 bg-sky-500/10 text-sky-100",
+  FOLLOW_UP: "border-white/15 bg-white/5 text-muted-foreground",
+  WAIT: "border-white/10 bg-white/5 text-muted-foreground",
+  NO_ACTION: "border-white/10 bg-white/5 text-muted-foreground",
 };
 
-const STAGE_DOT: Record<SalesStage, string> = {
-  closing: "bg-rose-400",
-  unsent: "bg-sky-400",
-  follow_up: "bg-amber-400",
-  cold: "bg-white/40",
-  awaiting: "bg-emerald-400",
+const STATE_TONE: Partial<Record<CustomerState, string>> = {
+  PRICE_OBJECTION: "text-amber-300",
+  COMPETITOR_COMPARISON: "text-amber-300",
+  READY_TO_BOOK: "text-emerald-300",
+  EVALUATING: "text-sky-300",
+  DORMANT: "text-muted-foreground",
 };
 
-const URGENCY_DOT: Record<string, string> = {
-  now: "bg-rose-400",
-  today: "bg-amber-400",
-  soon: "bg-sky-400",
-  monitor: "bg-white/30",
-};
-
-function ChannelIcon({ channel }: { channel: ActionChannel }): React.JSX.Element {
-  const cls = "size-3.5 shrink-0";
-  if (channel === "call") return <Phone className={cls} />;
-  if (channel === "text") return <MessageSquare className={cls} />;
-  if (channel === "email") return <Mail className={cls} />;
-  return <HelpCircle className={cls} />;
+function repliedLabel(mins: number | null): string | null {
+  if (mins == null) return null;
+  if (mins < 60) return `replied ${mins}m ago`;
+  if (mins < 1440) return `replied ${Math.round(mins / 60)}h ago`;
+  return null; // older than a day isn't "hot"
 }
 
-const STAGE_ORDER: SalesStage[] = ["closing", "unsent", "follow_up", "cold", "awaiting"];
-
-export default async function SalesOsPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ stage?: string }>;
-}): Promise<React.JSX.Element> {
+export default async function SalesCommandCenter(): Promise<React.JSX.Element> {
   const showMoney = canSeeFinancials(await viewerRole());
-  const sp = await searchParams;
-  const filter = STAGE_ORDER.includes(sp.stage as SalesStage) ? (sp.stage as SalesStage) : null;
-
-  const os = salesLeads();
-  const shown = filter ? os.leads.filter((l) => l.stage === filter) : os.leads;
+  const cc = salesCommandCenter();
 
   return (
     <main className="mx-auto max-w-4xl p-5 pb-16 md:p-8">
@@ -66,158 +58,86 @@ export default async function SalesOsPage({
             <Sparkles className="size-7" /> Sales OS
           </h1>
           <div className="mt-1 flex shrink-0 items-center gap-2">
-            <Link
-              href="/salesos/trends"
-              className="flex items-center gap-1.5 border border-white/10 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
-            >
+            <Link href="/salesos/trends" className="flex items-center gap-1.5 border border-white/10 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground">
               <CalendarRange className="size-3.5" /> Trends
             </Link>
             {showMoney && (
-              <Link
-                href="/salesos/bid"
-                className="flex items-center gap-1.5 border border-white/10 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
-              >
+              <Link href="/salesos/bid" className="flex items-center gap-1.5 border border-white/10 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground">
                 <Scale className="size-3.5" /> Bid review
               </Link>
             )}
-            <Link
-              href="/salesos/lost"
-              className="flex items-center gap-1.5 border border-white/10 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground"
-            >
+            <Link href="/salesos/lost" className="flex items-center gap-1.5 border border-white/10 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground">
               <TrendingDown className="size-3.5" /> Lost quotes
             </Link>
           </div>
         </div>
         <p className="text-sm text-muted-foreground">
-          Your open pipeline, ranked by what to do next. {os.totalOpen} open lead{os.totalOpen === 1 ? "" : "s"}
-          {showMoney && os.totalPotential != null ? ` · ${money(os.totalPotential)} potential` : ""}.
+          {cc.needAttention} action{cc.needAttention === 1 ? "" : "s"} need attention · sorted by what matters most right now.
         </p>
       </header>
 
-      {/* Phase-1 honesty: we can't see replies yet. */}
-      <div className="mb-4 flex items-start gap-2.5 border border-white/10 bg-white/[0.03] p-3 text-xs text-muted-foreground">
-        <EyeOff className="mt-0.5 size-3.5 shrink-0" />
-        <span>
-          Priority is derived from quote age, event date, and deal size. We can&apos;t see customer replies or calls yet,
-          so &ldquo;going quiet&rdquo; is inferred from elapsed time — always sanity-check against Goodshuffle before acting.
-        </span>
-      </div>
-
-      {/* Scorecard + stage filter chips */}
-      <section className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {/* Scorecard */}
+      <section className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <div className="surface border border-white/5 p-3">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Act now</div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-2xl font-bold tabular-nums">
-            {os.actNowCount > 0 && <span className="inline-block size-2 rounded-full bg-rose-400" />}
-            {os.actNowCount}
-          </div>
+          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground"><Zap className="size-3.5" /> Need attention</div>
+          <div className="mt-0.5 text-2xl font-bold tabular-nums">{cc.needAttention}</div>
         </div>
         <div className="surface border border-white/5 p-3">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Open leads</div>
-          <div className="mt-0.5 text-2xl font-bold tabular-nums">{os.totalOpen}</div>
+          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground"><MessageCircle className="size-3.5" /> Just replied</div>
+          <div className="mt-0.5 text-2xl font-bold tabular-nums text-sky-200">{cc.justReplied}</div>
+          <div className="text-[10px] text-muted-foreground">in the last 24h</div>
         </div>
-        {showMoney ? (
-          <div className="surface col-span-2 border border-white/5 p-3">
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Potential pipeline</div>
-            <div className="mt-0.5 text-2xl font-bold tabular-nums text-amber-200">{money(os.totalPotential)}</div>
-            <div className="text-[10px] text-muted-foreground">Unsigned — potential, not booked revenue.</div>
-          </div>
-        ) : (
-          <div className="surface col-span-2 border border-white/5 p-3">
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Closing this window</div>
-            <div className="mt-0.5 text-2xl font-bold tabular-nums text-rose-200">{os.counts.closing}</div>
-          </div>
-        )}
+        <div className="surface col-span-2 border border-white/5 p-3 sm:col-span-1">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{showMoney ? "Potential pipeline" : "Open leads"}</div>
+          <div className="mt-0.5 text-2xl font-bold tabular-nums text-amber-200">{showMoney ? money(cc.totalPotential) : cc.items.length}</div>
+        </div>
       </section>
 
-      {/* Stage filter chips */}
-      <div className="mb-4 flex flex-wrap gap-2">
-        <FilterChip href="/salesos" active={filter == null} label="All" count={os.totalOpen} />
-        {STAGE_ORDER.map((s) =>
-          os.counts[s] > 0 ? (
-            <FilterChip key={s} href={`/salesos?stage=${s}`} active={filter === s} label={STAGE_LABEL[s]} count={os.counts[s]} stage={s} />
-          ) : null,
-        )}
-      </div>
-
-      {/* Worklist */}
-      {shown.length === 0 ? (
-        <div className="surface border border-white/10 p-8 text-center text-sm text-muted-foreground">
-          {os.totalOpen === 0 ? "No open leads — every quote is signed, lost, or in the past." : "No leads in this stage."}
-        </div>
+      {cc.items.length === 0 ? (
+        <div className="surface border border-white/10 p-8 text-center text-sm text-muted-foreground">No open leads — the pipeline is clear.</div>
       ) : (
         <ol className="space-y-2">
-          {shown.map((l, i) => {
-            const dte = l.signals.daysToEvent;
-            const when =
-              dte == null ? "No date" : dte < 0 ? `${Math.abs(dte)}d ago` : dte === 0 ? "Today" : dte === 1 ? "Tomorrow" : `in ${dte}d`;
-            return (
-              <li key={l.id}>
-                <Link
-                  href={`/salesos/${l.id}`}
-                  className="surface flex items-center gap-3 border border-white/10 p-3 transition-colors hover:bg-white/[0.04]"
-                >
-                  <div className="w-6 shrink-0 text-center text-sm font-bold tabular-nums text-muted-foreground">{filter ? i + 1 : l.priority.score}</div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate font-semibold">{l.eventName || l.clientName || `Project ${l.id}`}</span>
-                      <span className={`shrink-0 border px-1.5 py-0.5 text-[10px] font-medium ${STAGE_STYLE[l.stage]}`}>{STAGE_LABEL[l.stage]}</span>
-                      {l.statusLabel && (
-                        <span className="shrink-0 border border-white/10 px-1.5 py-0.5 text-[10px] text-muted-foreground" title="Goodshuffle status">
-                          {l.statusLabel}
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <span className={`inline-block size-1.5 rounded-full ${URGENCY_DOT[l.action.urgency]}`} />
-                      <ChannelIcon channel={l.action.channel} />
-                      <span className="truncate text-foreground/90">{l.action.action}</span>
-                    </div>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <div className={`text-xs tabular-nums ${dte != null && dte >= 0 && dte <= 14 ? "text-rose-200" : "text-muted-foreground"}`}>{when}</div>
-                    {showMoney && <div className="text-sm font-semibold tabular-nums text-amber-200">{money(l.value)}</div>}
-                  </div>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                </Link>
-              </li>
-            );
-          })}
+          {cc.items.map((it) => (
+            <QueueRow key={it.id} it={it} showMoney={showMoney} />
+          ))}
         </ol>
       )}
 
       <p className="mt-6 flex items-start gap-1.5 text-[11px] text-muted-foreground">
         <AlertTriangle className="mt-0.5 size-3 shrink-0" />
-        Recommendations only — no message is sent automatically. Approval-based outreach and reply visibility come in a later phase.
+        State is FACT from Goodshuffle where known, otherwise inferred from the customer&apos;s own reply (shown as evidence). Recommendations only —
+        no message sends without your review.
       </p>
     </main>
   );
 }
 
-function FilterChip({
-  href,
-  active,
-  label,
-  count,
-  stage,
-}: {
-  href: string;
-  active: boolean;
-  label: string;
-  count: number;
-  stage?: SalesStage;
-}): React.JSX.Element {
+function QueueRow({ it, showMoney }: { it: QueueItem; showMoney: boolean }): React.JSX.Element {
+  const replied = repliedLabel(it.repliedMinutesAgo);
+  const dte = it.daysToEvent;
+  const when = dte == null ? "no date" : dte < 0 ? `${Math.abs(dte)}d ago` : dte === 0 ? "today" : dte === 1 ? "tomorrow" : `in ${dte}d`;
   return (
-    <Link
-      href={href}
-      aria-current={active ? "true" : undefined}
-      className={`flex items-center gap-1.5 border px-2.5 py-1 text-xs transition-colors ${
-        active ? "border-foreground bg-white/10 text-foreground" : `border-white/10 text-muted-foreground hover:bg-white/5 ${stage ? "" : ""}`
-      }`}
-    >
-      {stage && <span className={`inline-block size-1.5 rounded-full ${STAGE_DOT[stage]}`} />}
-      {label}
-      <span className="tabular-nums opacity-70">{count}</span>
-    </Link>
+    <li>
+      <Link href={`/salesos/${it.id}`} className="surface flex items-center gap-3 border border-white/10 p-3 transition-colors hover:bg-white/[0.04]">
+        <div className="w-8 shrink-0 text-center text-sm font-bold tabular-nums text-muted-foreground">{it.nba.priority}</div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="truncate font-semibold">{it.eventName || it.clientName || `Project ${it.id}`}</span>
+            <span className={`shrink-0 text-[11px] font-medium ${STATE_TONE[it.state.state] ?? "text-muted-foreground"}`}>{it.stateLabel}</span>
+            {replied && <span className="shrink-0 border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-200">{replied}</span>}
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            <span className={`shrink-0 border px-1.5 py-0.5 text-[10px] font-semibold ${ACTION_STYLE[it.nba.action]}`}>{NBA_LABEL[it.nba.action]}</span>
+            <span className="truncate text-xs text-muted-foreground">{it.nba.objective}</span>
+          </div>
+          {it.lastReplyPreview && replied && <div className="mt-1 truncate text-[11px] italic text-sky-200/80">“{it.lastReplyPreview}”</div>}
+        </div>
+        <div className="shrink-0 text-right">
+          <div className={`text-xs tabular-nums ${dte != null && dte >= 0 && dte <= 14 ? "text-rose-200" : "text-muted-foreground"}`}>{when}</div>
+          {showMoney && <div className="text-sm font-semibold tabular-nums text-amber-200">{money(it.value)}</div>}
+        </div>
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+      </Link>
+    </li>
   );
 }

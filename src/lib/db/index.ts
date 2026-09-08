@@ -412,6 +412,18 @@ CREATE TABLE IF NOT EXISTS comms_events (
 );
 CREATE INDEX IF NOT EXISTS idx_comms_lead ON comms_events(lead_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_comms_ts ON comms_events(ts DESC);
+
+CREATE TABLE IF NOT EXISTS customer_state (
+  lead_id        TEXT PRIMARY KEY,
+  state          TEXT NOT NULL,   -- NEW | CONTACTED | QUOTED | EVALUATING | PRICE_OBJECTION | ...
+  confidence     REAL,            -- 0..1
+  evidence       TEXT,            -- the fact/quote the state rests on (FACT vs INFERENCE labelled in reason)
+  source         TEXT,            -- goodshuffle | inbound_reply | inactivity | derived
+  previous_state TEXT,
+  reason         TEXT,            -- why it transitioned
+  ts             TEXT NOT NULL    -- when this state was set
+);
+CREATE INDEX IF NOT EXISTS idx_customer_state_ts ON customer_state(ts DESC);
 `;
 
 type DB = InstanceType<typeof Database>;

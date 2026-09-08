@@ -1750,6 +1750,86 @@ export function getRecentInboundComms(limit = 50): CommsEventView[] {
   ).map(toCommsEvent);
 }
 
+/** The most recent inbound message for a lead (the customer's latest words), or null. */
+export function getLatestInboundForLead(leadId: string): CommsEventView | null {
+  const r = getDb()
+    .prepare("SELECT * FROM comms_events WHERE lead_id = ? AND direction = 'inbound' ORDER BY COALESCE(occurred_at, ts) DESC LIMIT 1")
+    .get(leadId) as Record<string, unknown> | undefined;
+  return r ? toCommsEvent(r) : null;
+}
+
+/** Timestamp of the most recent comms of any direction for a lead (for dormancy), or null. */
+export function getLastCommsAt(leadId: string): string | null {
+  const r = getDb()
+    .prepare("SELECT COALESCE(occurred_at, ts) AS t FROM comms_events WHERE lead_id = ? ORDER BY t DESC LIMIT 1")
+    .get(leadId) as { t: string } | undefined;
+  return r?.t ?? null;
+}
+
+// ── Customer state (Phase 5) — the evidence-driven state machine, one row per lead ──
+
+export interface CustomerStateRow {
+  leadId: string;
+  state: string;
+  confidence: number | null;
+  evidence: string | null;
+  source: string | null;
+  previousState: string | null;
+  reason: string | null;
+  ts: string;
+}
+
+function toCustomerState(r: Record<string, unknown>): CustomerStateRow {
+  return {
+    leadId: String(r.lead_id),
+    state: String(r.state),
+    confidence: r.confidence == null ? null : Number(r.confidence),
+    evidence: (r.evidence as string) ?? null,
+    source: (r.source as string) ?? null,
+    previousState: (r.previous_state as string) ?? null,
+    reason: (r.reason as string) ?? null,
+    ts: String(r.ts),
+  };
+}
+
+export function getCustomerState(leadId: string): CustomerStateRow | null {
+  const r = getDb().prepare("SELECT * FROM customer_state WHERE lead_id = ?").get(leadId) as Record<string, unknown> | undefined;
+  return r ? toCustomerState(r) : null;
+}
+
+/** All stored customer states, keyed by lead id — for the command center overlay. */
+export function getAllCustomerStates(): Map<string, CustomerStateRow> {
+  const out = new Map<string, CustomerStateRow>();
+  for (const r of getDb().prepare("SELECT * FROM customer_state").all() as Record<string, unknown>[]) {
+    const cs = toCustomerState(r);
+    out.set(cs.leadId, cs);
+  }
+  return out;
+}
+
+/** Upsert a lead's state, preserving the prior state as previous_state on a transition. */
+export function upsertCustomerState(s: { leadId: string; state: string; confidence: number | null; evidence: string | null; source: string | null; reason: string | null }): void {
+  const prior = getCustomerState(s.leadId);
+  const previousState = prior && prior.state !== s.state ? prior.state : (prior?.previousState ?? null);
+  getDb()
+    .prepare(
+      `INSERT INTO customer_state (lead_id, state, confidence, evidence, source, previous_state, reason, ts)
+       VALUES (@leadId,@state,@confidence,@evidence,@source,@previousState,@reason,@ts)
+       ON CONFLICT(lead_id) DO UPDATE SET state=@state, confidence=@confidence, evidence=@evidence,
+         source=@source, previous_state=@previousState, reason=@reason, ts=@ts`,
+    )
+    .run({
+      leadId: s.leadId,
+      state: s.state,
+      confidence: s.confidence,
+      evidence: s.evidence,
+      source: s.source,
+      previousState,
+      reason: s.reason,
+      ts: new Date().toISOString(),
+    });
+}
+
 // ── Call events (OpenPhone) — inbound call metadata + sentiment for the customer-alerts feature ──
 
 export interface CallEventInput {

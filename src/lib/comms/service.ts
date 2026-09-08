@@ -21,6 +21,7 @@ import { slackNotifyAlert } from "@/lib/notify/slack";
 import { decideCallNote } from "@/lib/salesos/callNote";
 import { initialsOf, salesOsNoteLine } from "@/lib/salesos/noteFormat";
 import { logSalesEventBy } from "@/lib/salesos/audit";
+import { resolveAndStore } from "@/lib/salesos/stateService";
 import { todayInOpsTz } from "@/lib/dates";
 
 export interface IngestCallInput extends CallEventInput {
@@ -156,6 +157,10 @@ export function ingestInboundSms(input: InboundSmsInput): InboundSmsResult {
   });
   if (!id) return { recorded: false, leadId, duplicate: true };
 
-  if (leadId) logSalesEventBy("INBOUND_SMS", leadId, "Customer", { preview: input.body.slice(0, 140) });
+  if (leadId) {
+    logSalesEventBy("INBOUND_SMS", leadId, "Customer", { preview: input.body.slice(0, 140) });
+    // Customer responded → re-resolve the state (AI classifies the reply). Best-effort, non-blocking.
+    void resolveAndStore(leadId).catch(() => {});
+  }
   return { recorded: true, leadId };
 }
