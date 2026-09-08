@@ -158,11 +158,13 @@ export default async function LostQuotesPage(): Promise<React.JSX.Element> {
           {o.lost.map((l) => (
             <div key={l.id} className="flex items-center gap-3 border-b border-white/5 px-3 py-2.5 last:border-b-0">
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{l.eventName || l.clientName || `Project ${l.id}`}</div>
+                <Link href={`/salesos/lost/${l.id}`} className="truncate text-sm font-medium hover:underline">{l.eventName || l.clientName || `Project ${l.id}`}</Link>
                 <div className="text-[11px] text-muted-foreground">
                   {l.clientName || "—"}
                   {l.eventDate ? ` · ${formatYmdLong(l.eventDate)}` : ""}
                   {l.statusLabel ? ` · ${l.statusLabel}` : ""}
+                  {" · "}
+                  <Link href={`/salesos/lost/${l.id}`} className="text-sky-300/80 hover:text-sky-200">autopsy →</Link>
                 </div>
               </div>
               {showMoney && <div className="w-20 shrink-0 text-right text-sm tabular-nums text-amber-200">{money(l.value)}</div>}

@@ -12,6 +12,7 @@ import { STAGE_LABEL, type SalesStage } from "@/lib/salesos/calc";
 import { resolveDeterministic, fromStored, replyMinutesAgo } from "@/lib/salesos/stateService";
 import { nextBestAction, NBA_LABEL } from "@/lib/salesos/nba";
 import { STATE_LABEL as STATE_LABEL_V2 } from "@/lib/salesos/state";
+import { callBriefFor } from "@/lib/salesos/callBrief";
 import { logLeadView, leadActivity } from "@/lib/salesos/audit";
 import { formatYmdLong } from "@/lib/dates";
 import { viewerRole } from "@/lib/auth/getSession";
@@ -47,6 +48,7 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
   const cstate = stored ? fromStored(stored) : booking ? resolveDeterministic(booking) : null;
   const repliedMinutesAgo = replyMinutesAgo(id);
   const nba = cstate ? nextBestAction({ state: cstate.state, value: lead.value, daysToEvent: lead.signals.daysToEvent, repliedMinutesAgo }) : null;
+  const brief = cstate ? callBriefFor(cstate.state, lead.clientName) : null;
 
   const { signals: s, priority } = lead;
   const dte = s.daysToEvent;
@@ -132,6 +134,38 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
           </a>
         </div>
       </section>
+
+      {/* Call brief — the 15-second briefing before dialing (state-keyed, deterministic) */}
+      {brief && brief.opening && (
+        <section className="surface mb-4 border border-white/10 p-4">
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+            <Phone className="size-3.5" /> Call brief
+          </div>
+          {brief.blocker && (
+            <p className="mb-2 text-xs text-muted-foreground">Likely blocker: <span className="text-amber-200">{brief.blocker}</span></p>
+          )}
+          <div className="space-y-2 text-sm">
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Opening</div>
+              <p>{brief.opening}</p>
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Ask this</div>
+              <p className="font-medium">&ldquo;{brief.primaryQuestion}&rdquo;</p>
+            </div>
+            {brief.watchFor.length > 0 && (
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Watch for</div>
+                <ul className="mt-0.5 flex flex-wrap gap-1.5">
+                  {brief.watchFor.map((w, i) => (
+                    <li key={i} className="border border-white/10 px-1.5 py-0.5 text-[11px] text-muted-foreground">{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* Suggested outreach — message copy + call strategy, on demand */}
       <OutreachPanel id={lead.id} />
