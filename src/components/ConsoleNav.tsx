@@ -67,7 +67,7 @@ export function ConsoleNav({ role }: { role: Role }) {
   };
 
   return (
-    <aside className="flex shrink-0 flex-col border-b border-white/10 bg-background md:min-h-dvh md:w-60 md:border-b-0 md:border-r">
+    <aside className="flex shrink-0 flex-col border-b border-white/10 bg-background md:sticky md:top-0 md:h-dvh md:w-60 md:border-b-0 md:border-r">
       {/* Brand */}
       <div className="flex items-center gap-2.5 px-4 py-4 md:px-5 md:py-5">
         <span className="btn-hero flex size-9 items-center justify-center rounded-xl">
@@ -80,7 +80,7 @@ export function ConsoleNav({ role }: { role: Role }) {
       </div>
 
       {/* Blades */}
-      <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:flex-1 md:flex-col md:overflow-visible md:px-3">
+      <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:min-h-0 md:flex-1 md:flex-col md:overflow-y-auto md:px-3">
         {blades.map((b) => (
           <BladeLink key={b.href} blade={b} active={isActive(b.href)} />
         ))}
