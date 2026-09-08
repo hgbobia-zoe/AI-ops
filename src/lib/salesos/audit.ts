@@ -17,9 +17,10 @@ export type SalesAction =
   | "LOSS_REASON_TAGGED"
   | "BID_REVIEWED"
   | "CALL_LOGGED"
+  | "CALL_DEBRIEF"
   | "INBOUND_SMS";
 
-export const SALES_ACTIONS: SalesAction[] = ["LEAD_VIEWED", "OUTREACH_DRAFTED", "MESSAGE_SENT", "LOSS_REASON_TAGGED", "BID_REVIEWED", "CALL_LOGGED", "INBOUND_SMS"];
+export const SALES_ACTIONS: SalesAction[] = ["LEAD_VIEWED", "OUTREACH_DRAFTED", "MESSAGE_SENT", "LOSS_REASON_TAGGED", "BID_REVIEWED", "CALL_LOGGED", "CALL_DEBRIEF", "INBOUND_SMS"];
 
 export const ACTION_LABEL: Record<SalesAction, string> = {
   LEAD_VIEWED: "Viewed lead",
@@ -28,6 +29,7 @@ export const ACTION_LABEL: Record<SalesAction, string> = {
   LOSS_REASON_TAGGED: "Tagged loss reason",
   BID_REVIEWED: "Reviewed bid",
   CALL_LOGGED: "Logged call",
+  CALL_DEBRIEF: "Debriefed call → state",
   INBOUND_SMS: "Customer replied (SMS)",
 };
 

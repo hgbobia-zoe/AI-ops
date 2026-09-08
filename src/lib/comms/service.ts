@@ -21,8 +21,9 @@ import { slackNotifyAlert } from "@/lib/notify/slack";
 import { decideCallNote } from "@/lib/salesos/callNote";
 import { initialsOf, salesOsNoteLine } from "@/lib/salesos/noteFormat";
 import { logSalesEventBy } from "@/lib/salesos/audit";
-import { resolveAndStore } from "@/lib/salesos/stateService";
+import { resolveAndStore, debriefCall } from "@/lib/salesos/stateService";
 import { todayInOpsTz } from "@/lib/dates";
+import type { BookingView } from "@/lib/db/repo";
 
 export interface IngestCallInput extends CallEventInput {
   callId: string; // OpenPhone call id — the idempotency key across a call's several webhook events
@@ -38,7 +39,7 @@ const last10 = (phone?: string | null): string | null => {
 /** Log this call to the matching project's Goodshuffle notes (conversation summary, or a brief
  *  voicemail line). Independent of sentiment, once per call, and only when we can match the number.
  *  The rep initials come from Quo's user id (who handled the call) — the reliable source — else name. */
-async function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLogged: boolean, summary: string | null): Promise<void> {
+async function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLogged: boolean, summary: string | null, booking: BookingView | null, initials: string | null): Promise<void> {
   if (alreadyLogged) return;
   const comment = decideCallNote({
     eventType: input.eventType ?? "",
@@ -47,11 +48,7 @@ async function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLo
     summary,
   });
   if (!comment) return;
-  const custPhone = input.direction === "outgoing" ? input.toPhone : input.fromPhone;
-  const digits = last10(custPhone);
-  const booking = digits ? getBookingByPhoneDigits(digits) : null;
   if (!booking) return; // can't attach a note to a project we can't identify
-  const initials = (await openphoneUserInitials(input.agentUserId)) ?? initialsOf(input.agentName ?? null);
   const line = salesOsNoteLine(initials, comment, todayInOpsTz());
   enqueueGsOp({ op: "note_append", transactionId: booking.bookingId, label: "call logged", payload: { line } });
   markCallNoteLogged(rowId);
@@ -97,10 +94,41 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   if (!transcript && !summary) summary = await getCallSummary(callId);
   updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: input.contactName, eventType: input.eventType });
 
+  // Match the customer's project once — shared by the note, the timeline row, and the state debrief.
+  const custPhone = input.direction === "outgoing" ? input.toPhone : input.fromPhone;
+  const digits = last10(custPhone);
+  const booking = digits ? getBookingByPhoneDigits(digits) : null;
+  const initials = (await openphoneUserInitials(input.agentUserId)) ?? initialsOf(input.agentName ?? null);
+
   // Log the call to Goodshuffle notes (conversation summary or voicemail) — regardless of sentiment.
-  await maybeLogCallNote(id, input, !!existing?.noteLoggedAt, summary);
+  await maybeLogCallNote(id, input, !!existing?.noteLoggedAt, summary, booking, initials);
 
   const text = transcript ?? summary;
+
+  // Phase 11 — close the loop: put the call on the lead's unified timeline, and let a real
+  // conversation move the state machine (same evidence-driven path an inbound SMS reply takes).
+  // Deduped on the call id so it runs once per call regardless of how many webhook events arrive.
+  if (booking && text) {
+    const onTimeline = insertCommsEventIfNew({
+      providerId: `call:${callId}`,
+      leadId: booking.bookingId,
+      direction: input.direction === "outgoing" ? "outbound" : "inbound",
+      channel: "call",
+      fromPhone: input.fromPhone ?? null,
+      toPhone: input.toPhone ?? null,
+      body: (summary ?? text).slice(0, 500),
+      actor: initials,
+      occurredAt: input.occurredAt ?? null,
+    });
+    // A genuine conversation = OpenPhone produced a summary, or a transcript from a call of real length.
+    // Voicemails / quick no-answers are excluded — they stay "Insufficient Data" for the state machine.
+    const isConversation = !!summary || (transcript != null && (input.durationSec ?? 0) >= 45);
+    if (onTimeline && isConversation) {
+      logSalesEventBy("CALL_DEBRIEF", booking.bookingId, initials ?? "Quo", { source: transcript ? "transcript" : "summary", direction: input.direction ?? "unknown" });
+      await debriefCall(booking.bookingId, text).catch(() => {});
+    }
+  }
+
   if (!text) return { recorded: true, analyzed: false, alerted: false, skippedReason: "no transcript/summary yet" };
 
   const s = await analyzeSentiment(text);

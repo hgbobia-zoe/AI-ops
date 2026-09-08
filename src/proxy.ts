@@ -31,6 +31,7 @@ const PUBLIC: string[] = [
   "/api/gs/notes",
   "/api/gs/outbox",
   "/api/openphone/webhook", // OpenPhone → us; authenticates by HMAC signature, not a session
+  "/api/coach", // Custodian live-coach bridge; authenticates by COACH_API_TOKEN bearer, not a session
 ];
 
 function isPublicPath(pathname: string): boolean {

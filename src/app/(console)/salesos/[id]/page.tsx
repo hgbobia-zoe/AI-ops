@@ -4,7 +4,7 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, MessagesSquare, History, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, MessagesSquare, History, AlertTriangle, Radio } from "lucide-react";
 import { OutreachPanel } from "@/components/OutreachPanel";
 import { getLead } from "@/lib/salesos/service";
 import { getCommsForLead, getBookingById, getCustomerState } from "@/lib/db/repo";
@@ -13,6 +13,7 @@ import { resolveDeterministic, fromStored, replyMinutesAgo } from "@/lib/salesos
 import { nextBestAction, NBA_LABEL } from "@/lib/salesos/nba";
 import { STATE_LABEL as STATE_LABEL_V2 } from "@/lib/salesos/state";
 import { callBriefFor } from "@/lib/salesos/callBrief";
+import { coachBridgeConfigured } from "@/lib/salesos/coach";
 import { logLeadView, leadActivity } from "@/lib/salesos/audit";
 import { formatYmdLong } from "@/lib/dates";
 import { viewerRole } from "@/lib/auth/getSession";
@@ -40,7 +41,7 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
 
   await logLeadView(id); // audit trail: who viewed this lead (deduped per actor/30min)
   const activity = leadActivity(id, 30);
-  const conversation = getCommsForLead(id, 20); // inbound + outbound SMS timeline
+  const conversation = getCommsForLead(id, 20); // unified timeline: inbound/outbound texts + calls
 
   // Evidence-driven state (stored AI-refined if we have it, else instant deterministic) + NBA v2.
   const booking = getBookingById(id);
@@ -49,6 +50,7 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
   const repliedMinutesAgo = replyMinutesAgo(id);
   const nba = cstate ? nextBestAction({ state: cstate.state, value: lead.value, daysToEvent: lead.signals.daysToEvent, repliedMinutesAgo }) : null;
   const brief = cstate ? callBriefFor(cstate.state, lead.clientName) : null;
+  const coachOn = coachBridgeConfigured(); // show the Custodian handoff only when the bridge is set up
 
   const { signals: s, priority } = lead;
   const dte = s.daysToEvent;
@@ -119,6 +121,15 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
               <a href={`sms:${lead.clientPhone.replace(/[^\d+]/g, "")}`} className="flex items-center gap-1.5 border border-white/15 px-3 py-1.5 text-sm hover:bg-white/5">
                 <MessageSquare className="size-4" /> Text
               </a>
+              {coachOn && (
+                <a
+                  href={`custodian://coach?leadId=${encodeURIComponent(lead.id)}&name=${encodeURIComponent(lead.clientName || "")}&phone=${encodeURIComponent(lead.clientPhone.replace(/[^\d+]/g, ""))}`}
+                  className="flex items-center gap-1.5 border border-violet-500/30 bg-violet-500/[0.07] px-3 py-1.5 text-sm text-violet-100 hover:bg-violet-500/[0.12]"
+                  title="Open the live call coach (Custodian) with this lead's brief"
+                >
+                  <Radio className="size-4" /> Coach this call
+                </a>
+              )}
             </>
           ) : null}
           {s.hasEmail ? (
@@ -179,11 +190,13 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
           <ul className="space-y-2">
             {conversation.map((c) => {
               const inbound = c.direction === "inbound";
+              const isCall = c.channel === "call";
               return (
                 <li key={c.id} className={`flex ${inbound ? "justify-start" : "justify-end"}`}>
-                  <div className={`max-w-[80%] border p-2.5 text-sm ${inbound ? "border-sky-500/30 bg-sky-500/[0.07]" : "border-emerald-500/25 bg-emerald-500/[0.06]"}`}>
-                    <div className="mb-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                      {inbound ? "Customer" : c.actor || "Zoe"} · {c.occurredAt ? new Date(c.occurredAt).toLocaleString() : ""}
+                  <div className={`max-w-[80%] border p-2.5 text-sm ${isCall ? "border-violet-500/30 bg-violet-500/[0.07]" : inbound ? "border-sky-500/30 bg-sky-500/[0.07]" : "border-emerald-500/25 bg-emerald-500/[0.06]"}`}>
+                    <div className="mb-0.5 flex items-center gap-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {isCall && <Phone className="size-3" />}
+                      {isCall ? "Call" : inbound ? "Customer" : c.actor || "Zoe"} · {c.occurredAt ? new Date(c.occurredAt).toLocaleString() : ""}
                     </div>
                     <div className="whitespace-pre-wrap">{c.body}</div>
                   </div>
