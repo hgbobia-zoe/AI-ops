@@ -11,6 +11,7 @@ import {
   markCallAlerted,
   markCallNoteLogged,
   getBookingByPhoneDigits,
+  insertCommsEventIfNew,
   enqueueGsOp,
   type CallEventInput,
 } from "@/lib/db/repo";
@@ -119,4 +120,42 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   const res = await slackNotifyAlert(msg);
   if (res.ok) markCallAlerted(id);
   return { recorded: true, analyzed: true, alerted: res.ok, sentiment: s.label, skippedReason: res.ok ? undefined : res.skipped ? "alert channel not configured" : res.error };
+}
+
+export interface InboundSmsInput {
+  providerId: string; // OpenPhone message id (idempotency)
+  from: string; // customer number
+  to?: string | null; // our Quo number
+  body: string;
+  occurredAt?: string | null;
+}
+
+export interface InboundSmsResult {
+  recorded: boolean;
+  leadId: string | null;
+  duplicate?: boolean;
+}
+
+/** Ingest an inbound customer SMS: store it on the unified timeline, match it to a lead, and log a
+ *  CUSTOMER_REPLIED audit entry. Interpretation (state/next-action) is a later phase — this just
+ *  captures the reply faithfully (FACT), never inventing meaning. Idempotent on the message id. */
+export function ingestInboundSms(input: InboundSmsInput): InboundSmsResult {
+  const digits = last10(input.from);
+  const lead = digits ? getBookingByPhoneDigits(digits) : null;
+  const leadId = lead?.bookingId ?? null;
+
+  const id = insertCommsEventIfNew({
+    providerId: input.providerId,
+    leadId,
+    direction: "inbound",
+    channel: "sms",
+    fromPhone: input.from,
+    toPhone: input.to ?? null,
+    body: input.body,
+    occurredAt: input.occurredAt ?? null,
+  });
+  if (!id) return { recorded: false, leadId, duplicate: true };
+
+  if (leadId) logSalesEventBy("INBOUND_SMS", leadId, "Customer", { preview: input.body.slice(0, 140) });
+  return { recorded: true, leadId };
 }

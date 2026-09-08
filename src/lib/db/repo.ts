@@ -1661,6 +1661,95 @@ export function expireTracking(stopId: string): void {
   getDb().prepare("UPDATE tracking_links SET active = 0 WHERE stop_id = ?").run(stopId);
 }
 
+// ── Comms events — unified inbound/outbound SMS (+ calls later) timeline per lead (Phase 3/4) ──
+
+export interface CommsEventInput {
+  providerId: string; // OpenPhone message/call id (idempotency)
+  leadId?: string | null;
+  direction: "inbound" | "outbound";
+  channel: "sms" | "call";
+  fromPhone?: string | null;
+  toPhone?: string | null;
+  body?: string | null;
+  actor?: string | null;
+  occurredAt?: string | null;
+}
+
+export interface CommsEventView {
+  id: string;
+  providerId: string;
+  leadId: string | null;
+  direction: "inbound" | "outbound";
+  channel: string;
+  fromPhone: string | null;
+  toPhone: string | null;
+  body: string | null;
+  actor: string | null;
+  occurredAt: string | null;
+  ts: string;
+}
+
+function toCommsEvent(r: Record<string, unknown>): CommsEventView {
+  return {
+    id: String(r.id),
+    providerId: String(r.provider_id ?? ""),
+    leadId: (r.lead_id as string) ?? null,
+    direction: (r.direction as "inbound" | "outbound") ?? "inbound",
+    channel: String(r.channel ?? ""),
+    fromPhone: (r.from_phone as string) ?? null,
+    toPhone: (r.to_phone as string) ?? null,
+    body: (r.body as string) ?? null,
+    actor: (r.actor as string) ?? null,
+    occurredAt: (r.occurred_at as string) ?? null,
+    ts: String(r.ts),
+  };
+}
+
+/** Record a comms event if its provider id is new (idempotent — providers retry webhooks). Returns
+ *  the row id, or null if it was a duplicate. */
+export function insertCommsEventIfNew(e: CommsEventInput): string | null {
+  const id = `CM-${randomUUID()}`;
+  const info = getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO comms_events (id, provider_id, lead_id, direction, channel, from_phone,
+        to_phone, body, actor, occurred_at, ts)
+       VALUES (@id,@providerId,@leadId,@direction,@channel,@fromPhone,@toPhone,@body,@actor,@occurredAt,@ts)`,
+    )
+    .run({
+      id,
+      providerId: e.providerId,
+      leadId: e.leadId ?? null,
+      direction: e.direction,
+      channel: e.channel,
+      fromPhone: e.fromPhone ?? null,
+      toPhone: e.toPhone ?? null,
+      body: e.body ?? null,
+      actor: e.actor ?? null,
+      occurredAt: e.occurredAt ?? null,
+      ts: new Date().toISOString(),
+    });
+  return info.changes > 0 ? id : null;
+}
+
+/** The conversation for one lead (inbound + outbound), newest first. */
+export function getCommsForLead(leadId: string, limit = 30): CommsEventView[] {
+  return (
+    getDb()
+      .prepare("SELECT * FROM comms_events WHERE lead_id = ? ORDER BY COALESCE(occurred_at, ts) DESC LIMIT ?")
+      .all(leadId, limit) as Record<string, unknown>[]
+  ).map(toCommsEvent);
+}
+
+/** Most recent inbound comms across all leads with a lead match — the "customers who just replied"
+ *  feed foundation (Phase 7 command center). */
+export function getRecentInboundComms(limit = 50): CommsEventView[] {
+  return (
+    getDb()
+      .prepare("SELECT * FROM comms_events WHERE direction = 'inbound' AND lead_id IS NOT NULL ORDER BY COALESCE(occurred_at, ts) DESC LIMIT ?")
+      .all(limit) as Record<string, unknown>[]
+  ).map(toCommsEvent);
+}
+
 // ── Call events (OpenPhone) — inbound call metadata + sentiment for the customer-alerts feature ──
 
 export interface CallEventInput {

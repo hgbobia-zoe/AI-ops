@@ -5,7 +5,8 @@
 
 import { NextResponse } from "next/server";
 import { verifyOpenphoneSignature, openphoneSigningKey } from "@/lib/comms/openphone";
-import { ingestCallEvent, type IngestCallInput } from "@/lib/comms/service";
+import { ingestCallEvent, ingestInboundSms, type IngestCallInput } from "@/lib/comms/service";
+import { insertAudit } from "@/lib/db/repo";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,7 @@ interface OpObject {
   object?: string;
   direction?: string;
   from?: string;
-  to?: string;
+  to?: string | string[];
   duration?: number;
   createdAt?: string;
   completedAt?: string;
@@ -25,7 +26,12 @@ interface OpObject {
   userId?: string;
   user?: { id?: string; name?: string; firstName?: string; lastName?: string };
   answeredBy?: { id?: string; name?: string };
+  // message events
+  body?: string;
+  text?: string;
 }
+
+const firstTo = (to: unknown): string | null => (Array.isArray(to) ? (to[0] ? String(to[0]) : null) : typeof to === "string" ? to : null);
 
 /** Best-effort Quo user id of who handled/made the call — mapped to initials for the note tag. */
 function agentUserIdOf(o: OpObject): string | undefined {
@@ -54,10 +60,16 @@ export async function POST(req: Request): Promise<NextResponse> {
   const raw = await req.text();
 
   // Authenticate: enforce the HMAC signature when a signing key is configured. Until it's set (setup
-  // window), accept — matching the repo's fail-open ingest convention — but never once a key exists.
+  // window) we accept — matching the repo's fail-open ingest convention — but never once a key exists.
+  // A rejection is a security event: log it (actor "quo-webhook") and return an explicit failure.
   const sig = verifyOpenphoneSignature(raw, req.headers.get("openphone-signature"));
   if (openphoneSigningKey() && !sig.verified) {
-    return NextResponse.json({ error: "bad signature" }, { status: 401 });
+    try {
+      insertAudit({ actor: "quo-webhook", action: "WEBHOOK_REJECTED", entity: "webhook", entityId: "openphone", after: { reason: "signature_invalid", hadHeader: Boolean(req.headers.get("openphone-signature")) } });
+    } catch {
+      /* logging is best-effort */
+    }
+    return NextResponse.json({ error: "Webhook rejected — authentication failed." }, { status: 401 });
   }
 
   let payload: OpEvent;
@@ -69,7 +81,22 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const type = payload.type ?? "";
   const obj = payload.data?.object ?? {};
-  // Only call-related events carry customer tone. Ack everything else without work.
+
+  // Inbound customer SMS → capture on the unified timeline + match to a lead (Phase 3).
+  if (type === "message.received" || (type.startsWith("message") && obj.direction === "incoming")) {
+    const msgId = (obj.id ?? "").trim();
+    const from = (obj.from ?? "").trim();
+    const body = (obj.body ?? obj.text ?? "").trim();
+    if (!msgId || !from) return NextResponse.json({ ok: true, ignored: "message missing id/from" });
+    try {
+      ingestInboundSms({ providerId: msgId, from, to: firstTo(obj.to), body, occurredAt: obj.createdAt ?? payload.createdAt ?? null });
+    } catch {
+      /* best-effort */
+    }
+    return NextResponse.json({ ok: true, received: type });
+  }
+
+  // Call events carry customer tone + call notes. Ack everything else without work.
   if (!type.startsWith("call")) return NextResponse.json({ ok: true, ignored: type || "unknown" });
 
   const callId = (obj.callId ?? obj.id ?? "").trim();
@@ -81,7 +108,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     eventType: type,
     direction: obj.direction,
     fromPhone: obj.from,
-    toPhone: obj.to,
+    toPhone: firstTo(obj.to) ?? undefined,
     durationSec: typeof obj.duration === "number" ? obj.duration : null,
     transcript: joinDialogue(obj.dialogue),
     summary: Array.isArray(obj.summary) ? obj.summary.join(" ") : typeof obj.summary === "string" ? obj.summary : null,

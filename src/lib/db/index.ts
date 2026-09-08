@@ -396,6 +396,22 @@ CREATE TABLE IF NOT EXISTS call_events (
   ts            TEXT NOT NULL  -- when we recorded it
 );
 CREATE INDEX IF NOT EXISTS idx_call_events_ts ON call_events(ts DESC);
+
+CREATE TABLE IF NOT EXISTS comms_events (
+  id           TEXT PRIMARY KEY,
+  provider_id  TEXT UNIQUE,   -- OpenPhone message/call id (idempotency)
+  lead_id      TEXT,          -- matched booking id (nullable)
+  direction    TEXT,          -- inbound | outbound
+  channel      TEXT,          -- sms | call
+  from_phone   TEXT,
+  to_phone     TEXT,
+  body         TEXT,          -- message text (sms) or short descriptor (call)
+  actor        TEXT,          -- who sent it (rep initials/name) for outbound; null for inbound
+  occurred_at  TEXT,          -- provider timestamp
+  ts           TEXT NOT NULL  -- when we recorded it
+);
+CREATE INDEX IF NOT EXISTS idx_comms_lead ON comms_events(lead_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_comms_ts ON comms_events(ts DESC);
 `;
 
 type DB = InstanceType<typeof Database>;

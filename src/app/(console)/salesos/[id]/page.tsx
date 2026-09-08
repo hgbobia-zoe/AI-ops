@@ -7,6 +7,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, MessagesSquare, History } from "lucide-react";
 import { OutreachPanel } from "@/components/OutreachPanel";
 import { getLead } from "@/lib/salesos/service";
+import { getCommsForLead } from "@/lib/db/repo";
 import { STAGE_LABEL, type SalesStage } from "@/lib/salesos/calc";
 import { logLeadView, leadActivity } from "@/lib/salesos/audit";
 import { formatYmdLong } from "@/lib/dates";
@@ -35,6 +36,7 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
 
   await logLeadView(id); // audit trail: who viewed this lead (deduped per actor/30min)
   const activity = leadActivity(id, 30);
+  const conversation = getCommsForLead(id, 20); // inbound + outbound SMS timeline
 
   const { signals: s, action, priority } = lead;
   const dte = s.daysToEvent;
@@ -98,6 +100,30 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
 
       {/* Suggested outreach — message copy + call strategy, on demand */}
       <OutreachPanel id={lead.id} />
+
+      {/* Conversation — inbound + outbound texts on the unified timeline (FACT: actual messages) */}
+      {conversation.length > 0 && (
+        <section className="surface mb-4 border border-white/10 p-4">
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+            <MessageSquare className="size-3.5" /> Conversation
+          </div>
+          <ul className="space-y-2">
+            {conversation.map((c) => {
+              const inbound = c.direction === "inbound";
+              return (
+                <li key={c.id} className={`flex ${inbound ? "justify-start" : "justify-end"}`}>
+                  <div className={`max-w-[80%] border p-2.5 text-sm ${inbound ? "border-sky-500/30 bg-sky-500/[0.07]" : "border-emerald-500/25 bg-emerald-500/[0.06]"}`}>
+                    <div className="mb-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {inbound ? "Customer" : c.actor || "Zoe"} · {c.occurredAt ? new Date(c.occurredAt).toLocaleString() : ""}
+                    </div>
+                    <div className="whitespace-pre-wrap">{c.body}</div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       {/* Prior contact — the Goodshuffle comms log the outreach is based on */}
       {lead.internalNotes && (

@@ -6,7 +6,8 @@
 // logged to the messages table.
 
 import { NextResponse } from "next/server";
-import { getBookingById, insertMessage, smsRecentlySent, enqueueGsOp } from "@/lib/db/repo";
+import { randomUUID } from "node:crypto";
+import { getBookingById, insertMessage, smsRecentlySent, enqueueGsOp, insertCommsEventIfNew } from "@/lib/db/repo";
 import { sendSms } from "@/lib/notify/sms";
 import { getSettings } from "@/lib/settings";
 import { viewerInitials, viewerQuoUserId } from "@/lib/auth/getSession";
@@ -71,6 +72,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       enqueueGsOp({ op: "note_append", transactionId: id, label: "sms sent", payload: { line } });
       // Sales audit trail: who sent it, and whether they edited the AI draft first.
       await logSalesEvent("MESSAGE_SENT", id, { chars: text.length, to: phone.slice(-4), sender: initials ?? "SalesOS", edited: Boolean(body.edited) });
+      // Unified timeline: record the outbound side of the conversation.
+      insertCommsEventIfNew({ providerId: res.providerMsgId || `out-${randomUUID()}`, leadId: id, direction: "outbound", channel: "sms", toPhone: phone, body: text, actor: initials ?? "SalesOS", occurredAt: new Date().toISOString() });
     } catch {
       /* note + audit are best-effort — never fail the send over them */
     }
