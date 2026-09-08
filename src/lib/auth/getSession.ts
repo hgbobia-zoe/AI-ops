@@ -38,3 +38,15 @@ export async function viewerInitials(): Promise<string | null> {
     return null;
   }
 }
+
+/** The signed-in rep's linked Quo/OpenPhone user id, or null — so a text they send is attributed to
+ *  them in Quo AND tagged with their initials, automatically, without a per-message picker. */
+export async function viewerQuoUserId(): Promise<string | null> {
+  const s = await getSession();
+  if (!s) return null;
+  try {
+    return getUser(s.uid)?.openphoneUserId ?? null;
+  } catch {
+    return null;
+  }
+}

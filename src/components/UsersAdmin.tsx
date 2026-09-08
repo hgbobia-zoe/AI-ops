@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { UserPlus, KeyRound, Check, X } from "lucide-react";
 import { ROLE_LABEL, assignableRoles, type Role } from "@/lib/auth/roles";
 
@@ -11,6 +11,13 @@ interface UserRow {
   role: Role;
   active: boolean;
   lastLoginAt: string | null;
+  openphoneUserId: string | null;
+}
+
+interface QuoRep {
+  id: string;
+  initials: string;
+  name: string;
 }
 
 export function UsersAdmin({
@@ -24,7 +31,15 @@ export function UsersAdmin({
 }): React.JSX.Element {
   const [users, setUsers] = useState<UserRow[]>(initialUsers);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [reps, setReps] = useState<QuoRep[]>([]);
   const roles = assignableRoles(viewerRole);
+
+  useEffect(() => {
+    fetch("/api/salesos/quo-users")
+      .then((r) => (r.ok ? r.json() : { users: [] }))
+      .then((j: { users?: QuoRep[] }) => setReps((j.users ?? []).filter((u) => u.initials)))
+      .catch(() => {});
+  }, []);
 
   const canManage = (u: UserRow): boolean =>
     viewerRole === "owner" ? true : u.role === "member";
@@ -58,6 +73,7 @@ export function UsersAdmin({
             <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <th className="p-2.5">User</th>
               <th className="p-2.5">Role</th>
+              <th className="p-2.5">Quo (text sender)</th>
               <th className="p-2.5">Status</th>
               <th className="p-2.5">Last login</th>
               <th className="p-2.5"></th>
@@ -87,6 +103,25 @@ export function UsersAdmin({
                       </select>
                     ) : (
                       <span className="border border-white/15 px-1.5 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">{ROLE_LABEL[u.role]}</span>
+                    )}
+                  </td>
+                  <td className="p-2.5">
+                    {editable ? (
+                      <select
+                        value={u.openphoneUserId ?? ""}
+                        onChange={(e) => patch(u.id, { openphoneUserId: e.target.value || null })}
+                        className="rounded border border-white/15 bg-transparent px-2 py-1 text-sm"
+                        title="Link this login to their Quo user so texts they send are attributed to them"
+                      >
+                        <option value="" className="bg-background">— not linked</option>
+                        {reps.map((r) => (
+                          <option key={r.id} value={r.id} className="bg-background">
+                            {r.initials} — {r.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground">{reps.find((r) => r.id === u.openphoneUserId)?.initials ?? "—"}</span>
                     )}
                   </td>
                   <td className="p-2.5">

@@ -9,7 +9,7 @@ import { NextResponse } from "next/server";
 import { getBookingById, insertMessage, smsRecentlySent, enqueueGsOp } from "@/lib/db/repo";
 import { sendSms } from "@/lib/notify/sms";
 import { getSettings } from "@/lib/settings";
-import { viewerInitials } from "@/lib/auth/getSession";
+import { viewerInitials, viewerQuoUserId } from "@/lib/auth/getSession";
 import { openphoneUserInitials } from "@/lib/comms/openphone";
 import { salesOsNoteLine } from "@/lib/salesos/noteFormat";
 import { todayInOpsTz } from "@/lib/dates";
@@ -32,7 +32,9 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
   const id = (body.id ?? "").trim();
   const text = (body.body ?? "").trim();
-  const userId = (body.userId ?? "").trim() || undefined; // the "Send as" Quo rep, if picked
+  // Sender attribution: an explicit "Send as" pick wins; otherwise the signed-in rep's linked Quo user
+  // (so a logged-in rep is attributed automatically, no picker needed).
+  const userId = (body.userId ?? "").trim() || (await viewerQuoUserId()) || undefined;
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
   if (!text) return NextResponse.json({ error: "message body required" }, { status: 400 });
   if (text.length > MAX_LEN) return NextResponse.json({ error: `message too long (max ${MAX_LEN})` }, { status: 400 });

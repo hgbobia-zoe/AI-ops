@@ -17,7 +17,14 @@ const PUBLIC: string[] = [
   "/login",
   "/api/auth",
   "/track",
-  "/api/kiosk/publish",
+  // Driver tablets are bound to a TRUCK, not a person (device binding, no login), so the whole
+  // driver surface must stay open when per-person auth is enabled — otherwise the field is locked out.
+  "/kiosk",
+  "/select",
+  "/route",
+  "/api/action", // driver ARRIVED / COMPLETED / HEADING_NEXT taps
+  "/api/pod", // driver photo/signature upload + public tracking images (ids are unguessable capabilities)
+  "/api/kiosk", // kiosk publish + OTA (latest/download)
   "/api/finance/revenue", // own token; hit by the pull, not a person
   "/api/route/import",
   "/api/gs/projects",

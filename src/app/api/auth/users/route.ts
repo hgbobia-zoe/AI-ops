@@ -6,7 +6,7 @@ import { NextResponse } from "next/server";
 import { viewerRole } from "@/lib/auth/getSession";
 import { getSession } from "@/lib/auth/getSession";
 import { canManageUsers, canManageRole, isRole, type Role } from "@/lib/auth/roles";
-import { listUsers, createUser, getUser, setUserRole, setUserActive, setUserPassword, usernameExists } from "@/lib/auth/users";
+import { listUsers, createUser, getUser, setUserRole, setUserActive, setUserPassword, setUserOpenphone, usernameExists } from "@/lib/auth/users";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +44,7 @@ export async function PATCH(req: Request): Promise<NextResponse> {
   const session = await getSession();
   if (!canManageUsers(actorRole)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
-  let body: { id?: string; role?: string; active?: boolean; password?: string };
+  let body: { id?: string; role?: string; active?: boolean; password?: string; openphoneUserId?: string | null };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -79,6 +79,11 @@ export async function PATCH(req: Request): Promise<NextResponse> {
   if (typeof body.password === "string") {
     if (body.password.length < 8) return NextResponse.json({ error: "password must be at least 8 characters" }, { status: 400 });
     setUserPassword(target.id, body.password);
+  }
+
+  // Link (or clear) the rep's Quo user — for sender attribution on texts.
+  if (body.openphoneUserId !== undefined) {
+    setUserOpenphone(target.id, body.openphoneUserId || null);
   }
 
   return NextResponse.json({ ok: true, user: getUser(target.id) });

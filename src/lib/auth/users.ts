@@ -13,6 +13,7 @@ export interface User {
   active: boolean;
   createdAt: string;
   lastLoginAt: string | null;
+  openphoneUserId: string | null; // links this rep to their Quo user (sender attribution)
 }
 
 interface Row {
@@ -24,6 +25,7 @@ interface Row {
   active: number;
   created_at: string;
   last_login_at: string | null;
+  openphone_user_id: string | null;
 }
 
 function toUser(r: Row): User {
@@ -35,6 +37,7 @@ function toUser(r: Row): User {
     active: r.active === 1,
     createdAt: r.created_at,
     lastLoginAt: r.last_login_at,
+    openphoneUserId: r.openphone_user_id ?? null,
   };
 }
 
@@ -91,6 +94,11 @@ export function setUserActive(id: string, active: boolean): void {
 
 export function setUserPassword(id: string, password: string): void {
   getDb().prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(password), id);
+}
+
+/** Link (or clear, with null) a rep's login to their Quo/OpenPhone user id — for sender attribution. */
+export function setUserOpenphone(id: string, openphoneUserId: string | null): void {
+  getDb().prepare("UPDATE users SET openphone_user_id = ? WHERE id = ?").run(openphoneUserId?.trim() || null, id);
 }
 
 /** Verify a login. Returns the user (active only) on success, else null. Updates last_login_at. */
