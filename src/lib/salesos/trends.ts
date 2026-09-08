@@ -11,6 +11,7 @@ export interface TrendInput {
   eventDate?: string | null; // YYYY-MM-DD
   eventName?: string | null;
   location?: string | null; // cityStateZipCounty
+  items?: string[] | null; // captured line-item titles (strong event-type signal when present)
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -70,6 +71,34 @@ export function classifyEventType(name?: string | null): EventType {
   return "other";
 }
 
+// Distinctive line-item signals — far stronger evidence than an address-y event name.
+// NB: "drape" alone is ambiguous — "pipe and drape" is corporate staging — so wedding uses only "draping".
+const ITEM_WEDDING = /\b(arch|arbor|aisle|chuppah|sweetheart|chiavari|charger|draping|dance ?floor|gold chair|champagne wall|backdrop)\b/i;
+const ITEM_CORPORATE = /\b(podium|lectern|stage|staging|projector|screen|pipe and drape|highboy|cocktail table|conference|trade ?show|booth|barricade)\b/i;
+const ITEM_SOCIAL = /\b(bounce|inflatable|balloon|cotton candy|popcorn|concession|kids|carnival|photo ?booth|dunk)\b/i;
+
+export interface EventClassification {
+  type: EventType;
+  confidence: number; // 0..1
+  verified: boolean; // true when a distinctive signal supports it (not just a generic name/items)
+  evidence: string; // what the classification rests on
+}
+
+/** Classify an event using the best available evidence: distinctive LINE ITEMS first (strong), then the
+ *  event name (moderate), else Unverified. Never overstates — generic items (just tables/chairs) stay
+ *  Unverified. */
+export function classifyEvent(name?: string | null, items?: string[] | null): EventClassification {
+  const itemText = (items ?? []).join(" ").toLowerCase();
+  if (itemText) {
+    if (ITEM_WEDDING.test(itemText)) return { type: "wedding", confidence: 0.85, verified: true, evidence: "wedding-specific rentals" };
+    if (ITEM_CORPORATE.test(itemText)) return { type: "corporate", confidence: 0.8, verified: true, evidence: "corporate/AV rentals" };
+    if (ITEM_SOCIAL.test(itemText)) return { type: "social", confidence: 0.8, verified: true, evidence: "party/kids rentals" };
+  }
+  const byName = classifyEventType(name);
+  if (byName !== "other") return { type: byName, confidence: 0.6, verified: true, evidence: "event name" };
+  return { type: "other", confidence: 0.25, verified: false, evidence: (items ?? []).length ? "generic rentals only" : "no distinctive signal" };
+}
+
 export interface TypeTrend {
   type: EventType;
   label: string;
@@ -84,7 +113,7 @@ export interface TypeTrend {
 export function typeTrends(deals: TrendInput[]): TypeTrend[] {
   const types: EventType[] = ["wedding", "corporate", "social", "other"];
   return types.map((type) => {
-    const inType = deals.filter((d) => classifyEventType(d.eventName) === type && outcomeOf(d) !== "open");
+    const inType = deals.filter((d) => classifyEvent(d.eventName, d.items).type === type && outcomeOf(d) !== "open");
     const won = inType.filter((d) => outcomeOf(d) === "won");
     const lost = inType.filter((d) => outcomeOf(d) === "lost");
     const decided = won.length + lost.length;

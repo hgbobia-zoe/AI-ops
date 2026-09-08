@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { seasonTrends, classifyEventType, typeTrends, regionOf, areaTrends, type TrendInput } from "./trends";
+import { seasonTrends, classifyEventType, classifyEvent, typeTrends, regionOf, areaTrends, type TrendInput } from "./trends";
 
 const won = (o: Partial<TrendInput>): TrendInput => ({ signed: true, statusLabel: "Contract Signed", grandTotal: 1000, ...o });
 const lost = (o: Partial<TrendInput>): TrendInput => ({ signed: false, statusLabel: "Lost", grandTotal: 1000, ...o });
@@ -30,6 +30,32 @@ describe("trends — event type inference", () => {
     expect(classifyEventType("Okafor 50th Birthday")).toBe("social");
     expect(classifyEventType("550 Morse St NE delivery")).toBe("other");
     expect(classifyEventType("")).toBe("other");
+  });
+
+  it("classifyEvent: distinctive line items outweigh an address-y name and are marked verified", () => {
+    // Name looks like nothing; the rentals are unmistakably a wedding.
+    const w = classifyEvent("550 Morse St NE", ["Gold Chiavari Chair", "Ceremony Arch", "Charger Plate"]);
+    expect(w.type).toBe("wedding");
+    expect(w.verified).toBe(true);
+    expect(w.confidence).toBeGreaterThan(0.6);
+
+    const c = classifyEvent("Q3 offsite", ["Podium w/ mic", "Pipe and Drape", "Cocktail Table"]);
+    expect(c.type).toBe("corporate");
+    expect(c.verified).toBe(true);
+  });
+
+  it("classifyEvent: falls back to the name, and stays unverified when nothing is distinctive", () => {
+    const byName = classifyEvent("Ashford Wedding", ["6ft Banquet Table", "Folding Chair"]);
+    expect(byName.type).toBe("wedding"); // generic items don't fire; name carries it
+    expect(byName.confidence).toBeCloseTo(0.6);
+
+    const unknown = classifyEvent("550 Morse St NE", ["6ft Banquet Table", "Folding Chair"]);
+    expect(unknown.type).toBe("other");
+    expect(unknown.verified).toBe(false);
+
+    const empty = classifyEvent(null, null);
+    expect(empty.type).toBe("other");
+    expect(empty.verified).toBe(false);
   });
 
   it("computes win rate + avg won value per inferred type", () => {

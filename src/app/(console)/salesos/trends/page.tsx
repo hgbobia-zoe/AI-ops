@@ -57,9 +57,17 @@ export default async function TrendsPage(): Promise<React.JSX.Element> {
         <div className="mb-2 flex items-center gap-2">
           <h2 className="text-lg font-semibold">By event type</h2>
           <span className="flex items-center gap-1 border border-white/10 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            <Tags className="size-3" /> inferred from name
+            <Tags className="size-3" /> {t.itemCoverage > 0 ? "inferred from rentals + name" : "inferred from name"}
           </span>
         </div>
+        {t.itemCoverage < 0.5 && (
+          <div className="mb-3 flex items-start gap-2 border border-white/10 bg-white/[0.03] p-2.5 text-[11px] text-muted-foreground">
+            <Info className="mt-0.5 size-3.5 shrink-0" />
+            {t.itemCoverage === 0
+              ? "Classified from event names only. Run a fresh Goodshuffle pull — it now captures rental line items, which classify event type far more reliably (wedding arches, AV/staging, party rentals)."
+              : `Only ${Math.round(t.itemCoverage * 100)}% of deals have captured line items so far; the rest are classified from the event name alone. A fresh pull raises this.`}
+          </div>
+        )}
         <div className="border border-white/10">
           {t.types.map((ty) => (
             <div key={ty.type} className="flex items-center gap-3 border-b border-white/5 px-3 py-2.5 last:border-b-0">
@@ -112,8 +120,8 @@ export default async function TrendsPage(): Promise<React.JSX.Element> {
       </section>
 
       <p className="mt-6 text-[11px] text-muted-foreground">
-        Win/loss from real Goodshuffle outcomes (open quotes excluded from win rate). Event type is inferred from the event name — treat it as a
-        best-guess grouping, not a Goodshuffle field.
+        Win/loss from real Goodshuffle outcomes (open quotes excluded from win rate). Event type is inferred — from the rental line items where captured
+        (stronger signal), otherwise the event name — and is a best-guess grouping, not a Goodshuffle field.
       </p>
     </main>
   );

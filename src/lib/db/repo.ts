@@ -551,6 +551,17 @@ export interface BookingView {
   internalNotes: string | null;
   clientNotes: string | null;
   lastSentDate: string | null;
+  lineItems: string[] | null; // captured line-item titles (event-type signal); null = never captured
+}
+
+function parseLineItems(raw: unknown): string[] | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
+  } catch {
+    return null;
+  }
 }
 
 function toBookingView(r: Record<string, unknown>): BookingView {
@@ -574,6 +585,7 @@ function toBookingView(r: Record<string, unknown>): BookingView {
     internalNotes: (r.internal_notes as string) ?? null,
     clientNotes: (r.client_notes as string) ?? null,
     lastSentDate: (r.last_sent_date as string) ?? null,
+    lineItems: parseLineItems(r.line_items),
   };
 }
 
@@ -582,6 +594,7 @@ export interface LeadNotesRecord {
   internalNotes?: string | null;
   clientNotes?: string | null;
   lastSentDate?: string | null; // YYYY-MM-DD
+  lineItems?: string[] | null; // captured line-item titles (event-type signal)
 }
 
 /** Attach captured Goodshuffle notes (comms history) to existing bookings, keyed by project id. Only
@@ -591,16 +604,21 @@ export function saveLeadNotes(items: LeadNotesRecord[]): number {
   const now = new Date().toISOString();
   const up = db.prepare(
     `UPDATE bookings SET internal_notes=@internalNotes, client_notes=@clientNotes,
-       last_sent_date=@lastSentDate, notes_updated_at=@now WHERE booking_id=@bookingId`,
+       last_sent_date=@lastSentDate,
+       line_items=CASE WHEN @lineItemsProvided=1 THEN @lineItems ELSE line_items END,
+       notes_updated_at=@now WHERE booking_id=@bookingId`,
   );
   let n = 0;
   const tx = db.transaction(() => {
     for (const i of items) {
+      const provided = i.lineItems !== undefined;
       const r = up.run({
         bookingId: i.bookingId,
         internalNotes: i.internalNotes ?? null,
         clientNotes: i.clientNotes ?? null,
         lastSentDate: i.lastSentDate ?? null,
+        lineItemsProvided: provided ? 1 : 0,
+        lineItems: provided ? JSON.stringify(i.lineItems ?? []) : null,
         now,
       });
       n += r.changes;

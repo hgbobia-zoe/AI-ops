@@ -459,6 +459,7 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "notes_updated_at", type: "TEXT" }, // when we last captured this lead's notes
   { table: "call_events", column: "note_logged_at", type: "TEXT" }, // when we queued a GS note for this call (dedupe)
   { table: "users", column: "openphone_user_id", type: "TEXT" }, // links a rep's login to their Quo user (sender attribution)
+  { table: "bookings", column: "line_items", type: "TEXT" }, // JSON string[] of line-item titles (event-type classification)
 ];
 
 function migrate(db: DB): void {

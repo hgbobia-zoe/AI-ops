@@ -49,8 +49,15 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var openIds=Object.keys(all).filter(function(id){ var p=all[id]; if(p.signed) return false; var s=(p.statusLabel||"").toLowerCase(); if(s.indexOf("lost")>=0||s.indexOf("cancel")>=0||s.indexOf("dead")>=0) return false; var d=d2(p.logistics_start_date); return !d || d>=todayY; }).slice(0,80);
         function pullNotes(){
           var notes=[];
+          // Collect line-item titles from a project's loaded line-item groups (event-type signal).
+          function titlesFrom(lists){ var t=[]; function w(o,d){ if(!o||typeof o!=="object"||d>7)return; if(Object.prototype.toString.call(o)==="[object Array]"){for(var k=0;k<o.length;k++)w(o[k],d+1);return;} if(o.itemTitle)t.push(o.itemTitle); for(var kk in o)w(o[kk],d+1);} (lists||[]).forEach(function(gj){w(gj,0);}); return t; }
           function one(i){ if(i>=openIds.length) return Promise.resolve(); var id=openIds[i];
-            return fetch("/app/vendorTransaction/initContractView?transactionID="+id,H).then(function(r){ if(!r.ok) return; return r.json().then(function(j){ notes.push({ bookingId:String(id), internalNotes:(j.internalNotes||"").trim(), clientNotes:(j.clientVisibleNotes||"").trim(), lastSentDate:null }); }); }).catch(function(){}).then(function(){ return one(i+1); }); }
+            return fetch("/app/vendorTransaction/initContractView?transactionID="+id,H).then(function(r){ if(!r.ok) return; return r.json().then(function(j){
+              var g=(j&&j.lineItemGroupsToLoad)||[];
+              return Promise.all(g.map(function(x){ return fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID="+x.id+"&transactionID="+id,H).then(function(r){return r.json();}).catch(function(){return null;}); })).then(function(lists){
+                notes.push({ bookingId:String(id), internalNotes:(j.internalNotes||"").trim(), clientNotes:(j.clientVisibleNotes||"").trim(), lastSentDate:null, lineItems:titlesFrom(lists) });
+              });
+            }); }).catch(function(){}).then(function(){ return one(i+1); }); }
           return one(0).then(function(){ if(!notes.length) return {updated:0}; return fetch(API+"/api/gs/notes",{method:"POST",headers:POSTH(),body:JSON.stringify({notes:notes})}).then(function(r){return r.json();}).catch(function(){return {updated:0};}); });
         }
         return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr})}).then(function(r){return r.json();}).then(function(j){ return pullNotes().then(function(nj){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:(nj&&nj.updated)||0 }; }); }).catch(function(){ return { saved:0, partial:true }; });
