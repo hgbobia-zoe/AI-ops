@@ -25,6 +25,7 @@ const PUBLIC: string[] = [
   "/api/action", // driver ARRIVED / COMPLETED / HEADING_NEXT taps
   "/api/pod", // driver photo/signature upload + public tracking images (ids are unguessable capabilities)
   "/api/kiosk", // kiosk publish + OTA (latest/download)
+  "/api/vehicles", // driver truck-picker (/select) reads the truck list; GET-only, not sensitive
   "/api/finance/revenue", // own token; hit by the pull, not a person
   "/api/route/import",
   "/api/gs/projects",
@@ -50,6 +51,9 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
   const { pathname } = req.nextUrl;
   if (isPublicPath(pathname)) return NextResponse.next();
   if (pathname.startsWith("/api/pod") && req.method === "GET") return NextResponse.next(); // public tracking images
+  // Driver truck-picker → kiosk reads its assigned route here. EXACT GET only, so the dispatcher write
+  // actions under /api/route/* (close, reopen, driver, stop/remove) stay authenticated.
+  if (pathname === "/api/route" && req.method === "GET") return NextResponse.next();
 
   const session = await verifySession(req.cookies.get(SESSION_COOKIE)?.value, secret);
   if (!session) return deny(req, "auth");
