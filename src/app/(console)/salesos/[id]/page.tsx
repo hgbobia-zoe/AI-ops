@@ -16,7 +16,7 @@ import { callBriefFor } from "@/lib/salesos/callBrief";
 import { coachBridgeConfigured } from "@/lib/salesos/coach";
 import { logLeadView, leadActivity } from "@/lib/salesos/audit";
 import { formatYmdLong } from "@/lib/dates";
-import { viewerRole } from "@/lib/auth/getSession";
+import { viewerRole, viewerInitials } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
@@ -51,6 +51,9 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
   const nba = cstate ? nextBestAction({ state: cstate.state, value: lead.value, daysToEvent: lead.signals.daysToEvent, repliedMinutesAgo }) : null;
   const brief = cstate ? callBriefFor(cstate.state, lead.clientName) : null;
   const coachOn = coachBridgeConfigured(); // show the Custodian handoff only when the bridge is set up
+  // Carry the viewing rep's initials through the deep link so the coach's post-call note is attributed
+  // to the right person (Custodian is machine-authed and otherwise wouldn't know who is on the call).
+  const coachInitials = coachOn ? await viewerInitials() : null;
 
   const { signals: s, priority } = lead;
   const dte = s.daysToEvent;
@@ -123,7 +126,7 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
               </a>
               {coachOn && (
                 <a
-                  href={`custodian://coach?leadId=${encodeURIComponent(lead.id)}&name=${encodeURIComponent(lead.clientName || "")}&phone=${encodeURIComponent(lead.clientPhone.replace(/[^\d+]/g, ""))}`}
+                  href={`custodian://coach?leadId=${encodeURIComponent(lead.id)}&name=${encodeURIComponent(lead.clientName || "")}&phone=${encodeURIComponent(lead.clientPhone.replace(/[^\d+]/g, ""))}${coachInitials ? `&initials=${encodeURIComponent(coachInitials)}` : ""}`}
                   className="flex items-center gap-1.5 border border-violet-500/30 bg-violet-500/[0.07] px-3 py-1.5 text-sm text-violet-100 hover:bg-violet-500/[0.12]"
                   title="Open the live call coach (Custodian) with this lead's brief"
                 >
