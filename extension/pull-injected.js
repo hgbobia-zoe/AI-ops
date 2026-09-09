@@ -12,12 +12,15 @@ export function zoePull(apiBase) {
   const API = String(apiBase || "").replace(/\/+$/, "");
   const H = { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" };
   const POSTH = { "content-type": "application/json" };
+  const AUTH_RE = /\/(ui\/auth|app\/login|login|signin|auth)\b/i;
 
-  // Not signed into Goodshuffle → report it so Zoe can banner. Cheap probe: the app 302s API calls
-  // to a login page when the session is gone, and the visible path turns to /auth|/login|/signin.
-  const path = location.pathname.toLowerCase();
-  if (path.indexOf("auth") >= 0 || path.indexOf("login") >= 0 || path.indexOf("signin") >= 0) {
-    return Promise.resolve({ ok: false, loggedIn: false, stops: 0, bookings: 0, notes: 0, photos: 0, error: "not signed in" });
+  // Signed-out probe. Goodshuffle keeps the visible path at "/" but 302s an API call to its auth page
+  // when the session is gone (fetch follows it → r.redirected, r.url = /ui/auth), and returns no
+  // projectSearch. Checking location.pathname is NOT reliable — verify against the real endpoint.
+  function loggedInProbe() {
+    return fetch("/app/project/searchProjects?page=0&pageSize=1&allProjects=true&sortColumn=logistics_start_date&sortDirection=desc&useV2DateHandling=true", H)
+      .then((r) => { if (r.redirected && AUTH_RE.test(r.url)) return false; if (!r.ok) return false; return r.json().then((j) => !!(j && j.projectSearch)).catch(() => false); })
+      .catch(() => false);
   }
 
   function d2(s) { try { if (!s) return null; const dt = new Date(s); if (isNaN(dt)) return null; return new Date(dt.getTime() - dt.getTimezoneOffset() * 60000).toISOString().slice(0, 10); } catch (e) { return null; } }
@@ -120,10 +123,13 @@ export function zoePull(apiBase) {
     }).catch(() => ({ pushed: 0, failed: 0, notes: 0 }));
   }
 
-  return Promise.all([pullRoutes(), pullProjects(), drainOutbox()]).then((res) => {
-    const r = res[0] || { stops: 0, failed: 0, unmatched: [] };
-    const bk = res[1] || { saved: 0, partial: false, notes: 0 };
-    const ph = res[2] || { pushed: 0, failed: 0 };
-    return { ok: !r.failed && !bk.partial, loggedIn: true, stops: r.stops || 0, bookings: bk.saved || 0, notes: bk.notes || 0, photos: ph.pushed || 0, unmatched: r.unmatched || [], partial: !!bk.partial, error: r.failed ? "routes failed to save" : bk.partial ? "bookings incomplete" : null };
-  }).catch((e) => ({ ok: false, loggedIn: true, stops: 0, bookings: 0, notes: 0, photos: 0, error: String(e).slice(0, 120) }));
+  return loggedInProbe().then((ok) => {
+    if (!ok) return { ok: false, loggedIn: false, stops: 0, bookings: 0, notes: 0, photos: 0, error: "not signed in" };
+    return Promise.all([pullRoutes(), pullProjects(), drainOutbox()]).then((res) => {
+      const r = res[0] || { stops: 0, failed: 0, unmatched: [] };
+      const bk = res[1] || { saved: 0, partial: false, notes: 0 };
+      const ph = res[2] || { pushed: 0, failed: 0 };
+      return { ok: !r.failed && !bk.partial, loggedIn: true, stops: r.stops || 0, bookings: bk.saved || 0, notes: bk.notes || 0, photos: ph.pushed || 0, unmatched: r.unmatched || [], partial: !!bk.partial, error: r.failed ? "routes failed to save" : bk.partial ? "bookings incomplete" : null };
+    }).catch((e) => ({ ok: false, loggedIn: true, stops: 0, bookings: 0, notes: 0, photos: 0, error: String(e).slice(0, 120) }));
+  });
 }
