@@ -266,14 +266,6 @@ export interface ImportResult {
   gsRouteId?: string; // Goodshuffle routeID (hint for write-back)
 }
 
-// Which Goodshuffle vehicle.title substring this truck maps to.
-function goodshuffleMatch(truckId: string): string {
-  const t = truckId.toLowerCase();
-  if (t.includes("e450") || t.includes("ford")) return "ford";
-  if (t.includes("npr") || t.includes("isuzu")) return "isuzu";
-  return t;
-}
-
 type GsResult = {
   ok?: boolean;
   stops?: ImportedStop[];
@@ -293,12 +285,20 @@ type GsResult = {
  * Customer phone: the inlined `transaction.renter` (validated e164 → raw phone), then
  * the on-site contact. Never dispatcher/storeLocation (those are the Zoe main line).
  */
-function goodshuffleExtractionScript(key: string, match: string): string {
+function goodshuffleExtractionScript(key: string, truckId: string): string {
   const KEY = JSON.stringify(key);
-  const MATCH = JSON.stringify(match);
+  const TRUCK = JSON.stringify(truckId);
   return `(function(){
     window.__gsRoute = window.__gsRoute || {};
-    var KEY = ${KEY}, MATCH = ${MATCH};
+    var KEY = ${KEY}, TRUCK = ${TRUCK};
+    // Which truck a string maps to. Vehicle titles are authoritative (allow the bare 1/2 fallback);
+    // route NAMES are only trusted when they name an actual truck word (ford/e450/isuzu/npr) + its
+    // number — a stray digit in a date must NOT match. A route matches this truck if EITHER its
+    // assigned vehicle OR its name resolves here. This is what lets "9/9 - FORD DELIVERY" (no vehicle
+    // assigned) still load onto the Ford E450.
+    function tIdVeh(s){ var t=(s||"").toLowerCase(); if(t.indexOf("ford")>=0||t.indexOf("e450")>=0||t.indexOf("e-450")>=0)return "E450"; if(t.indexOf("isuzu")>=0||t.indexOf("npr")>=0)return t.indexOf("2")>=0?"NPR-2":"NPR-1"; if(t.indexOf("2")>=0)return "NPR-2"; if(t.indexOf("1")>=0)return "NPR-1"; return null; }
+    function tIdName(s){ var t=(s||"").toLowerCase(); if(t.indexOf("ford")>=0||t.indexOf("e450")>=0||t.indexOf("e-450")>=0)return "E450"; if(t.indexOf("isuzu")>=0||t.indexOf("npr")>=0){ if(t.indexOf("2")>=0)return "NPR-2"; if(t.indexOf("1")>=0)return "NPR-1"; return null; } return null; }
+    function mineRt(rt){ if(tIdVeh(rt.vehicle&&rt.vehicle.title)===TRUCK)return true; if(tIdName(rt.name)===TRUCK)return true; return false; }
     function fail(m){ try { window.__gsRoute[KEY] = {ok:false, error:String(m).slice(0,300)}; } catch(x){} }
     function done(stops, routes, total, matched, gsRouteId){ window.__gsRoute[KEY] = {ok:true, stops:stops, routeNames:routes, total:total, matched:matched, gsRouteId:gsRouteId}; }
     try {
@@ -386,7 +386,7 @@ function goodshuffleExtractionScript(key: string, match: string): string {
       fetch("/app/routing/listRoutes", { method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body), credentials:"include" })
         .then(function(r){ return r.json(); })
         .then(function(routes){
-          var mine = (routes||[]).filter(function(rt){ return rt.vehicle && String(rt.vehicle.title||"").toLowerCase().indexOf(MATCH) >= 0; });
+          var mine = (routes||[]).filter(mineRt);
           mine.sort(function(a,b){ return new Date(a.startDate) - new Date(b.startDate); });
           var total = (routes||[]).length;
           if (!mine.length) { done([], [], total, 0); return; }
@@ -414,9 +414,8 @@ async function evalInGoodshuffle(script: string, timeoutMs = 20000): Promise<unk
 // polling its result global — the whole extraction lives in the web (Fly-deployable).
 async function importViaEval(truckId: string): Promise<GsResult | null> {
   const key = `r${Date.now()}${Math.random().toString(36).slice(2, 8)}`;
-  const match = goodshuffleMatch(truckId);
   // Kick off the async extraction (returns immediately; stashes to window.__gsRoute[key]).
-  await evalInGoodshuffle(goodshuffleExtractionScript(key, match), 15000);
+  await evalInGoodshuffle(goodshuffleExtractionScript(key, truckId), 15000);
   const pollScript = `(function(){try{return (window.__gsRoute && window.__gsRoute[${JSON.stringify(
     key,
   )}]) || null;}catch(e){return null;}})()`;

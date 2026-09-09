@@ -68,6 +68,12 @@ export function zoePull(apiBase) {
     if (t.indexOf("2") >= 0) return "NPR-2";
     if (t.indexOf("1") >= 0) return "NPR-1";
     return null; }
+  // Fallback for a route with no vehicle assigned: match the truck from the route NAME, but only on an
+  // explicit truck word (ford/e450/isuzu/npr) + number — never a bare 1/2 (a date digit must not match).
+  function truckFromName(name) { const t = (name || "").toLowerCase();
+    if (t.indexOf("ford") >= 0 || t.indexOf("e450") >= 0 || t.indexOf("e-450") >= 0) return "E450";
+    if (t.indexOf("isuzu") >= 0 || t.indexOf("npr") >= 0) { if (t.indexOf("2") >= 0) return "NPR-2"; if (t.indexOf("1") >= 0) return "NPR-1"; return null; }
+    return null; }
   function fetchEvent(txID) { const out = { items: undefined, contactId: undefined, grandTotalCents: undefined, paidCents: undefined };
     const pI = fetch("/app/vendorTransaction/initContractView?transactionID=" + txID, H).then((r) => r.json())
       .then((cv) => { if (cv && cv.contactID != null) out.contactId = String(cv.contactID); const g = (cv && cv.lineItemGroupsToLoad) || []; return Promise.all(g.map((x) => fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID=" + x.id + "&transactionID=" + txID, H).then((r) => r.json()).catch(() => null))); })
@@ -88,7 +94,7 @@ export function zoePull(apiBase) {
     const body = { from: start.toISOString(), to: end.toISOString(), warehouseCanonicalIDs: null, crew: null, vehicles: null, statuses: null };
     return fetch("/app/routing/listRoutes", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), credentials: "include" }).then((r) => r.json()).then((routes) => {
       const byTruck = {}, gsBy = {}; let chain = Promise.resolve(); const unmatched = {};
-      (routes || []).forEach((rt) => { chain = chain.then(() => { const title = (rt.vehicle && rt.vehicle.title) || ""; const tid = truckIdFor(title); if (!tid) { if (title) unmatched[title] = 1; return; }
+      (routes || []).forEach((rt) => { chain = chain.then(() => { const title = (rt.vehicle && rt.vehicle.title) || ""; const tid = truckIdFor(title) || truckFromName(rt.name); if (!tid) { if (title || rt.name) unmatched[title || rt.name] = 1; return; }
         return fetch("/app/routing/getRoute?routeID=" + rt.id + "&includeAttributes=true", { headers: { accept: "application/json" }, credentials: "include" }).then((r) => r.json()).then((full) => attachItems(extractStops(full)).then((stops) => { byTruck[tid] = (byTruck[tid] || []).concat(stops); if (!gsBy[tid]) gsBy[tid] = String(rt.id); })); }); });
       return chain.then(() => {
         const trucks = Object.keys(byTruck).filter((t) => byTruck[t].length); let totalStops = 0, failed = 0; const unm = Object.keys(unmatched);

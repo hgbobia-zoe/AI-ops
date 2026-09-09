@@ -71,6 +71,13 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
       if(t.indexOf("2")>=0) return "NPR-2";
       if(t.indexOf("1")>=0) return "NPR-1";
       return null; }
+    // Fallback for a route with no vehicle assigned: read the truck from the route NAME, but ONLY when
+    // it names an actual truck word (ford/e450/isuzu/npr) + number — never the bare 1/2 (a date digit
+    // must not match). Lets "9/9 - FORD DELIVERY" load onto E450 even when the vehicle field is empty.
+    function truckFromName(name){ var t=(name||"").toLowerCase();
+      if(t.indexOf("ford")>=0||t.indexOf("e450")>=0||t.indexOf("e-450")>=0) return "E450";
+      if(t.indexOf("isuzu")>=0||t.indexOf("npr")>=0){ if(t.indexOf("2")>=0) return "NPR-2"; if(t.indexOf("1")>=0) return "NPR-1"; return null; }
+      return null; }
     function fetchEvent(txID){ var out={items:undefined,contactId:undefined,grandTotalCents:undefined,paidCents:undefined};
       var pI=fetch("/app/vendorTransaction/initContractView?transactionID="+txID,H).then(function(r){return r.json();})
         .then(function(cv){ if(cv&&cv.contactID!=null)out.contactId=String(cv.contactID); var g=(cv&&cv.lineItemGroupsToLoad)||[]; return Promise.all(g.map(function(x){ return fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID="+x.id+"&transactionID="+txID,H).then(function(r){return r.json();}).catch(function(){return null;}); })); })
@@ -91,7 +98,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
       var body={from:start.toISOString(),to:end.toISOString(),warehouseCanonicalIDs:null,crew:null,vehicles:null,statuses:null};
       return fetch("/app/routing/listRoutes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),credentials:"include"}).then(function(r){return r.json();}).then(function(routes){
         var byTruck={},gsBy={},chain=Promise.resolve(),unmatched={};
-        (routes||[]).forEach(function(rt){ chain=chain.then(function(){ var title=(rt.vehicle&&rt.vehicle.title)||""; var tid=truckIdFor(title); if(!tid){ if(title)unmatched[title]=1; return; }
+        (routes||[]).forEach(function(rt){ chain=chain.then(function(){ var title=(rt.vehicle&&rt.vehicle.title)||""; var tid=truckIdFor(title)||truckFromName(rt.name); if(!tid){ if(title||rt.name)unmatched[title||rt.name]=1; return; }
           return fetch("/app/routing/getRoute?routeID="+rt.id+"&includeAttributes=true",{headers:{accept:"application/json"},credentials:"include"}).then(function(r){return r.json();}).then(function(full){ return attachItems(extractStops(full)).then(function(stops){ byTruck[tid]=(byTruck[tid]||[]).concat(stops); if(!gsBy[tid])gsBy[tid]=String(rt.id); }); }); }); });
         return chain.then(function(){
           var trucks=Object.keys(byTruck).filter(function(t){return byTruck[t].length;}); var totalStops=0,failed=0; var unm=Object.keys(unmatched);
