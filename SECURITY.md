@@ -9,6 +9,7 @@ never trusts the network; secrets live only in Fly secrets (server-side) — nev
 |---|---|---|---|
 | `POST /api/openphone/webhook` (Quo calls + inbound SMS) | **HMAC-SHA256 signature** over `<timestamp>.<rawBody>` using the webhook signing key, compared in constant time (`verifyOpenphoneSignature`). | **401 "Webhook rejected — authentication failed."** — no data written. | A `WEBHOOK_REJECTED` row in `audit_logs` (actor `quo-webhook`, reason, whether a signature header was present). |
 | `POST /api/gs/projects`, `/api/gs/notes`, `/api/gs/outbox`, `/api/route/import` (office pull ingest) | Shared token `GS_INGEST_TOKEN` in `x-publish-token`, plus CORS locked to `https://pro.goodshuffle.com`. | 401 `unauthorized`. | `import_log`. |
+| `GET /api/coach/brief`, `POST /api/coach/debrief` (Custodian live-coach bridge) | Shared token `COACH_API_TOKEN` as `Authorization: Bearer` (or `x-coach-token`), compared exact. **Fail-CLOSED** — with no token set the bridge is off (401), since `brief` exposes lead data. | 401 `unauthorized`. | `debrief` writes a `CALL_DEBRIEF` sales-audit row (via Custodian). |
 | Console + all `/api/salesos/*`, `/admin`, `/api/finance`, `/api/settings` | Signed session cookie (`APP_SESSION_TOKEN`), role-gated in `src/proxy.ts`. | 401 / redirect to `/login`. | Sales actions → `audit_logs` (per-person once login is on). |
 
 ### Quo (OpenPhone) signature verification — details
@@ -31,4 +32,4 @@ never trusts the network; secrets live only in Fly secrets (server-side) — nev
 ## Secrets
 All credentials are Fly secrets, write-only from the admin UI, never returned to the client in
 plaintext: `APP_SESSION_TOKEN`, `OWNER_PASSWORD`, `OPENPHONE_API_KEY`, `OPENPHONE_WEBHOOK_SECRET`,
-`SLACK_WEBHOOK_URL`, `SLACK_ALERT_WEBHOOK_URL`, `GS_INGEST_TOKEN`, `ANTHROPIC_API_KEY`.
+`SLACK_WEBHOOK_URL`, `SLACK_ALERT_WEBHOOK_URL`, `GS_INGEST_TOKEN`, `ANTHROPIC_API_KEY`, `COACH_API_TOKEN`.
