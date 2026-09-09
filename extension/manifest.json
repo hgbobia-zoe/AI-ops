@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Zoe Auto-Pull (Goodshuffle → Zoe Ops)",
+  "version": "1.0.0",
+  "description": "Keeps Zoe Ops fresh: pulls Goodshuffle routes, bookings & revenue on a timer from a logged-in GSPRO tab, and drains queued write-backs. Install on the office machine only.",
+  "permissions": ["alarms", "scripting", "tabs", "storage"],
+  "host_permissions": ["https://pro.goodshuffle.com/*", "https://zoe-dispatch.fly.dev/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "options_page": "options.html",
+  "action": { "default_title": "Zoe Auto-Pull", "default_popup": "popup.html" }
+}

@@ -3,14 +3,22 @@
 // /route, /select) and customer (/track) pages live outside this group — no shell.
 
 import { ConsoleNav } from "@/components/ConsoleNav";
+import { PullHealthBanner } from "@/components/PullHealthBanner";
 import { viewerRole } from "@/lib/auth/getSession";
+import { canManageSettings } from "@/lib/auth/roles";
+import { pullBannerState } from "@/lib/pull/state";
 
 export default async function ConsoleLayout({ children }: { children: React.ReactNode }) {
   const role = await viewerRole();
+  // Only staff who can act on it (open GSPRO / manage the pull) see the data-health banner.
+  const banner = canManageSettings(role) ? pullBannerState() : null;
   return (
     <div className="flex min-h-dvh flex-col md:flex-row">
       <ConsoleNav role={role} />
-      <div className="min-w-0 flex-1">{children}</div>
+      <div className="flex min-w-0 flex-1 flex-col">
+        {banner && <PullHealthBanner level={banner.level} title={banner.title} detail={banner.detail} />}
+        <div className="min-w-0 flex-1">{children}</div>
+      </div>
     </div>
   );
 }

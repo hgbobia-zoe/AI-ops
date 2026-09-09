@@ -12,9 +12,19 @@ export interface SourceFreshness {
   count: number;
 }
 
+export type AgentStatus = "ok" | "no_tab" | "not_logged_in" | "error";
+
+export interface AgentHeartbeat {
+  agent: string; // e.g. "extension"
+  status: AgentStatus;
+  detail: string | null;
+  at: string; // ISO of this heartbeat
+}
+
 export interface PullState {
   sources?: Record<string, SourceFreshness>;
   lastStaleAlertAt?: string;
+  agent?: AgentHeartbeat; // last heartbeat from the Auto-Pull extension (drives the "not signed in" banner)
   // Legacy single-value fields (kept so the existing freshness banner keeps working).
   lastPullAt?: string;
   lastStops?: number;
@@ -53,6 +63,60 @@ export function markStaleAlerted(now: Date = new Date()): void {
   const s = getPullState();
   s.lastStaleAlertAt = now.toISOString();
   save(s);
+}
+
+/** Record the Auto-Pull extension's latest heartbeat (status + detail). Independent of pull success —
+ *  a successful pull updates source freshness via recordPull; this captures WHY a pull didn't happen
+ *  (no GSPRO tab, signed out) so the UI can say so precisely instead of only "stale". */
+export function recordAgentHeartbeat(agent: string, status: AgentStatus, detail: string | null, now: Date = new Date()): void {
+  const s = getPullState();
+  s.agent = { agent, status, detail: detail ?? null, at: now.toISOString() };
+  save(s);
+}
+
+// ── Banner verdict (drives PullHealthBanner) ──────────────────────────────────
+
+export interface PullBanner {
+  level: "error" | "warn";
+  title: string;
+  detail: string;
+}
+
+/** Decide whether to show a data-health banner, and what it says. Keys primarily off the Auto-Pull
+ *  extension's heartbeat (it pings every cycle): a recent "not_logged_in"/"no_tab"/"error" is precise;
+ *  a missing/stale heartbeat means the puller isn't running at all. Returns null when all is well.
+ *  `agentFreshMin` = how recent a heartbeat must be to be trusted (default 30m; the extension pulls
+ *  every ~10m). `routeStaleH` = fallback route-freshness threshold when there's no extension at all. */
+export function pullBannerState(now: number = Date.now(), agentFreshMin = 30, routeStaleH = 20): PullBanner | null {
+  const st = getPullState();
+  const agent = st.agent;
+  const agentAgeMin = agent ? (now - Date.parse(agent.at)) / 60000 : Infinity;
+
+  const routeAts = Object.entries(st.sources ?? {})
+    .filter(([k]) => k.startsWith("route:"))
+    .map(([, v]) => Date.parse(v.at))
+    .filter((t) => !Number.isNaN(t));
+  const routeAgeH = routeAts.length ? (now - Math.max(...routeAts)) / 3_600_000 : Infinity;
+  const lastPullPhrase = routeAts.length ? `Last route pull ${Math.round(routeAgeH)}h ago.` : "Routes have never been pulled.";
+
+  // A live extension heartbeat is the most precise signal.
+  if (agent && agentAgeMin <= agentFreshMin) {
+    if (agent.status === "not_logged_in")
+      return { level: "error", title: "Goodshuffle is signed out — auto-pull can't run", detail: "Open pro.goodshuffle.com on the office machine and sign in; data will refresh within a few minutes." };
+    if (agent.status === "no_tab")
+      return { level: "warn", title: "Auto-pull has no Goodshuffle tab open", detail: "Open pro.goodshuffle.com (signed in) in the office browser so the pull can run." };
+    if (agent.status === "error")
+      return { level: "warn", title: "Auto-pull hit a problem", detail: `${agent.detail ?? "Last pull errored."} ${lastPullPhrase}` };
+    return null; // status ok and recent → all good
+  }
+
+  // No live heartbeat. If a route pull is recent enough anyway (manual bookmarklet), stay quiet.
+  if (routeAgeH < routeStaleH) return null;
+  return {
+    level: "warn",
+    title: "Route data may be stale — auto-pull isn't reporting in",
+    detail: `${lastPullPhrase} Start the Auto-Pull extension (or run the pull) on the office machine.`,
+  };
 }
 
 // ── Import ledger ────────────────────────────────────────────────────────────

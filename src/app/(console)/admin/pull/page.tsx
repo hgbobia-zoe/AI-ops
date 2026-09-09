@@ -3,8 +3,9 @@
 // today's routes — with revenue + customer identity the driver/tablet account can't see.
 
 import { headers } from "next/headers";
-import { Download, CircleCheck, AlertTriangle } from "lucide-react";
+import { Download, CircleCheck, AlertTriangle, Puzzle } from "lucide-react";
 import { PullBookmarklet } from "@/components/PullBookmarklet";
+import { PullExtensionInstall } from "@/components/PullExtensionInstall";
 import { buildOfficePullScript } from "@/lib/gsPull";
 import { getPullState } from "@/lib/pull/state";
 import { DISPLAY_TZ } from "@/lib/dates";
@@ -33,6 +34,16 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
   const ageH = state.lastPullAt ? Math.round((Date.now() - Date.parse(state.lastPullAt)) / 3_600_000) : null;
   const stale = ageH == null || ageH >= 26;
 
+  const agent = state.agent;
+  const agentAgeMin = agent ? Math.round((Date.now() - Date.parse(agent.at)) / 60_000) : null;
+  const agentLive = agentAgeMin != null && agentAgeMin <= 30;
+  const AGENT_STATUS_LABEL: Record<string, string> = {
+    ok: "Pulling on schedule",
+    no_tab: "No Goodshuffle tab open on this machine",
+    not_logged_in: "Goodshuffle is signed out — sign in to resume",
+    error: "Last pull hit a problem",
+  };
+
   return (
     <main className="mx-auto max-w-3xl p-5 pb-16 md:p-8">
       <header className="mb-5">
@@ -55,9 +66,36 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
         </div>
       </div>
 
-      {/* Install */}
+      {/* Auto-Pull extension — the recommended, zero-click path */}
+      <section className="mb-6 space-y-3 border border-indigo-500/30 bg-indigo-500/[0.06] p-4">
+        <h2 className="flex items-center gap-2 text-lg font-semibold">
+          <Puzzle className="size-5" /> Auto-Pull extension (recommended)
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Install once on the <b>office machine</b> that stays logged into Goodshuffle. It then pulls every 10 minutes on
+          its own — no clicking, and it keeps running across browser restarts. Everyone else just uses the app; only this
+          one machine needs it.
+        </p>
+
+        {/* Live status from the extension's heartbeat */}
+        <div className={`flex items-center gap-2 border px-3 py-2 text-sm ${agentLive && agent?.status === "ok" ? "border-emerald-500/30 bg-emerald-500/[0.06] text-emerald-200" : agentLive ? "border-amber-500/40 bg-amber-500/10 text-amber-200" : "border-white/10 bg-white/[0.03] text-muted-foreground"}`}>
+          {agentLive && agent?.status === "ok" ? <CircleCheck className="size-4 shrink-0" /> : <AlertTriangle className="size-4 shrink-0" />}
+          <span>
+            {agent
+              ? agentLive
+                ? `Extension: ${AGENT_STATUS_LABEL[agent.status] ?? agent.status} (${agentAgeMin}m ago)`
+                : `Extension last reported ${agentAgeMin}m ago — may not be running here.`
+              : "Extension not detected yet. Install it below, or it hasn't run its first pull."}
+          </span>
+        </div>
+
+        <PullExtensionInstall downloadHref="/zoe-autopull-extension.zip" />
+      </section>
+
+      {/* Install the bookmarklet — no-install alternative */}
       <section className="mb-6 space-y-3">
-        <h2 className="text-lg font-semibold">1 · Install the button (once)</h2>
+        <h2 className="text-lg font-semibold">Or, no install: the bookmarklet</h2>
+        <h3 className="text-sm font-semibold text-muted-foreground">1 · Install the button (once)</h3>
         <p className="text-sm text-muted-foreground">
           Make sure your bookmarks bar is visible (Ctrl/Cmd+Shift+B), then <b>drag</b> this button onto it. Or click
           Copy and create a new bookmark with that as the URL.

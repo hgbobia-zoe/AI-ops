@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Zoe Auto-Pull — Settings</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; margin: 0; background: #0b0b0c; color: #e7e7e9; }
+    .wrap { max-width: 460px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    p.sub { color: #9a9aa2; margin: 0 0 20px; font-size: 12.5px; }
+    label { display: block; margin: 16px 0 4px; font-weight: 600; font-size: 12.5px; }
+    input[type=text], input[type=number] { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #2a2a30; border-radius: 6px; background: #141416; color: #e7e7e9; }
+    .row { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+    button { margin-top: 20px; padding: 9px 16px; border: 0; border-radius: 6px; background: #4f46e5; color: #fff; font-weight: 600; cursor: pointer; }
+    .hint { color: #7c7c85; font-size: 11.5px; margin-top: 4px; }
+    #saved { color: #22c55e; font-size: 12.5px; margin-left: 10px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Zoe Auto-Pull</h1>
+    <p class="sub">Install on the office machine that stays logged into Goodshuffle. It pulls on a timer whenever a GSPRO tab is open in this browser — no clicking.</p>
+
+    <label for="apiBase">Zoe Ops URL</label>
+    <input id="apiBase" type="text" placeholder="https://zoe-dispatch.fly.dev" />
+    <div class="hint">Where the data is sent. Leave the default unless you're on a different deployment.</div>
+
+    <label for="intervalMin">Pull every (minutes)</label>
+    <input id="intervalMin" type="number" min="1" max="120" />
+    <div class="hint">How often to refresh. 10 is plenty for a delivery day.</div>
+
+    <div class="row"><input id="enabled" type="checkbox" /> <label for="enabled" style="margin:0;">Auto-pull enabled</label></div>
+
+    <div><button id="save">Save</button><span id="saved" hidden>Saved ✓</span></div>
+  </div>
+  <script src="options.js"></script>
+</body>
+</html>
