@@ -93,18 +93,31 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         if(doc){s.dayOfName=doc.name||doc.fullName||undefined;s.dayOfPhone=doc.phoneNumber||doc.phone||undefined;}
         s._txID=w.transactionID||(tx&&tx.id)||null; if(s._txID)s.txId=String(s._txID); return s; }); }
     function attachItems(stops){ return Promise.all(stops.map(function(s){ if(!s._txID){delete s._txID;return Promise.resolve();} return fetchEvent(s._txID).then(function(ev){ if(ev){ if(ev.items&&ev.items.length)s.items=ev.items; if(ev.contactId)s.contactId=ev.contactId; if(ev.grandTotalCents!=null)s.grandTotalCents=ev.grandTotalCents; if(ev.paidCents!=null)s.paidCents=ev.paidCents; } delete s._txID; }); })).then(function(){return stops;}); }
+    // Multi-week route pull: fetch the next ~3 weeks of routes and import each per (truck, DATE), so
+    // the dispatch calendar + risk engine stay populated ahead of time. Near-term routes (<= ENRICH
+    // days out) get full per-event enrichment (line items → tent/crew rules); farther-out routes import
+    // bare stops (names/addresses/windows) to keep the pull fast — a closer pull enriches them later.
+    function rymd(s){ try{ if(!s) return null; var dt=new Date(s); if(isNaN(dt)) return null; return new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,10); }catch(e){ return null; } }
     function pullRoutes(){
-      var now=new Date(); var start=new Date(now.getFullYear(),now.getMonth(),now.getDate(),0,0,0); var end=new Date(start.getTime()+24*3600*1000);
+      var HORIZON=21, ENRICH=8;
+      var now=new Date(); var start=new Date(now.getFullYear(),now.getMonth(),now.getDate(),0,0,0); var end=new Date(start.getTime()+(HORIZON+1)*24*3600*1000); var todayYmd=rymd(start.toISOString());
       var body={from:start.toISOString(),to:end.toISOString(),warehouseCanonicalIDs:null,crew:null,vehicles:null,statuses:null};
       return fetch("/app/routing/listRoutes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),credentials:"include"}).then(function(r){return r.json();}).then(function(routes){
-        var byTruck={},gsBy={},chain=Promise.resolve(),unmatched={};
+        var groups={},chain=Promise.resolve(),unmatched={};
         (routes||[]).forEach(function(rt){ chain=chain.then(function(){ var title=(rt.vehicle&&rt.vehicle.title)||""; var tid=truckIdFor(title)||truckFromName(rt.name); if(!tid){ if(title||rt.name)unmatched[title||rt.name]=1; return; }
-          return fetch("/app/routing/getRoute?routeID="+rt.id+"&includeAttributes=true",{headers:{accept:"application/json"},credentials:"include"}).then(function(r){return r.json();}).then(function(full){ return attachItems(extractStops(full)).then(function(stops){ byTruck[tid]=(byTruck[tid]||[]).concat(stops); if(!gsBy[tid])gsBy[tid]=String(rt.id); }); }); }); });
+          return fetch("/app/routing/getRoute?routeID="+rt.id+"&includeAttributes=true",{headers:{accept:"application/json"},credentials:"include"}).then(function(r){return r.json();}).then(function(full){
+            var stops=extractStops(full);
+            var rdate=rymd(rt.startDate)||rymd(rt.date)||(stops[0]?rymd(stops[0].eta):null);
+            if(!rdate) return;
+            var daysOut=Math.round((Date.parse(rdate+"T00:00:00Z")-Date.parse(todayYmd+"T00:00:00Z"))/86400000);
+            var p=(daysOut>=0&&daysOut<=ENRICH)?attachItems(stops):Promise.resolve(stops);
+            return p.then(function(st){ var key=tid+"|"+rdate; if(!groups[key])groups[key]={truckId:tid,date:rdate,stops:[],gsRouteId:String(rt.id)}; groups[key].stops=groups[key].stops.concat(st); });
+          }); }); });
         return chain.then(function(){
-          var trucks=Object.keys(byTruck).filter(function(t){return byTruck[t].length;}); var totalStops=0,failed=0; var unm=Object.keys(unmatched);
-          return Promise.all(trucks.map(function(tid){ var st=byTruck[tid]; totalStops+=st.length; return fetch(API+"/api/route/import",{method:"POST",headers:POSTH(),body:JSON.stringify({truckId:tid,stops:st,gsRouteId:gsBy[tid]})}).then(function(r){ if(!r.ok)failed++; }).catch(function(){failed++;}); })).then(function(){ return {stops:totalStops,failed:failed,unmatched:unm}; });
+          var keys=Object.keys(groups); var totalStops=0,failed=0,days=keys.length; var unm=Object.keys(unmatched);
+          return Promise.all(keys.map(function(k){ var g=groups[k]; totalStops+=g.stops.length; return fetch(API+"/api/route/import",{method:"POST",headers:POSTH(),body:JSON.stringify({truckId:g.truckId,date:g.date,stops:g.stops,gsRouteId:g.gsRouteId})}).then(function(r){ if(!r.ok)failed++; }).catch(function(){failed++;}); })).then(function(){ return {stops:totalStops,days:days,failed:failed,unmatched:unm}; });
         });
-      }).catch(function(){ return {stops:0,failed:1,unmatched:[]}; });
+      }).catch(function(){ return {stops:0,days:0,failed:1,unmatched:[]}; });
     }
 
     // ---- Outbox drain: push queued DISPATCH → GOODSHUFFLE writes (delivery photos → Files tab) ----
@@ -161,8 +174,8 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
           var photoErr=ph.failed?" · ⚠ "+ph.failed+" photo push(es) failed":"";
           if(r.failed) fin("⚠️ Bookings synced ("+bk.saved+"), but routes failed to save."+unm,"#b91c1c");
           else if(bk.partial) fin("⚠️ Routes synced ("+r.stops+"), but bookings INCOMPLETE ("+bk.saved+" saved) — will retry."+unm,"#b45309");
-          else if(unm||photoErr) fin("✅ Synced "+r.stops+" stops + "+bk.saved+" bookings"+photoNote+unm+photoErr,"#b45309");
-          else fin("✅ Synced "+r.stops+" route stops + "+bk.saved+" bookings"+photoNote+" → Zoe Ops","#15803d");
+          else if(unm||photoErr) fin("✅ Synced "+r.stops+" stops"+(r.days?" ("+r.days+" day"+(r.days===1?"":"s")+")":"")+" + "+bk.saved+" bookings"+photoNote+unm+photoErr,"#b45309");
+          else fin("✅ Synced "+r.stops+" route stops"+(r.days?" across "+r.days+" day"+(r.days===1?"":"s"):"")+" + "+bk.saved+" bookings"+photoNote+" → Zoe Ops","#15803d");
         }).catch(function(e){ fin("⚠️ Pull failed: "+String(e).slice(0,90),"#b91c1c"); });
       }catch(e){ banner("⚠️ "+String(e).slice(0,110),"#b91c1c"); }
     }

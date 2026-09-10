@@ -89,18 +89,30 @@ export function zoePull(apiBase) {
       if (doc) { s.dayOfName = doc.name || doc.fullName || undefined; s.dayOfPhone = doc.phoneNumber || doc.phone || undefined; }
       s._txID = w.transactionID || (tx && tx.id) || null; if (s._txID) s.txId = String(s._txID); return s; }); }
   function attachItems(stops) { return Promise.all(stops.map((s) => { if (!s._txID) { delete s._txID; return Promise.resolve(); } return fetchEvent(s._txID).then((ev) => { if (ev) { if (ev.items && ev.items.length) s.items = ev.items; if (ev.contactId) s.contactId = ev.contactId; if (ev.grandTotalCents != null) s.grandTotalCents = ev.grandTotalCents; if (ev.paidCents != null) s.paidCents = ev.paidCents; } delete s._txID; }); })).then(() => stops); }
+  // Multi-week route pull: the next ~3 weeks, imported per (truck, DATE) so the dispatch calendar +
+  // risk engine stay populated ahead. Near-term routes (<= ENRICH days) get full per-event enrichment
+  // (line items → tent/crew rules); farther-out routes import bare stops to keep the pull fast.
   function pullRoutes() {
-    const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0); const end = new Date(start.getTime() + 24 * 3600 * 1000);
+    const HORIZON = 21, ENRICH = 8;
+    const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0); const end = new Date(start.getTime() + (HORIZON + 1) * 24 * 3600 * 1000);
+    const todayYmd = d2(start.toISOString());
     const body = { from: start.toISOString(), to: end.toISOString(), warehouseCanonicalIDs: null, crew: null, vehicles: null, statuses: null };
     return fetch("/app/routing/listRoutes", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), credentials: "include" }).then((r) => r.json()).then((routes) => {
-      const byTruck = {}, gsBy = {}; let chain = Promise.resolve(); const unmatched = {};
+      const groups = {}; let chain = Promise.resolve(); const unmatched = {};
       (routes || []).forEach((rt) => { chain = chain.then(() => { const title = (rt.vehicle && rt.vehicle.title) || ""; const tid = truckIdFor(title) || truckFromName(rt.name); if (!tid) { if (title || rt.name) unmatched[title || rt.name] = 1; return; }
-        return fetch("/app/routing/getRoute?routeID=" + rt.id + "&includeAttributes=true", { headers: { accept: "application/json" }, credentials: "include" }).then((r) => r.json()).then((full) => attachItems(extractStops(full)).then((stops) => { byTruck[tid] = (byTruck[tid] || []).concat(stops); if (!gsBy[tid]) gsBy[tid] = String(rt.id); })); }); });
+        return fetch("/app/routing/getRoute?routeID=" + rt.id + "&includeAttributes=true", { headers: { accept: "application/json" }, credentials: "include" }).then((r) => r.json()).then((full) => {
+          const stops = extractStops(full);
+          const rdate = d2(rt.startDate) || d2(rt.date) || (stops[0] ? d2(stops[0].eta) : null);
+          if (!rdate) return;
+          const daysOut = Math.round((Date.parse(rdate + "T00:00:00Z") - Date.parse(todayYmd + "T00:00:00Z")) / 86400000);
+          const p = daysOut >= 0 && daysOut <= ENRICH ? attachItems(stops) : Promise.resolve(stops);
+          return p.then((st) => { const key = tid + "|" + rdate; if (!groups[key]) groups[key] = { truckId: tid, date: rdate, stops: [], gsRouteId: String(rt.id) }; groups[key].stops = groups[key].stops.concat(st); });
+        }); }); });
       return chain.then(() => {
-        const trucks = Object.keys(byTruck).filter((t) => byTruck[t].length); let totalStops = 0, failed = 0; const unm = Object.keys(unmatched);
-        return Promise.all(trucks.map((tid) => { const st = byTruck[tid]; totalStops += st.length; return fetch(API + "/api/route/import", { method: "POST", headers: POSTH, body: JSON.stringify({ truckId: tid, stops: st, gsRouteId: gsBy[tid] }) }).then((r) => { if (!r.ok) failed++; }).catch(() => { failed++; }); })).then(() => ({ stops: totalStops, failed, unmatched: unm }));
+        const keys = Object.keys(groups); let totalStops = 0, failed = 0; const days = keys.length; const unm = Object.keys(unmatched);
+        return Promise.all(keys.map((k) => { const g = groups[k]; totalStops += g.stops.length; return fetch(API + "/api/route/import", { method: "POST", headers: POSTH, body: JSON.stringify({ truckId: g.truckId, date: g.date, stops: g.stops, gsRouteId: g.gsRouteId }) }).then((r) => { if (!r.ok) failed++; }).catch(() => { failed++; }); })).then(() => ({ stops: totalStops, days, failed, unmatched: unm }));
       });
-    }).catch(() => ({ stops: 0, failed: 1, unmatched: [] }));
+    }).catch(() => ({ stops: 0, days: 0, failed: 1, unmatched: [] }));
   }
 
   // ---- Outbox drain: push queued Dispatch → Goodshuffle writes (photos, note appends) ----

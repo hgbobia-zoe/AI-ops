@@ -13,7 +13,8 @@ import { DriverAssign } from "@/components/DriverAssign";
 import { QuoteReviewButton } from "@/components/QuoteReviewButton";
 import { ResolveExceptionButton } from "@/components/ResolveExceptionButton";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { DatePicker } from "@/components/DatePicker";
 import {
   getOpenExceptions,
   getRecentMessages,
@@ -178,10 +179,7 @@ function DateNav({ date, today }: { date: string; today: string }) {
       >
         <ChevronLeft className="size-4" />
       </Link>
-      <span className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-1.5 text-sm font-medium">
-        <CalendarDays className="size-4 text-muted-foreground" />
-        {isToday ? "Today" : formatYmdLong(date)}
-      </span>
+      <DatePicker date={date} today={today} basePath="/dispatch" />
       <Link
         href={href(next)}
         aria-label="Next day"

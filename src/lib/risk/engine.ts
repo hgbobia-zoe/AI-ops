@@ -242,7 +242,12 @@ function assessDrivers(
     const windows = active.map((r) => routeWindow(r, cfg));
     const windowed = windows.filter((w): w is NonNullable<typeof w> => Boolean(w));
     const need = peakConcurrency(windowed) + (windows.length - windowed.length);
-    if (scheduled.size < need) {
+    // Drivers are rostered ~a week out, so a gap is only a real, actionable risk within the staffing
+    // lead window. Routes populate ~3 weeks ahead for planning/visibility, but a route that's still
+    // 2–3 weeks out simply isn't crewed yet — flagging it would flood the board with non-actionable
+    // "not enough drivers" for every future day. Only assess headcount within STAFFING_LEAD_DAYS.
+    const STAFFING_LEAD_DAYS = 10;
+    if (scheduled.size < need && days <= STAFFING_LEAD_DAYS) {
       const gap = need - scheduled.size;
       const base: RiskSeverity = scheduled.size === 0 ? "CRITICAL" : "HIGH";
       out.push({

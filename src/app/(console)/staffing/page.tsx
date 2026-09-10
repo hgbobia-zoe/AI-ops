@@ -11,10 +11,10 @@ import {
   PackageCheck,
   PackageOpen,
   Briefcase,
-  CalendarDays,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
+import { DatePicker } from "@/components/DatePicker";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import {
   getCrewForDate,
@@ -270,10 +270,7 @@ function DateNav({ date, today }: { date: string; today: string }): React.JSX.El
       <Link href={href(prev)} aria-label="Previous day" className="flex size-9 items-center justify-center border border-white/10 text-muted-foreground hover:text-foreground">
         <ChevronLeft className="size-4" />
       </Link>
-      <span className="inline-flex items-center gap-2 border border-white/10 px-3 py-1.5 text-sm font-medium">
-        <CalendarDays className="size-4 text-muted-foreground" />
-        {isToday ? "Today" : formatYmdLong(date)}
-      </span>
+      <DatePicker date={date} today={today} basePath="/staffing" />
       <Link href={href(next)} aria-label="Next day" className="flex size-9 items-center justify-center border border-white/10 text-muted-foreground hover:text-foreground">
         <ChevronRight className="size-4" />
       </Link>
