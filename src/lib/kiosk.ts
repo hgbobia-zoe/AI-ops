@@ -94,9 +94,11 @@ export function isNativeAndroid(): boolean {
     /* ignore */
   }
   if (!android) {
-    // Client-side navigation can drop the query param — remember it once seen.
+    // Client-side nav drops the query param, and a full WebView reload (truck-select round-trip, app
+    // relaunch) drops the window global AND sessionStorage. localStorage persists on the device, so
+    // once this WebView has EVER seen native=android it stays native — the durable signal.
     try {
-      android = sessionStorage.getItem("zoeNativeAndroid") === "1";
+      android = sessionStorage.getItem("zoeNativeAndroid") === "1" || localStorage.getItem("zoeNativeAndroid") === "1";
     } catch {
       /* ignore */
     }
@@ -105,6 +107,11 @@ export function isNativeAndroid(): boolean {
     w.__ZOE_NATIVE_ANDROID__ = true;
     try {
       sessionStorage.setItem("zoeNativeAndroid", "1");
+    } catch {
+      /* ignore */
+    }
+    try {
+      localStorage.setItem("zoeNativeAndroid", "1");
     } catch {
       /* ignore */
     }
