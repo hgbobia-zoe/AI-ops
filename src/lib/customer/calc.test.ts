@@ -58,16 +58,19 @@ describe("customer — aggregation from booking dates", () => {
     expect(c.find((x) => x.key === "id:9999")!.bookings).toBe(1);
   });
 
-  it("keys by email when present and sums revenue (LTV)", () => {
+  it("keys by email and sums only WON revenue as LTV (a lost quote is not spend)", () => {
     const events = [
-      { name: "Jane Doe", date: "2025-06-01", email: "jane@x.com", revenue: 1000 },
-      { name: "J. Doe", date: "2026-02-01", email: "JANE@x.com", revenue: 500 }, // same email (case-insensitive) → merge
-      { name: "Other", date: "2026-03-01", email: "other@x.com", revenue: 300 },
+      { name: "Jane Doe", date: "2025-06-01", email: "jane@x.com", revenue: 1000, outcome: "won" as const },
+      { name: "J. Doe", date: "2026-02-01", email: "JANE@x.com", revenue: 500, outcome: "won" as const }, // same email → merge
+      { name: "Jane Doe", date: "2026-05-01", email: "jane@x.com", revenue: 9000, outcome: "lost" as const }, // a big LOST quote must NOT count as revenue
+      { name: "Other", date: "2026-03-01", email: "other@x.com", revenue: 300, outcome: "won" as const },
     ];
     const c = aggregateCustomers(events, "2026-09-02");
     const jane = c.find((x) => x.key === "em:jane@x.com")!;
-    expect(jane.bookings).toBe(2);
-    expect(jane.totalRevenue).toBe(1500);
+    expect(jane.bookings).toBe(3);
+    expect(jane.totalRevenue).toBe(1500); // won only — the $9k lost quote is excluded
+    expect(jane.lostValue).toBe(9000);
+    expect(jane.hasLostQuote).toBe(true);
     expect(c.find((x) => x.key === "em:other@x.com")!.totalRevenue).toBe(300);
   });
 

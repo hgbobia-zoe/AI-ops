@@ -26,6 +26,19 @@ function StatusPill({ c }: { c: CustomerAgg }): React.JSX.Element {
   return <span className={`border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${map[c.status]}`}>{c.status}</span>;
 }
 
+/** Contact affordance for marketing outreach — email (mailto) + phone, or a hint when unknown. */
+function ContactCell({ c }: { c: CustomerAgg }): React.JSX.Element {
+  if (!c.email && !c.phone) return <span className="text-[11px] text-muted-foreground">—</span>;
+  return (
+    <div className="flex flex-col gap-0.5 text-[11px]">
+      {c.email && (
+        <a href={`mailto:${c.email}`} className="text-sky-300/90 hover:text-sky-200 hover:underline">{c.email}</a>
+      )}
+      {c.phone && <span className="tabular-nums text-muted-foreground">{c.phone}</span>}
+    </div>
+  );
+}
+
 export default async function CustomersPage(): Promise<React.JSX.Element> {
   const showMoney = canSeeFinancials(await viewerRole());
   const s = customerOverview();
@@ -55,7 +68,7 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
           <div className="surface border border-white/5 p-4">
             <div className="mb-2 flex items-center gap-2 text-sm font-semibold"><DollarSign className="size-4" /> Revenue</div>
             <div className="text-2xl font-bold tabular-nums">{money(s.totalRevenue)}</div>
-            <p className="mt-1 text-[11px] text-muted-foreground">across all bookings</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">won business (lost quotes excluded)</p>
           </div>
         )}
         <div className="surface border border-white/5 p-4">
@@ -65,9 +78,46 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
         </div>
       </section>
 
-      {/* Top customers */}
+      {/* Win-back VIPs — proven spenders with a quote currently marked LOST (the #1 flag) */}
+      {showMoney && s.winBackVips.length > 0 && (
+        <section className="mb-8 space-y-2">
+          <h2 className="flex items-center gap-2 text-lg font-semibold"><DollarSign className="size-5 text-amber-300" /> Win back — top customers with a lost quote</h2>
+          <p className="text-[11px] text-muted-foreground">
+            They&apos;ve spent real money with Zoe, but a quote is sitting <b>Lost</b> in Goodshuffle. Worth a personal follow-up before writing it off.
+          </p>
+          <div className="overflow-x-auto border border-amber-500/30">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="p-2.5">Customer</th>
+                  <th className="p-2.5">Contact</th>
+                  <th className="p-2.5 text-right">Won to date</th>
+                  <th className="p-2.5 text-right">Lost quote(s)</th>
+                  <th className="p-2.5">Last</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {s.winBackVips.slice(0, 20).map((c) => (
+                  <tr key={c.key}>
+                    <td className="p-2.5 font-medium">{c.name}</td>
+                    <td className="p-2.5"><ContactCell c={c} /></td>
+                    <td className="p-2.5 text-right tabular-nums text-emerald-300">{money(c.totalRevenue)}</td>
+                    <td className="p-2.5 text-right tabular-nums text-amber-300">{money(c.lostValue)}{c.lostBookings > 1 ? ` · ${c.lostBookings}` : ""}</td>
+                    <td className="p-2.5 text-muted-foreground">{fmtDate(c.lastSeen)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* Big spenders — the marketing list */}
       <section className="mb-8 space-y-2">
-        <h2 className="text-lg font-semibold">Top customers by {showMoney ? "revenue" : "bookings"}</h2>
+        <h2 className="text-lg font-semibold">{showMoney ? "Big spenders" : "Top customers by bookings"}</h2>
+        <p className="text-[11px] text-muted-foreground">
+          {showMoney ? "Your best customers by actual (won) revenue — reach out for repeat business and referrals." : "Your most frequent customers."}
+        </p>
         {topList.length === 0 ? (
           <p className="text-sm text-muted-foreground">No bookings yet — pull from Settings → Pull Routes.</p>
         ) : (
@@ -76,7 +126,8 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
               <thead>
                 <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="p-2.5">Customer</th>
-                  {showMoney && <th className="p-2.5 text-right">Revenue</th>}
+                  {showMoney && <th className="p-2.5">Contact</th>}
+                  {showMoney && <th className="p-2.5 text-right">Won revenue</th>}
                   <th className="p-2.5 text-right">Bookings</th>
                   <th className="p-2.5">Last</th>
                   <th className="p-2.5">Status</th>
@@ -86,6 +137,7 @@ export default async function CustomersPage(): Promise<React.JSX.Element> {
                 {topList.map((c) => (
                   <tr key={c.key}>
                     <td className="p-2.5 font-medium">{c.name}</td>
+                    {showMoney && <td className="p-2.5"><ContactCell c={c} /></td>}
                     {showMoney && <td className="p-2.5 text-right tabular-nums">{money(c.totalRevenue)}</td>}
                     <td className="p-2.5 text-right tabular-nums">{c.bookings}</td>
                     <td className="p-2.5 text-muted-foreground">{fmtDate(c.lastSeen)}</td>
