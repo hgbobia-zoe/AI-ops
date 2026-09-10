@@ -7,7 +7,7 @@
 //   grandTotalCents?, contractTotalCents?, amountPaidCents?, amountDueCents?, clientName?, clientEmail? }] }
 
 import { NextResponse } from "next/server";
-import { saveBookings, type BookingRecord } from "@/lib/db/repo";
+import { saveBookings, enqueueWarehouseTeamAdds, type BookingRecord } from "@/lib/db/repo";
 import { recordPull, logImport } from "@/lib/pull/state";
 
 export const dynamic = "force-dynamic";
@@ -95,5 +95,9 @@ export async function POST(req: Request): Promise<NextResponse> {
   logImport("bookings", !partial, { rowsIn: projects.length, rowsWritten: records.length, detail });
   if (!partial && records.length > 0) recordPull("bookings", records.length);
 
-  return NextResponse.json({ ok: true, saved: records.length, partial }, { headers: CORS });
+  // Auto-add the Warehouse Desktop account to every SIGNED project's GSPRO team (add-once, batched)
+  // so the warehouse tablet/workstation sees signed work. The office extension drains these ops.
+  const wdQueued = records.length > 0 ? enqueueWarehouseTeamAdds() : 0;
+
+  return NextResponse.json({ ok: true, saved: records.length, partial, wdQueued }, { headers: CORS });
 }

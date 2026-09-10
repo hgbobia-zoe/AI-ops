@@ -475,6 +475,7 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "call_events", column: "note_logged_at", type: "TEXT" }, // when we queued a GS note for this call (dedupe)
   { table: "users", column: "openphone_user_id", type: "TEXT" }, // links a rep's login to their Quo user (sender attribution)
   { table: "bookings", column: "line_items", type: "TEXT" }, // JSON string[] of line-item titles (event-type classification)
+  { table: "bookings", column: "wd_member_added", type: "TEXT" }, // ISO ts once Warehouse Desktop was queued onto a signed project's GSPRO team (add-once)
 ];
 
 function migrate(db: DB): void {

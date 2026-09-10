@@ -130,7 +130,13 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var all=((j&&j.ops)||[]);
         var photoOps=all.filter(function(o){ return o.op==="photo_upload" && o.transactionId && o.payload && o.payload.photoIds && o.payload.photoIds.length; });
         var noteOps=all.filter(function(o){ return o.op==="note_append" && o.transactionId && o.payload && o.payload.line; });
-        var pushed=0, failed=0, notes=0, chain=Promise.resolve();
+        var teamOps=all.filter(function(o){ return o.op==="add_team_member" && o.transactionId && o.payload && o.payload.userID; });
+        var pushed=0, failed=0, notes=0, team=0, chain=Promise.resolve();
+        // add_team_member: add a GSPRO user (Warehouse Desktop) to the project team on a signed project.
+        teamOps.forEach(function(o){ chain=chain.then(function(){
+          var body=new URLSearchParams({ transactionID:String(o.transactionId), userID:String(o.payload.userID), linkType:String(o.payload.linkType||"OTHER") });
+          return fetch("/app/project/addNewTeamMember",{method:"POST",headers:{"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"},credentials:"include",body:body}).then(function(r){ return r.ok; }).then(function(ok){ if(ok)team++; else failed++; return ackOp(o.id,ok,"add_team_member_failed"); }).catch(function(){ failed++; return ackOp(o.id,false,"add_team_member_error"); });
+        }); });
         photoOps.forEach(function(o){
           chain=chain.then(function(){
             var ok=Promise.resolve(true);
@@ -156,7 +162,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             }).then(function(ok){ if(ok)notes++; else failed++; return ackOp(o.id,ok,"note_append_failed"); }).catch(function(){ failed++; return ackOp(o.id,false,"note_append_error"); });
           });
         });
-        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes}; });
+        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team}; });
       }).catch(function(){ return {pushed:0, failed:0, notes:0}; });
     }
 

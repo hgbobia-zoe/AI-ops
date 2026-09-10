@@ -122,7 +122,13 @@ export function zoePull(apiBase) {
       const all = (j && j.ops) || [];
       const photoOps = all.filter((o) => o.op === "photo_upload" && o.transactionId && o.payload && o.payload.photoIds && o.payload.photoIds.length);
       const noteOps = all.filter((o) => o.op === "note_append" && o.transactionId && o.payload && o.payload.line);
-      let pushed = 0, failed = 0, notes = 0, chain = Promise.resolve();
+      const teamOps = all.filter((o) => o.op === "add_team_member" && o.transactionId && o.payload && o.payload.userID);
+      let pushed = 0, failed = 0, notes = 0, team = 0, chain = Promise.resolve();
+      // add_team_member: add a GSPRO user (e.g. Warehouse Desktop) to the project's team.
+      teamOps.forEach((o) => { chain = chain.then(() => {
+        const body = new URLSearchParams({ transactionID: String(o.transactionId), userID: String(o.payload.userID), linkType: String(o.payload.linkType || "OTHER") });
+        return fetch("/app/project/addNewTeamMember", { method: "POST", headers: { "x-requested-with": "XMLHttpRequest", "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, credentials: "include", body }).then((r) => r.ok).then((ok) => { if (ok) team++; else failed++; return ackOp(o.id, ok, "add_team_member_failed"); }).catch(() => { failed++; return ackOp(o.id, false, "add_team_member_error"); });
+      }); });
       photoOps.forEach((o) => { chain = chain.then(() => {
         let ok = Promise.resolve(true);
         o.payload.photoIds.forEach((pid) => { ok = ok.then((soFar) => { if (!soFar) return false;
@@ -137,8 +143,8 @@ export function zoePull(apiBase) {
           return fetch("/app/vendorTransaction/saveEventNotes", { method: "POST", headers: { "x-requested-with": "XMLHttpRequest", "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, credentials: "include", body }).then((r) => r.ok);
         }).then((ok) => { if (ok) notes++; else failed++; return ackOp(o.id, ok, "note_append_failed"); }).catch(() => { failed++; return ackOp(o.id, false, "note_append_error"); });
       }); });
-      return chain.then(() => ({ pushed, failed, notes }));
-    }).catch(() => ({ pushed: 0, failed: 0, notes: 0 }));
+      return chain.then(() => ({ pushed, failed, notes, team }));
+    }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0 }));
   }
 
   return loggedInProbe().then((ok) => {

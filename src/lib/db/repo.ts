@@ -1180,6 +1180,35 @@ export function enqueueGsOp(op: {
   return toGsItem(getDb().prepare("SELECT * FROM gs_outbox WHERE id = ?").get(id) as GsOutboxRow);
 }
 
+// The "Warehouse Desktop" Crew user in Zoe's Goodshuffle account — added to every SIGNED project's
+// team so the warehouse tablet/workstation sees it in its queue. Id + linkType captured live from
+// GSPRO's addNewTeamMember call (POST /app/project/addNewTeamMember: transactionID, userID, linkType).
+export const WAREHOUSE_DESKTOP_USER_ID = "983882714";
+
+/** Queue "add Warehouse Desktop to the team" for SIGNED projects it hasn't been added to yet
+ *  (add-once via the wd_member_added flag). Batched (default 50/run) so the initial backfill spreads
+ *  across pulls instead of flooding GSPRO with hundreds of writes at once; newest events first.
+ *  Called after a bookings pull. Returns how many were queued. */
+export function enqueueWarehouseTeamAdds(limit = 50): number {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT booking_id FROM bookings WHERE signed = 1 AND (wd_member_added IS NULL OR wd_member_added = '') ORDER BY COALESCE(event_date,'') DESC LIMIT ?")
+    .all(limit) as { booking_id: string }[];
+  if (rows.length === 0) return 0;
+  const now = new Date().toISOString();
+  const mark = db.prepare("UPDATE bookings SET wd_member_added = ? WHERE booking_id = ?");
+  let n = 0;
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      enqueueGsOp({ op: "add_team_member", transactionId: String(r.booking_id), label: "add Warehouse Desktop", payload: { userID: WAREHOUSE_DESKTOP_USER_ID, linkType: "OTHER" } });
+      mark.run(now, r.booking_id);
+      n++;
+    }
+  });
+  tx();
+  return n;
+}
+
 /** Pending write-backs, oldest first — what a logged-in session should replay. */
 export function listPendingGsOps(limit = 50): GsOutboxItem[] {
   return (
