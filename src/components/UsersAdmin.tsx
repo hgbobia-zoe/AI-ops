@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { UserPlus, KeyRound, Check, X } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { UserPlus, KeyRound, Check, X, Link2, Copy, Trash2, Clock } from "lucide-react";
 import { ROLE_LABEL, assignableRoles, type Role } from "@/lib/auth/roles";
 
 interface UserRow {
@@ -151,15 +151,128 @@ export function UsersAdmin({
         </table>
       </div>
 
-      <AddUser
-        roles={roles}
-        onAdded={(u) => {
-          setUsers((us) => [...us, u]);
-          setMsg({ ok: true, text: `Added ${u.username}.` });
-        }}
-        onError={(text) => setMsg({ ok: false, text })}
-      />
+      {/* Streamlined onboarding — invite link (no password handling by you) */}
+      <InviteTeammate roles={roles} onError={(text) => setMsg({ ok: false, text })} />
+
+      {/* Manual fallback — create the account + password yourself */}
+      <details className="text-sm">
+        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Or create an account manually…</summary>
+        <div className="mt-3">
+          <AddUser
+            roles={roles}
+            onAdded={(u) => {
+              setUsers((us) => [...us, u]);
+              setMsg({ ok: true, text: `Added ${u.username}.` });
+            }}
+            onError={(text) => setMsg({ ok: false, text })}
+          />
+        </div>
+      </details>
     </div>
+  );
+}
+
+interface InviteRow {
+  token: string;
+  role: Role;
+  name: string | null;
+  invitedByName: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
+function InviteTeammate({ roles, onError }: { roles: Role[]; onError: (t: string) => void }): React.JSX.Element {
+  const [role, setRole] = useState<Role>(roles[roles.length - 1] ?? "member");
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [invites, setInvites] = useState<InviteRow[]>([]);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const linkFor = (token: string): string => `${typeof window !== "undefined" ? window.location.origin : ""}/join?token=${token}`;
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch("/api/auth/invites");
+      if (r.ok) setInvites(((await r.json()).invites ?? []) as InviteRow[]);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const copy = async (token: string) => {
+    try {
+      await navigator.clipboard.writeText(linkFor(token));
+      setCopied(token);
+      setTimeout(() => setCopied((c) => (c === token ? null : c)), 1800);
+    } catch {
+      /* clipboard blocked — the link is visible to copy manually */
+    }
+  };
+
+  const create = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const r = await fetch("/api/auth/invites", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ role, name }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.invite) {
+        setName("");
+        await load();
+        void copy(j.invite.token); // one click: created + link on the clipboard
+      } else {
+        onError(j.error || "Could not create invite.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (token: string) => {
+    await fetch("/api/auth/invites", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) }).catch(() => {});
+    await load();
+  };
+
+  const expiresIn = (iso: string): string => {
+    const days = Math.round((Date.parse(iso) - Date.now()) / 86_400_000);
+    return days <= 0 ? "expiring today" : `expires in ${days}d`;
+  };
+
+  return (
+    <form onSubmit={create} className="surface space-y-3 border border-indigo-500/30 bg-indigo-500/[0.05] p-4">
+      <div className="flex items-center gap-2 text-sm font-semibold"><Link2 className="size-4" /> Invite a teammate</div>
+      <p className="text-xs text-muted-foreground">Create a link, send it however you like. They set their own username and password — you never handle a password.</p>
+      <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="name (optional)" className="rounded border border-white/15 bg-transparent px-2.5 py-1.5 text-sm" />
+        <select value={role} onChange={(e) => setRole(e.target.value as Role)} className="rounded border border-white/15 bg-transparent px-2.5 py-1.5 text-sm">
+          {roles.map((r) => (
+            <option key={r} value={r} className="bg-background">{ROLE_LABEL[r]}</option>
+          ))}
+        </select>
+        <button type="submit" disabled={busy} className="btn-hero rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-50">
+          {busy ? "Creating…" : "Create invite link"}
+        </button>
+      </div>
+
+      {invites.length > 0 && (
+        <div className="space-y-2 border-t border-white/10 pt-3">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Pending invites</div>
+          {invites.map((inv) => (
+            <div key={inv.token} className="flex items-center gap-2">
+              <span className="w-16 shrink-0 border border-white/15 px-1.5 py-0.5 text-center text-[10px] uppercase tracking-wide text-muted-foreground">{ROLE_LABEL[inv.role]}</span>
+              <input readOnly value={linkFor(inv.token)} onFocus={(e) => e.currentTarget.select()} className="min-w-0 flex-1 rounded border border-white/15 bg-black/20 px-2 py-1 text-xs text-muted-foreground" />
+              <span className="hidden items-center gap-1 text-[10px] text-muted-foreground sm:flex"><Clock className="size-3" />{expiresIn(inv.expiresAt)}</span>
+              <button type="button" onClick={() => copy(inv.token)} title="Copy link" className="rounded border border-white/15 p-1.5 text-muted-foreground hover:text-foreground">
+                {copied === inv.token ? <Check className="size-3.5 text-emerald-300" /> : <Copy className="size-3.5" />}
+              </button>
+              <button type="button" onClick={() => revoke(inv.token)} title="Revoke" className="rounded border border-white/15 p-1.5 text-muted-foreground hover:text-red-300">
+                <Trash2 className="size-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </form>
   );
 }
 

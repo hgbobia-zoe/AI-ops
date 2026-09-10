@@ -15,6 +15,7 @@ import { canSeeFinancials, canManageSettings } from "@/lib/auth/roles";
 
 const PUBLIC: string[] = [
   "/login",
+  "/join", // invite acceptance — the invitee isn't logged in yet (token-gated by the invite itself)
   "/api/auth",
   "/track",
   // Driver tablets are bound to a TRUCK, not a person (device binding, no login), so the whole

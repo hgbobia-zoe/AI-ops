@@ -357,6 +357,21 @@ CREATE TABLE IF NOT EXISTS users (
   last_login_at TEXT
 );
 
+-- One-time invite links. An owner/admin creates one with a role; the invitee opens /join?token=…,
+-- picks a username + their OWN password, and the account is created with that role (owner never sets
+-- a password). Single-use + time-limited. No email is stored — delivery is a copyable link.
+CREATE TABLE IF NOT EXISTS invites (
+  token            TEXT PRIMARY KEY,   -- the secret in the link (random, URL-safe)
+  role             TEXT NOT NULL,      -- role the accepted account gets (admin | member)
+  name             TEXT,               -- optional pre-filled display name
+  invited_by       TEXT,              -- user id of the creator (attribution)
+  invited_by_name  TEXT,
+  created_at       TEXT NOT NULL,
+  expires_at       TEXT NOT NULL,
+  accepted_at      TEXT,               -- set when redeemed (single-use)
+  accepted_user_id TEXT
+);
+
 -- Per-event readiness score (0-100) + component breakdown, recomputed each scan.
 CREATE TABLE IF NOT EXISTS event_readiness (
   event_id                   TEXT PRIMARY KEY,
