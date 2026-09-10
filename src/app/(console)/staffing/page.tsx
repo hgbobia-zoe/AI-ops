@@ -18,11 +18,15 @@ import {
 import { AutoRefresh } from "@/components/AutoRefresh";
 import {
   getCrewForDate,
+  getCrewForDateSafe,
+  getUsersList,
   connecteamConfigured,
   type CrewShift,
   type CrewMember,
   type CrewRole,
 } from "@/lib/connecteam";
+import { openShiftsWithSuggestions } from "@/lib/staffing/openShifts";
+import { OpenShiftsPanel } from "@/components/OpenShiftsPanel";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRouteForDate } from "@/lib/db/repo";
 import { crewForRoute } from "@/lib/crewRules";
@@ -49,9 +53,12 @@ export default async function StaffingPage({
     .filter((r): r is Route => Boolean(r) && r!.status !== "done");
 
   const configured = connecteamConfigured();
-  const [crewD, crewPrev, crewNext] = configured
-    ? await Promise.all([getCrewForDate(date), getCrewForDate(dayBefore), getCrewForDate(nextDay)])
-    : [[], [], []];
+  const [crewDResult, crewPrev, crewNext, usersList] = configured
+    ? await Promise.all([getCrewForDateSafe(date), getCrewForDate(dayBefore), getCrewForDate(nextDay), getUsersList()])
+    : [{ ok: false, shifts: [] }, [] as CrewShift[], [] as CrewShift[], [] as CrewMember[]];
+  const crewD = crewDResult.shifts;
+  // Open (unassigned) shifts on the day + who's free to take them (schedule-derived, not fabricated).
+  const openShifts = openShiftsWithSuggestions(crewD, usersList);
 
   const driversD = distinctByRole(crewD, "driver");
   const prepPrev = distinctByRole(crewPrev, "prep");
@@ -81,6 +88,9 @@ export default async function StaffingPage({
           Connecteam isn&apos;t connected — no crew data to show.
         </div>
       )}
+
+      {/* Open shifts (scheduled but unassigned) + suggested crew — top of the page so gaps are seen first. */}
+      <OpenShiftsPanel openShifts={openShifts} verified={crewDResult.ok} />
 
       <RoleSection
         icon={<PackageCheck className="size-4" />}

@@ -148,6 +148,11 @@ export async function getUsers(): Promise<Map<number, CrewMember>> {
   return map;
 }
 
+/** The team as a flat array (empty when unconfigured/unreachable). For crew suggestions. */
+export async function getUsersList(): Promise<CrewMember[]> {
+  return Array.from((await getUsers()).values());
+}
+
 export async function getSchedulers(): Promise<Scheduler[]> {
   const j = (await ctGet("/scheduler/v1/schedulers")) as SchedResp | null;
   return (j?.data?.schedulers ?? [])
