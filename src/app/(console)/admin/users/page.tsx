@@ -6,6 +6,7 @@ import { listUsers } from "@/lib/auth/users";
 import { viewerRole, getSession, authEnabled } from "@/lib/auth/getSession";
 import { canManageUsers } from "@/lib/auth/roles";
 import { UsersAdmin } from "@/components/UsersAdmin";
+import { AccessMatrix } from "@/components/AccessMatrix";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,10 @@ export default async function UsersPage(): Promise<React.JSX.Element> {
       )}
 
       <UsersAdmin initialUsers={users} viewerRole={role} viewerId={session?.uid ?? null} />
+
+      <div className="mt-6">
+        <AccessMatrix />
+      </div>
     </main>
   );
 }
