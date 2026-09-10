@@ -14,7 +14,7 @@ import { recordPull, logImport } from "@/lib/pull/state";
 import { classifyCapacity, type CapacityResult } from "@/lib/capacity/capacity";
 import { assessDay, daysUntil, routeWindow, peakConcurrency } from "./engine";
 import { DEFAULT_RISK_CONFIG, SEVERITY_RANK } from "./types";
-import { reconcileRisks, getRiskQueue, type RiskChanges } from "./store";
+import { reconcileRisks, expirePastRisks, getRiskQueue, type RiskChanges } from "./store";
 import { computeReadiness } from "./readiness";
 import type { EngineRoute, EngineShift, RiskFinding } from "./types";
 
@@ -203,6 +203,9 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
 
   // Persist lifecycle + readiness.
   const changes = reconcileRisks(allFindings, dates, now, unverifiedStaffingDates);
+  // Close any risk whose date has passed — the horizon reconcile only touches scanned (future) dates,
+  // so a shortage for a day that's now in the past would otherwise linger on the board forever.
+  const expired = expirePastRisks(today, now);
   const events = getEventsInRange(dates);
   const readiness = computeReadiness(events, allFindings);
   saveEventReadiness(
@@ -253,6 +256,8 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   for (const r of changes.created) logChange({ source: "risk", entity: "risk", entityId: r.signature, kind: "risk_detected", field: r.title, toValue: r.severity, changeKey: `created|${r.signature}` });
   for (const e of changes.escalated) logChange({ source: "risk", entity: "risk", entityId: e.risk.signature, kind: "risk_escalated", field: e.risk.title, fromValue: e.from, toValue: e.to, changeKey: `escalated|${e.risk.signature}|${e.to}` });
   for (const r of changes.resolved) logChange({ source: "risk", entity: "risk", entityId: r.signature, kind: "risk_resolved", field: r.title, changeKey: `resolved|${r.signature}|${dayKey}` });
+  // Expired (date passed) — logged to history but kept out of the Slack summary (no "✅ Resolved" noise for old days).
+  for (const r of expired) logChange({ source: "risk", entity: "risk", entityId: r.signature, kind: "risk_resolved", field: `${r.title} (date passed)`, changeKey: `expired|${r.signature}|${r.date}` });
   for (const r of changes.regressed) logChange({ source: "risk", entity: "risk", entityId: r.signature, kind: "risk_regressed", field: r.title, changeKey: `regressed|${r.signature}|${dayKey}` });
 
   // Record Connecteam reachability for the Data Health view (was computed then discarded).

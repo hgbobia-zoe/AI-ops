@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { reconcileRisks, getRiskQueue, setRiskStatus } from "./store";
+import { reconcileRisks, expirePastRisks, getRiskQueue, setRiskStatus } from "./store";
 import type { RiskFinding, RiskSeverity } from "./types";
 
-// DATABASE_PATH is ":memory:" in tests — a throwaway DB for this file.
-const DATE = "2026-09-10";
+// DATABASE_PATH is ":memory:" in tests — a throwaway DB for this file. DATE is far-future so the
+// forward-looking getRiskQueue() (which now hides past dates) never filters these lifecycle fixtures.
+const DATE = "2099-09-10";
 const finding = (sig: string, severity: RiskSeverity, title = "Risk"): RiskFinding => ({
   signature: sig,
   riskType: "route_no_driver",
@@ -63,7 +64,7 @@ describe("risk store — lifecycle (spec S10–S12)", () => {
   });
 
   it("only resolves risks on the SCANNED dates (horizon-safe)", () => {
-    reconcileRisks([{ ...finding("sigOther", "HIGH"), date: "2026-12-25" }], ["2026-12-25"]);
+    reconcileRisks([{ ...finding("sigOther", "HIGH"), date: "2099-12-25" }], ["2099-12-25"]);
     // A scan of a different date must not resolve the Dec risk.
     const other = reconcileRisks([], [DATE]);
     expect(other.resolved.some((r) => r.signature === "sigOther")).toBe(false);
@@ -79,5 +80,20 @@ describe("risk store — lifecycle (spec S10–S12)", () => {
     // Connecteam returns and the risk is genuinely gone → now it resolves.
     const recovered = reconcileRisks([], [DATE]);
     expect(recovered.resolved.some((r) => r.signature === "sigFreeze")).toBe(true);
+  });
+
+  it("hides past-dated risks from the queue, and expirePastRisks closes them", () => {
+    reconcileRisks([{ ...finding("sigYesterday", "CRITICAL"), date: "2026-09-09" }], ["2026-09-09"]);
+    reconcileRisks([{ ...finding("sigToday", "HIGH"), date: "2026-09-10" }], ["2026-09-10"]);
+    // A day that's already passed never shows on the forward-looking board; today still does.
+    expect(getRiskQueue("2026-09-10").some((r) => r.signature === "sigYesterday")).toBe(false);
+    expect(getRiskQueue("2026-09-10").some((r) => r.signature === "sigToday")).toBe(true);
+    // Expiry closes the past one for real (and reports it); the same-day one is untouched.
+    const closed = expirePastRisks("2026-09-10");
+    expect(closed.some((r) => r.signature === "sigYesterday")).toBe(true);
+    expect(closed.some((r) => r.signature === "sigToday")).toBe(false);
+    // Undated risks are never expired by date.
+    reconcileRisks([{ signature: "sigUndated", riskType: "x", category: "ROUTE", severity: "MEDIUM", title: "No date", description: "…" }], ["nodate-scan-key"]);
+    expect(expirePastRisks("2026-09-10").some((r) => r.signature === "sigUndated")).toBe(false);
   });
 });

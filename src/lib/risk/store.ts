@@ -7,6 +7,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+import { todayInOpsTz } from "@/lib/dates";
 import { SEVERITY_RANK, type RiskFinding, type RiskSeverity, type RiskStatus, type RiskCategory } from "./types";
 
 export interface StoredRisk {
@@ -217,14 +218,32 @@ export function reconcileRisks(
   return changes;
 }
 
-/** The active risk queue (OPEN/ACK/IN_PROGRESS), worst-first then soonest date. */
-export function getRiskQueue(): StoredRisk[] {
+/** The active risk queue (OPEN/ACK/IN_PROGRESS), worst-first then soonest date. Past-dated risks are
+ *  excluded — a day that's already happened can't be "not ready" any more; this is a forward-looking
+ *  board. Undated (date-agnostic) risks always stay. `expirePastRisks` closes those rows for real; this
+ *  read-time guard keeps the board correct instantly even between scans. */
+export function getRiskQueue(today: string = todayInOpsTz()): StoredRisk[] {
   const rows = getDb()
-    .prepare(`SELECT * FROM risk_items WHERE status IN ${ACTIVE_STATES} ORDER BY date ASC`)
-    .all() as Row[];
+    .prepare(`SELECT * FROM risk_items WHERE status IN ${ACTIVE_STATES} AND (date IS NULL OR date >= ?) ORDER BY date ASC`)
+    .all(today) as Row[];
   return rows
     .map(toStored)
     .sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || (a.date ?? "").localeCompare(b.date ?? ""));
+}
+
+/** Close active risks whose date has passed (date < today). A past day can't be made ready, so its
+ *  risk is moot — resolve it (distinct from a fix). Returns the closed rows so the scanner can log
+ *  them to history. Undated risks are never expired this way. */
+export function expirePastRisks(today: string, now: Date = new Date()): StoredRisk[] {
+  const db = getDb();
+  const ts = now.toISOString();
+  const rows = db.prepare(`SELECT * FROM risk_items WHERE status IN ${ACTIVE_STATES} AND date IS NOT NULL AND date < ?`).all(today) as Row[];
+  if (rows.length === 0) return [];
+  const resolve = db.prepare("UPDATE risk_items SET status='RESOLVED', resolved_at=@now, last_seen_at=@now WHERE id=@id");
+  db.transaction(() => {
+    for (const r of rows) resolve.run({ id: r.id, now: ts });
+  })();
+  return rows.map((r) => ({ ...toStored(r), status: "RESOLVED" as RiskStatus, resolvedAt: ts }));
 }
 
 export function getRiskById(id: string): StoredRisk | null {
