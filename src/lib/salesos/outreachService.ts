@@ -8,7 +8,7 @@
 
 import { getLead } from "./service";
 import { STAGE_LABEL, type SalesStage } from "./calc";
-import { summarizeComms, templateOutreach, type CommsSummary, type OutreachDraft, type OutreachLead } from "./outreach";
+import { summarizeComms, templateOutreach, humanize, type CommsSummary, type OutreachDraft, type OutreachLead } from "./outreach";
 import { chat, llmConfigured, llmModel } from "@/lib/llm";
 import { formatYmdLong } from "@/lib/dates";
 
@@ -36,10 +36,14 @@ const SYSTEM =
   "Virginia area). Given ONE open quote — its stage, event, and the rep's own logged history of calls/" +
   "texts/emails — write the single best next outreach. Read the history carefully: do NOT suggest another " +
   "identical follow-up when the client has been contacted many times with no response, and respect any " +
-  "context note (e.g. on leave, deferred to another contact). Warm, concise, professional; no emojis; " +
-  "sign texts as Zoe Events. The rep will review and send it themselves — never imply it was sent. " +
+  "context note (e.g. on leave, deferred to another contact). " +
+  "Write like a real person texting a customer: warm, natural, and concise. Contractions are good. Do NOT " +
+  "sound like a brochure or a mass marketing blast, and do NOT use buzzwords like 'unforgettable'. " +
+  "CRITICAL STYLE RULE: never use an em dash or en dash (— or –) anywhere — use commas, periods, or a new " +
+  "sentence instead. No emojis. Sign texts as Zoe Events. The rep will review and send it themselves, so " +
+  "never imply it was already sent. " +
   'Output RAW JSON ONLY, no markdown/fences: {"sms": string, "callStrategy": string, "cadence": string, "caution": string}. ' +
-  "sms ≤ 320 characters. caution = one short heads-up drawn from the history, or empty string if none.";
+  "sms <= 320 characters. caution = one short heads-up drawn from the history, or empty string if none.";
 
 function extractJson(text: string): unknown {
   let s = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
@@ -73,10 +77,11 @@ async function llmDraft(lead: OutreachLead, clientName: string, eventDate: strin
     if (typeof p.sms !== "string" || !p.sms.trim()) return null;
     return {
       draft: {
-        sms: p.sms.trim(),
-        callStrategy: typeof p.callStrategy === "string" ? p.callStrategy.trim() : "",
-        cadence: typeof p.cadence === "string" ? p.cadence.trim() : "",
-        caution: typeof p.caution === "string" && p.caution.trim() ? p.caution.trim() : null,
+        // humanize() strips any em/en dashes the model slips in, so drafts always read like a person.
+        sms: humanize(p.sms),
+        callStrategy: typeof p.callStrategy === "string" ? humanize(p.callStrategy) : "",
+        cadence: typeof p.cadence === "string" ? humanize(p.cadence) : "",
+        caution: typeof p.caution === "string" && p.caution.trim() ? humanize(p.caution) : null,
         source: "ai",
       },
       model: r.model ?? llmModel(),
@@ -107,7 +112,7 @@ export async function draftLeadOutreach(id: string): Promise<OutreachResult | nu
     if (ai) {
       draft = ai.draft;
       model = ai.model;
-      if (!draft.caution && comms.clientContext) draft.caution = `Client note: “${comms.clientContext}”.`;
+      if (!draft.caution && comms.clientContext) draft.caution = humanize(`Client note: "${comms.clientContext}".`);
     }
   }
 

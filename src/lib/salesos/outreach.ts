@@ -60,6 +60,16 @@ export interface OutreachDraft {
 
 const firstName = (name: string): string => (name || "").trim().split(/\s+/)[0] || "there";
 
+/** Strip em/en dashes so drafts read like a person texting, not a brochure. Em dash → comma; a dash
+ *  between digits ("2–3") → "to"; stray en dash → comma. Applied to templates AND any LLM output. */
+export function humanize(text: string): string {
+  return (text || "")
+    .replace(/(\d)\s*[—–]\s*(\d)/g, "$1 to $2")
+    .replace(/\s*[—–]\s*/g, ", ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 /** Deterministic outreach by stage, adjusted for the comms history. Always available; the honest floor. */
 export function templateOutreach(lead: OutreachLead, comms: CommsSummary): OutreachDraft {
   const fn = firstName(lead.firstName);
@@ -68,8 +78,8 @@ export function templateOutreach(lead: OutreachLead, comms: CommsSummary): Outre
 
   // A caution surfaces when the history says "stop chasing the same way".
   let caution: string | null = null;
-  if (comms.clientContext) caution = `Client note on file: “${comms.clientContext}” — factor this in before reaching out.`;
-  else if (comms.noResponse && comms.attempts >= 5) caution = `${comms.attempts} attempts logged with little response — change the approach (new contact, new channel, or give it room) rather than another identical follow-up.`;
+  if (comms.clientContext) caution = `Client note on file: "${comms.clientContext}". Factor this in before reaching out.`;
+  else if (comms.noResponse && comms.attempts >= 5) caution = `${comms.attempts} attempts logged with little response. Try a different approach (new contact, new channel, or give it room) rather than another identical follow-up.`;
 
   let sms: string;
   let callStrategy: string;
@@ -77,32 +87,32 @@ export function templateOutreach(lead: OutreachLead, comms: CommsSummary): Outre
 
   switch (lead.stage) {
     case "unsent":
-      sms = `Hi ${fn}, it's Zoe Events & Party Rentals — your quote for ${ev} is ready. Want me to send it over, or is there anything you'd like to adjust first?`;
-      callStrategy = `Quick call to confirm the details (date, count, delivery) and send the quote on the spot. Goal: get it out today.`;
-      cadence = "Now — it hasn't gone out yet.";
+      sms = `Hi ${fn}, it's Zoe Events & Party Rentals. Your quote for ${ev} is ready to go. Want me to send it over, or is there anything you'd like to tweak first?`;
+      callStrategy = `Quick call to confirm the details (date, count, delivery), then send the quote on the spot. Goal is to get it out today.`;
+      cadence = "Now, it hasn't gone out yet.";
       break;
     case "awaiting":
-      sms = `Hi ${fn}, just making sure you received the quote for ${ev} from Zoe Events. Happy to answer any questions whenever you're ready.`;
-      callStrategy = `Light touch only — it's fresh. A soft "did it come through?" beats a hard push. Save the real follow-up for a few days out.`;
-      cadence = "Give it 2–3 days before a real follow-up.";
+      sms = `Hi ${fn}, just making sure the quote for ${ev} came through okay. Happy to answer any questions whenever you're ready.`;
+      callStrategy = `Keep it light, the quote is still fresh. A soft "did it come through?" beats a hard push. Save the real follow-up for a few days out.`;
+      cadence = "Give it 2 to 3 days before a real follow-up.";
       break;
     case "follow_up":
-      sms = `Hi ${fn}, following up on your ${ev} quote from Zoe Events — still happy to tweak anything or answer questions. Are you leaning toward moving forward?`;
+      sms = `Hi ${fn}, following up on your ${ev} quote. Happy to tweak anything or answer questions. Are you leaning toward moving forward?`;
       callStrategy = `Reference the quote, ask an open question (what's holding it up?), and offer to adjust. Listen for the real objection.`;
       cadence = "Today.";
       break;
     case "cold":
       sms = `Hi ${fn}, checking in one last time on your ${ev} rental quote. Should I keep it open for you, or have your plans changed? Either way, just let me know.`;
-      callStrategy = `A respectful last attempt — give them an easy out. If no answer, try a different contact or channel, or mark it lost. Don't repeat the same chase.`;
-      cadence = "Soon — then close it out.";
+      callStrategy = `A respectful last attempt, give them an easy out. If no answer, try a different contact or channel, or mark it lost. Don't repeat the same chase.`;
+      cadence = "Soon, then close it out.";
       break;
     case "closing":
     default:
-      sms = `Hi ${fn}, your ${ev}${when} is coming up fast — want to lock in your rentals? I can hold your items today so nothing sells out before the date.`;
-      callStrategy = `Lead with the deadline${when}. Create real urgency: availability isn't guaranteed until signed. Offer to send the contract right now.`;
-      cadence = "Now — the event is close and it's still unsigned.";
+      sms = `Hi ${fn}, your ${ev}${when} is coming up fast. Want to lock in your rentals? I can hold your items today so nothing sells out before your date.`;
+      callStrategy = `Lead with the date${when}. Create real urgency, availability isn't guaranteed until it's signed. Offer to send the contract right now.`;
+      cadence = "Now, the event is close and it's still unsigned.";
       break;
   }
 
-  return { sms, callStrategy, cadence, source: "template", caution };
+  return { sms: humanize(sms), callStrategy: humanize(callStrategy), cadence: humanize(cadence), source: "template", caution: caution ? humanize(caution) : null };
 }

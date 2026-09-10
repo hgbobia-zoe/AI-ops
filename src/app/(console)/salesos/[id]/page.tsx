@@ -16,7 +16,7 @@ import { callBriefFor } from "@/lib/salesos/callBrief";
 import { coachBridgeConfigured } from "@/lib/salesos/coach";
 import { logLeadView, leadActivity } from "@/lib/salesos/audit";
 import { formatYmdLong } from "@/lib/dates";
-import { viewerRole, viewerInitials } from "@/lib/auth/getSession";
+import { viewerRole, viewerInitials, viewerQuoUserId, currentActor } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
@@ -54,6 +54,9 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
   // Carry the viewing rep's initials through the deep link so the coach's post-call note is attributed
   // to the right person (Custodian is machine-authed and otherwise wouldn't know who is on the call).
   const coachInitials = coachOn ? await viewerInitials() : null;
+  // Who's sending: default the outreach "Send as" to the logged-in user (their linked Quo number).
+  const [viewerName, viewerQuo, viewerInits] = await Promise.all([currentActor(), viewerQuoUserId(), viewerInitials()]);
+  const outreachViewer = { name: viewerName.label, quoUserId: viewerQuo, initials: viewerInits };
 
   const { signals: s, priority } = lead;
   const dte = s.daysToEvent;
@@ -182,7 +185,7 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
       )}
 
       {/* Suggested outreach — message copy + call strategy, on demand */}
-      <OutreachPanel id={lead.id} />
+      <OutreachPanel id={lead.id} viewer={outreachViewer} />
 
       {/* Conversation — inbound + outbound texts on the unified timeline (FACT: actual messages) */}
       {conversation.length > 0 && (

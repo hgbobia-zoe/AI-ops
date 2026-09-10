@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summarizeComms, templateOutreach, type OutreachLead } from "./outreach";
+import { summarizeComms, templateOutreach, humanize, type OutreachLead } from "./outreach";
 
 const GRADY_NOTES = `8/28 - JM SENT THE QUOTE
 
@@ -53,12 +53,31 @@ describe("outreach — templateOutreach", () => {
 
   it("warns to change approach after many unanswered attempts (no client note)", () => {
     const d = templateOutreach(lead("cold"), summarizeComms(GRADY_NOTES, null));
-    expect(d.caution).toMatch(/change the approach/i);
+    expect(d.caution).toMatch(/different approach/i);
   });
 
   it("an unsent lead is told to send the quote now", () => {
     const d = templateOutreach(lead("unsent"), summarizeComms(null, null));
     expect(d.cadence).toMatch(/now/i);
     expect(d.callStrategy).toMatch(/send the quote/i);
+  });
+
+  it("no template text contains an em or en dash (reads like a person, not a brochure)", () => {
+    const stages = ["unsent", "awaiting", "follow_up", "cold", "closing"] as const;
+    for (const s of stages) {
+      const d = templateOutreach(lead(s), summarizeComms(GRADY_NOTES, "DEVIN IS ON PATERNITY LEAVE"));
+      for (const text of [d.sms, d.callStrategy, d.cadence, d.caution ?? ""]) {
+        expect(text).not.toMatch(/[—–]/);
+      }
+    }
+  });
+});
+
+describe("outreach — humanize", () => {
+  it("replaces em dashes with commas and number ranges with 'to'", () => {
+    expect(humanize("Zoe Events — your quote is ready")).toBe("Zoe Events, your quote is ready");
+    expect(humanize("Give it 2–3 days")).toBe("Give it 2 to 3 days");
+    expect(humanize("plain text stays put")).toBe("plain text stays put");
+    expect(humanize("a — b – c")).toBe("a, b, c");
   });
 });
