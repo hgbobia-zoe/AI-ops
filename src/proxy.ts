@@ -11,7 +11,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { verifySession, SESSION_COOKIE } from "@/lib/auth/session";
-import { canSeeFinancials, canManageSettings } from "@/lib/auth/roles";
+import { canSeeFinancials, canManageSettings, canSeeCoaching } from "@/lib/auth/roles";
 
 const PUBLIC: string[] = [
   "/login",
@@ -44,6 +44,8 @@ function isPublicPath(pathname: string): boolean {
 const isFinancial = (p: string): boolean => p === "/finance" || p.startsWith("/finance/") || p.startsWith("/api/finance");
 const isSettings = (p: string): boolean =>
   p === "/admin" || p.startsWith("/admin/") || p.startsWith("/api/settings") || p.startsWith("/api/integrations") || p.startsWith("/api/auth/users");
+// Post-call coaching — sensitive transcripts + recaps, owner/admin only.
+const isCoaching = (p: string): boolean => p === "/coaching" || p.startsWith("/coaching/") || p.startsWith("/api/coaching");
 
 export async function proxy(req: NextRequest): Promise<NextResponse> {
   const secret = process.env.APP_SESSION_TOKEN;
@@ -61,6 +63,7 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
 
   if (isFinancial(pathname) && !canSeeFinancials(session.role)) return deny(req, "forbidden");
   if (isSettings(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
+  if (isCoaching(pathname) && !canSeeCoaching(session.role)) return deny(req, "forbidden");
 
   return NextResponse.next();
 }

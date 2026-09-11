@@ -42,7 +42,7 @@ export function llmModel(): string {
 
 export async function chat(
   messages: ChatMessage[],
-  opts: { json?: boolean; temperature?: number; timeoutMs?: number } = {},
+  opts: { json?: boolean; temperature?: number; timeoutMs?: number; model?: string; maxTokens?: number } = {},
 ): Promise<ChatResult> {
   const p = provider();
   if (!p) return { ok: false, error: "LLM not configured (set ANTHROPIC_API_KEY or LLM_BASE_URL)" };
@@ -61,7 +61,7 @@ export async function chat(
 
 async function chatAnthropic(
   messages: ChatMessage[],
-  opts: { temperature?: number },
+  opts: { temperature?: number; model?: string; maxTokens?: number },
   signal: AbortSignal,
 ): Promise<ChatResult> {
   // Anthropic takes the system prompt separately; the rest are user/assistant turns.
@@ -77,8 +77,8 @@ async function chatAnthropic(
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: llmModel(),
-      max_tokens: 1024,
+      model: opts.model ?? llmModel(),
+      max_tokens: opts.maxTokens ?? 1024,
       temperature: opts.temperature ?? 0.2,
       ...(system ? { system } : {}),
       messages: turns,
@@ -98,7 +98,7 @@ async function chatAnthropic(
 
 async function chatOpenAI(
   messages: ChatMessage[],
-  opts: { json?: boolean; temperature?: number },
+  opts: { json?: boolean; temperature?: number; model?: string; maxTokens?: number },
   signal: AbortSignal,
 ): Promise<ChatResult> {
   const base = process.env.LLM_BASE_URL!.replace(/\/$/, "");
@@ -109,9 +109,10 @@ async function chatOpenAI(
       ...(process.env.LLM_API_KEY ? { authorization: `Bearer ${process.env.LLM_API_KEY}` } : {}),
     },
     body: JSON.stringify({
-      model: llmModel(),
+      model: opts.model ?? llmModel(),
       messages,
       temperature: opts.temperature ?? 0.2,
+      ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
       ...(opts.json ? { response_format: { type: "json_object" } } : {}),
     }),
     signal,

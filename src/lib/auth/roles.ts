@@ -20,6 +20,11 @@ export function canSeeFinancials(role: Role): boolean {
   return role === "owner" || role === "admin";
 }
 
+/** Coaching blade — sales-call transcripts + recaps are sensitive, so owner/admin only. */
+export function canSeeCoaching(role: Role): boolean {
+  return role === "owner" || role === "admin";
+}
+
 /** App settings, providers/integrations, pulling routes. */
 export function canManageSettings(role: Role): boolean {
   return role === "owner" || role === "admin";

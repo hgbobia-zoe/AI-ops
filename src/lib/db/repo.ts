@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { getDb } from "./index";
 import { logChange } from "@/lib/history/store";
 import type { Route, RouteStatus, Stop, StopState } from "@/lib/types";
+import type { CallRecap } from "@/lib/coach/recap";
 
 interface StopRow {
   stop_id: string;
@@ -2040,4 +2041,84 @@ export function getRecentCallEvents(limit = 50): CallEventView[] {
   return (
     getDb().prepare("SELECT * FROM call_events ORDER BY ts DESC LIMIT ?").all(limit) as Record<string, unknown>[]
   ).map(toCallEvent);
+}
+
+/** One call event by OUR id (call_events.id) — for the coaching detail page. */
+export function getCallEventById(id: string): CallEventView | null {
+  const r = getDb().prepare("SELECT * FROM call_events WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+  return r ? toCallEvent(r) : null;
+}
+
+// ---- Post-call coaching (Custodian-in-Maestro) --------------------------------------------------
+
+/** A call that has a transcript and can therefore be coached, plus whether a recap already exists. */
+export interface CoachableCall {
+  id: string;
+  direction: string | null;
+  fromPhone: string | null;
+  toPhone: string | null;
+  contactName: string | null;
+  durationSec: number | null;
+  sentiment: string | null;
+  occurredAt: string | null;
+  ts: string;
+  analyzed: boolean;
+}
+
+/** Calls with a transcript (the only ones coachable), newest first, flagged whether analyzed. */
+export function listCoachableCalls(limit = 50): CoachableCall[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT c.id, c.direction, c.from_phone, c.to_phone, c.contact_name, c.duration_sec, c.sentiment,
+              c.occurred_at, c.ts,
+              CASE WHEN a.call_id IS NOT NULL THEN 1 ELSE 0 END AS analyzed
+         FROM call_events c
+         LEFT JOIN coaching_analyses a ON a.call_id = c.id
+        WHERE c.transcript IS NOT NULL AND TRIM(c.transcript) <> ''
+        ORDER BY COALESCE(c.occurred_at, c.ts) DESC
+        LIMIT ?`,
+    )
+    .all(limit) as Record<string, unknown>[];
+  return rows.map((r) => ({
+    id: String(r.id),
+    direction: (r.direction as string) ?? null,
+    fromPhone: (r.from_phone as string) ?? null,
+    toPhone: (r.to_phone as string) ?? null,
+    contactName: (r.contact_name as string) ?? null,
+    durationSec: r.duration_sec == null ? null : Number(r.duration_sec),
+    sentiment: (r.sentiment as string) ?? null,
+    occurredAt: (r.occurred_at as string) ?? null,
+    ts: String(r.ts),
+    analyzed: Number(r.analyzed) === 1,
+  }));
+}
+
+/** The stored coaching recap for a call, or null if it hasn't been analyzed yet. */
+export function getCoachingAnalysis(callId: string): CallRecap | null {
+  const r = getDb().prepare("SELECT recap_json FROM coaching_analyses WHERE call_id = ?").get(callId) as
+    | { recap_json: string }
+    | undefined;
+  if (!r) return null;
+  try {
+    return JSON.parse(r.recap_json) as CallRecap;
+  } catch {
+    return null;
+  }
+}
+
+/** Store (or replace) a call's coaching recap. */
+export function saveCoachingAnalysis(callId: string, recap: CallRecap): void {
+  getDb()
+    .prepare(
+      `INSERT INTO coaching_analyses (call_id, recap_json, model, created_at)
+       VALUES (@callId, @recapJson, @model, @createdAt)
+       ON CONFLICT(call_id) DO UPDATE SET recap_json = excluded.recap_json, model = excluded.model,
+         created_at = excluded.created_at`,
+    )
+    .run({
+      callId,
+      recapJson: JSON.stringify(recap),
+      model: recap.model ?? null,
+      createdAt: new Date().toISOString(),
+    });
 }

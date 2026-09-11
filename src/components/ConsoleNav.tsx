@@ -23,9 +23,10 @@ import {
   LogOut,
   Sparkles,
   Target,
+  Headphones,
   type LucideIcon,
 } from "lucide-react";
-import { canSeeFinancials, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
+import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
 
 interface Blade {
   href: string;
@@ -33,6 +34,8 @@ interface Blade {
   icon: LucideIcon;
   /** Only show to roles that can see financials ($). */
   financial?: boolean;
+  /** Only show to roles that can see coaching (sensitive call transcripts). */
+  coaching?: boolean;
 }
 
 // Add a feature → add a blade.
@@ -45,6 +48,7 @@ const BLADES: Blade[] = [
   { href: "/finance", label: "Financial", icon: DollarSign, financial: true },
   { href: "/sales", label: "Sales", icon: TrendingUp },
   { href: "/salesos", label: "Sales OS", icon: Target },
+  { href: "/coaching", label: "Coaching", icon: Headphones, coaching: true },
   { href: "/customers", label: "Customers", icon: UserRound },
   { href: "/history", label: "History", icon: History },
   { href: "/automation", label: "Automation", icon: Workflow },
@@ -54,7 +58,7 @@ export function ConsoleNav({ role }: { role: Role }) {
   const pathname = usePathname();
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
 
-  const blades = BLADES.filter((b) => !b.financial || canSeeFinancials(role));
+  const blades = BLADES.filter((b) => (!b.financial || canSeeFinancials(role)) && (!b.coaching || canSeeCoaching(role)));
   const bottom: Blade[] = [];
   if (canManageSettings(role)) bottom.push({ href: "/admin/pull", label: "Pull Routes", icon: Download });
   if (canManageSettings(role)) bottom.push({ href: "/admin/health", label: "Data Health", icon: HeartPulse });

@@ -439,6 +439,17 @@ CREATE TABLE IF NOT EXISTS customer_state (
   ts             TEXT NOT NULL    -- when this state was set
 );
 CREATE INDEX IF NOT EXISTS idx_customer_state_ts ON customer_state(ts DESC);
+
+-- Post-call coaching recaps (Custodian-in-Maestro). One recap per call, keyed by call_events.id;
+-- re-analyzing overwrites. recap_json is the CallRecap shape from src/lib/coach/recap.ts. The recap
+-- is INFERENCE over the transcript, generated on demand and cached here so we don't re-bill the LLM
+-- on every view.
+CREATE TABLE IF NOT EXISTS coaching_analyses (
+  call_id    TEXT PRIMARY KEY,   -- call_events.id
+  recap_json TEXT NOT NULL,      -- CallRecap JSON
+  model      TEXT,               -- model that produced it
+  created_at TEXT NOT NULL
+);
 `;
 
 type DB = InstanceType<typeof Database>;
