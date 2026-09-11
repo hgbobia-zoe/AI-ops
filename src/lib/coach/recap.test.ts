@@ -36,6 +36,11 @@ describe("generateRecap", () => {
         keyPoints: ["150 guests", "June 14", 42, "budget ~$6k"],
         actionItems: ["Send tent + lighting quote by Tuesday"],
         customerConcerns: ["Talking to another vendor"],
+        objections: [
+          { objection: "Budget is tight, around $6k", response: "Frame reliability as the cost of avoiding a failed setup" },
+          { objection: "not-an-object", response: 5 },
+          "not an object at all",
+        ],
         followUpEmail: "Subject: Your wedding rentals\n\nHi Sam,\n\nGreat talking...",
         coachingNotes: ["When they mentioned the other vendor, you could have asked what matters most to them", 99],
         nextStep: "Send the quote by Tuesday.",
@@ -48,6 +53,11 @@ describe("generateRecap", () => {
     expect(recap!.keyPoints).toEqual(["150 guests", "June 14", "budget ~$6k"]);
     expect(recap!.actionItems).toEqual(["Send tent + lighting quote by Tuesday"]);
     expect(recap!.customerConcerns).toEqual(["Talking to another vendor"]);
+    // Paired objections coerced; the plain-string entry is dropped, the numeric response becomes "".
+    expect(recap!.objections).toEqual([
+      { objection: "Budget is tight, around $6k", response: "Frame reliability as the cost of avoiding a failed setup" },
+      { objection: "not-an-object", response: "" },
+    ]);
     expect(recap!.coachingNotes).toEqual(["When they mentioned the other vendor, you could have asked what matters most to them"]);
     expect(recap!.followUpEmail).toContain("Subject:");
     expect(recap!.model).toBe("claude-sonnet-5");

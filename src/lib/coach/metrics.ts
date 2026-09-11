@@ -71,6 +71,78 @@ export function computeCallMetrics(transcript: string, durationSec: number | nul
   };
 }
 
+// ---- Spiky-style gauges + momentum (all derived from the metrics above; transparent formulas) ----
+
+export type GaugeTone = "good" | "warn" | "bad" | "neutral";
+export interface Gauge {
+  pct: number; // marker position 0..100 along the track
+  label: string; // human verdict, e.g. "Good pace" / "Too fast"
+  tone: GaugeTone;
+}
+
+/** Talking speed → verdict. Ranges tuned for phone sales calls (conversational ~110-165 wpm). */
+export function speedGauge(wpm: number | null): Gauge | null {
+  if (wpm == null) return null;
+  const pct = Math.max(0, Math.min(100, ((wpm - 60) / (220 - 60)) * 100));
+  if (wpm < 110) return { pct, label: "A bit slow", tone: "warn" };
+  if (wpm > 190) return { pct, label: "Too fast", tone: "bad" };
+  if (wpm > 165) return { pct, label: "A bit fast", tone: "warn" };
+  return { pct, label: "Good pace", tone: "good" };
+}
+
+/** Talking time → verdict. repShare is the dominant speaker's share of the two-party words (0..1). */
+export function balanceGauge(repShare: number | null): Gauge | null {
+  if (repShare == null) return null;
+  const pct = Math.max(0, Math.min(100, repShare * 100));
+  if (repShare > 0.7) return { pct, label: "You talked a lot", tone: "bad" };
+  if (repShare > 0.6) return { pct, label: "You led the talking", tone: "warn" };
+  if (repShare < 0.3) return { pct, label: "You listened a lot", tone: "warn" };
+  return { pct, label: "Well balanced", tone: "good" };
+}
+
+/** Customer tone → verdict, from the sentiment label (from the transcript/summary, not audio). */
+export function sentimentGauge(sentiment: string | null): Gauge | null {
+  if (!sentiment) return null;
+  if (sentiment === "positive") return { pct: 82, label: "Positive", tone: "good" };
+  if (sentiment === "negative") return { pct: 18, label: "Negative", tone: "bad" };
+  return { pct: 50, label: "Neutral", tone: "neutral" };
+}
+
+export interface Momentum {
+  score: number; // 0..100
+  label: string; // Strong / Building / At risk
+  tone: GaugeTone;
+}
+
+/** Call momentum — a transparent composite of the signals we actually have: customer sentiment,
+ *  talk balance (discovery vs monologue), questions asked, and whether a next step was secured.
+ *  NOT a black-box "AI score" — the formula is right here. */
+export function momentumScore(input: {
+  sentiment: string | null;
+  repShare: number | null;
+  questions: number | null;
+  hasNextStep: boolean;
+}): Momentum {
+  let s = 50;
+  if (input.sentiment === "positive") s += 20;
+  else if (input.sentiment === "negative") s -= 25;
+  if (input.repShare != null) {
+    if (input.repShare >= 0.4 && input.repShare <= 0.6) s += 10;
+    else if (input.repShare > 0.7) s -= 15;
+    else if (input.repShare < 0.3) s += 4;
+  }
+  if (input.questions != null) {
+    if (input.questions >= 3) s += 10;
+    else if (input.questions >= 1) s += 5;
+    else s -= 5;
+  }
+  if (input.hasNextStep) s += 10;
+  s = Math.max(0, Math.min(100, Math.round(s)));
+  if (s >= 70) return { score: s, label: "Strong", tone: "good" };
+  if (s < 45) return { score: s, label: "At risk", tone: "bad" };
+  return { score: s, label: "Building", tone: "warn" };
+}
+
 /** Map a raw speaker tag to a friendly label when we recognise it; otherwise keep it (truncated). */
 function prettyLabel(raw: string): string {
   if (REP_HINT.test(raw)) return "You";

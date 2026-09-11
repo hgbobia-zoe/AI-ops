@@ -20,6 +20,8 @@ export interface CallRecap {
   actionItems: string[];
   /** Objections/concerns the customer raised. Empty if none surfaced. */
   customerConcerns: string[];
+  /** Each objection paired with a recommended way to handle it (Spiky's objection→response). */
+  objections: { objection: string; response: string }[];
   /** Paste-ready plain-text follow-up email; first line is "Subject: …". */
   followUpEmail: string;
   /** Coaching critique — specific, kind, actionable notes on what the rep could have done better
@@ -52,6 +54,9 @@ const SYSTEM =
   "Friendly and direct.\n" +
   "- Action items are things THE REP committed to do, not what the customer will do.\n" +
   "- Zoe wins on reliability and execution, not price — never suggest discounting as the next step.\n" +
+  "- objections: for each real concern the customer raised (price, timing, competitor, fit, authority), " +
+  "output {objection: what they raised, in their terms, response: a specific, non-discounting way to " +
+  "handle it, grounded in Zoe's reliability/execution and in what was actually said}. Empty array if none.\n" +
   "- coachingNotes: put on your SALES-COACH hat. Give 2-5 specific, kind, actionable notes on what " +
   "the rep could have done better — a sharper discovery question, a stronger way to handle an " +
   "objection the customer actually raised, a clearer next-step ask. Ground each note in what actually " +
@@ -61,7 +66,8 @@ const SYSTEM =
   "guessing. Empty arrays are fine.\n" +
   "Output RAW JSON ONLY, no prose, no code fences, exactly this shape: " +
   '{"executive": string, "keyPoints": string[], "actionItems": string[], "customerConcerns": string[], ' +
-  '"followUpEmail": string, "coachingNotes": string[], "nextStep": string}';
+  '"objections": [{"objection": string, "response": string}], "followUpEmail": string, ' +
+  '"coachingNotes": string[], "nextStep": string}';
 
 function extractJson(text: string): unknown {
   let s = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
@@ -116,6 +122,15 @@ export async function generateRecap(input: RecapInput): Promise<CallRecap | null
       keyPoints: strList(p.keyPoints),
       actionItems: strList(p.actionItems),
       customerConcerns: strList(p.customerConcerns),
+      objections: Array.isArray(p.objections)
+        ? (p.objections as unknown[])
+            .filter((o): o is Record<string, unknown> => !!o && typeof o === "object")
+            .map((o) => ({
+              objection: typeof o.objection === "string" ? o.objection.trim() : "",
+              response: typeof o.response === "string" ? o.response.trim() : "",
+            }))
+            .filter((o) => o.objection || o.response)
+        : [],
       followUpEmail: typeof p.followUpEmail === "string" ? p.followUpEmail.trim() : "",
       coachingNotes: strList(p.coachingNotes),
       nextStep: typeof p.nextStep === "string" ? p.nextStep.trim() : "",

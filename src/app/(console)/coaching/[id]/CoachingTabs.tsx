@@ -4,7 +4,7 @@
 // with a count badge. Pure presentation over the recap + Quo summary + transcript passed in.
 
 import { useState } from "react";
-import { FileText, GraduationCap, AlertTriangle, CheckSquare, ArrowRight, ScrollText } from "lucide-react";
+import { FileText, GraduationCap, AlertTriangle, CheckSquare, ArrowRight, ScrollText, MessageSquareReply } from "lucide-react";
 
 export interface CoachingTabsProps {
   quoSummary: string | null;
@@ -12,6 +12,7 @@ export interface CoachingTabsProps {
   keyPoints: string[];
   coachingNotes: string[];
   customerConcerns: string[];
+  objections: { objection: string; response: string }[];
   actionItems: string[];
   nextStep: string;
   followUpEmail: string;
@@ -28,7 +29,7 @@ export function CoachingTabs(props: CoachingTabsProps): React.JSX.Element {
   const tabs: { key: TabKey; label: string; count: number | null; icon: typeof FileText }[] = [
     { key: "overview", label: "Overview", count: null, icon: FileText },
     { key: "coaching", label: "Coaching", count: props.coachingNotes.length || null, icon: GraduationCap },
-    { key: "objections", label: "Objections", count: props.customerConcerns.length || null, icon: AlertTriangle },
+    { key: "objections", label: "Objections", count: (props.objections.length || props.customerConcerns.length) || null, icon: AlertTriangle },
     { key: "actions", label: "Actions", count: actionsCount || null, icon: CheckSquare },
     { key: "transcript", label: "Transcript", count: null, icon: ScrollText },
   ];
@@ -94,7 +95,23 @@ export function CoachingTabs(props: CoachingTabsProps): React.JSX.Element {
         )}
 
         {active === "objections" && (
-          props.customerConcerns.length > 0 ? (
+          props.objections.length > 0 ? (
+            // Spiky's objection → response pairing.
+            <ul className="space-y-3">
+              {props.objections.map((o, i) => (
+                <li key={i} className="grid gap-2 rounded-lg border border-white/10 p-3 sm:grid-cols-2 sm:gap-3">
+                  <div className="rounded-md border border-amber-500/25 bg-amber-500/[0.06] p-2.5">
+                    <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200"><AlertTriangle className="size-3.5" /> Objection</div>
+                    <p className="text-sm">{o.objection || "—"}</p>
+                  </div>
+                  <div className="rounded-md border border-emerald-500/25 bg-emerald-500/[0.05] p-2.5">
+                    <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-200"><MessageSquareReply className="size-3.5" /> Response</div>
+                    <p className="text-sm">{o.response || "—"}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : props.customerConcerns.length > 0 ? (
             <ul className="space-y-2.5">
               {props.customerConcerns.map((c, i) => (
                 <li key={i} className="flex items-start gap-2.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] p-3 text-sm">

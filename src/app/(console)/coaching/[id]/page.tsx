@@ -6,10 +6,10 @@
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { ArrowLeft, PhoneIncoming, PhoneOutgoing, Clock, Gauge, MessageCircleQuestion, Mic, CheckSquare, AlertTriangle, GraduationCap } from "lucide-react";
+import { ArrowLeft, PhoneIncoming, PhoneOutgoing, Clock, Gauge as GaugeIcon, MessageCircleQuestion, Mic, CheckSquare, AlertTriangle, GraduationCap } from "lucide-react";
 import { getCallEventById, getCoachingAnalysis, saveCoachingAnalysis, resolveCallerName } from "@/lib/db/repo";
 import { generateRecap } from "@/lib/coach/recap";
-import { computeCallMetrics } from "@/lib/coach/metrics";
+import { computeCallMetrics, speedGauge, balanceGauge, sentimentGauge, momentumScore, type Gauge, type GaugeTone } from "@/lib/coach/metrics";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeCoaching } from "@/lib/auth/roles";
 import { llmConfigured } from "@/lib/llm";
@@ -60,6 +60,14 @@ export default async function CoachingDetail({ params }: { params: Promise<{ id:
   }
 
   const topSpeaker = metrics?.speakers[0];
+  // Rep's share of talk time (only when we can identify the rep as "You"); drives the talk-time gauge.
+  const you = metrics?.speakers.find((s) => s.label === "You") ?? null;
+  const repShare = you ? you.share : null;
+  const speed = speedGauge(metrics?.wordsPerMin ?? null);
+  const talk = balanceGauge(repShare);
+  const tone = sentimentGauge(call.sentiment);
+  const hasSignals = Boolean(speed || talk || tone);
+  const momentum = hasSignals ? momentumScore({ sentiment: call.sentiment, repShare, questions: metrics?.questions ?? null, hasNextStep: !!recap?.nextStep }) : null;
 
   return (
     <main className="mx-auto max-w-5xl p-5 pb-16 md:p-8">
@@ -99,26 +107,28 @@ export default async function CoachingDetail({ params }: { params: Promise<{ id:
       {/* Metric tiles — every value COMPUTED from the transcript/recap, never invented */}
       <section className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <Tile icon={Clock} label="Duration" value={fmtDuration(call.durationSec)} />
-        {metrics?.wordsPerMin != null && <Tile icon={Gauge} label="Talking speed" value={`${metrics.wordsPerMin}`} unit="words/min" />}
+        {metrics?.wordsPerMin != null && <Tile icon={GaugeIcon} label="Talking speed" value={`${metrics.wordsPerMin}`} unit="words/min" />}
         {metrics && metrics.questions > 0 && <Tile icon={MessageCircleQuestion} label="Questions" value={`${metrics.questions}`} />}
         {topSpeaker && <Tile icon={Mic} label="Talk balance" value={`${Math.round(topSpeaker.share * 100)}%`} unit={topSpeaker.label} />}
         {recap && <Tile icon={CheckSquare} label="Action items" value={`${recap.actionItems.length}`} tone="text-sky-300" />}
-        {recap && <Tile icon={AlertTriangle} label="Objections" value={`${recap.customerConcerns.length}`} tone="text-amber-300" />}
+        {recap && <Tile icon={AlertTriangle} label="Objections" value={`${recap.objections.length || recap.customerConcerns.length}`} tone="text-amber-300" />}
         {recap && <Tile icon={GraduationCap} label="Coaching notes" value={`${recap.coachingNotes.length}`} tone="text-violet-300" />}
       </section>
 
-      {/* Talk-balance bar when the transcript is speaker-labelled */}
-      {metrics && metrics.speakers.length >= 2 && (
+      {/* Call signals — Spiky-style sliders + momentum, all computed (not audio-derived, not invented) */}
+      {(hasSignals || momentum) && (
         <section className="surface mb-4 border border-white/5 p-4">
-          <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Talk balance</h2>
-          <div className="flex h-2.5 overflow-hidden rounded-full bg-white/5">
-            <div className="bg-sky-400/70" style={{ width: `${Math.round(metrics.speakers[0].share * 100)}%` }} />
-            <div className="bg-violet-400/60" style={{ width: `${Math.round(metrics.speakers[1].share * 100)}%` }} />
+          <div className="grid gap-5 md:grid-cols-[1fr_auto] md:items-center">
+            <div className="space-y-3">
+              {speed && <Slider label="Talking speed" gauge={speed} variant="center" />}
+              {talk && <Slider label="Talking time" gauge={talk} variant="center" />}
+              {tone && <Slider label="Customer tone" gauge={tone} variant="polar" />}
+            </div>
+            {momentum && <MomentumCard m={momentum} />}
           </div>
-          <div className="mt-1.5 flex justify-between text-[11px] text-muted-foreground">
-            <span>{metrics.speakers[0].label} · {Math.round(metrics.speakers[0].share * 100)}%</span>
-            <span>{metrics.speakers[1].label} · {Math.round(metrics.speakers[1].share * 100)}%</span>
-          </div>
+          <p className="mt-3 text-[10px] text-muted-foreground">
+            Momentum is a composite of customer tone, talk balance, discovery questions, and whether a next step was secured. Tone is read from the transcript, not audio.
+          </p>
         </section>
       )}
 
@@ -129,6 +139,7 @@ export default async function CoachingDetail({ params }: { params: Promise<{ id:
         keyPoints={recap?.keyPoints ?? []}
         coachingNotes={recap?.coachingNotes ?? []}
         customerConcerns={recap?.customerConcerns ?? []}
+        objections={recap?.objections ?? []}
         actionItems={recap?.actionItems ?? []}
         nextStep={recap?.nextStep ?? ""}
         followUpEmail={recap?.followUpEmail ?? ""}
@@ -161,6 +172,54 @@ function Tile({ icon: Icon, label, value, unit, tone = "text-foreground" }: { ic
       <div className="mt-1 flex items-baseline gap-1">
         <span className={`text-2xl font-bold capitalize tabular-nums ${tone}`}>{value}</span>
         {unit && <span className="text-[11px] text-muted-foreground">{unit}</span>}
+      </div>
+    </div>
+  );
+}
+
+const TONE_TEXT: Record<GaugeTone, string> = {
+  good: "text-emerald-300",
+  warn: "text-amber-300",
+  bad: "text-rose-300",
+  neutral: "text-muted-foreground",
+};
+const TONE_DOT: Record<GaugeTone, string> = {
+  good: "bg-emerald-400",
+  warn: "bg-amber-400",
+  bad: "bg-rose-400",
+  neutral: "bg-white/40",
+};
+
+function Slider({ label, gauge, variant }: { label: string; gauge: Gauge; variant: "center" | "polar" }): React.JSX.Element {
+  const track =
+    variant === "polar"
+      ? "bg-gradient-to-r from-rose-500/40 via-amber-500/30 to-emerald-500/50"
+      : "bg-gradient-to-r from-rose-500/40 via-emerald-500/50 to-rose-500/40";
+  return (
+    <div className="flex items-center gap-3">
+      <span className="w-24 shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground md:w-28">{label}</span>
+      <div className={`relative h-1.5 flex-1 rounded-full ${track}`}>
+        <span className="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-black/40 bg-white shadow" style={{ left: `${gauge.pct}%` }} />
+      </div>
+      <span className={`w-20 shrink-0 text-right text-[10px] font-semibold uppercase tracking-wide md:w-28 ${TONE_TEXT[gauge.tone]}`}>{gauge.label}</span>
+    </div>
+  );
+}
+
+function MomentumCard({ m }: { m: { score: number; label: string; tone: GaugeTone } }): React.JSX.Element {
+  const dots = 8;
+  const filled = Math.round((m.score / 100) * dots);
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 md:w-56">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Call momentum</div>
+      <div className="mt-0.5 flex items-baseline gap-2">
+        <span className={`text-3xl font-bold tabular-nums ${TONE_TEXT[m.tone]}`}>{m.score}%</span>
+        <span className={`text-sm font-semibold ${TONE_TEXT[m.tone]}`}>{m.label}</span>
+      </div>
+      <div className="mt-2 flex gap-1">
+        {Array.from({ length: dots }).map((_, i) => (
+          <span key={i} className={`h-1.5 flex-1 rounded-full ${i < filled ? TONE_DOT[m.tone] : "bg-white/10"}`} />
+        ))}
       </div>
     </div>
   );
