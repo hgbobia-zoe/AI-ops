@@ -2060,12 +2060,19 @@ export interface CoachableCall {
   toPhone: string | null;
   contactName: string | null; // resolved name, or null when only a phone is known
   customerPhone: string | null; // the customer's number (from metadata or the transcript)
+  caller: string; // display label: resolved name, else formatted phone, else "Unknown caller"
   durationSec: number | null;
   sentiment: string | null;
   occurredAt: string | null;
   ts: string;
   analyzed: boolean;
 }
+
+const prettyPhone = (p: string | null): string | null => {
+  const d = (p ?? "").replace(/\D/g, "");
+  const t = d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+  return t.length === 10 ? `(${t.slice(0, 3)}) ${t.slice(3, 6)}-${t.slice(6)}` : (p ?? "").trim() || null;
+};
 
 const callerDigits = (direction: string | null, fromPhone: string | null, toPhone: string | null): string | null => {
   const p = direction === "outgoing" ? toPhone : fromPhone;
@@ -2137,6 +2144,7 @@ export function listCoachableCalls(limit = 50, ourDigits?: Set<string>): Coachab
       toPhone,
       contactName,
       customerPhone,
+      caller: contactName || prettyPhone(customerPhone) || "Unknown caller",
       durationSec: r.duration_sec == null ? null : Number(r.duration_sec),
       sentiment: (r.sentiment as string) ?? null,
       occurredAt: (r.occurred_at as string) ?? null,
