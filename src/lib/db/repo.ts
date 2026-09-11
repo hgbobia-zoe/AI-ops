@@ -6,6 +6,7 @@ import { getDb } from "./index";
 import { logChange } from "@/lib/history/store";
 import type { Route, RouteStatus, Stop, StopState } from "@/lib/types";
 import type { CallRecap } from "@/lib/coach/recap";
+import { computeCallMetrics } from "@/lib/coach/metrics";
 
 interface StopRow {
   stop_id: string;
@@ -2057,7 +2058,8 @@ export interface CoachableCall {
   direction: string | null;
   fromPhone: string | null;
   toPhone: string | null;
-  contactName: string | null;
+  contactName: string | null; // resolved name, or null when only a phone is known
+  customerPhone: string | null; // the customer's number (from metadata or the transcript)
   durationSec: number | null;
   sentiment: string | null;
   occurredAt: string | null;
@@ -2085,13 +2087,20 @@ export function resolveCallerName(call: {
   return getBookingByPhoneDigits(digits)?.clientName?.trim() || null;
 }
 
-/** Calls with a transcript (the only ones coachable), newest first, flagged whether analyzed.
- *  The caller name is resolved from Quo's contact name, else our matched customer by phone. */
-export function listCoachableCalls(limit = 50): CoachableCall[] {
+const last10Digits = (p: string | null): string | null => {
+  const d = (p ?? "").replace(/\D/g, "");
+  return d.length >= 10 ? d.slice(-10) : null;
+};
+
+/** Calls with a transcript (the only ones coachable), newest first, flagged whether analyzed. Caller
+ *  identity is resolved from Quo's contact name, else our matched customer by phone; the customer's
+ *  number is recovered from the transcript's speakers when the call metadata lacks it. `ourDigits`
+ *  (Zoe's own numbers) lets us tell the customer's phone from ours. */
+export function listCoachableCalls(limit = 50, ourDigits?: Set<string>): CoachableCall[] {
   const rows = getDb()
     .prepare(
-      `SELECT c.id, c.direction, c.from_phone, c.to_phone, c.contact_name, c.duration_sec, c.sentiment,
-              c.occurred_at, c.ts,
+      `SELECT c.id, c.direction, c.from_phone, c.to_phone, c.contact_name, c.transcript, c.duration_sec,
+              c.sentiment, c.occurred_at, c.ts,
               CASE WHEN a.call_id IS NOT NULL THEN 1 ELSE 0 END AS analyzed
          FROM call_events c
          LEFT JOIN coaching_analyses a ON a.call_id = c.id
@@ -2104,12 +2113,30 @@ export function listCoachableCalls(limit = 50): CoachableCall[] {
     const direction = (r.direction as string) ?? null;
     const fromPhone = (r.from_phone as string) ?? null;
     const toPhone = (r.to_phone as string) ?? null;
+
+    // Customer number: the call's external party, else the non-Zoe speaker in the transcript.
+    const fromD = last10Digits(fromPhone);
+    const toD = last10Digits(toPhone);
+    let customerPhone: string | null =
+      fromD && !ourDigits?.has(fromD) ? fromPhone : toD && !ourDigits?.has(toD) ? toPhone : null;
+    if (!customerPhone) {
+      const cust = computeCallMetrics(String(r.transcript ?? ""), null, ourDigits).speakers.find((s) => s.label === "Customer");
+      customerPhone = cust && /\d{10}/.test(cust.raw) ? cust.raw : null;
+    }
+
+    const contactName =
+      ((r.contact_name as string) ?? "").trim() ||
+      resolveCallerName({ contactName: null, direction, fromPhone, toPhone }) ||
+      (customerPhone ? getBookingByPhoneDigits(last10Digits(customerPhone) ?? "")?.clientName?.trim() || null : null) ||
+      null;
+
     return {
       id: String(r.id),
       direction,
       fromPhone,
       toPhone,
-      contactName: resolveCallerName({ contactName: (r.contact_name as string) ?? null, direction, fromPhone, toPhone }),
+      contactName,
+      customerPhone,
       durationSec: r.duration_sec == null ? null : Number(r.duration_sec),
       sentiment: (r.sentiment as string) ?? null,
       occurredAt: (r.occurred_at as string) ?? null,
