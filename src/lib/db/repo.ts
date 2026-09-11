@@ -2121,10 +2121,10 @@ export function listCoachableCalls(limit = 50): CoachableCall[] {
 
 /** Un-analyzed coachable calls (transcript present, no recap yet), oldest first so the backlog
  *  drains in chronological order. Powers the auto-backfill. */
-export function listUnanalyzedCoachableCalls(limit = 25): { id: string; transcript: string; direction: string | null; contactName: string | null; durationSec: number | null }[] {
+export function listUnanalyzedCoachableCalls(limit = 25): { id: string; transcript: string; direction: string | null; contactName: string | null; durationSec: number | null; quoSummary: string | null }[] {
   const rows = getDb()
     .prepare(
-      `SELECT c.id, c.transcript, c.direction, c.from_phone, c.to_phone, c.contact_name, c.duration_sec
+      `SELECT c.id, c.transcript, c.summary, c.direction, c.from_phone, c.to_phone, c.contact_name, c.duration_sec
          FROM call_events c
          LEFT JOIN coaching_analyses a ON a.call_id = c.id
         WHERE a.call_id IS NULL AND c.transcript IS NOT NULL AND TRIM(c.transcript) <> ''
@@ -2140,6 +2140,7 @@ export function listUnanalyzedCoachableCalls(limit = 25): { id: string; transcri
       direction,
       contactName: resolveCallerName({ contactName: (r.contact_name as string) ?? null, direction, fromPhone: (r.from_phone as string) ?? null, toPhone: (r.to_phone as string) ?? null }),
       durationSec: r.duration_sec == null ? null : Number(r.duration_sec),
+      quoSummary: (r.summary as string) ?? null,
     };
   });
 }

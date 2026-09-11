@@ -32,7 +32,12 @@ export interface CallRecap {
   generatedAt: string;
 }
 
-const RECAP_MODEL = "claude-sonnet-5"; // Haiku is too shallow for the multi-field recap.
+// Model is configurable so the analysis can run on a LOCAL / open model (point chat() at an
+// OpenAI-compatible endpoint via LLM_BASE_URL — Ollama/vLLM/Groq/etc.) instead of a paid cloud call.
+// COACH_MODEL overrides just the coaching model; unset ⇒ chat()'s default (llmModel()), which already
+// respects LLM_BASE_URL/LLM_MODEL/ANTHROPIC_API_KEY. Feeding Quo's own summary in as context lets a
+// smaller model lean on work Quo already did rather than re-deriving everything.
+const COACH_MODEL = process.env.COACH_MODEL?.trim() || undefined;
 const MAX_TRANSCRIPT_CHARS = 16_000;
 
 const SYSTEM =
@@ -74,6 +79,8 @@ export interface RecapInput {
   direction?: string | null;
   contactName?: string | null;
   durationSec?: number | null;
+  /** Quo's own AI call summary, if available — passed in as grounding context for the analysis. */
+  quoSummary?: string | null;
 }
 
 /** Generate a coaching recap for one finished call. Returns null when the LLM is unconfigured, the
@@ -90,14 +97,15 @@ export async function generateRecap(input: RecapInput): Promise<CallRecap | null
 
   const who = input.contactName ? `Contact: ${input.contactName}\n` : "";
   const dir = input.direction ? `Direction: ${input.direction}\n` : "";
-  const user = `${who}${dir}\nTranscript:\n${trimmed}`;
+  const quo = input.quoSummary?.trim() ? `Quo's AI call summary (reference — build on it, don't just repeat it):\n${input.quoSummary.trim()}\n\n` : "";
+  const user = `${who}${dir}\n${quo}Transcript:\n${trimmed}`;
 
   const r = await chat(
     [
       { role: "system", content: SYSTEM },
       { role: "user", content: user },
     ],
-    { json: true, temperature: 0.3, model: RECAP_MODEL, maxTokens: 2048, timeoutMs: 60000 },
+    { json: true, temperature: 0.3, model: COACH_MODEL, maxTokens: 2048, timeoutMs: 90000 },
   );
   if (!r.ok || !r.text) return null;
 

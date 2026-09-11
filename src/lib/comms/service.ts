@@ -62,7 +62,7 @@ async function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLo
 /** Auto-generate the post-call coaching recap (Custodian-in-Maestro) for a real conversation, once
  *  per call. Skips voicemails / quick no-answers, skips calls already analyzed (never re-bills the
  *  LLM on a later webhook event for the same call), and no-ops when the LLM isn't configured. */
-async function maybeGenerateRecap(rowId: string, transcript: string | null, input: IngestCallInput): Promise<void> {
+async function maybeGenerateRecap(rowId: string, transcript: string | null, input: IngestCallInput, quoSummary: string | null): Promise<void> {
   if (!transcript) return;
   if ((input.durationSec ?? 0) < 45) return;
   if (getCoachingAnalysis(rowId)) return;
@@ -71,6 +71,7 @@ async function maybeGenerateRecap(rowId: string, transcript: string | null, inpu
     direction: input.direction ?? null,
     contactName: input.contactName ?? null,
     durationSec: input.durationSec ?? null,
+    quoSummary,
   });
   if (recap) saveCoachingAnalysis(rowId, recap);
 }
@@ -129,7 +130,7 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
 
   // Custodian-in-Maestro: kick off the coaching recap in the background (once per call, real
   // conversations only). Detached so it never delays sentiment/alerting or the webhook ACK.
-  void maybeGenerateRecap(id, transcript, { ...input, contactName: resolvedName ?? undefined }).catch(() => {});
+  void maybeGenerateRecap(id, transcript, { ...input, contactName: resolvedName ?? undefined }, summary).catch(() => {});
 
   // Phase 11 — close the loop: put the call on the lead's unified timeline, and let a real
   // conversation move the state machine (same evidence-driven path an inbound SMS reply takes).

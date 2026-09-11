@@ -26,6 +26,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       direction: c.direction,
       contactName: c.contactName,
       durationSec: c.durationSec,
+      quoSummary: c.quoSummary,
     });
     if (recap) {
       saveCoachingAnalysis(c.id, recap);
