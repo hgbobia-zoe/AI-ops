@@ -43,6 +43,8 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
   const ourDigits = ourPhoneDigits();
   const metrics = call.transcript ? computeCallMetrics(call.transcript, call.durationSec, ourDigits) : null;
   const Dir = call.direction === "outgoing" ? PhoneOutgoing : PhoneIncoming;
+  // Not enough was said to coach (voicemail / hang-up / a few seconds) — not an error.
+  const tooShort = !!call.transcript && (metrics?.words ?? 0) < 20;
 
   const customerSpeaker = metrics?.speakers.find((s) => s.label === "Customer") ?? null;
   const fromDigits = last10(call.fromPhone);
@@ -89,9 +91,11 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
           {topSpeaker && <ScoreChip label="Talk" value={`${topSpeaker.label} ${Math.round(topSpeaker.share * 100)}%`} />}
           {metrics?.wordsPerMin != null && <ScoreChip label="Pace" value={`${metrics.wordsPerMin} wpm`} />}
           {!recap && call.transcript && llmConfigured() && (
-            call.coachingAttemptedAt
-              ? <span className="text-xs text-muted-foreground">Couldn&apos;t generate a recap for this call.</span>
-              : <AutoAnalyze callId={id} />
+            tooShort
+              ? <span className="text-xs text-muted-foreground">Too short to coach.</span>
+              : call.coachingAttemptedAt
+                ? <span className="text-xs text-muted-foreground">Couldn&apos;t generate a recap for this call.</span>
+                : <AutoAnalyze callId={id} />
           )}
         </div>
       </header>
