@@ -104,15 +104,15 @@ export function CoachingShell({ calls, unanalyzed, children }: { calls: Coachabl
           <X className="size-5" />
         </button>
       </div>
-      {/* Filter tabs */}
-      <div className="flex gap-1 overflow-x-auto px-3 pt-2">
+      {/* Filter tabs — wrap so they always fit, never a horizontal scrollbar */}
+      <div className="flex flex-wrap gap-1 px-3 pt-2">
         {FILTERS.map((t) => {
           const on = filter === t.key;
           return (
             <button
               key={t.key}
               onClick={() => setFilter(t.key)}
-              className={`flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+              className={`flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-1 text-xs font-medium transition-colors ${
                 on ? "bg-white/[0.1] text-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
