@@ -32,6 +32,7 @@ const PUBLIC: string[] = [
   "/api/gs/projects",
   "/api/gs/notes",
   "/api/gs/outbox",
+  "/api/gs/wd-check", // Warehouse-Desktop team check (pending + report); own token, CORS to GSPRO
   "/api/pull/heartbeat", // Auto-Pull extension status ping; own token (fail-open), CORS-open
   "/api/openphone/webhook", // OpenPhone → us; authenticates by HMAC signature, not a session
   "/api/coach", // Custodian live-coach bridge; authenticates by COACH_API_TOKEN bearer, not a session

@@ -439,6 +439,16 @@ CREATE TABLE IF NOT EXISTS customer_state (
   ts             TEXT NOT NULL    -- when this state was set
 );
 CREATE INDEX IF NOT EXISTS idx_customer_state_ts ON customer_state(ts DESC);
+
+-- Warehouse-Desktop team-check alerts. A signed, upcoming project whose GSPRO team is MISSING the
+-- Warehouse Desktop account (verified as ground truth by the office extension reading
+-- initAddTeamPanel) gets a Slack nag. One row per project throttles that nag (re-fires ~daily while
+-- still missing) and lets us re-alert if the event date changes. Keyed by the Goodshuffle project id.
+CREATE TABLE IF NOT EXISTS wd_alerts (
+  transaction_id TEXT PRIMARY KEY,   -- Goodshuffle project id
+  event_date     TEXT,               -- the event date at last alert (re-alert if it changes)
+  last_alerted   TEXT NOT NULL       -- ISO ts of the last Slack nag
+);
 `;
 
 type DB = InstanceType<typeof Database>;

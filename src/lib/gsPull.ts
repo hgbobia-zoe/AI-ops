@@ -120,6 +120,20 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
       }).catch(function(){ return {stops:0,days:0,failed:1,unmatched:[]}; });
     }
 
+    // ---- Warehouse-Desktop team check: verify upcoming signed projects actually have Warehouse
+    // Desktop on their GSPRO team (ground truth: initAddTeamPanel.linkedUserMap); report the missing.
+    function checkWarehouseTeam(){
+      return fetch(API+"/api/gs/wd-check/pending",H).then(function(r){return r.json();}).then(function(j){
+        var wd=String((j&&j.warehouseUserId)||""); var projects=(j&&j.projects)||[];
+        if(!wd||!projects.length) return {checked:0,missing:0};
+        var missing=[],chain=Promise.resolve();
+        projects.forEach(function(p){ chain=chain.then(function(){
+          return fetch("/app/project/initAddTeamPanel?transactionID="+encodeURIComponent(p.transactionId),H).then(function(r){return r.ok?r.json():null;}).then(function(panel){ if(!panel)return; var linked=panel.linkedUserMap||[]; var has=linked.some(function(u){return u&&String(u.id)===wd;}); if(!has)missing.push({transactionId:String(p.transactionId),eventName:p.eventName||"",eventDate:p.eventDate||null}); }).catch(function(){});
+        }); });
+        return chain.then(function(){ return fetch(API+"/api/gs/wd-check/report",{method:"POST",headers:POSTH(),body:JSON.stringify({checked:projects.length,missing:missing})}).then(function(r){return r.json();}).then(function(rep){ return {checked:projects.length,missing:missing.length,alerted:(rep&&rep.alerted)||0}; }).catch(function(){ return {checked:projects.length,missing:missing.length}; }); });
+      }).catch(function(){ return {checked:0,missing:0}; });
+    }
+
     // ---- Outbox drain: push queued DISPATCH → GOODSHUFFLE writes (delivery photos → Files tab) ----
     // Delivery photos are captured in the driver app and stored on our volume; this replays each as a
     // multipart upload to the project's Files tab (POST /app/files/uploadFileToProject?transactionID=…)
@@ -173,11 +187,12 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var pth=location.pathname.toLowerCase();
         if(pth.indexOf("auth")>=0||pth.indexOf("login")>=0||pth.indexOf("signin")>=0){ banner("Signed out of Goodshuffle — sign in to resume"+(AUTO?" (auto-pull paused).":", then click again."),"#b45309"); return; }
         banner(AUTO?"Auto-pull: syncing…":"Pulling Zoe data…","#334155");
-        Promise.all([pullRoutes(), pullProjects(), drainOutbox()]).then(function(res){
-          var r=res[0]||{stops:0,failed:0}, bk=res[1]||{saved:0,partial:false}, ph=res[2]||{pushed:0,failed:0};
+        Promise.all([pullRoutes(), pullProjects(), drainOutbox(), checkWarehouseTeam()]).then(function(res){
+          var r=res[0]||{stops:0,failed:0}, bk=res[1]||{saved:0,partial:false}, ph=res[2]||{pushed:0,failed:0}, wd=res[3]||{missing:0};
           var unm=(r.unmatched&&r.unmatched.length)?" · ⚠ unrecognized truck(s): "+r.unmatched.join(", "):"";
           var photoNote=ph.pushed?" · "+ph.pushed+" photo"+(ph.pushed===1?"":"s")+"→GS":"";
-          var photoErr=ph.failed?" · ⚠ "+ph.failed+" photo push(es) failed":"";
+          var wdNote=wd.missing?" · ⚠ "+wd.missing+" missing Warehouse Desktop":"";
+          var photoErr=(ph.failed?" · ⚠ "+ph.failed+" photo push(es) failed":"")+wdNote;
           if(r.failed) fin("⚠️ Bookings synced ("+bk.saved+"), but routes failed to save."+unm,"#b91c1c");
           else if(bk.partial) fin("⚠️ Routes synced ("+r.stops+"), but bookings INCOMPLETE ("+bk.saved+" saved) — will retry."+unm,"#b45309");
           else if(unm||photoErr) fin("✅ Synced "+r.stops+" stops"+(r.days?" ("+r.days+" day"+(r.days===1?"":"s")+")":"")+" + "+bk.saved+" bookings"+photoNote+unm+photoErr,"#b45309");

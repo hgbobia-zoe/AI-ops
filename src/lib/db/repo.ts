@@ -1209,6 +1209,63 @@ export function enqueueWarehouseTeamAdds(limit = 50): number {
   return n;
 }
 
+/** Signed projects whose event is within the next `days` (inclusive of today) that DON'T already
+ *  have a pending add-team-member op queued — the candidates the office extension should verify
+ *  against GSPRO ground truth (initAddTeamPanel.linkedUserMap) for a missing Warehouse Desktop.
+ *  Excluding projects with a pending add avoids false alarms while an add is still in flight. */
+export function listUpcomingSignedForTeamCheck(days = 14, today = new Date().toISOString().slice(0, 10)): {
+  transactionId: string;
+  eventName: string | null;
+  eventDate: string | null;
+}[] {
+  const until = new Date(Date.parse(today + "T00:00:00Z") + days * 86400000).toISOString().slice(0, 10);
+  const rows = getDb()
+    .prepare(
+      `SELECT booking_id, event_name, event_date FROM bookings
+       WHERE signed = 1 AND event_date IS NOT NULL AND event_date >= ? AND event_date <= ?
+         AND booking_id NOT IN (
+           SELECT transaction_id FROM gs_outbox
+           WHERE op = 'add_team_member' AND status = 'pending' AND transaction_id IS NOT NULL)
+       ORDER BY event_date ASC LIMIT 200`,
+    )
+    .all(today, until) as { booking_id: string; event_name: string | null; event_date: string | null }[];
+  return rows.map((r) => ({ transactionId: String(r.booking_id), eventName: r.event_name, eventDate: r.event_date }));
+}
+
+/** Re-queue a Warehouse Desktop add for a project the extension found genuinely missing it — but
+ *  only if no add is already pending, so the nag/fix loop can't duplicate ops. Clears the add-once
+ *  flag so the normal path won't consider it "done". Returns whether it enqueued. */
+export function requeueWarehouseTeamAdd(transactionId: string): boolean {
+  const db = getDb();
+  const pending = db
+    .prepare("SELECT 1 FROM gs_outbox WHERE op = 'add_team_member' AND status = 'pending' AND transaction_id = ? LIMIT 1")
+    .get(transactionId);
+  if (pending) return false;
+  enqueueGsOp({ op: "add_team_member", transactionId: String(transactionId), label: "add Warehouse Desktop (re-queued: found missing)", payload: { userID: WAREHOUSE_DESKTOP_USER_ID, linkType: "OTHER" } });
+  db.prepare("UPDATE bookings SET wd_member_added = NULL WHERE booking_id = ?").run(transactionId);
+  return true;
+}
+
+/** Throttle the "missing Warehouse Desktop" Slack nag: returns true (and records the alert) only if
+ *  this project hasn't been alerted within `cooldownHours`, or its event date changed since. Re-fires
+ *  ~daily while a project stays missing, so a genuinely stuck one keeps surfacing without spamming. */
+export function shouldAlertMissingWd(transactionId: string, eventDate: string | null, cooldownHours = 20, now = new Date()): boolean {
+  const db = getDb();
+  const row = db.prepare("SELECT event_date, last_alerted FROM wd_alerts WHERE transaction_id = ?").get(transactionId) as
+    | { event_date: string | null; last_alerted: string }
+    | undefined;
+  if (row) {
+    const sameDate = (row.event_date ?? null) === (eventDate ?? null);
+    const withinCooldown = now.getTime() - Date.parse(row.last_alerted) < cooldownHours * 3600000;
+    if (sameDate && withinCooldown) return false;
+  }
+  db.prepare(
+    `INSERT INTO wd_alerts (transaction_id, event_date, last_alerted) VALUES (?, ?, ?)
+     ON CONFLICT(transaction_id) DO UPDATE SET event_date = excluded.event_date, last_alerted = excluded.last_alerted`,
+  ).run(transactionId, eventDate ?? null, now.toISOString());
+  return true;
+}
+
 /** Pending write-backs, oldest first — what a logged-in session should replay. */
 export function listPendingGsOps(limit = 50): GsOutboxItem[] {
   return (

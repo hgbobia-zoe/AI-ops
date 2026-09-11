@@ -115,6 +115,25 @@ export function zoePull(apiBase) {
     }).catch(() => ({ stops: 0, days: 0, failed: 1, unmatched: [] }));
   }
 
+  // ---- Warehouse-Desktop team check: verify upcoming signed projects actually have Warehouse Desktop
+  // on their GSPRO team (ground truth: initAddTeamPanel.linkedUserMap), report the ones missing it. ----
+  function checkWarehouseTeam() {
+    return fetch(API + "/api/gs/wd-check/pending", H).then((r) => r.json()).then((j) => {
+      const wd = String((j && j.warehouseUserId) || "");
+      const projects = (j && j.projects) || [];
+      if (!wd || !projects.length) return { checked: 0, missing: 0 };
+      const missing = [];
+      let chain = Promise.resolve();
+      projects.forEach((p) => { chain = chain.then(() => {
+        return fetch("/app/project/initAddTeamPanel?transactionID=" + encodeURIComponent(p.transactionId), H)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((panel) => { if (!panel) return; const linked = panel.linkedUserMap || []; const has = linked.some((u) => u && String(u.id) === wd); if (!has) missing.push({ transactionId: String(p.transactionId), eventName: p.eventName || "", eventDate: p.eventDate || null }); })
+          .catch(() => {});
+      }); });
+      return chain.then(() => fetch(API + "/api/gs/wd-check/report", { method: "POST", headers: POSTH, body: JSON.stringify({ checked: projects.length, missing }) }).then((r) => r.json()).then((rep) => ({ checked: projects.length, missing: missing.length, alerted: (rep && rep.alerted) || 0 })).catch(() => ({ checked: projects.length, missing: missing.length })));
+    }).catch(() => ({ checked: 0, missing: 0 }));
+  }
+
   // ---- Outbox drain: push queued Dispatch → Goodshuffle writes (photos, note appends) ----
   function ackOp(id, ok, err) { return fetch(API + "/api/gs/outbox", { method: "POST", headers: POSTH, body: JSON.stringify({ id, ok, error: ok ? undefined : err }) }).catch(() => {}); }
   function drainOutbox() {
@@ -149,11 +168,12 @@ export function zoePull(apiBase) {
 
   return loggedInProbe().then((ok) => {
     if (!ok) return { ok: false, loggedIn: false, stops: 0, bookings: 0, notes: 0, photos: 0, error: "not signed in" };
-    return Promise.all([pullRoutes(), pullProjects(), drainOutbox()]).then((res) => {
+    return Promise.all([pullRoutes(), pullProjects(), drainOutbox(), checkWarehouseTeam()]).then((res) => {
       const r = res[0] || { stops: 0, failed: 0, unmatched: [] };
       const bk = res[1] || { saved: 0, partial: false, notes: 0 };
       const ph = res[2] || { pushed: 0, failed: 0 };
-      return { ok: !r.failed && !bk.partial, loggedIn: true, stops: r.stops || 0, bookings: bk.saved || 0, notes: bk.notes || 0, photos: ph.pushed || 0, unmatched: r.unmatched || [], partial: !!bk.partial, error: r.failed ? "routes failed to save" : bk.partial ? "bookings incomplete" : null };
+      const wd = res[3] || { missing: 0, alerted: 0 };
+      return { ok: !r.failed && !bk.partial, loggedIn: true, stops: r.stops || 0, bookings: bk.saved || 0, notes: bk.notes || 0, photos: ph.pushed || 0, wdMissing: wd.missing || 0, unmatched: r.unmatched || [], partial: !!bk.partial, error: r.failed ? "routes failed to save" : bk.partial ? "bookings incomplete" : null };
     }).catch((e) => ({ ok: false, loggedIn: true, stops: 0, bookings: 0, notes: 0, photos: 0, error: String(e).slice(0, 120) }));
   });
 }
