@@ -2176,6 +2176,60 @@ export function getCustomerCallThread(
     .slice(0, opts.limit ?? 20);
 }
 
+// ---- Name enrichment: keep trying to resolve a name for calls that still show only a number ------
+
+/** Coachable calls with no resolved name yet, due for a (re)attempt — i.e. never attempted, or last
+ *  attempted before `cutoffIso`. Newest first. Powers the continuous name-enrichment loop. */
+export function listUnnamedCoachableCalls(limit: number, cutoffIso: string): {
+  id: string;
+  transcript: string;
+  direction: string | null;
+  fromPhone: string | null;
+  toPhone: string | null;
+}[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT c.id, c.transcript, c.direction, c.from_phone, c.to_phone
+         FROM call_events c
+        WHERE (c.contact_name IS NULL OR TRIM(c.contact_name) = '')
+          AND c.transcript IS NOT NULL AND TRIM(c.transcript) <> ''
+          AND (c.name_attempted_at IS NULL OR c.name_attempted_at < ?)
+        ORDER BY COALESCE(c.occurred_at, c.ts) DESC
+        LIMIT ?`,
+    )
+    .all(cutoffIso, limit) as Record<string, unknown>[];
+  return rows.map((r) => ({
+    id: String(r.id),
+    transcript: String(r.transcript ?? ""),
+    direction: (r.direction as string) ?? null,
+    fromPhone: (r.from_phone as string) ?? null,
+    toPhone: (r.to_phone as string) ?? null,
+  }));
+}
+
+/** How many un-named calls are still due for a name attempt (drives the loop's progress + stop). */
+export function countUnnamedDueCalls(cutoffIso: string): number {
+  const r = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM call_events c
+        WHERE (c.contact_name IS NULL OR TRIM(c.contact_name) = '')
+          AND c.transcript IS NOT NULL AND TRIM(c.transcript) <> ''
+          AND (c.name_attempted_at IS NULL OR c.name_attempted_at < ?)`,
+    )
+    .get(cutoffIso) as { n: number };
+  return Number(r.n);
+}
+
+/** Persist a resolved caller name onto a call (and clear its name-attempt throttle — it's named now). */
+export function setCallContactName(callId: string, name: string): void {
+  getDb().prepare("UPDATE call_events SET contact_name = ?, name_attempted_at = NULL WHERE id = ?").run(name, callId);
+}
+
+/** Record that we tried to resolve a name and couldn't — throttles the next retry for this call. */
+export function markNameAttempted(callId: string): void {
+  getDb().prepare("UPDATE call_events SET name_attempted_at = ? WHERE id = ?").run(new Date().toISOString(), callId);
+}
+
 /** Un-analyzed coachable calls (transcript present, no recap yet), oldest first so the backlog
  *  drains in chronological order. Powers the auto-backfill. */
 export function listUnanalyzedCoachableCalls(limit = 25): { id: string; transcript: string; direction: string | null; contactName: string | null; durationSec: number | null; quoSummary: string | null }[] {

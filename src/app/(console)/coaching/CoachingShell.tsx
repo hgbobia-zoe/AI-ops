@@ -11,6 +11,7 @@ import { usePathname } from "next/navigation";
 import { Headphones, ChevronRight, PhoneIncoming, PhoneOutgoing, CheckCircle2, Circle, SmilePlus, Meh, Frown, PanelLeftOpen, X } from "lucide-react";
 import type { CoachableCall } from "@/lib/db/repo";
 import { BackfillDriver } from "./BackfillDriver";
+import { NameEnricher } from "./NameEnricher";
 
 type Filter = "all" | "positive" | "neutral" | "negative" | "pending";
 const FILTERS: { key: Filter; label: string }[] = [
@@ -179,6 +180,9 @@ export function CoachingShell({ calls, unanalyzed, children }: { calls: Coachabl
 
   return (
     <div className="flex flex-col lg:flex-row lg:items-start">
+      {/* Continuous background loop: resolve names for calls that still show only a number. */}
+      <NameEnricher />
+
       {/* Sidebar (large screens) */}
       <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-dvh lg:w-[340px] lg:shrink-0 lg:flex-col lg:border-r lg:border-white/10">
         {listBody}

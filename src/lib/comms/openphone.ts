@@ -156,7 +156,7 @@ export async function getOpenphoneContactMap(): Promise<Map<string, string>> {
   if (!apiKey) return contactsCache?.map ?? new Map();
   const map = new Map<string, string>();
   let pageToken: string | null = null;
-  for (let page = 0; page < 12; page++) {
+  for (let page = 0; page < 40; page++) {
     const q = `/contacts?maxResults=50${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`;
     const json = await opGet(q, apiKey);
     const data = (json?.data as OpContact[]) ?? [];
