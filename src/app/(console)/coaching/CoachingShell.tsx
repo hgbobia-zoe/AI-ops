@@ -8,7 +8,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Headphones, ChevronRight, PhoneIncoming, PhoneOutgoing, CheckCircle2, Circle, SmilePlus, Meh, Frown, PanelLeftOpen, X } from "lucide-react";
+import { Headphones, PhoneIncoming, PhoneOutgoing, SmilePlus, Meh, Frown, PanelLeftOpen, X } from "lucide-react";
 import type { CoachableCall } from "@/lib/db/repo";
 import { BackfillDriver } from "./BackfillDriver";
 import { NameEnricher } from "./NameEnricher";
@@ -165,7 +165,6 @@ export function CoachingShell({ calls, unanalyzed, children }: { calls: Coachabl
                             )}
                           </div>
                         </div>
-                        {c.analyzed ? <CheckCircle2 className="size-3.5 shrink-0 text-emerald-300" /> : <Circle className="size-3.5 shrink-0 text-muted-foreground" />}
                       </Link>
                     </li>
                   );
