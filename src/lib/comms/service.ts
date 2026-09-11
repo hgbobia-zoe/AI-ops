@@ -13,8 +13,11 @@ import {
   getBookingByPhoneDigits,
   insertCommsEventIfNew,
   enqueueGsOp,
+  getCoachingAnalysis,
+  saveCoachingAnalysis,
   type CallEventInput,
 } from "@/lib/db/repo";
+import { generateRecap } from "@/lib/coach/recap";
 import { analyzeSentiment } from "./sentiment";
 import { getCallTranscript, getCallSummary, openphoneUserInitials } from "./openphone";
 import { slackNotifyAlert } from "@/lib/notify/slack";
@@ -54,6 +57,22 @@ async function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLo
   markCallNoteLogged(rowId);
   // Sales audit trail: the call, attributed to the Quo rep who handled it.
   logSalesEventBy("CALL_LOGGED", booking.bookingId, initials ?? "Quo", { outcome: comment, direction: input.direction ?? "unknown" });
+}
+
+/** Auto-generate the post-call coaching recap (Custodian-in-Maestro) for a real conversation, once
+ *  per call. Skips voicemails / quick no-answers, skips calls already analyzed (never re-bills the
+ *  LLM on a later webhook event for the same call), and no-ops when the LLM isn't configured. */
+async function maybeGenerateRecap(rowId: string, transcript: string | null, input: IngestCallInput): Promise<void> {
+  if (!transcript) return;
+  if ((input.durationSec ?? 0) < 45) return;
+  if (getCoachingAnalysis(rowId)) return;
+  const recap = await generateRecap({
+    transcript,
+    direction: input.direction ?? null,
+    contactName: input.contactName ?? null,
+    durationSec: input.durationSec ?? null,
+  });
+  if (recap) saveCoachingAnalysis(rowId, recap);
 }
 
 export interface IngestResult {
@@ -104,6 +123,10 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   await maybeLogCallNote(id, input, !!existing?.noteLoggedAt, summary, booking, initials);
 
   const text = transcript ?? summary;
+
+  // Custodian-in-Maestro: kick off the coaching recap in the background (once per call, real
+  // conversations only). Detached so it never delays sentiment/alerting or the webhook ACK.
+  void maybeGenerateRecap(id, transcript, input).catch(() => {});
 
   // Phase 11 — close the loop: put the call on the lead's unified timeline, and let a real
   // conversation move the state machine (same evidence-driven path an inbound SMS reply takes).
