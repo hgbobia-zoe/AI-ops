@@ -22,6 +22,9 @@ export interface CallRecap {
   customerConcerns: string[];
   /** Paste-ready plain-text follow-up email; first line is "Subject: …". */
   followUpEmail: string;
+  /** Coaching critique — specific, kind, actionable notes on what the rep could have done better
+   *  (a sharper question, a stronger objection response, a clearer close). The teaching layer. */
+  coachingNotes: string[];
   /** One sentence: the recommended next action. */
   nextStep: string;
   /** Model that produced it + when (provenance). */
@@ -44,11 +47,16 @@ const SYSTEM =
   "Friendly and direct.\n" +
   "- Action items are things THE REP committed to do, not what the customer will do.\n" +
   "- Zoe wins on reliability and execution, not price — never suggest discounting as the next step.\n" +
+  "- coachingNotes: put on your SALES-COACH hat. Give 2-5 specific, kind, actionable notes on what " +
+  "the rep could have done better — a sharper discovery question, a stronger way to handle an " +
+  "objection the customer actually raised, a clearer next-step ask. Ground each note in what actually " +
+  "happened on THIS call (quote or paraphrase the moment); never generic advice. If the rep did well, " +
+  "say what worked and one thing to reinforce. Empty array only if there's truly nothing to coach.\n" +
   "- Do NOT invent facts. If the call had too little signal, return short/empty fields rather than " +
   "guessing. Empty arrays are fine.\n" +
   "Output RAW JSON ONLY, no prose, no code fences, exactly this shape: " +
   '{"executive": string, "keyPoints": string[], "actionItems": string[], "customerConcerns": string[], ' +
-  '"followUpEmail": string, "nextStep": string}';
+  '"followUpEmail": string, "coachingNotes": string[], "nextStep": string}';
 
 function extractJson(text: string): unknown {
   let s = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
@@ -101,6 +109,7 @@ export async function generateRecap(input: RecapInput): Promise<CallRecap | null
       actionItems: strList(p.actionItems),
       customerConcerns: strList(p.customerConcerns),
       followUpEmail: typeof p.followUpEmail === "string" ? p.followUpEmail.trim() : "",
+      coachingNotes: strList(p.coachingNotes),
       nextStep: typeof p.nextStep === "string" ? p.nextStep.trim() : "",
       model: r.model,
       generatedAt: new Date().toISOString(),

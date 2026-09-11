@@ -6,7 +6,7 @@
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { ArrowLeft, Headphones, ListChecks, CheckSquare, AlertTriangle, Mail, ArrowRight } from "lucide-react";
+import { ArrowLeft, Headphones, ListChecks, CheckSquare, AlertTriangle, Mail, ArrowRight, GraduationCap } from "lucide-react";
 import { getCallEventById, getCoachingAnalysis, saveCoachingAnalysis } from "@/lib/db/repo";
 import { generateRecap } from "@/lib/coach/recap";
 import { viewerRole } from "@/lib/auth/getSession";
@@ -117,6 +117,19 @@ export default async function CoachingDetail({
               </h2>
               <ul className="list-disc space-y-1 pl-5 text-sm">
                 {recap.customerConcerns.map((c, i) => <li key={i}>{c}</li>)}
+              </ul>
+            </section>
+          )}
+
+          {recap.coachingNotes.length > 0 && (
+            <section className="surface border border-violet-500/25 bg-violet-500/[0.05] p-4">
+              <h2 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-violet-200">
+                <GraduationCap className="size-3.5" /> Coaching notes
+              </h2>
+              <ul className="space-y-1.5 text-sm">
+                {recap.coachingNotes.map((n, i) => (
+                  <li key={i} className="flex items-start gap-2"><GraduationCap className="mt-0.5 size-3.5 shrink-0 text-violet-300" /> {n}</li>
+                ))}
               </ul>
             </section>
           )}

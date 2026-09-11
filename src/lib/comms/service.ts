@@ -111,13 +111,16 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   if (!transcript) transcript = await getCallTranscript(callId);
   let summary = (input.summary ?? "").trim() || null;
   if (!transcript && !summary) summary = await getCallSummary(callId);
-  updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: input.contactName, eventType: input.eventType });
 
   // Match the customer's project once — shared by the note, the timeline row, and the state debrief.
   const custPhone = input.direction === "outgoing" ? input.toPhone : input.fromPhone;
   const digits = last10(custPhone);
   const booking = digits ? getBookingByPhoneDigits(digits) : null;
   const initials = (await openphoneUserInitials(input.agentUserId)) ?? initialsOf(input.agentName ?? null);
+
+  // Caller name: Quo's contact name if any, else the matched customer (so calls aren't "Unknown").
+  const resolvedName = (input.contactName ?? "").trim() || booking?.clientName?.trim() || null;
+  updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: resolvedName, eventType: input.eventType });
 
   // Log the call to Goodshuffle notes (conversation summary or voicemail) — regardless of sentiment.
   await maybeLogCallNote(id, input, !!existing?.noteLoggedAt, summary, booking, initials);
@@ -126,7 +129,7 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
 
   // Custodian-in-Maestro: kick off the coaching recap in the background (once per call, real
   // conversations only). Detached so it never delays sentiment/alerting or the webhook ACK.
-  void maybeGenerateRecap(id, transcript, input).catch(() => {});
+  void maybeGenerateRecap(id, transcript, { ...input, contactName: resolvedName ?? undefined }).catch(() => {});
 
   // Phase 11 — close the loop: put the call on the lead's unified timeline, and let a real
   // conversation move the state machine (same evidence-driven path an inbound SMS reply takes).

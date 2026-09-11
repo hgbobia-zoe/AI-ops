@@ -37,6 +37,7 @@ describe("generateRecap", () => {
         actionItems: ["Send tent + lighting quote by Tuesday"],
         customerConcerns: ["Talking to another vendor"],
         followUpEmail: "Subject: Your wedding rentals\n\nHi Sam,\n\nGreat talking...",
+        coachingNotes: ["When they mentioned the other vendor, you could have asked what matters most to them", 99],
         nextStep: "Send the quote by Tuesday.",
       }),
     });
@@ -47,6 +48,7 @@ describe("generateRecap", () => {
     expect(recap!.keyPoints).toEqual(["150 guests", "June 14", "budget ~$6k"]);
     expect(recap!.actionItems).toEqual(["Send tent + lighting quote by Tuesday"]);
     expect(recap!.customerConcerns).toEqual(["Talking to another vendor"]);
+    expect(recap!.coachingNotes).toEqual(["When they mentioned the other vendor, you could have asked what matters most to them"]);
     expect(recap!.followUpEmail).toContain("Subject:");
     expect(recap!.model).toBe("claude-sonnet-5");
     expect(recap!.generatedAt).toBeTruthy();

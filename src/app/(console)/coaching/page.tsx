@@ -6,17 +6,19 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Headphones, ChevronRight, PhoneIncoming, PhoneOutgoing, CheckCircle2, Circle } from "lucide-react";
-import { listCoachableCalls, type CoachableCall } from "@/lib/db/repo";
+import { listCoachableCalls, countUnanalyzedCoachableCalls, type CoachableCall } from "@/lib/db/repo";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeCoaching } from "@/lib/auth/roles";
 import { llmConfigured } from "@/lib/llm";
+import { BackfillDriver } from "./BackfillDriver";
 
 export const dynamic = "force-dynamic";
 
 function fmtDuration(sec: number | null): string {
   if (!sec || sec <= 0) return "—";
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
+  const total = Math.round(sec);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
@@ -43,6 +45,7 @@ export default async function CoachingPage(): Promise<React.JSX.Element> {
   if (!canSeeCoaching(await viewerRole())) redirect("/dashboard");
   const calls = listCoachableCalls(100);
   const analyzed = calls.filter((c) => c.analyzed).length;
+  const unanalyzed = llmConfigured() ? countUnanalyzedCoachableCalls() : 0;
 
   return (
     <main className="mx-auto max-w-4xl p-5 pb-16 md:p-8">
@@ -51,10 +54,12 @@ export default async function CoachingPage(): Promise<React.JSX.Element> {
           <Headphones className="size-7" /> Coaching
         </h1>
         <p className="text-sm text-muted-foreground">
-          Post-call recaps for every call with a transcript. {calls.length} call{calls.length === 1 ? "" : "s"}
+          Every call with a transcript is analyzed automatically. {calls.length} call{calls.length === 1 ? "" : "s"}
           {analyzed > 0 ? ` · ${analyzed} analyzed` : ""}.
         </p>
       </header>
+
+      {unanalyzed > 0 && <BackfillDriver initialRemaining={unanalyzed} />}
 
       {!llmConfigured() && (
         <div className="surface mb-4 border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">

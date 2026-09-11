@@ -2065,7 +2065,28 @@ export interface CoachableCall {
   analyzed: boolean;
 }
 
-/** Calls with a transcript (the only ones coachable), newest first, flagged whether analyzed. */
+const callerDigits = (direction: string | null, fromPhone: string | null, toPhone: string | null): string | null => {
+  const p = direction === "outgoing" ? toPhone : fromPhone;
+  const d = (p ?? "").replace(/\D/g, "");
+  return d.length >= 10 ? d.slice(-10) : null;
+};
+
+/** Resolve a human name for the counterparty: an explicit contact name (from Quo), else the matched
+ *  customer (our booking, by phone), else null — in which case callers display the phone number. */
+export function resolveCallerName(call: {
+  contactName: string | null;
+  direction: string | null;
+  fromPhone: string | null;
+  toPhone: string | null;
+}): string | null {
+  if (call.contactName && call.contactName.trim()) return call.contactName.trim();
+  const digits = callerDigits(call.direction, call.fromPhone, call.toPhone);
+  if (!digits) return null;
+  return getBookingByPhoneDigits(digits)?.clientName?.trim() || null;
+}
+
+/** Calls with a transcript (the only ones coachable), newest first, flagged whether analyzed.
+ *  The caller name is resolved from Quo's contact name, else our matched customer by phone. */
 export function listCoachableCalls(limit = 50): CoachableCall[] {
   const rows = getDb()
     .prepare(
@@ -2079,18 +2100,60 @@ export function listCoachableCalls(limit = 50): CoachableCall[] {
         LIMIT ?`,
     )
     .all(limit) as Record<string, unknown>[];
-  return rows.map((r) => ({
-    id: String(r.id),
-    direction: (r.direction as string) ?? null,
-    fromPhone: (r.from_phone as string) ?? null,
-    toPhone: (r.to_phone as string) ?? null,
-    contactName: (r.contact_name as string) ?? null,
-    durationSec: r.duration_sec == null ? null : Number(r.duration_sec),
-    sentiment: (r.sentiment as string) ?? null,
-    occurredAt: (r.occurred_at as string) ?? null,
-    ts: String(r.ts),
-    analyzed: Number(r.analyzed) === 1,
-  }));
+  return rows.map((r) => {
+    const direction = (r.direction as string) ?? null;
+    const fromPhone = (r.from_phone as string) ?? null;
+    const toPhone = (r.to_phone as string) ?? null;
+    return {
+      id: String(r.id),
+      direction,
+      fromPhone,
+      toPhone,
+      contactName: resolveCallerName({ contactName: (r.contact_name as string) ?? null, direction, fromPhone, toPhone }),
+      durationSec: r.duration_sec == null ? null : Number(r.duration_sec),
+      sentiment: (r.sentiment as string) ?? null,
+      occurredAt: (r.occurred_at as string) ?? null,
+      ts: String(r.ts),
+      analyzed: Number(r.analyzed) === 1,
+    };
+  });
+}
+
+/** Un-analyzed coachable calls (transcript present, no recap yet), oldest first so the backlog
+ *  drains in chronological order. Powers the auto-backfill. */
+export function listUnanalyzedCoachableCalls(limit = 25): { id: string; transcript: string; direction: string | null; contactName: string | null; durationSec: number | null }[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT c.id, c.transcript, c.direction, c.from_phone, c.to_phone, c.contact_name, c.duration_sec
+         FROM call_events c
+         LEFT JOIN coaching_analyses a ON a.call_id = c.id
+        WHERE a.call_id IS NULL AND c.transcript IS NOT NULL AND TRIM(c.transcript) <> ''
+        ORDER BY COALESCE(c.occurred_at, c.ts) ASC
+        LIMIT ?`,
+    )
+    .all(limit) as Record<string, unknown>[];
+  return rows.map((r) => {
+    const direction = (r.direction as string) ?? null;
+    return {
+      id: String(r.id),
+      transcript: String(r.transcript ?? ""),
+      direction,
+      contactName: resolveCallerName({ contactName: (r.contact_name as string) ?? null, direction, fromPhone: (r.from_phone as string) ?? null, toPhone: (r.to_phone as string) ?? null }),
+      durationSec: r.duration_sec == null ? null : Number(r.duration_sec),
+    };
+  });
+}
+
+/** Count of coachable calls still without a recap — for the backfill progress UI. */
+export function countUnanalyzedCoachableCalls(): number {
+  const r = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM call_events c
+         LEFT JOIN coaching_analyses a ON a.call_id = c.id
+        WHERE a.call_id IS NULL AND c.transcript IS NOT NULL AND TRIM(c.transcript) <> ''`,
+    )
+    .get() as { n: number };
+  return Number(r.n);
 }
 
 /** The stored coaching recap for a call, or null if it hasn't been analyzed yet. */
