@@ -9,13 +9,15 @@ import { canSeeCoaching } from "@/lib/auth/roles";
 import { llmConfigured } from "@/lib/llm";
 import { listCoachableCalls, countUnanalyzedCoachableCalls } from "@/lib/db/repo";
 import { ourPhoneDigits } from "@/lib/comms/identity";
+import { getOpenphoneContactMap } from "@/lib/comms/openphone";
 import { CoachingShell } from "./CoachingShell";
 
 export const dynamic = "force-dynamic";
 
 export default async function CoachingLayout({ children }: { children: React.ReactNode }): Promise<React.JSX.Element> {
   if (!canSeeCoaching(await viewerRole())) redirect("/dashboard");
-  const calls = listCoachableCalls(200, ourPhoneDigits());
+  const contactMap = await getOpenphoneContactMap();
+  const calls = listCoachableCalls(200, ourPhoneDigits(), contactMap);
   const unanalyzed = llmConfigured() ? countUnanalyzedCoachableCalls() : 0;
   return (
     <CoachingShell calls={calls} unanalyzed={unanalyzed}>

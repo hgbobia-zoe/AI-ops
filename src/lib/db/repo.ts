@@ -2103,7 +2103,7 @@ const last10Digits = (p: string | null): string | null => {
  *  identity is resolved from Quo's contact name, else our matched customer by phone; the customer's
  *  number is recovered from the transcript's speakers when the call metadata lacks it. `ourDigits`
  *  (Zoe's own numbers) lets us tell the customer's phone from ours. */
-export function listCoachableCalls(limit = 50, ourDigits?: Set<string>): CoachableCall[] {
+export function listCoachableCalls(limit = 50, ourDigits?: Set<string>, contactMap?: Map<string, string>): CoachableCall[] {
   const rows = getDb()
     .prepare(
       `SELECT c.id, c.direction, c.from_phone, c.to_phone, c.contact_name, c.transcript, c.duration_sec,
@@ -2131,10 +2131,12 @@ export function listCoachableCalls(limit = 50, ourDigits?: Set<string>): Coachab
       customerPhone = cust && /\d{10}/.test(cust.raw) ? cust.raw : null;
     }
 
+    const custDigits = last10Digits(customerPhone);
     const contactName =
       ((r.contact_name as string) ?? "").trim() ||
       resolveCallerName({ contactName: null, direction, fromPhone, toPhone }) ||
-      (customerPhone ? getBookingByPhoneDigits(last10Digits(customerPhone) ?? "")?.clientName?.trim() || null : null) ||
+      (custDigits ? getBookingByPhoneDigits(custDigits)?.clientName?.trim() || null : null) ||
+      (custDigits ? contactMap?.get(custDigits) ?? null : null) ||
       null;
 
     return {
@@ -2152,6 +2154,18 @@ export function listCoachableCalls(limit = 50, ourDigits?: Set<string>): Coachab
       analyzed: Number(r.analyzed) === 1,
     };
   });
+}
+
+/** A customer's other coachable calls — their conversation thread — newest first, excluding one id.
+ *  Matches by the customer's last-10 digits (derived the same way as the list). */
+export function getCustomerCallThread(
+  customerDigits: string,
+  opts: { ourDigits?: Set<string>; contactMap?: Map<string, string>; excludeId?: string; limit?: number } = {},
+): CoachableCall[] {
+  if (!customerDigits) return [];
+  return listCoachableCalls(300, opts.ourDigits, opts.contactMap)
+    .filter((c) => last10Digits(c.customerPhone) === customerDigits && c.id !== opts.excludeId)
+    .slice(0, opts.limit ?? 20);
 }
 
 /** Un-analyzed coachable calls (transcript present, no recap yet), oldest first so the backlog

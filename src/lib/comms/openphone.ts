@@ -118,3 +118,59 @@ export async function openphoneUserInitials(userId?: string | null): Promise<str
   const u = (await getOpenphoneUsers()).find((x) => x.id === userId);
   return u && u.initials ? u.initials : null;
 }
+
+// ── Contacts → names. Build a phone(last-10) → name map from the OpenPhone address book so a call
+// from a saved contact shows their name instead of a bare number. Cached (contacts change rarely);
+// {} when not configured. Defensive about the response shape — a name we can't parse just isn't added.
+
+const last10 = (p: string): string | null => {
+  const d = p.replace(/\D/g, "");
+  return d.length >= 10 ? d.slice(-10) : null;
+};
+
+interface OpContactFields {
+  firstName?: string;
+  lastName?: string;
+  company?: string;
+  phoneNumbers?: { value?: string }[];
+}
+type OpContact = OpContactFields & { defaultFields?: OpContactFields };
+
+function contactName(c: OpContact): string {
+  const f = { ...c, ...(c.defaultFields ?? {}) };
+  const full = [f.firstName, f.lastName].filter(Boolean).join(" ").trim();
+  return full || (f.company ?? "").trim();
+}
+function contactPhones(c: OpContact): string[] {
+  const f = { ...c, ...(c.defaultFields ?? {}) };
+  return (f.phoneNumbers ?? []).map((p) => p?.value ?? "").filter(Boolean);
+}
+
+let contactsCache: { at: number; map: Map<string, string> } | null = null;
+const CONTACTS_TTL_MS = 15 * 60 * 1000;
+
+/** last-10-digits → contact name, from the OpenPhone address book. Cached 15 min. */
+export async function getOpenphoneContactMap(): Promise<Map<string, string>> {
+  if (contactsCache && Date.now() - contactsCache.at < CONTACTS_TTL_MS) return contactsCache.map;
+  const apiKey = openphoneApiKey();
+  if (!apiKey) return contactsCache?.map ?? new Map();
+  const map = new Map<string, string>();
+  let pageToken: string | null = null;
+  for (let page = 0; page < 12; page++) {
+    const q = `/contacts?maxResults=50${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`;
+    const json = await opGet(q, apiKey);
+    const data = (json?.data as OpContact[]) ?? [];
+    for (const c of data) {
+      const name = contactName(c);
+      if (!name) continue;
+      for (const phone of contactPhones(c)) {
+        const d = last10(phone);
+        if (d && !map.has(d)) map.set(d, name);
+      }
+    }
+    pageToken = (json?.nextPageToken as string) ?? null;
+    if (!pageToken || data.length === 0) break;
+  }
+  if (map.size) contactsCache = { at: Date.now(), map };
+  return contactsCache?.map ?? map;
+}

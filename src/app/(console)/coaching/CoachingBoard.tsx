@@ -3,13 +3,15 @@
 // both the index (newest call) and /coaching/[id]. Metrics are COMPUTED from the transcript; the
 // recap is INFERENCE, labelled as such, never invented.
 
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { PhoneIncoming, PhoneOutgoing, Clock, Gauge as GaugeIcon, MessageCircleQuestion, Mic, CheckSquare, AlertTriangle, GraduationCap } from "lucide-react";
-import { getCallEventById, getCoachingAnalysis, saveCoachingAnalysis, resolveCallerName, getBookingByPhoneDigits } from "@/lib/db/repo";
+import { PhoneIncoming, PhoneOutgoing, Clock, Gauge as GaugeIcon, MessageCircleQuestion, Mic, CheckSquare, AlertTriangle, GraduationCap, History, ChevronRight } from "lucide-react";
+import { getCallEventById, getCoachingAnalysis, saveCoachingAnalysis, resolveCallerName, getBookingByPhoneDigits, getCustomerCallThread } from "@/lib/db/repo";
 import { generateRecap } from "@/lib/coach/recap";
 import { computeCallMetrics, speedGauge, balanceGauge, sentimentGauge, momentumScore, type Gauge, type GaugeTone } from "@/lib/coach/metrics";
 import { ourPhoneDigits, fmtPhone, last10 } from "@/lib/comms/identity";
+import { getOpenphoneContactMap } from "@/lib/comms/openphone";
 import { llmConfigured } from "@/lib/llm";
 import { AnalyzeButton } from "./[id]/AnalyzeButton";
 import { CoachingTabs } from "./[id]/CoachingTabs";
@@ -50,8 +52,15 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
   const externalFromCall =
     fromDigits && !ourDigits.has(fromDigits) ? call.fromPhone : toDigits && !ourDigits.has(toDigits) ? call.toPhone : null;
   const customerPhone = externalFromCall || (customerSpeaker && /\d{10}/.test(customerSpeaker.raw) ? customerSpeaker.raw : null);
-  const nameByPhone = customerPhone ? getBookingByPhoneDigits(last10(customerPhone) ?? "")?.clientName?.trim() || null : null;
-  const party = (call.contactName?.trim() || resolveCallerName(call) || nameByPhone || fmtPhone(customerPhone)) ?? "Unknown caller";
+  const custDigits = last10(customerPhone);
+  const contactMap = await getOpenphoneContactMap();
+  const nameByPhone = custDigits ? getBookingByPhoneDigits(custDigits)?.clientName?.trim() || null : null;
+  const party =
+    (call.contactName?.trim() || resolveCallerName(call) || nameByPhone || (custDigits ? contactMap.get(custDigits) : null) || fmtPhone(customerPhone)) ??
+    "Unknown caller";
+
+  // The customer's other calls — their conversation thread.
+  const thread = custDigits ? getCustomerCallThread(custDigits, { ourDigits, contactMap, excludeId: id, limit: 12 }) : [];
 
   async function analyze(): Promise<void> {
     "use server";
@@ -73,9 +82,9 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
   const momentum = hasSignals ? momentumScore({ sentiment: call.sentiment, repShare, questions: metrics?.questions ?? null, hasNextStep: !!recap?.nextStep }) : null;
 
   return (
-    <div className="mx-auto max-w-5xl p-5 pb-16 md:p-8">
+    <div className="@container p-5 pb-16 md:p-6 xl:p-8">
       {/* Header — caller + score chips */}
-      <header className="surface mb-4 flex flex-col gap-4 border border-white/5 p-4 lg:flex-row lg:items-center lg:justify-between">
+      <header className="surface mb-4 flex flex-col gap-4 border border-white/5 p-4 @3xl:flex-row @3xl:items-center @3xl:justify-between">
         <div className="flex items-center gap-3">
           <span className="btn-hero flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold">
             {/[A-Za-z]/.test(party) ? initials(party) : <Dir className="size-5" />}
@@ -106,7 +115,7 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
       )}
 
       {/* Metric tiles */}
-      <section className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+      <section className="mb-4 grid grid-cols-2 gap-3 @md:grid-cols-3 @2xl:grid-cols-4">
         <Tile icon={Clock} label="Duration" value={fmtDuration(call.durationSec)} />
         {metrics?.wordsPerMin != null && <Tile icon={GaugeIcon} label="Talking speed" value={`${metrics.wordsPerMin}`} unit="words/min" />}
         {metrics && metrics.questions > 0 && <Tile icon={MessageCircleQuestion} label="Questions" value={`${metrics.questions}`} />}
@@ -119,7 +128,7 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
       {/* Call signals */}
       {(hasSignals || momentum) && (
         <section className="surface mb-4 border border-white/5 p-4">
-          <div className="grid gap-5 md:grid-cols-[1fr_auto] md:items-center">
+          <div className="grid gap-5 @2xl:grid-cols-[1fr_auto] @2xl:items-center">
             <div className="space-y-3">
               {speed && <Slider label="Talking speed" gauge={speed} variant="center" />}
               {talk && <Slider label="Talking time" gauge={talk} variant="center" />}
@@ -146,6 +155,29 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
         transcript={call.transcript}
         analyzed={!!recap}
       />
+
+      {/* Conversation thread — this customer's other calls */}
+      {thread.length > 0 && (
+        <section className="surface mt-4 border border-white/5 p-4">
+          <h2 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <History className="size-3.5" /> Call history with {party} · {thread.length + 1} calls
+          </h2>
+          <ol className="space-y-1">
+            {thread.map((c) => (
+              <li key={c.id}>
+                <Link href={`/coaching/${c.id}`} className="flex items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm transition-colors hover:border-white/10 hover:bg-white/[0.04]">
+                  {c.direction === "outgoing" ? <PhoneOutgoing className="size-3.5 shrink-0 text-muted-foreground" /> : <PhoneIncoming className="size-3.5 shrink-0 text-muted-foreground" />}
+                  <span className="text-muted-foreground">{fmtWhen(c.occurredAt ?? c.ts)}</span>
+                  <span className="text-muted-foreground">· {fmtDuration(c.durationSec)}</span>
+                  {c.sentiment && <span className="capitalize text-muted-foreground">· {c.sentiment}</span>}
+                  {c.analyzed && <span className="ml-auto text-[10px] font-medium text-emerald-300">Recap</span>}
+                  <ChevronRight className={`size-3.5 shrink-0 text-muted-foreground ${c.analyzed ? "" : "ml-auto"}`} />
+                </Link>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
 
       <p className="mt-5 flex items-start gap-1.5 text-[11px] text-muted-foreground">
         <AlertTriangle className="mt-0.5 size-3 shrink-0" />
