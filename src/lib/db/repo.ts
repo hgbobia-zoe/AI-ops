@@ -2230,6 +2230,14 @@ export function markNameAttempted(callId: string): void {
   getDb().prepare("UPDATE call_events SET name_attempted_at = ? WHERE id = ?").run(new Date().toISOString(), callId);
 }
 
+/** Distinct non-empty customer phone numbers from our bookings — the leads to pull call history for. */
+export function listBookingPhones(): string[] {
+  const rows = getDb()
+    .prepare("SELECT DISTINCT client_phone FROM bookings WHERE client_phone IS NOT NULL AND TRIM(client_phone) <> ''")
+    .all() as { client_phone: string }[];
+  return rows.map((r) => r.client_phone);
+}
+
 /** Un-analyzed coachable calls (transcript present, no recap yet), oldest first so the backlog
  *  drains in chronological order. Powers the auto-backfill. */
 export function listUnanalyzedCoachableCalls(limit = 25): { id: string; transcript: string; direction: string | null; contactName: string | null; durationSec: number | null; quoSummary: string | null }[] {

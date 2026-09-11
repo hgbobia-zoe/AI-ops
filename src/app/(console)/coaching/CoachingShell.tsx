@@ -12,6 +12,7 @@ import { Headphones, PhoneIncoming, PhoneOutgoing, SmilePlus, Meh, Frown, PanelL
 import type { CoachableCall } from "@/lib/db/repo";
 import { BackfillDriver } from "./BackfillDriver";
 import { NameEnricher } from "./NameEnricher";
+import { HistoryImporter } from "./HistoryImporter";
 
 type Filter = "all" | "positive" | "neutral" | "negative" | "pending";
 const FILTERS: { key: Filter; label: string }[] = [
@@ -178,10 +179,12 @@ export function CoachingShell({ calls, unanalyzed, children }: { calls: Coachabl
   );
 
   return (
-    <div className="flex flex-col lg:flex-row lg:items-start">
-      {/* Continuous background loop: resolve names for calls that still show only a number. */}
+    <>
+      {/* Continuous background loops: resolve names for un-named numbers, and import past calls. */}
       <NameEnricher />
+      <HistoryImporter />
 
+      <div className="flex flex-col lg:flex-row lg:items-start">
       {/* Sidebar (large screens) */}
       <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-dvh lg:w-[340px] lg:shrink-0 lg:flex-col lg:border-r lg:border-white/10">
         {listBody}
@@ -203,6 +206,7 @@ export function CoachingShell({ calls, unanalyzed, children }: { calls: Coachabl
         </div>
         {children}
       </section>
-    </div>
+      </div>
+    </>
   );
 }

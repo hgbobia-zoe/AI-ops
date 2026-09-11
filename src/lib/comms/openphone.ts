@@ -146,6 +146,58 @@ function contactPhones(c: OpContact): string[] {
   return (f.phoneNumbers ?? []).map((p) => p?.value ?? "").filter(Boolean);
 }
 
+// ── Phone numbers + calls (for the historical import). /v1/calls requires a phoneNumberId AND a
+// single participant (the other party), so history is pulled per (our number × known participant).
+
+export interface QuoNumber {
+  id: string;
+  number: string;
+}
+
+/** Zoe's Quo phone numbers (id + E.164). [] when not configured. */
+export async function getOpenphonePhoneNumbers(): Promise<QuoNumber[]> {
+  const apiKey = openphoneApiKey();
+  if (!apiKey) return [];
+  const json = await opGet("/phone-numbers", apiKey);
+  const data = (json?.data as { id?: string; number?: string; phoneNumber?: string }[]) ?? [];
+  return data.filter((n) => n.id).map((n) => ({ id: String(n.id), number: String(n.number ?? n.phoneNumber ?? "") }));
+}
+
+export interface QuoCall {
+  id: string;
+  direction: string | null; // incoming | outgoing
+  participants: string[]; // the other party (E.164), excludes our Quo number
+  durationSec: number | null;
+  occurredAt: string | null;
+}
+
+/** One page of calls between our `phoneNumberId` and `participant`. Empty when not configured. */
+export async function listOpenphoneCalls(
+  phoneNumberId: string,
+  participant: string,
+  pageToken?: string | null,
+): Promise<{ calls: QuoCall[]; nextPageToken: string | null }> {
+  const apiKey = openphoneApiKey();
+  if (!apiKey) return { calls: [], nextPageToken: null };
+  const q =
+    `/calls?phoneNumberId=${encodeURIComponent(phoneNumberId)}` +
+    `&participants=${encodeURIComponent(participant)}&maxResults=50` +
+    (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "");
+  const json = await opGet(q, apiKey);
+  if (!json) return { calls: [], nextPageToken: null };
+  const data = (json.data as Record<string, unknown>[]) ?? [];
+  const calls: QuoCall[] = data
+    .filter((c) => c?.id)
+    .map((c) => ({
+      id: String(c.id),
+      direction: (c.direction as string) ?? null,
+      participants: Array.isArray(c.participants) ? (c.participants as unknown[]).map(String) : [],
+      durationSec: typeof c.duration === "number" ? (c.duration as number) : null,
+      occurredAt: (c.completedAt as string) ?? (c.createdAt as string) ?? null,
+    }));
+  return { calls, nextPageToken: (json.nextPageToken as string) ?? null };
+}
+
 let contactsCache: { at: number; map: Map<string, string> } | null = null;
 const CONTACTS_TTL_MS = 15 * 60 * 1000;
 
