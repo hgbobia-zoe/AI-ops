@@ -4,7 +4,8 @@
 // transcript has no speaker labels, talk-balance is simply omitted rather than guessed.
 
 export interface SpeakerShare {
-  label: string; // best-effort display label (raw speaker tag, or "You"/"Caller" when identifiable)
+  label: string; // "Rep" / "Customer" when identifiable, else the raw tag
+  raw: string; // the original speaker tag (often a phone number)
   words: number;
   share: number; // 0..1 of the two-party total
 }
@@ -21,8 +22,9 @@ const REP_HINT = /\b(rep|agent|sales|zoe|me|you|host)\b/i;
 const CUST_HINT = /\b(customer|client|caller|prospect|them)\b/i;
 
 /** Parse a transcript into per-speaker word counts + question/turn/pace stats. Lines are expected as
- *  "Label: text"; unlabelled lines fold into the previous speaker. Safe on any string. */
-export function computeCallMetrics(transcript: string, durationSec: number | null): CallMetrics {
+ *  "Label: text"; unlabelled lines fold into the previous speaker. `ourDigits` (Zoe's phone numbers)
+ *  lets phone-numbered speakers be labelled Rep vs Customer. Safe on any string. */
+export function computeCallMetrics(transcript: string, durationSec: number | null, ourDigits?: Set<string>): CallMetrics {
   const text = (transcript ?? "").trim();
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
@@ -56,7 +58,8 @@ export function computeCallMetrics(transcript: string, durationSec: number | nul
   const ranked = [...byLabel.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2);
   const pairTotal = ranked.reduce((s, [, w]) => s + w, 0) || 1;
   const speakers: SpeakerShare[] = ranked.map(([label, words]) => ({
-    label: prettyLabel(label),
+    raw: label,
+    label: prettyLabel(label, ourDigits),
     words,
     share: words / pairTotal,
   }));
@@ -143,10 +146,14 @@ export function momentumScore(input: {
   return { score: s, label: "Building", tone: "warn" };
 }
 
-/** Map a raw speaker tag to a friendly label when we recognise it; otherwise keep it (truncated). */
-function prettyLabel(raw: string): string {
-  if (REP_HINT.test(raw)) return "You";
-  if (CUST_HINT.test(raw)) return "Caller";
+/** Map a raw speaker tag to Rep/Customer. A phone number is matched against Zoe's own numbers
+ *  (ours ⇒ Rep, else Customer); otherwise fall back to keyword hints, then the raw tag. */
+function prettyLabel(raw: string, ourDigits?: Set<string>): string {
+  const digits = raw.replace(/\D/g, "");
+  const d10 = digits.length >= 10 ? digits.slice(-10) : null;
+  if (d10) return ourDigits?.has(d10) ? "Rep" : "Customer";
+  if (REP_HINT.test(raw)) return "Rep";
+  if (CUST_HINT.test(raw)) return "Customer";
   const t = raw.replace(/\s+/g, " ").trim();
   return t.length > 16 ? t.slice(0, 15) + "…" : t;
 }

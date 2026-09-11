@@ -7,9 +7,10 @@ import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { ArrowLeft, PhoneIncoming, PhoneOutgoing, Clock, Gauge as GaugeIcon, MessageCircleQuestion, Mic, CheckSquare, AlertTriangle, GraduationCap } from "lucide-react";
-import { getCallEventById, getCoachingAnalysis, saveCoachingAnalysis, resolveCallerName } from "@/lib/db/repo";
+import { getCallEventById, getCoachingAnalysis, saveCoachingAnalysis, resolveCallerName, getBookingByPhoneDigits } from "@/lib/db/repo";
 import { generateRecap } from "@/lib/coach/recap";
 import { computeCallMetrics, speedGauge, balanceGauge, sentimentGauge, momentumScore, type Gauge, type GaugeTone } from "@/lib/coach/metrics";
+import { ourPhoneDigits, fmtPhone, last10 } from "@/lib/comms/identity";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeCoaching } from "@/lib/auth/roles";
 import { llmConfigured } from "@/lib/llm";
@@ -46,9 +47,21 @@ export default async function CoachingDetail({ params }: { params: Promise<{ id:
   if (!call) notFound();
 
   const recap = getCoachingAnalysis(id);
-  const party = resolveCallerName(call) || (call.direction === "outgoing" ? call.toPhone : call.fromPhone) || "Unknown caller";
-  const metrics = call.transcript ? computeCallMetrics(call.transcript, call.durationSec) : null;
+  const ourDigits = ourPhoneDigits();
+  const metrics = call.transcript ? computeCallMetrics(call.transcript, call.durationSec, ourDigits) : null;
   const Dir = call.direction === "outgoing" ? PhoneOutgoing : PhoneIncoming;
+
+  // Identify the customer's phone: the call's external number, else the transcript's "Customer"
+  // speaker (a phone that isn't one of ours). Drives both the caller name and the display fallback.
+  const customerSpeaker = metrics?.speakers.find((s) => s.label === "Customer") ?? null;
+  const fromDigits = last10(call.fromPhone);
+  const toDigits = last10(call.toPhone);
+  const externalFromCall =
+    fromDigits && !ourDigits.has(fromDigits) ? call.fromPhone : toDigits && !ourDigits.has(toDigits) ? call.toPhone : null;
+  const customerPhone = externalFromCall || (customerSpeaker && /\d{10}/.test(customerSpeaker.raw) ? customerSpeaker.raw : null);
+  const nameByPhone = customerPhone ? getBookingByPhoneDigits(last10(customerPhone) ?? "")?.clientName?.trim() || null : null;
+  const party =
+    (call.contactName?.trim() || resolveCallerName(call) || nameByPhone || fmtPhone(customerPhone)) ?? "Unknown caller";
 
   async function analyze(): Promise<void> {
     "use server";
@@ -60,9 +73,9 @@ export default async function CoachingDetail({ params }: { params: Promise<{ id:
   }
 
   const topSpeaker = metrics?.speakers[0];
-  // Rep's share of talk time (only when we can identify the rep as "You"); drives the talk-time gauge.
-  const you = metrics?.speakers.find((s) => s.label === "You") ?? null;
-  const repShare = you ? you.share : null;
+  // Rep's share of talk time (only when we can identify the rep); drives the talk-time gauge.
+  const rep = metrics?.speakers.find((s) => s.label === "Rep") ?? null;
+  const repShare = rep ? rep.share : null;
   const speed = speedGauge(metrics?.wordsPerMin ?? null);
   const talk = balanceGauge(repShare);
   const tone = sentimentGauge(call.sentiment);
@@ -78,7 +91,9 @@ export default async function CoachingDetail({ params }: { params: Promise<{ id:
       {/* Header — caller + score chips (Spiky's "Attention / Emotion / Interaction") */}
       <header className="surface mb-4 flex flex-col gap-4 border border-white/5 p-4 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
-          <span className="btn-hero flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold">{initials(party)}</span>
+          <span className="btn-hero flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold">
+            {/[A-Za-z]/.test(party) ? initials(party) : <Dir className="size-5" />}
+          </span>
           <div className="min-w-0">
             <h1 className="truncate text-xl font-bold tracking-tight">{party}</h1>
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">

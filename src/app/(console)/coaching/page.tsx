@@ -10,6 +10,7 @@ import { listCoachableCalls, countUnanalyzedCoachableCalls, type CoachableCall }
 import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeCoaching } from "@/lib/auth/roles";
 import { llmConfigured } from "@/lib/llm";
+import { fmtPhone } from "@/lib/comms/identity";
 import { BackfillDriver } from "./BackfillDriver";
 
 export const dynamic = "force-dynamic";
@@ -37,8 +38,8 @@ const SENTIMENT_CHIP: Record<string, string> = {
 
 function counterparty(c: CoachableCall): string {
   if (c.contactName) return c.contactName;
-  const phone = c.direction === "outgoing" ? c.toPhone : c.fromPhone;
-  return phone || "Unknown caller";
+  const phone = (c.direction === "outgoing" ? c.toPhone : c.fromPhone) || c.fromPhone || c.toPhone;
+  return fmtPhone(phone) || "Unknown caller";
 }
 
 function initials(name: string): string {
@@ -85,7 +86,7 @@ export default async function CoachingPage(): Promise<React.JSX.Element> {
                 className="surface flex items-center gap-3 border border-white/5 p-3 transition-colors hover:bg-white/[0.04]"
               >
                 <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-xs font-semibold text-muted-foreground">
-                  {initials(counterparty(c))}
+                  {/[A-Za-z]/.test(counterparty(c)) ? initials(counterparty(c)) : (c.direction === "outgoing" ? <PhoneOutgoing className="size-4" /> : <PhoneIncoming className="size-4" />)}
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{counterparty(c)}</div>

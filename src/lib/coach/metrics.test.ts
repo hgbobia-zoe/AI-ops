@@ -15,10 +15,23 @@ describe("computeCallMetrics", () => {
     expect(m.words).toBeGreaterThan(0);
     expect(m.wordsPerMin).toBe(m.words); // 1 minute → wpm === words
     expect(m.speakers).toHaveLength(2);
-    // "Rep" hint → "You", "Customer" hint → "Caller".
-    expect(m.speakers.map((s) => s.label).sort()).toEqual(["Caller", "You"]);
+    expect(m.speakers.map((s) => s.label).sort()).toEqual(["Customer", "Rep"]);
     const total = m.speakers[0].share + m.speakers[1].share;
     expect(total).toBeCloseTo(1, 5);
+  });
+
+  it("labels phone-numbered speakers Rep vs Customer using Zoe's own numbers", () => {
+    const transcript = [
+      "+13012915296: Thanks for calling Zoe Events.",
+      "+17867413005: Hi, we need a tent for a wedding.",
+      "+13012915296: Great, how many guests?",
+    ].join("\n");
+    const ours = new Set(["3012915296"]); // Zoe's number, last 10
+    const m = computeCallMetrics(transcript, 60, ours);
+    const rep = m.speakers.find((s) => s.label === "Rep");
+    const cust = m.speakers.find((s) => s.label === "Customer");
+    expect(rep?.raw).toBe("+13012915296");
+    expect(cust?.raw).toBe("+17867413005");
   });
 
   it("folds unlabelled continuation lines into the previous speaker", () => {
