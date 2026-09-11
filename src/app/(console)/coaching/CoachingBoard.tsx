@@ -5,15 +5,13 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { revalidatePath } from "next/cache";
 import { PhoneIncoming, PhoneOutgoing, Clock, Gauge as GaugeIcon, MessageCircleQuestion, Mic, CheckSquare, AlertTriangle, GraduationCap, History, ChevronRight } from "lucide-react";
-import { getCallEventById, getCoachingAnalysis, saveCoachingAnalysis, resolveCallerName, getBookingByPhoneDigits, getCustomerCallThread } from "@/lib/db/repo";
-import { generateRecap } from "@/lib/coach/recap";
+import { getCallEventById, getCoachingAnalysis, resolveCallerName, getBookingByPhoneDigits, getCustomerCallThread } from "@/lib/db/repo";
 import { computeCallMetrics, speedGauge, balanceGauge, sentimentGauge, momentumScore, type Gauge, type GaugeTone } from "@/lib/coach/metrics";
 import { ourPhoneDigits, fmtPhone, last10 } from "@/lib/comms/identity";
 import { getOpenphoneContactMap } from "@/lib/comms/openphone";
 import { llmConfigured } from "@/lib/llm";
-import { AnalyzeButton } from "./[id]/AnalyzeButton";
+import { AutoAnalyze } from "./AutoAnalyze";
 import { CoachingTabs } from "./[id]/CoachingTabs";
 
 const SENTIMENT_TONE: Record<string, string> = {
@@ -62,16 +60,6 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
   // The customer's other calls — their conversation thread.
   const thread = custDigits ? getCustomerCallThread(custDigits, { ourDigits, contactMap, excludeId: id, limit: 12 }) : [];
 
-  async function analyze(): Promise<void> {
-    "use server";
-    const c = getCallEventById(id);
-    if (!c || !c.transcript) return;
-    const r = await generateRecap({ transcript: c.transcript, direction: c.direction, contactName: resolveCallerName(c), durationSec: c.durationSec, quoSummary: c.summary });
-    if (r) saveCoachingAnalysis(id, r);
-    revalidatePath(`/coaching/${id}`);
-    revalidatePath("/coaching");
-  }
-
   const topSpeaker = metrics?.speakers[0];
   const rep = metrics?.speakers.find((s) => s.label === "Rep") ?? null;
   const repShare = rep ? rep.share : null;
@@ -100,10 +88,10 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
           {call.sentiment && <ScoreChip label="Sentiment" value={call.sentiment} tone={SENTIMENT_TONE[call.sentiment]} />}
           {topSpeaker && <ScoreChip label="Talk" value={`${topSpeaker.label} ${Math.round(topSpeaker.share * 100)}%`} />}
           {metrics?.wordsPerMin != null && <ScoreChip label="Pace" value={`${metrics.wordsPerMin} wpm`} />}
-          {call.transcript && llmConfigured() && (
-            <form action={analyze}>
-              <AnalyzeButton label={recap ? "Re-analyze" : "Analyze call"} />
-            </form>
+          {!recap && call.transcript && llmConfigured() && (
+            call.coachingAttemptedAt
+              ? <span className="text-xs text-muted-foreground">Couldn&apos;t generate a recap for this call.</span>
+              : <AutoAnalyze callId={id} />
           )}
         </div>
       </header>

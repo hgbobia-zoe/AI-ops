@@ -1912,6 +1912,7 @@ export interface CallEventView {
   llmModel: string | null;
   alertedAt: string | null;
   noteLoggedAt: string | null;
+  coachingAttemptedAt: string | null;
   occurredAt: string | null;
   ts: string;
 }
@@ -1941,9 +1942,16 @@ function toCallEvent(r: Record<string, unknown>): CallEventView {
     llmModel: (r.llm_model as string) ?? null,
     alertedAt: (r.alerted_at as string) ?? null,
     noteLoggedAt: (r.note_logged_at as string) ?? null,
+    coachingAttemptedAt: (r.coaching_attempted_at as string) ?? null,
     occurredAt: (r.occurred_at as string) ?? null,
     ts: String(r.ts),
   };
+}
+
+/** Record that we tried to build a coaching recap for a call but couldn't (thin transcript, model
+ *  error). Keeps the backfill from re-attempting it forever and wedging on it. */
+export function markCoachingAttempted(callId: string): void {
+  getDb().prepare("UPDATE call_events SET coaching_attempted_at = ? WHERE id = ?").run(new Date().toISOString(), callId);
 }
 
 /** Mark that we've queued a Goodshuffle note for this call — so a duplicate webhook never double-logs. */
@@ -2176,7 +2184,8 @@ export function listUnanalyzedCoachableCalls(limit = 25): { id: string; transcri
       `SELECT c.id, c.transcript, c.summary, c.direction, c.from_phone, c.to_phone, c.contact_name, c.duration_sec
          FROM call_events c
          LEFT JOIN coaching_analyses a ON a.call_id = c.id
-        WHERE a.call_id IS NULL AND c.transcript IS NOT NULL AND TRIM(c.transcript) <> ''
+        WHERE a.call_id IS NULL AND c.coaching_attempted_at IS NULL
+          AND c.transcript IS NOT NULL AND TRIM(c.transcript) <> ''
         ORDER BY COALESCE(c.occurred_at, c.ts) ASC
         LIMIT ?`,
     )
@@ -2200,7 +2209,8 @@ export function countUnanalyzedCoachableCalls(): number {
     .prepare(
       `SELECT COUNT(*) AS n FROM call_events c
          LEFT JOIN coaching_analyses a ON a.call_id = c.id
-        WHERE a.call_id IS NULL AND c.transcript IS NOT NULL AND TRIM(c.transcript) <> ''`,
+        WHERE a.call_id IS NULL AND c.coaching_attempted_at IS NULL
+          AND c.transcript IS NOT NULL AND TRIM(c.transcript) <> ''`,
     )
     .get() as { n: number };
   return Number(r.n);

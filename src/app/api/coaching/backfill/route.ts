@@ -4,8 +4,8 @@
 // Owner/admin only — enforced by the proxy for /api/coaching/*. Key-gated: no-ops without an LLM.
 
 import { NextResponse } from "next/server";
-import { listUnanalyzedCoachableCalls, saveCoachingAnalysis, countUnanalyzedCoachableCalls } from "@/lib/db/repo";
-import { generateRecap } from "@/lib/coach/recap";
+import { listUnanalyzedCoachableCalls, countUnanalyzedCoachableCalls } from "@/lib/db/repo";
+import { analyzeCall } from "@/lib/coach/analyze";
 import { llmConfigured } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
@@ -21,21 +21,11 @@ export async function POST(req: Request): Promise<NextResponse> {
   const batch = listUnanalyzedCoachableCalls(limit);
   let analyzed = 0;
   for (const c of batch) {
-    const recap = await generateRecap({
-      transcript: c.transcript,
-      direction: c.direction,
-      contactName: c.contactName,
-      durationSec: c.durationSec,
-      quoSummary: c.quoSummary,
-    });
-    if (recap) {
-      saveCoachingAnalysis(c.id, recap);
-      analyzed++;
-    }
+    // analyzeCall marks calls it can't turn into a recap as attempted, so the backlog always shrinks
+    // (analyzed OR marked) and never wedges on a thin/failed transcript.
+    if ((await analyzeCall(c.id)) === "analyzed") analyzed++;
   }
   const remaining = countUnanalyzedCoachableCalls();
-  // done when the backlog is clear, or when this batch made no progress (avoids an infinite client
-  // loop on calls the model can't turn into a recap — they're left for a future run).
-  const done = remaining === 0 || (batch.length > 0 && analyzed === 0) || batch.length === 0;
+  const done = remaining === 0 || batch.length === 0;
   return NextResponse.json({ done, analyzed, remaining, batch: batch.length });
 }
