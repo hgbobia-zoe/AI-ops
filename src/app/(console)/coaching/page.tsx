@@ -29,16 +29,21 @@ function fmtWhen(iso: string | null): string {
   return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-const SENTIMENT_TONE: Record<string, string> = {
-  positive: "text-emerald-300",
-  negative: "text-rose-300",
-  neutral: "text-muted-foreground",
+const SENTIMENT_CHIP: Record<string, string> = {
+  positive: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  negative: "border-rose-500/30 bg-rose-500/10 text-rose-300",
+  neutral: "border-white/10 bg-white/5 text-muted-foreground",
 };
 
 function counterparty(c: CoachableCall): string {
   if (c.contactName) return c.contactName;
   const phone = c.direction === "outgoing" ? c.toPhone : c.fromPhone;
   return phone || "Unknown caller";
+}
+
+function initials(name: string): string {
+  const parts = name.replace(/[^A-Za-z0-9 ]/g, "").trim().split(/\s+/).filter(Boolean);
+  return (parts[0]?.[0] ?? "?").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
 }
 
 export default async function CoachingPage(): Promise<React.JSX.Element> {
@@ -79,20 +84,25 @@ export default async function CoachingPage(): Promise<React.JSX.Element> {
                 href={`/coaching/${c.id}`}
                 className="surface flex items-center gap-3 border border-white/5 p-3 transition-colors hover:bg-white/[0.04]"
               >
-                <span className="shrink-0 text-muted-foreground">
-                  {c.direction === "outgoing" ? <PhoneOutgoing className="size-4" /> : <PhoneIncoming className="size-4" />}
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-xs font-semibold text-muted-foreground">
+                  {initials(counterparty(c))}
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{counterparty(c)}</div>
-                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    {c.direction === "outgoing" ? <PhoneOutgoing className="size-3" /> : <PhoneIncoming className="size-3" />}
                     <span>{fmtWhen(c.occurredAt ?? c.ts)}</span>
                     <span>· {fmtDuration(c.durationSec)}</span>
-                    {c.sentiment && <span className={SENTIMENT_TONE[c.sentiment] ?? ""}>· {c.sentiment}</span>}
                   </div>
                 </div>
+                {c.sentiment && (
+                  <span className={`hidden shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium capitalize sm:inline ${SENTIMENT_CHIP[c.sentiment] ?? SENTIMENT_CHIP.neutral}`}>
+                    {c.sentiment}
+                  </span>
+                )}
                 <span className={`flex shrink-0 items-center gap-1 text-[11px] ${c.analyzed ? "text-emerald-300" : "text-muted-foreground"}`}>
                   {c.analyzed ? <CheckCircle2 className="size-3.5" /> : <Circle className="size-3.5" />}
-                  {c.analyzed ? "Recap ready" : "Not analyzed"}
+                  <span className="hidden sm:inline">{c.analyzed ? "Recap ready" : "Not analyzed"}</span>
                 </span>
                 <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
               </Link>
