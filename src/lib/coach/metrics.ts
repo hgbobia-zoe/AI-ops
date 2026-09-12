@@ -10,10 +10,16 @@ export interface SpeakerShare {
   share: number; // 0..1 of the two-party total
 }
 
+export interface CallQuestion {
+  speaker: string; // "Rep" / "Customer" when identifiable, else the raw tag
+  text: string; // the question sentence, verbatim from the transcript
+}
+
 export interface CallMetrics {
   words: number;
   wordsPerMin: number | null; // total pace; null without a duration
-  questions: number; // '?'-bearing segments (discovery signal)
+  questions: number; // count of question sentences (== questionList.length)
+  questionList: CallQuestion[]; // the actual questions asked, verbatim + who asked (discovery signal)
   turns: number; // labelled speaker segments
   speakers: SpeakerShare[]; // top 2 by words, when the transcript is speaker-labelled
 }
@@ -29,9 +35,9 @@ export function computeCallMetrics(transcript: string, durationSec: number | nul
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
   const byLabel = new Map<string, number>();
+  const questionList: CallQuestion[] = [];
   let lastLabel: string | null = null;
   let turns = 0;
-  let questions = 0;
   let totalWords = 0;
 
   const wc = (s: string): number => (s.match(/\b[\w'’-]+\b/g)?.length ?? 0);
@@ -51,7 +57,9 @@ export function computeCallMetrics(transcript: string, durationSec: number | nul
     lastLabel = label;
     const words = wc(body);
     totalWords += words;
-    if (/\?/.test(body)) questions++;
+    for (const q of extractQuestions(body)) {
+      if (questionList.length < 50) questionList.push({ speaker: label ? prettyLabel(label, ourDigits) : "Speaker", text: q });
+    }
     if (label) byLabel.set(label, (byLabel.get(label) ?? 0) + words);
   }
 
@@ -68,10 +76,22 @@ export function computeCallMetrics(transcript: string, durationSec: number | nul
   return {
     words: totalWords,
     wordsPerMin: mins ? Math.round(totalWords / mins) : null,
-    questions,
+    questions: questionList.length,
+    questionList,
     turns,
     speakers: speakers.length >= 2 ? speakers : [],
   };
+}
+
+/** Pull the question sentences out of a line of dialogue. A single turn can hold several ("What's
+ *  your date? And your budget?"); each chunk up to and including a '?' is one question. Deterministic. */
+function extractQuestions(body: string): string[] {
+  const out: string[] = [];
+  for (const chunk of body.match(/[^.?!]*\?+/g) ?? []) {
+    const t = chunk.trim().replace(/\s+/g, " ");
+    if (t.length > 1) out.push(t);
+  }
+  return out;
 }
 
 // ---- Spiky-style gauges + momentum (all derived from the metrics above; transparent formulas) ----

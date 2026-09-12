@@ -138,6 +138,7 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
         quoSummary={call.summary}
         executive={recap?.executive ?? ""}
         keyPoints={recap?.keyPoints ?? []}
+        questions={metrics?.questionList ?? []}
         coachingNotes={recap?.coachingNotes ?? []}
         customerConcerns={recap?.customerConcerns ?? []}
         objections={recap?.objections ?? []}

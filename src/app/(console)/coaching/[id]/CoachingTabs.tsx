@@ -4,12 +4,14 @@
 // with a count badge. Pure presentation over the recap + Quo summary + transcript passed in.
 
 import { useState } from "react";
-import { FileText, GraduationCap, AlertTriangle, CheckSquare, ArrowRight, ScrollText, MessageSquareReply } from "lucide-react";
+import { FileText, GraduationCap, AlertTriangle, CheckSquare, ArrowRight, ScrollText, MessageSquareReply, MessageCircleQuestion } from "lucide-react";
+import type { CallQuestion } from "@/lib/coach/metrics";
 
 export interface CoachingTabsProps {
   quoSummary: string | null;
   executive: string;
   keyPoints: string[];
+  questions: CallQuestion[];
   coachingNotes: string[];
   customerConcerns: string[];
   objections: { objection: string; response: string }[];
@@ -20,7 +22,7 @@ export interface CoachingTabsProps {
   analyzed: boolean;
 }
 
-type TabKey = "overview" | "coaching" | "objections" | "actions" | "transcript";
+type TabKey = "overview" | "questions" | "coaching" | "objections" | "actions" | "transcript";
 
 export function CoachingTabs(props: CoachingTabsProps): React.JSX.Element {
   const summary = props.quoSummary?.trim() || props.executive?.trim() || "";
@@ -28,6 +30,7 @@ export function CoachingTabs(props: CoachingTabsProps): React.JSX.Element {
 
   const tabs: { key: TabKey; label: string; count: number | null; icon: typeof FileText }[] = [
     { key: "overview", label: "Overview", count: null, icon: FileText },
+    { key: "questions", label: "Questions", count: props.questions.length || null, icon: MessageCircleQuestion },
     { key: "coaching", label: "Coaching", count: props.coachingNotes.length || null, icon: GraduationCap },
     { key: "objections", label: "Objections", count: (props.objections.length || props.customerConcerns.length) || null, icon: AlertTriangle },
     { key: "actions", label: "Actions", count: actionsCount || null, icon: CheckSquare },
@@ -80,6 +83,22 @@ export function CoachingTabs(props: CoachingTabsProps): React.JSX.Element {
               </div>
             )}
           </div>
+        )}
+
+        {active === "questions" && (
+          props.questions.length > 0 ? (
+            <ul className="space-y-2">
+              {props.questions.map((q, i) => (
+                <li key={i} className="flex items-start gap-2.5 rounded-lg border border-white/10 bg-white/[0.02] p-3 text-sm">
+                  <MessageCircleQuestion className="mt-0.5 size-4 shrink-0 text-sky-300" />
+                  <div className="min-w-0">
+                    <span className="mr-2 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{q.speaker}</span>
+                    {q.text}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : <Empty>No questions detected in this call.</Empty>
         )}
 
         {active === "coaching" && (

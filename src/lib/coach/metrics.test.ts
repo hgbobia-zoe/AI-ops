@@ -12,6 +12,9 @@ describe("computeCallMetrics", () => {
     const m = computeCallMetrics(transcript, 60); // 1 minute
     expect(m.turns).toBe(4);
     expect(m.questions).toBe(2); // two rep lines end in '?'
+    expect(m.questionList).toHaveLength(2); // and we keep the verbatim questions
+    expect(m.questionList.every((q) => q.text.endsWith("?"))).toBe(true);
+    expect(m.questionList[0]).toMatchObject({ speaker: "Rep", text: "Thanks for calling, how can I help you today?" });
     expect(m.words).toBeGreaterThan(0);
     expect(m.wordsPerMin).toBe(m.words); // 1 minute → wpm === words
     expect(m.speakers).toHaveLength(2);
