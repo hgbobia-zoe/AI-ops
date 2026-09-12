@@ -20,7 +20,6 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "positive", label: "Positive" },
   { key: "neutral", label: "Neutral" },
   { key: "negative", label: "Negative" },
-  { key: "pending", label: "New" },
 ];
 
 const SENTIMENT_CHIP: Record<string, string> = {
@@ -105,20 +104,20 @@ export function CoachingShell({ calls, unanalyzed, children }: { calls: Coachabl
           <X className="size-5" />
         </button>
       </div>
-      {/* Filter tabs — wrap so they always fit, never a horizontal scrollbar */}
-      <div className="flex flex-wrap gap-1 px-3 pt-2">
+      {/* Filter tabs — one line, no wrap, no scrollbar. Count rides inline after the label. */}
+      <div className="flex gap-1 px-3 pt-2">
         {FILTERS.map((t) => {
           const on = filter === t.key;
           return (
             <button
               key={t.key}
               onClick={() => setFilter(t.key)}
-              className={`flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-1 text-xs font-medium transition-colors ${
+              className={`flex min-w-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                 on ? "bg-white/[0.1] text-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              {t.label}
-              <span className={`rounded-full px-1 text-[10px] tabular-nums ${on ? "bg-white/15" : "bg-white/[0.06]"}`}>{counts[t.key]}</span>
+              <span className="truncate">{t.label}</span>
+              <span className="tabular-nums opacity-60">{counts[t.key]}</span>
             </button>
           );
         })}
