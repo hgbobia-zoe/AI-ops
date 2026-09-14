@@ -1,18 +1,18 @@
-// The coaching board for one call — the right pane of the master-detail. Spiky-style: caller +
-// score chips, computed metric tiles, signal sliders + momentum, and a tabbed analysis. Rendered by
-// both the index (newest call) and /coaching/[id]. Metrics are COMPUTED from the transcript; the
-// recap is INFERENCE, labelled as such, never invented.
+// The coaching board for one call — the right pane of the master-detail, in the same Quo-style shape
+// as Sales OS: the customer's conversation (texts + calls) as the hero, with the call's analysis tabbed
+// underneath — Signals (computed metrics/sliders/momentum), Overview, Questions, Coaching, Objections,
+// Actions, Transcript. Metrics are COMPUTED from the transcript; the recap is INFERENCE, labelled.
 
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { PhoneIncoming, PhoneOutgoing, Clock, Gauge as GaugeIcon, MessageCircleQuestion, Mic, CheckSquare, AlertTriangle, GraduationCap, History, ChevronRight } from "lucide-react";
-import { getCallEventById, getCoachingAnalysis, resolveCallerName, getBookingByPhoneDigits, getCustomerCallThread } from "@/lib/db/repo";
+import { PhoneIncoming, PhoneOutgoing, Clock, Gauge as GaugeIcon, MessageCircleQuestion, Mic, CheckSquare, AlertTriangle, GraduationCap } from "lucide-react";
+import { getCallEventById, getCoachingAnalysis, resolveCallerName, getBookingByPhoneDigits, getCommsForLead } from "@/lib/db/repo";
 import { computeCallMetrics, speedGauge, balanceGauge, sentimentGauge, momentumScore, type Gauge, type GaugeTone } from "@/lib/coach/metrics";
 import { ourPhoneDigits, fmtPhone, last10 } from "@/lib/comms/identity";
 import { getOpenphoneContactMap } from "@/lib/comms/openphone";
 import { llmConfigured } from "@/lib/llm";
 import { AutoAnalyze } from "./AutoAnalyze";
 import { CoachingTabs } from "./[id]/CoachingTabs";
+import { ConversationThread } from "@/components/ConversationThread";
 
 const SENTIMENT_TONE: Record<string, string> = {
   positive: "text-emerald-300",
@@ -43,7 +43,6 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
   const ourDigits = ourPhoneDigits();
   const metrics = call.transcript ? computeCallMetrics(call.transcript, call.durationSec, ourDigits) : null;
   const Dir = call.direction === "outgoing" ? PhoneOutgoing : PhoneIncoming;
-  // Not enough was said to coach (voicemail / hang-up / a few seconds) — not an error.
   const tooShort = !!call.transcript && (metrics?.words ?? 0) < 20;
 
   const customerSpeaker = metrics?.speakers.find((s) => s.label === "Customer") ?? null;
@@ -54,13 +53,14 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
   const customerPhone = externalFromCall || (customerSpeaker && /\d{10}/.test(customerSpeaker.raw) ? customerSpeaker.raw : null);
   const custDigits = last10(customerPhone);
   const contactMap = await getOpenphoneContactMap();
-  const nameByPhone = custDigits ? getBookingByPhoneDigits(custDigits)?.clientName?.trim() || null : null;
+  const custBooking = custDigits ? getBookingByPhoneDigits(custDigits) : null;
+  const nameByPhone = custBooking?.clientName?.trim() || null;
   const party =
     (call.contactName?.trim() || resolveCallerName(call) || nameByPhone || (custDigits ? contactMap.get(custDigits) : null) || fmtPhone(customerPhone)) ??
     "Unknown caller";
 
-  // The customer's other calls — their conversation thread.
-  const thread = custDigits ? getCustomerCallThread(custDigits, { ourDigits, contactMap, excludeId: id, limit: 12 }) : [];
+  // The customer's conversation (texts + calls) for the Quo-style hero, when we can match a lead.
+  const comms = custBooking ? getCommsForLead(custBooking.bookingId, 60) : [];
 
   const topSpeaker = metrics?.speakers[0];
   const rep = metrics?.speakers.find((s) => s.label === "Rep") ?? null;
@@ -70,6 +70,37 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
   const tone = sentimentGauge(call.sentiment);
   const hasSignals = Boolean(speed || talk || tone);
   const momentum = hasSignals ? momentumScore({ sentiment: call.sentiment, repShare, questions: metrics?.questions ?? null, hasNextStep: !!recap?.nextStep }) : null;
+
+  // Signals panel (computed metrics + sliders + momentum) — tabbed under the conversation.
+  const hasTiles = !!metrics || call.durationSec != null || !!recap;
+  const signalsNode = hasTiles ? (
+    <div className="space-y-4">
+      <section className="grid grid-cols-2 gap-3 @md:grid-cols-3 @2xl:grid-cols-4">
+        <Tile icon={Clock} label="Duration" value={fmtDuration(call.durationSec)} />
+        {metrics?.wordsPerMin != null && <Tile icon={GaugeIcon} label="Talking speed" value={`${metrics.wordsPerMin}`} unit="words/min" />}
+        {metrics && metrics.questions > 0 && <Tile icon={MessageCircleQuestion} label="Questions" value={`${metrics.questions}`} />}
+        {topSpeaker && <Tile icon={Mic} label="Talk balance" value={`${Math.round(topSpeaker.share * 100)}%`} unit={topSpeaker.label} />}
+        {recap && <Tile icon={CheckSquare} label="Action items" value={`${recap.actionItems.length}`} tone="text-sky-300" />}
+        {recap && <Tile icon={AlertTriangle} label="Objections" value={`${recap.objections.length || recap.customerConcerns.length}`} tone="text-amber-300" />}
+        {recap && <Tile icon={GraduationCap} label="Coaching notes" value={`${recap.coachingNotes.length}`} tone="text-violet-300" />}
+      </section>
+      {(hasSignals || momentum) && (
+        <section className="border-t border-white/5 pt-4">
+          <div className="grid gap-5 @2xl:grid-cols-[1fr_auto] @2xl:items-center">
+            <div className="space-y-3">
+              {speed && <Slider label="Talking speed" gauge={speed} variant="center" />}
+              {talk && <Slider label="Talking time" gauge={talk} variant="center" />}
+              {tone && <Slider label="Customer tone" gauge={tone} variant="polar" />}
+            </div>
+            {momentum && <MomentumCard m={momentum} />}
+          </div>
+          <p className="mt-3 text-[10px] text-muted-foreground">
+            Momentum is a composite of customer tone, talk balance, discovery questions, and whether a next step was secured. Tone is read from the transcript, not audio.
+          </p>
+        </section>
+      )}
+    </div>
+  ) : null;
 
   return (
     <div className="@container p-5 pb-16 md:p-6 xl:p-8">
@@ -106,35 +137,12 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
         </div>
       )}
 
-      {/* Metric tiles */}
-      <section className="mb-4 grid grid-cols-2 gap-3 @md:grid-cols-3 @2xl:grid-cols-4">
-        <Tile icon={Clock} label="Duration" value={fmtDuration(call.durationSec)} />
-        {metrics?.wordsPerMin != null && <Tile icon={GaugeIcon} label="Talking speed" value={`${metrics.wordsPerMin}`} unit="words/min" />}
-        {metrics && metrics.questions > 0 && <Tile icon={MessageCircleQuestion} label="Questions" value={`${metrics.questions}`} />}
-        {topSpeaker && <Tile icon={Mic} label="Talk balance" value={`${Math.round(topSpeaker.share * 100)}%`} unit={topSpeaker.label} />}
-        {recap && <Tile icon={CheckSquare} label="Action items" value={`${recap.actionItems.length}`} tone="text-sky-300" />}
-        {recap && <Tile icon={AlertTriangle} label="Objections" value={`${recap.objections.length || recap.customerConcerns.length}`} tone="text-amber-300" />}
-        {recap && <Tile icon={GraduationCap} label="Coaching notes" value={`${recap.coachingNotes.length}`} tone="text-violet-300" />}
-      </section>
+      {/* Conversation — the chronological hero (Quo-style); shown when we can match the customer's thread */}
+      {comms.length > 0 && <ConversationThread comms={comms} party={party} />}
 
-      {/* Call signals */}
-      {(hasSignals || momentum) && (
-        <section className="surface mb-4 border border-white/5 p-4">
-          <div className="grid gap-5 @2xl:grid-cols-[1fr_auto] @2xl:items-center">
-            <div className="space-y-3">
-              {speed && <Slider label="Talking speed" gauge={speed} variant="center" />}
-              {talk && <Slider label="Talking time" gauge={talk} variant="center" />}
-              {tone && <Slider label="Customer tone" gauge={tone} variant="polar" />}
-            </div>
-            {momentum && <MomentumCard m={momentum} />}
-          </div>
-          <p className="mt-3 text-[10px] text-muted-foreground">
-            Momentum is a composite of customer tone, talk balance, discovery questions, and whether a next step was secured. Tone is read from the transcript, not audio.
-          </p>
-        </section>
-      )}
-
+      {/* Analysis, tabbed — Signals folds in the computed metrics/sliders/momentum */}
       <CoachingTabs
+        signals={signalsNode}
         quoSummary={call.summary}
         executive={recap?.executive ?? ""}
         keyPoints={recap?.keyPoints ?? []}
@@ -148,29 +156,6 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
         transcript={call.transcript}
         analyzed={!!recap}
       />
-
-      {/* Conversation thread — this customer's other calls */}
-      {thread.length > 0 && (
-        <section className="surface mt-4 border border-white/5 p-4">
-          <h2 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            <History className="size-3.5" /> Call history with {party} · {thread.length + 1} calls
-          </h2>
-          <ol className="space-y-1">
-            {thread.map((c) => (
-              <li key={c.id}>
-                <Link href={`/coaching/${c.id}`} className="flex items-center gap-2 rounded-lg border border-transparent px-2 py-1.5 text-sm transition-colors hover:border-white/10 hover:bg-white/[0.04]">
-                  {c.direction === "outgoing" ? <PhoneOutgoing className="size-3.5 shrink-0 text-muted-foreground" /> : <PhoneIncoming className="size-3.5 shrink-0 text-muted-foreground" />}
-                  <span className="text-muted-foreground">{fmtWhen(c.occurredAt ?? c.ts)}</span>
-                  <span className="text-muted-foreground">· {fmtDuration(c.durationSec)}</span>
-                  {c.sentiment && <span className="capitalize text-muted-foreground">· {c.sentiment}</span>}
-                  {c.analyzed && <span className="ml-auto text-[10px] font-medium text-emerald-300">Recap</span>}
-                  <ChevronRight className={`size-3.5 shrink-0 text-muted-foreground ${c.analyzed ? "" : "ml-auto"}`} />
-                </Link>
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
 
       <p className="mt-5 flex items-start gap-1.5 text-[11px] text-muted-foreground">
         <AlertTriangle className="mt-0.5 size-3 shrink-0" />

@@ -7,7 +7,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, History, AlertTriangle, Radio } from "lucide-react";
 import { OutreachPanel } from "@/components/OutreachPanel";
-import { ConversationThread } from "./ConversationThread";
+import { ConversationThread } from "@/components/ConversationThread";
 import { LeadTabs } from "./LeadTabs";
 import { LeadCoachingInsight } from "./LeadCoachingInsight";
 import { getLead } from "@/lib/salesos/service";

@@ -4,10 +4,11 @@
 // with a count badge. Pure presentation over the recap + Quo summary + transcript passed in.
 
 import { useState } from "react";
-import { FileText, GraduationCap, AlertTriangle, CheckSquare, ArrowRight, ScrollText, MessageSquareReply, MessageCircleQuestion } from "lucide-react";
+import { FileText, GraduationCap, AlertTriangle, CheckSquare, ArrowRight, ScrollText, MessageSquareReply, MessageCircleQuestion, Gauge } from "lucide-react";
 import type { CallQuestion } from "@/lib/coach/metrics";
 
 export interface CoachingTabsProps {
+  signals?: React.ReactNode; // metric tiles + sliders + momentum (Coaching board), tabbed in
   quoSummary: string | null;
   executive: string;
   keyPoints: string[];
@@ -22,13 +23,14 @@ export interface CoachingTabsProps {
   analyzed: boolean;
 }
 
-type TabKey = "overview" | "questions" | "coaching" | "objections" | "actions" | "transcript";
+type TabKey = "signals" | "overview" | "questions" | "coaching" | "objections" | "actions" | "transcript";
 
 export function CoachingTabs(props: CoachingTabsProps): React.JSX.Element {
   const summary = props.quoSummary?.trim() || props.executive?.trim() || "";
   const actionsCount = props.actionItems.length + (props.nextStep ? 1 : 0) + (props.followUpEmail ? 1 : 0);
 
   const tabs: { key: TabKey; label: string; count: number | null; icon: typeof FileText }[] = [
+    ...(props.signals ? [{ key: "signals" as TabKey, label: "Signals", count: null, icon: Gauge }] : []),
     { key: "overview", label: "Overview", count: null, icon: FileText },
     { key: "questions", label: "Questions", count: props.questions.length || null, icon: MessageCircleQuestion },
     { key: "coaching", label: "Coaching", count: props.coachingNotes.length || null, icon: GraduationCap },
@@ -37,7 +39,7 @@ export function CoachingTabs(props: CoachingTabsProps): React.JSX.Element {
     { key: "transcript", label: "Transcript", count: null, icon: ScrollText },
   ];
 
-  const [active, setActive] = useState<TabKey>(props.analyzed ? "coaching" : "overview");
+  const [active, setActive] = useState<TabKey>(props.signals ? "signals" : props.analyzed ? "coaching" : "overview");
 
   return (
     <section className="surface overflow-hidden border border-white/5">
@@ -64,6 +66,8 @@ export function CoachingTabs(props: CoachingTabsProps): React.JSX.Element {
       </div>
 
       <div className="p-4 md:p-5">
+        {active === "signals" && props.signals}
+
         {active === "overview" && (
           <div className="space-y-4">
             {summary ? (
