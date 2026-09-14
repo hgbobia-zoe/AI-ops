@@ -2248,7 +2248,7 @@ export function listUnanalyzedCoachableCalls(limit = 25): { id: string; transcri
          LEFT JOIN coaching_analyses a ON a.call_id = c.id
         WHERE a.call_id IS NULL AND c.coaching_attempted_at IS NULL
           AND c.transcript IS NOT NULL AND TRIM(c.transcript) <> ''
-        ORDER BY COALESCE(c.occurred_at, c.ts) ASC
+        ORDER BY COALESCE(c.occurred_at, c.ts) DESC
         LIMIT ?`,
     )
     .all(limit) as Record<string, unknown>[];
