@@ -1,8 +1,19 @@
 // Build a conversation feed for a customer: their calls (from call_events, each with its AI summary +
 // next step) merged with their texts (from comms_events), chronological (oldest → newest). Server-only.
 
-import { getCallEventById, getCoachingAnalysis, type CoachableCall, type CommsEventView } from "@/lib/db/repo";
-import type { CallItem, TextItem, TimelineItem } from "./feedTypes";
+import { getCallEventById, getCoachingAnalysis, type CoachableCall, type CommsEventView, type BookingView } from "@/lib/db/repo";
+import type { CallItem, TextItem, EmailItem, TimelineItem } from "./feedTypes";
+
+/** Email events we can see from Goodshuffle: sending a quote emails the client. */
+export function emailFeedItems(booking: BookingView | null | undefined): EmailItem[] {
+  if (!booking) return [];
+  const out: EmailItem[] = [];
+  if (booking.quoteSentDate) out.push({ kind: "email", id: `qs-${booking.bookingId}`, at: booking.quoteSentDate, subject: "Quote sent to client", via: "Goodshuffle" });
+  if (booking.lastSentDate && booking.lastSentDate.slice(0, 10) !== (booking.quoteSentDate ?? "").slice(0, 10)) {
+    out.push({ kind: "email", id: `ls-${booking.bookingId}`, at: booking.lastSentDate, subject: "Quote re-sent to client", via: "Goodshuffle" });
+  }
+  return out;
+}
 
 /** Map coachable calls to feed items, pulling each call's Quo summary / recap. */
 export function callFeedItems(calls: CoachableCall[]): CallItem[] {
@@ -14,11 +25,11 @@ export function callFeedItems(calls: CoachableCall[]): CallItem[] {
   });
 }
 
-/** Merge calls + text comms into one chronological feed (calls carry their summary inline). */
-export function buildConversationFeed(calls: CoachableCall[], comms: CommsEventView[]): TimelineItem[] {
+/** Merge calls + text comms + Goodshuffle email events into one chronological feed. */
+export function buildConversationFeed(calls: CoachableCall[], comms: CommsEventView[], emails: EmailItem[] = []): TimelineItem[] {
   const callItems = callFeedItems(calls);
   const textItems: TextItem[] = comms
     .filter((c) => c.channel !== "call")
     .map((c) => ({ kind: "text", id: c.id, direction: c.direction, body: c.body ?? "", actor: c.actor, at: c.occurredAt ?? c.ts }));
-  return [...callItems, ...textItems].sort((a, b) => (Date.parse(a.at ?? "") || 0) - (Date.parse(b.at ?? "") || 0));
+  return [...callItems, ...textItems, ...emails].sort((a, b) => (Date.parse(a.at ?? "") || 0) - (Date.parse(b.at ?? "") || 0));
 }

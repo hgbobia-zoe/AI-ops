@@ -13,7 +13,7 @@ import { llmConfigured } from "@/lib/llm";
 import { AutoAnalyze } from "./AutoAnalyze";
 import { CoachingTabs } from "./[id]/CoachingTabs";
 import { ConversationFeed } from "@/components/ConversationFeed";
-import { buildConversationFeed } from "@/lib/coach/feed";
+import { buildConversationFeed, emailFeedItems } from "@/lib/coach/feed";
 import type { CoachableCall } from "@/lib/db/repo";
 
 const SENTIMENT_TONE: Record<string, string> = {
@@ -73,7 +73,7 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
     };
     feedCalls = [self, ...feedCalls];
   }
-  const feedItems = buildConversationFeed(feedCalls, comms);
+  const feedItems = buildConversationFeed(feedCalls, comms, emailFeedItems(custBooking));
 
   const topSpeaker = metrics?.speakers[0];
   const rep = metrics?.speakers.find((s) => s.label === "Rep") ?? null;

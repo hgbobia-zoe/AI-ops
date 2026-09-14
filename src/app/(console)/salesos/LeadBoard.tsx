@@ -8,7 +8,9 @@ import { notFound } from "next/navigation";
 import { Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, History, AlertTriangle, Radio } from "lucide-react";
 import { OutreachPanel } from "@/components/OutreachPanel";
 import { ConversationFeed } from "@/components/ConversationFeed";
-import { buildConversationFeed } from "@/lib/coach/feed";
+import { CopyButton } from "@/components/CopyButton";
+import { LeadAsk } from "@/components/LeadAsk";
+import { buildConversationFeed, emailFeedItems } from "@/lib/coach/feed";
 import { LeadTabs } from "./LeadTabs";
 import { LeadCoachingInsight } from "./LeadCoachingInsight";
 import { getLead } from "@/lib/salesos/service";
@@ -64,7 +66,7 @@ export async function LeadBoard({ id }: { id: string }): Promise<React.JSX.Eleme
   const custDigits = last10(lead.clientPhone);
   const contactMap = await getOpenphoneContactMap();
   const thread = custDigits ? getCustomerCallThread(custDigits, { ourDigits, contactMap, limit: 8 }) : [];
-  const feedItems = buildConversationFeed(thread, conversation); // calls (w/ summaries) + texts, merged
+  const feedItems = buildConversationFeed(thread, conversation, emailFeedItems(booking)); // calls + texts + GS emails
 
   const { signals: s, priority } = lead;
   const dte = s.daysToEvent;
@@ -114,6 +116,29 @@ export async function LeadBoard({ id }: { id: string }): Promise<React.JSX.Eleme
                 <ul className="mt-0.5 flex flex-wrap gap-1.5">{brief.watchFor.map((w, i) => <li key={i} className="border border-white/10 px-1.5 py-0.5 text-[11px] text-muted-foreground">{w}</li>)}</ul>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Follow-up drafts — Zoe always follows a call with a text + an email (edit before sending). */}
+      {brief && brief.textDraft && (
+        <div className="border-t border-white/5 pt-3">
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground"><MessageSquare className="size-3.5" /> Text follow-up</div>
+            <CopyButton text={brief.textDraft} />
+          </div>
+          <p className="rounded-md border border-white/10 bg-white/[0.02] p-2.5 text-sm">{brief.textDraft}</p>
+        </div>
+      )}
+      {brief && brief.email.body && (
+        <div className="border-t border-white/5 pt-3">
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground"><Mail className="size-3.5" /> Email follow-up</div>
+            <CopyButton text={`Subject: ${brief.email.subject}\n\n${brief.email.body}`} label="Copy email" />
+          </div>
+          <div className="rounded-md border border-white/10 bg-white/[0.02] p-2.5 text-sm">
+            <div className="mb-1 text-xs"><span className="text-muted-foreground">Subject:</span> {brief.email.subject}</div>
+            <pre className="whitespace-pre-wrap font-sans leading-relaxed">{brief.email.body}</pre>
           </div>
         </div>
       )}
@@ -219,6 +244,7 @@ export async function LeadBoard({ id }: { id: string }): Promise<React.JSX.Eleme
         coaching={<LeadCoachingInsight thread={thread} ourDigits={ourDigits} />}
         outreach={<OutreachPanel id={lead.id} viewer={outreachViewer} />}
         details={detailsPanel}
+        ask={<LeadAsk id={lead.id} />}
       />
 
       <p className="mt-4 flex items-start gap-1.5 text-[11px] text-muted-foreground">

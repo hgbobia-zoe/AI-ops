@@ -5,21 +5,23 @@
 // `hidden` so client panels like Outreach don't lose their state on tab change).
 
 import { useState } from "react";
-import { Sparkles, Headphones, MessageSquare, ListChecks } from "lucide-react";
+import { Sparkles, Headphones, MessageSquare, ListChecks, Search } from "lucide-react";
 
-type TabKey = "next" | "coaching" | "outreach" | "details";
+type TabKey = "next" | "coaching" | "outreach" | "details" | "ask";
 
 export function LeadTabs({
   next,
   coaching,
   outreach,
   details,
+  ask,
   coachingCount,
 }: {
   next: React.ReactNode;
   coaching: React.ReactNode;
   outreach: React.ReactNode;
   details: React.ReactNode;
+  ask: React.ReactNode;
   coachingCount: number;
 }): React.JSX.Element {
   const [active, setActive] = useState<TabKey>("next");
@@ -28,6 +30,7 @@ export function LeadTabs({
     { key: "coaching", label: "Coaching", icon: Headphones, count: coachingCount || undefined },
     { key: "outreach", label: "Outreach", icon: MessageSquare },
     { key: "details", label: "Details", icon: ListChecks },
+    { key: "ask", label: "Ask", icon: Search },
   ];
 
   return (
@@ -57,6 +60,7 @@ export function LeadTabs({
         <div className={active === "coaching" ? "" : "hidden"}>{coaching}</div>
         <div className={active === "outreach" ? "" : "hidden"}>{outreach}</div>
         <div className={active === "details" ? "" : "hidden"}>{details}</div>
+        <div className={active === "ask" ? "" : "hidden"}>{ask}</div>
       </div>
     </section>
   );

@@ -20,4 +20,11 @@ export interface CallItem {
   nextStep: string;
   analyzed: boolean;
 }
-export type TimelineItem = TextItem | CallItem;
+export interface EmailItem {
+  kind: "email";
+  id: string;
+  at: string | null;
+  subject: string;
+  via: string; // e.g. "Goodshuffle"
+}
+export type TimelineItem = TextItem | CallItem | EmailItem;

@@ -7,10 +7,10 @@
 
 import { useEffect, useRef } from "react";
 import Link from "next/link";
-import { PhoneIncoming, PhoneOutgoing, ArrowRight, Sparkles } from "lucide-react";
-import type { TextItem, CallItem, TimelineItem } from "@/lib/coach/feedTypes";
+import { PhoneIncoming, PhoneOutgoing, ArrowRight, Sparkles, Mail } from "lucide-react";
+import type { TextItem, CallItem, EmailItem, TimelineItem } from "@/lib/coach/feedTypes";
 
-export type { TextItem, CallItem, TimelineItem } from "@/lib/coach/feedTypes";
+export type { TextItem, CallItem, EmailItem, TimelineItem } from "@/lib/coach/feedTypes";
 
 const SENTIMENT_TONE: Record<string, string> = { positive: "text-emerald-300", negative: "text-rose-300", neutral: "text-muted-foreground" };
 
@@ -37,10 +37,25 @@ export function ConversationFeed({ items, party, activeId }: { items: TimelineIt
         Conversation with {party}
       </div>
       <div className="max-h-[34rem] space-y-3 overflow-y-auto px-4 py-4">
-        {items.map((it) => (it.kind === "call" ? <CallCard key={it.id} c={it} active={it.id === activeId} /> : <TextBubble key={it.id} t={it} />))}
+        {items.map((it) =>
+          it.kind === "call" ? <CallCard key={it.id} c={it} active={it.id === activeId} /> : it.kind === "email" ? <EmailRow key={it.id} e={it} /> : <TextBubble key={it.id} t={it} />,
+        )}
         <div ref={endRef} />
       </div>
     </section>
+  );
+}
+
+function EmailRow({ e }: { e: EmailItem }): React.JSX.Element {
+  return (
+    <div className="flex justify-center">
+      <div className="flex max-w-[90%] items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] text-muted-foreground">
+        <Mail className="size-3.5 shrink-0" />
+        <span className="text-foreground/80">{e.subject}</span>
+        <span>· {e.via}</span>
+        <span>· {fmtWhen(e.at)}</span>
+      </div>
+    </div>
   );
 }
 
