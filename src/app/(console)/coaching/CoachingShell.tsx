@@ -86,12 +86,31 @@ export function CoachingShell({ calls, unanalyzed, children }: { calls: Coachabl
     return c.sentiment === filter;
   });
 
-  const groups: { label: string; items: CoachableCall[] }[] = [];
+  // One row per contact (Quo-style): combine a caller's calls into a single conversation, represented
+  // by their most recent call. `shown` is newest-first, so the first seen per contact is the rep.
+  const last10 = (p: string | null): string | null => {
+    const d = (p ?? "").replace(/\D/g, "");
+    return d.length >= 10 ? d.slice(-10) : null;
+  };
+  const convByKey = new Map<string, { rep: CoachableCall; count: number; ids: string[] }>();
   for (const c of shown) {
-    const label = dayLabel(c.occurredAt ?? c.ts);
+    const key = last10(c.customerPhone) || c.caller.trim().toLowerCase() || c.id;
+    const ex = convByKey.get(key);
+    if (ex) {
+      ex.count++;
+      ex.ids.push(c.id);
+    } else {
+      convByKey.set(key, { rep: c, count: 1, ids: [c.id] });
+    }
+  }
+  const conversations = [...convByKey.values()];
+
+  const groups: { label: string; items: { rep: CoachableCall; count: number; ids: string[] }[] }[] = [];
+  for (const cv of conversations) {
+    const label = dayLabel(cv.rep.occurredAt ?? cv.rep.ts);
     const g = groups[groups.length - 1];
-    if (g && g.label === label) g.items.push(c);
-    else groups.push({ label, items: [c] });
+    if (g && g.label === label) g.items.push(cv);
+    else groups.push({ label, items: [cv] });
   }
 
   const listBody = (
@@ -137,8 +156,9 @@ export function CoachingShell({ calls, unanalyzed, children }: { calls: Coachabl
             <div key={g.label} className="mb-3">
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{g.label}</div>
               <ol className="space-y-1">
-                {g.items.map((c) => {
-                  const on = c.id === activeId;
+                {g.items.map((cv) => {
+                  const c = cv.rep;
+                  const on = cv.ids.includes(activeId ?? "");
                   const named = /[A-Za-z]/.test(c.caller);
                   return (
                     <li key={c.id}>
@@ -154,7 +174,10 @@ export function CoachingShell({ calls, unanalyzed, children }: { calls: Coachabl
                           {named ? initials(c.caller) : c.direction === "outgoing" ? <PhoneOutgoing className="size-3.5" /> : <PhoneIncoming className="size-3.5" />}
                         </span>
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium">{c.caller}</div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-sm font-medium">{c.caller}</span>
+                            {cv.count > 1 && <span className="shrink-0 rounded-full bg-white/[0.08] px-1.5 text-[10px] tabular-nums text-muted-foreground">{cv.count}</span>}
+                          </div>
                           <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
                             <span>{fmtTime(c.occurredAt ?? c.ts)}</span>
                             <span>· {fmtDuration(c.durationSec)}</span>

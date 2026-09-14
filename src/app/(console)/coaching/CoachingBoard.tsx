@@ -5,14 +5,14 @@
 
 import { notFound } from "next/navigation";
 import { PhoneIncoming, PhoneOutgoing, Clock, Gauge as GaugeIcon, MessageCircleQuestion, Mic, CheckSquare, AlertTriangle, GraduationCap } from "lucide-react";
-import { getCallEventById, getCoachingAnalysis, resolveCallerName, getBookingByPhoneDigits, getCommsForLead } from "@/lib/db/repo";
+import { getCallEventById, getCoachingAnalysis, resolveCallerName, getBookingByPhoneDigits, getCommsForLead, getCustomerCallThread } from "@/lib/db/repo";
 import { computeCallMetrics, speedGauge, balanceGauge, sentimentGauge, momentumScore, type Gauge, type GaugeTone } from "@/lib/coach/metrics";
 import { ourPhoneDigits, fmtPhone, last10 } from "@/lib/comms/identity";
 import { getOpenphoneContactMap } from "@/lib/comms/openphone";
 import { llmConfigured } from "@/lib/llm";
 import { AutoAnalyze } from "./AutoAnalyze";
 import { CoachingTabs } from "./[id]/CoachingTabs";
-import { ConversationThread } from "@/components/ConversationThread";
+import { CoachingConversation, type CallItem, type TextItem, type TimelineItem } from "./CoachingConversation";
 
 const SENTIMENT_TONE: Record<string, string> = {
   positive: "text-emerald-300",
@@ -59,8 +59,22 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
     (call.contactName?.trim() || resolveCallerName(call) || nameByPhone || (custDigits ? contactMap.get(custDigits) : null) || fmtPhone(customerPhone)) ??
     "Unknown caller";
 
-  // The customer's conversation (texts + calls) for the Quo-style hero, when we can match a lead.
+  // The customer's texts (from a matched lead) merged with their calls into one Quo-style feed, where
+  // each call carries its AI summary + next step inline.
   const comms = custBooking ? getCommsForLead(custBooking.bookingId, 60) : [];
+  const feedCalls = custDigits ? getCustomerCallThread(custDigits, { ourDigits, contactMap, limit: 12 }) : [];
+  const callItems: CallItem[] = feedCalls.map((fc) => {
+    const rc = fc.id === id ? recap : getCoachingAnalysis(fc.id);
+    const ev = fc.id === id ? call : getCallEventById(fc.id);
+    const summary = rc?.keyPoints?.length ? rc.keyPoints : ev?.summary ? [ev.summary] : [];
+    return { kind: "call", id: fc.id, direction: fc.direction, at: fc.occurredAt ?? fc.ts, durationSec: fc.durationSec, sentiment: fc.sentiment, summary, nextStep: rc?.nextStep ?? "", analyzed: !!rc };
+  });
+  if (!callItems.some((c) => c.id === id)) {
+    const summary = recap?.keyPoints?.length ? recap.keyPoints : call.summary ? [call.summary] : [];
+    callItems.push({ kind: "call", id, direction: call.direction, at: call.occurredAt ?? call.ts, durationSec: call.durationSec, sentiment: call.sentiment, summary, nextStep: recap?.nextStep ?? "", analyzed: !!recap });
+  }
+  const textItems: TextItem[] = comms.filter((c) => c.channel !== "call").map((c) => ({ kind: "text", id: c.id, direction: c.direction, body: c.body ?? "", actor: c.actor, at: c.occurredAt ?? c.ts }));
+  const feedItems: TimelineItem[] = [...callItems, ...textItems].sort((a, b) => (Date.parse(a.at ?? "") || 0) - (Date.parse(b.at ?? "") || 0));
 
   const topSpeaker = metrics?.speakers[0];
   const rep = metrics?.speakers.find((s) => s.label === "Rep") ?? null;
@@ -137,8 +151,8 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
         </div>
       )}
 
-      {/* Conversation — the chronological hero (Quo-style); shown when we can match the customer's thread */}
-      {comms.length > 0 && <ConversationThread comms={comms} party={party} />}
+      {/* Conversation — calls (with inline AI summaries) + texts, chronological (Quo-style hero) */}
+      <CoachingConversation items={feedItems} party={party} activeId={id} />
 
       {/* Analysis, tabbed — Signals folds in the computed metrics/sliders/momentum */}
       <CoachingTabs
