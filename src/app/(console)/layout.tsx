@@ -10,13 +10,15 @@ import { pullBannerState } from "@/lib/pull/state";
 
 export default async function ConsoleLayout({ children }: { children: React.ReactNode }) {
   const role = await viewerRole();
-  // Only staff who can act on it (open GSPRO / manage the pull) see the data-health banner.
-  const banner = canManageSettings(role) ? pullBannerState() : null;
+  // Only staff who can act on it (open GSPRO / manage the pull) see the data-health banner. Mounted
+  // even when currently healthy so it can appear (and auto-clear) live as the pull status changes.
+  const canManage = canManageSettings(role);
+  const banner = canManage ? pullBannerState() : null;
   return (
     <div className="flex min-h-dvh flex-col md:flex-row">
       <ConsoleNav role={role} />
       <div className="flex min-w-0 flex-1 flex-col">
-        {banner && <PullHealthBanner level={banner.level} title={banner.title} detail={banner.detail} />}
+        {canManage && <PullHealthBanner initial={banner} />}
         <div className="min-w-0 flex-1">{children}</div>
       </div>
     </div>
