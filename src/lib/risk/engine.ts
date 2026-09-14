@@ -295,7 +295,11 @@ function assessWarehouse(
 ): RiskFinding[] {
   const active = routes.filter((r) => r.status !== "done");
   if (active.length === 0) return [];
-  const need = Math.ceil(active.length / Math.max(1, cfg.warehousePerRoutes));
+  // Only DELIVERY routes need the truck pre-loaded. A pickup-only route goes out empty to collect
+  // returns, so it needs no prep/load crew — don't let it drive the warehouse shortage.
+  const loadRoutes = active.filter((r) => r.stops.some((s) => s.kind !== "pickup"));
+  if (loadRoutes.length === 0) return [];
+  const need = Math.ceil(loadRoutes.length / Math.max(1, cfg.warehousePerRoutes));
   const scheduled = new Set(warehouseShifts.map((s) => String(s.userId))).size;
   if (scheduled >= need) return [];
   const days = daysUntil(date, now);
@@ -306,7 +310,7 @@ function assessWarehouse(
       category: "WAREHOUSE",
       severity: escalate(scheduled === 0 ? "HIGH" : "MEDIUM", days),
       title: `Warehouse coverage short (${date})`,
-      description: `${active.length} route${active.length === 1 ? "" : "s"} need ~${need} warehouse associate${need === 1 ? "" : "s"} to prep & load, but only ${scheduled} scheduled.`,
+      description: `${loadRoutes.length} delivery route${loadRoutes.length === 1 ? "" : "s"} need ~${need} warehouse associate${need === 1 ? "" : "s"} to prep & load, but only ${scheduled} scheduled.`,
       date,
       recommendedAction: "Schedule warehouse/asset crew for the load day.",
       actionTarget: "connecteam",

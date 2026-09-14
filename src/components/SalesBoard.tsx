@@ -6,9 +6,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { Archive, GripVertical } from "lucide-react";
 import type { BoardStatus, LeadCard } from "@/lib/salesos/boardTypes";
+import { LeadQuickView } from "@/components/LeadQuickView";
 
 const money = (n: number | null): string => (n == null ? "" : "$" + Math.round(n).toLocaleString("en-US"));
 
@@ -41,6 +41,7 @@ export function SalesBoard({
   const [cards, setCards] = useState(initialCards);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<BoardStatus | null>(null);
+  const [quickId, setQuickId] = useState<string | null>(null);
 
   async function persist(id: string, status: BoardStatus | "archived"): Promise<void> {
     try {
@@ -105,15 +106,19 @@ export function SalesBoard({
                     draggable
                     onDragStart={(e) => { e.dataTransfer.setData("text/plain", c.id); e.dataTransfer.effectAllowed = "move"; setDragId(c.id); }}
                     onDragEnd={() => { setDragId(null); setOverCol(null); }}
-                    className={`group rounded-lg border border-white/10 bg-background p-2.5 shadow-sm transition-opacity ${dragId === c.id ? "opacity-40" : ""}`}
+                    onClick={() => setQuickId(c.id)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === "Enter") setQuickId(c.id); }}
+                    className={`group cursor-pointer rounded-lg border border-white/10 bg-background p-2.5 shadow-sm transition-opacity hover:border-white/25 ${dragId === c.id ? "opacity-40" : ""}`}
                   >
                     <div className="flex items-start gap-1.5">
                       <GripVertical className="mt-0.5 size-3.5 shrink-0 cursor-grab text-muted-foreground/50" />
                       <div className="min-w-0 flex-1">
-                        <Link href={`/salesos/${c.id}`} className="block truncate text-sm font-medium hover:underline">{c.eventName || `Project ${c.id}`}</Link>
+                        <div className="truncate text-sm font-medium">{c.eventName || `Project ${c.id}`}</div>
                         <div className="truncate text-[11px] text-muted-foreground">{c.clientName || "Unknown client"}</div>
                       </div>
-                      <button onClick={() => archive(c.id)} title="Archive (drop off the board)" className="shrink-0 rounded p-0.5 text-muted-foreground/60 opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100">
+                      <button onClick={(e) => { e.stopPropagation(); archive(c.id); }} title="Archive (drop off the board)" className="shrink-0 rounded p-0.5 text-muted-foreground/60 opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100">
                         <Archive className="size-3.5" />
                       </button>
                     </div>
@@ -128,6 +133,7 @@ export function SalesBoard({
           </div>
         );
       })}
+      <LeadQuickView id={quickId} onClose={() => setQuickId(null)} />
     </div>
   );
 }

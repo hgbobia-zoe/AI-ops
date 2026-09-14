@@ -160,6 +160,28 @@ describe("Event Risk engine — 12 scenarios", () => {
     expect(has(dayBefore, "warehouse_shortage", "CRITICAL")).toBe(true);
   });
 
+  it("pickup-only day needs no prep/load crew → no warehouse_shortage even with none scheduled", () => {
+    const pickupRoute: EngineRoute = {
+      routeId: "R1",
+      truckId: "NPR-1",
+      date: DATE,
+      status: "ready",
+      driverId: "1",
+      driverName: "Al",
+      stops: [{ sequence: 1, custName: "Venue X", kind: "pickup", plannedWindow: iso(9) }],
+    };
+    const f = assessDay({
+      date: DATE,
+      routes: [pickupRoute],
+      driverShifts: [shift(1, "Al", 6, 20)],
+      warehouseShifts: [] as EngineShift[], // none scheduled — but nothing to load
+      fieldCrewScheduled: 3,
+      now: NOW,
+      config: enabled,
+    });
+    expect(has(f, "warehouse_shortage")).toBe(false);
+  });
+
   it("S9: tent installation crew shortage → staffing risk", () => {
     const f = assessDay({
       date: DATE,
