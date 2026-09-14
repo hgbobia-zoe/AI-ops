@@ -12,7 +12,9 @@ import { getOpenphoneContactMap } from "@/lib/comms/openphone";
 import { llmConfigured } from "@/lib/llm";
 import { AutoAnalyze } from "./AutoAnalyze";
 import { CoachingTabs } from "./[id]/CoachingTabs";
-import { CoachingConversation, type CallItem, type TextItem, type TimelineItem } from "./CoachingConversation";
+import { ConversationFeed } from "@/components/ConversationFeed";
+import { buildConversationFeed } from "@/lib/coach/feed";
+import type { CoachableCall } from "@/lib/db/repo";
 
 const SENTIMENT_TONE: Record<string, string> = {
   positive: "text-emerald-300",
@@ -62,19 +64,16 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
   // The customer's texts (from a matched lead) merged with their calls into one Quo-style feed, where
   // each call carries its AI summary + next step inline.
   const comms = custBooking ? getCommsForLead(custBooking.bookingId, 60) : [];
-  const feedCalls = custDigits ? getCustomerCallThread(custDigits, { ourDigits, contactMap, limit: 12 }) : [];
-  const callItems: CallItem[] = feedCalls.map((fc) => {
-    const rc = fc.id === id ? recap : getCoachingAnalysis(fc.id);
-    const ev = fc.id === id ? call : getCallEventById(fc.id);
-    const summary = rc?.keyPoints?.length ? rc.keyPoints : ev?.summary ? [ev.summary] : [];
-    return { kind: "call", id: fc.id, direction: fc.direction, at: fc.occurredAt ?? fc.ts, durationSec: fc.durationSec, sentiment: fc.sentiment, summary, nextStep: rc?.nextStep ?? "", analyzed: !!rc };
-  });
-  if (!callItems.some((c) => c.id === id)) {
-    const summary = recap?.keyPoints?.length ? recap.keyPoints : call.summary ? [call.summary] : [];
-    callItems.push({ kind: "call", id, direction: call.direction, at: call.occurredAt ?? call.ts, durationSec: call.durationSec, sentiment: call.sentiment, summary, nextStep: recap?.nextStep ?? "", analyzed: !!recap });
+  let feedCalls = custDigits ? getCustomerCallThread(custDigits, { ourDigits, contactMap, limit: 12 }) : [];
+  // Always include the call being viewed, even for an unknown caller with no matched thread.
+  if (!feedCalls.some((c) => c.id === id)) {
+    const self: CoachableCall = {
+      id, direction: call.direction, fromPhone: call.fromPhone, toPhone: call.toPhone, contactName: call.contactName,
+      customerPhone, caller: party, durationSec: call.durationSec, sentiment: call.sentiment, occurredAt: call.occurredAt, ts: call.ts, analyzed: !!recap,
+    };
+    feedCalls = [self, ...feedCalls];
   }
-  const textItems: TextItem[] = comms.filter((c) => c.channel !== "call").map((c) => ({ kind: "text", id: c.id, direction: c.direction, body: c.body ?? "", actor: c.actor, at: c.occurredAt ?? c.ts }));
-  const feedItems: TimelineItem[] = [...callItems, ...textItems].sort((a, b) => (Date.parse(a.at ?? "") || 0) - (Date.parse(b.at ?? "") || 0));
+  const feedItems = buildConversationFeed(feedCalls, comms);
 
   const topSpeaker = metrics?.speakers[0];
   const rep = metrics?.speakers.find((s) => s.label === "Rep") ?? null;
@@ -152,7 +151,7 @@ export async function CoachingBoard({ id }: { id: string }): Promise<React.JSX.E
       )}
 
       {/* Conversation — calls (with inline AI summaries) + texts, chronological (Quo-style hero) */}
-      <CoachingConversation items={feedItems} party={party} activeId={id} />
+      <ConversationFeed items={feedItems} party={party} activeId={id} />
 
       {/* Analysis, tabbed — Signals folds in the computed metrics/sliders/momentum */}
       <CoachingTabs

@@ -7,7 +7,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, History, AlertTriangle, Radio } from "lucide-react";
 import { OutreachPanel } from "@/components/OutreachPanel";
-import { ConversationThread } from "@/components/ConversationThread";
+import { ConversationFeed } from "@/components/ConversationFeed";
+import { buildConversationFeed } from "@/lib/coach/feed";
 import { LeadTabs } from "./LeadTabs";
 import { LeadCoachingInsight } from "./LeadCoachingInsight";
 import { getLead } from "@/lib/salesos/service";
@@ -63,6 +64,7 @@ export async function LeadBoard({ id }: { id: string }): Promise<React.JSX.Eleme
   const custDigits = last10(lead.clientPhone);
   const contactMap = await getOpenphoneContactMap();
   const thread = custDigits ? getCustomerCallThread(custDigits, { ourDigits, contactMap, limit: 8 }) : [];
+  const feedItems = buildConversationFeed(thread, conversation); // calls (w/ summaries) + texts, merged
 
   const { signals: s, priority } = lead;
   const dte = s.daysToEvent;
@@ -207,8 +209,8 @@ export async function LeadBoard({ id }: { id: string }): Promise<React.JSX.Eleme
         </div>
       </header>
 
-      {/* Conversation — the chronological hero (Quo-style) */}
-      <ConversationThread comms={conversation} party={party} />
+      {/* Conversation — calls (with inline AI summaries) + texts, chronological (Quo-style hero) */}
+      <ConversationFeed items={feedItems} party={party} />
 
       {/* Detail tabs, right under the conversation */}
       <LeadTabs

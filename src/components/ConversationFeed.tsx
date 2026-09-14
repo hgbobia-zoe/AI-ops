@@ -8,27 +8,9 @@
 import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { PhoneIncoming, PhoneOutgoing, ArrowRight, Sparkles } from "lucide-react";
+import type { TextItem, CallItem, TimelineItem } from "@/lib/coach/feedTypes";
 
-export interface TextItem {
-  kind: "text";
-  id: string;
-  direction: string | null;
-  body: string;
-  actor: string | null;
-  at: string | null;
-}
-export interface CallItem {
-  kind: "call";
-  id: string;
-  direction: string | null;
-  at: string | null;
-  durationSec: number | null;
-  sentiment: string | null;
-  summary: string[]; // key points, or the Quo summary as one bullet
-  nextStep: string;
-  analyzed: boolean;
-}
-export type TimelineItem = TextItem | CallItem;
+export type { TextItem, CallItem, TimelineItem } from "@/lib/coach/feedTypes";
 
 const SENTIMENT_TONE: Record<string, string> = { positive: "text-emerald-300", negative: "text-rose-300", neutral: "text-muted-foreground" };
 
@@ -43,7 +25,7 @@ function fmtDuration(sec: number | null): string {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 }
 
-export function CoachingConversation({ items, party, activeId }: { items: TimelineItem[]; party: string; activeId: string }): React.JSX.Element {
+export function ConversationFeed({ items, party, activeId }: { items: TimelineItem[]; party: string; activeId?: string }): React.JSX.Element {
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });

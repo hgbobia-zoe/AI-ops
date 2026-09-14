@@ -8,7 +8,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive, GripVertical } from "lucide-react";
 import type { BoardStatus, LeadCard } from "@/lib/salesos/boardTypes";
-import { LeadQuickView } from "@/components/LeadQuickView";
 
 const money = (n: number | null): string => (n == null ? "" : "$" + Math.round(n).toLocaleString("en-US"));
 
@@ -41,7 +40,6 @@ export function SalesBoard({
   const [cards, setCards] = useState(initialCards);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<BoardStatus | null>(null);
-  const [quickId, setQuickId] = useState<string | null>(null);
 
   async function persist(id: string, status: BoardStatus | "archived"): Promise<void> {
     try {
@@ -106,10 +104,10 @@ export function SalesBoard({
                     draggable
                     onDragStart={(e) => { e.dataTransfer.setData("text/plain", c.id); e.dataTransfer.effectAllowed = "move"; setDragId(c.id); }}
                     onDragEnd={() => { setDragId(null); setOverCol(null); }}
-                    onClick={() => setQuickId(c.id)}
+                    onClick={() => router.push(`/salesos/${c.id}`)}
                     role="button"
                     tabIndex={0}
-                    onKeyDown={(e) => { if (e.key === "Enter") setQuickId(c.id); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") router.push(`/salesos/${c.id}`); }}
                     className={`group cursor-pointer rounded-lg border border-white/10 bg-background p-2.5 shadow-sm transition-opacity hover:border-white/25 ${dragId === c.id ? "opacity-40" : ""}`}
                   >
                     <div className="flex items-start gap-1.5">
@@ -133,7 +131,6 @@ export function SalesBoard({
           </div>
         );
       })}
-      <LeadQuickView id={quickId} onClose={() => setQuickId(null)} />
     </div>
   );
 }
