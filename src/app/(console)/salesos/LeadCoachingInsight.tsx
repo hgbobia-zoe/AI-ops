@@ -1,15 +1,12 @@
-// Call-coaching insight for a lead — folds the Coaching blade's real signals into the Sales OS flow so
-// a rep sees where the deal actually stands from the calls, not just the inferred state. Given the
-// customer's phone, it pulls their coachable calls, reads the latest call's computed metrics + recap
-// (INFERENCE, labelled), and links each call into the full Coaching board. Renders nothing when the
-// customer has no calls with transcripts — no empty noise.
+// Call-coaching insight for a lead — the Coaching tab under the conversation. Given the customer's
+// coachable calls (fetched once by LeadBoard), it reads the latest call's computed metrics (FACT) +
+// recap (INFERENCE, labelled) and links each call into the full Coaching board, so a rep sees where
+// the deal stands from the calls, not just the inferred state.
 
 import Link from "next/link";
 import { Headphones, PhoneIncoming, PhoneOutgoing, ArrowRight, MessageSquareReply, GraduationCap, ChevronRight } from "lucide-react";
-import { getCustomerCallThread, getCallEventById, getCoachingAnalysis } from "@/lib/db/repo";
+import { getCallEventById, getCoachingAnalysis, type CoachableCall } from "@/lib/db/repo";
 import { computeCallMetrics, sentimentGauge, momentumScore, type GaugeTone } from "@/lib/coach/metrics";
-import { ourPhoneDigits, last10 } from "@/lib/comms/identity";
-import { getOpenphoneContactMap } from "@/lib/comms/openphone";
 
 const TONE_TEXT: Record<GaugeTone, string> = { good: "text-emerald-300", warn: "text-amber-300", bad: "text-rose-300", neutral: "text-muted-foreground" };
 const SENTIMENT_TONE: Record<string, string> = { positive: "text-emerald-300", negative: "text-rose-300", neutral: "text-muted-foreground" };
@@ -25,14 +22,10 @@ function fmtDuration(sec: number | null): string {
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
 }
 
-export async function LeadCoachingInsight({ phone }: { phone: string | null }): Promise<React.JSX.Element | null> {
-  const digits = last10(phone);
-  if (!digits) return null;
-
-  const ourDigits = ourPhoneDigits();
-  const contactMap = await getOpenphoneContactMap();
-  const thread = getCustomerCallThread(digits, { ourDigits, contactMap, limit: 6 });
-  if (thread.length === 0) return null; // this customer has no coached calls — say nothing
+export function LeadCoachingInsight({ thread, ourDigits }: { thread: CoachableCall[]; ourDigits: Set<string> }): React.JSX.Element {
+  if (thread.length === 0) {
+    return <p className="py-6 text-center text-sm text-muted-foreground">No coached calls yet for this customer. Calls with a transcript are analyzed automatically and show up here.</p>;
+  }
 
   // Latest call → computed metrics (FACT) + recap (INFERENCE) for the headline signals.
   const latest = thread[0];
@@ -50,10 +43,10 @@ export async function LeadCoachingInsight({ phone }: { phone: string | null }): 
   const topNote = recap?.coachingNotes[0] || null;
 
   return (
-    <section className="surface mb-4 border border-violet-500/20 bg-violet-500/[0.03] p-4">
+    <div>
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-violet-200">
-          <Headphones className="size-3.5" /> Call coaching · {thread.length} {thread.length === 1 ? "call" : "calls"}
+          <Headphones className="size-3.5" /> Latest call
         </div>
         <Link href={`/coaching/${latest.id}`} className="flex items-center gap-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground">
           Open in Coaching <ArrowRight className="size-3" />
@@ -62,9 +55,7 @@ export async function LeadCoachingInsight({ phone }: { phone: string | null }): 
 
       {/* Headline signals from the most recent call */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        {call?.sentiment && (
-          <Chip label="Sentiment" value={call.sentiment} tone={SENTIMENT_TONE[call.sentiment]} />
-        )}
+        {call?.sentiment && <Chip label="Sentiment" value={call.sentiment} tone={SENTIMENT_TONE[call.sentiment]} />}
         {momentum && <Chip label="Momentum" value={`${momentum.score}% ${momentum.label}`} tone={TONE_TEXT[momentum.tone]} />}
         {metrics?.wordsPerMin != null && <Chip label="Pace" value={`${metrics.wordsPerMin} wpm`} />}
         {tone == null && !call?.sentiment && <span className="text-xs text-muted-foreground">Latest call not analyzed yet.</span>}
@@ -86,6 +77,7 @@ export async function LeadCoachingInsight({ phone }: { phone: string | null }): 
       )}
 
       {/* The customer's calls — each into the full coaching board */}
+      <div className="mb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">All calls · {thread.length}</div>
       <ol className="space-y-1">
         {thread.map((c) => (
           <li key={c.id}>
@@ -100,7 +92,7 @@ export async function LeadCoachingInsight({ phone }: { phone: string | null }): 
           </li>
         ))}
       </ol>
-    </section>
+    </div>
   );
 }
 
