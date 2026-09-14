@@ -6,43 +6,12 @@ import { getPipelineLeads, getLeadStatusMap, getAllCustomerStates, getLatestInbo
 import { resolveDeterministic, fromStored } from "./stateService";
 import { nextBestAction } from "./nba";
 import { todayInOpsTz } from "@/lib/dates";
+import { BOARD_COLUMNS, type BoardStatus, type LeadCard } from "./boardTypes";
+
+export { BOARD_COLUMNS, STATUS_LABEL } from "./boardTypes";
+export type { BoardStatus, LeadStatus, LeadCard } from "./boardTypes";
 
 const FOLLOWUP_SILENCE_DAYS = 4; // quote sent + this many days with no contact → Need Follow-up
-
-// Board columns (archived is intentionally NOT a column — archived cards drop off the board).
-export type BoardStatus = "new" | "quote_sent" | "follow_up" | "action_needed" | "signed";
-export const BOARD_COLUMNS: { key: BoardStatus; label: string }[] = [
-  { key: "new", label: "New" },
-  { key: "quote_sent", label: "Quote Sent" },
-  { key: "follow_up", label: "Need Follow-up" },
-  { key: "action_needed", label: "Action Needed" },
-  { key: "signed", label: "Signed" },
-];
-
-export const STATUS_LABEL: Record<LeadBoardStatus, string> = {
-  new: "New",
-  quote_sent: "Quote Sent",
-  follow_up: "Need Follow-up",
-  action_needed: "Action Needed",
-  signed: "Signed",
-  archived: "Archived",
-};
-
-export interface LeadCard {
-  id: string;
-  eventName: string;
-  clientName: string;
-  value: number | null; // grand total (cents-safe dollars from the pull)
-  netPaid: number | null;
-  amountDue: number | null;
-  remainingBalance: number | null;
-  eventDate: string | null;
-  dateCreated: string | null;
-  quoteSentDate: string | null;
-  statusLabel: string;
-  daysToEvent: number | null;
-  status: LeadBoardStatus; // effective board status
-}
 
 function daysBetween(fromYmd: string, toYmd: string): number {
   const a = Date.parse(`${fromYmd}T00:00:00Z`);

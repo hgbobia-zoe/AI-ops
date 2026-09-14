@@ -8,7 +8,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Archive, GripVertical } from "lucide-react";
-import type { BoardStatus, LeadCard } from "@/lib/salesos/board";
+import type { BoardStatus, LeadCard } from "@/lib/salesos/boardTypes";
 
 const money = (n: number | null): string => (n == null ? "" : "$" + Math.round(n).toLocaleString("en-US"));
 
@@ -79,7 +79,7 @@ export function SalesBoard({
   }
 
   return (
-    <div className="flex gap-3 overflow-x-auto p-5 md:p-6">
+    <div className="flex h-[calc(100dvh-3.25rem)] gap-3 overflow-x-auto p-4 md:p-5">
       {columns.map((col) => {
         const list = cards[col.key];
         const isOver = overCol === col.key;
@@ -89,7 +89,7 @@ export function SalesBoard({
             onDragOver={(e) => { e.preventDefault(); setOverCol(col.key); }}
             onDragLeave={() => setOverCol((c) => (c === col.key ? null : c))}
             onDrop={(e) => { e.preventDefault(); const id = e.dataTransfer.getData("text/plain") || dragId; if (id) moveTo(id, col.key); setOverCol(null); setDragId(null); }}
-            className={`flex max-h-[calc(100dvh-8rem)] w-72 shrink-0 flex-col rounded-xl border border-t-2 bg-white/[0.02] ${COL_ACCENT[col.key]} ${isOver ? "border-white/30 bg-white/[0.05]" : "border-white/10"}`}
+            className={`flex h-full min-w-72 flex-1 flex-col rounded-xl border border-t-2 bg-white/[0.02] ${COL_ACCENT[col.key]} ${isOver ? "border-white/30 bg-white/[0.05]" : "border-white/10"}`}
           >
             <div className="flex items-center justify-between gap-2 px-3 py-2.5">
               <span className="text-sm font-semibold">{col.label}</span>
