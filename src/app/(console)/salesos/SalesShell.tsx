@@ -9,7 +9,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Sparkles, PanelLeftOpen, X, CalendarRange, Scale, TrendingDown, MessageCircle, Zap } from "lucide-react";
+import { Sparkles, PanelLeftOpen, X, CalendarRange, Scale, TrendingDown, MessageCircle, Zap, List, Table2, Columns3 } from "lucide-react";
 import type { QueueItem } from "@/lib/salesos/commandCenter";
 import { NBA_LABEL, type NbaAction } from "@/lib/salesos/nba";
 import type { CustomerState } from "@/lib/salesos/state";
@@ -72,15 +72,25 @@ export function SalesShell({
   const pathname = usePathname();
   const [drawer, setDrawer] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
+  useEffect(() => setDrawer(false), [pathname]); // hooks before any early return
 
-  // The analytical sub-views own the whole pane — no worklist rail.
   const seg = pathname.split("/")[2] ?? "";
+  // The analytical sub-views own the whole pane — no worklist rail, no view switcher.
   if (seg === "bid" || seg === "lost" || seg === "trends") return <>{children}</>;
+
+  const view: ViewKey = seg === "table" ? "table" : seg === "board" ? "board" : "worklist";
+  // Table + Board are full-width views (still under the shared view switcher).
+  if (view !== "worklist") {
+    return (
+      <div className="flex min-w-0 flex-1 flex-col">
+        <ViewSwitcher active={view} />
+        <div className="min-w-0 flex-1">{children}</div>
+      </div>
+    );
+  }
 
   const activeId = pathname.match(/^\/salesos\/([^/]+)/)?.[1] ?? queue[0]?.id ?? null;
   const activeItem = queue.find((q) => q.id === activeId) ?? null;
-
-  useEffect(() => setDrawer(false), [pathname]);
 
   const counts: Record<Filter, number> = {
     all: queue.length,
@@ -187,25 +197,56 @@ export function SalesShell({
   );
 
   return (
-    <div className="flex flex-col lg:flex-row lg:items-start">
-      {/* Sidebar (large screens) */}
-      <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-dvh lg:w-[340px] lg:shrink-0 lg:flex-col lg:border-r lg:border-white/10">
-        {listBody}
-      </aside>
+    <div className="flex min-w-0 flex-1 flex-col">
+      <ViewSwitcher active="worklist" />
+      <div className="flex flex-col lg:flex-row lg:items-start">
+        {/* Sidebar (large screens) */}
+        <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-dvh lg:w-[340px] lg:shrink-0 lg:flex-col lg:border-r lg:border-white/10">
+          {listBody}
+        </aside>
 
-      {/* Drawer (small/medium screens) */}
-      {drawer && <div className="fixed inset-0 z-40 bg-background lg:hidden">{listBody}</div>}
+        {/* Drawer (small/medium screens) */}
+        {drawer && <div className="fixed inset-0 z-40 bg-background lg:hidden">{listBody}</div>}
 
-      {/* Detail pane */}
-      <section className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 border-b border-white/10 p-3 lg:hidden">
-          <button onClick={() => setDrawer(true)} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-sm text-muted-foreground">
-            <PanelLeftOpen className="size-4" /> Leads
-          </button>
-          <span className="truncate text-sm font-medium">{activeItem?.eventName || activeItem?.clientName || "Sales OS"}</span>
-        </div>
-        {children}
-      </section>
+        {/* Detail pane */}
+        <section className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 border-b border-white/10 p-3 lg:hidden">
+            <button onClick={() => setDrawer(true)} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-sm text-muted-foreground">
+              <PanelLeftOpen className="size-4" /> Leads
+            </button>
+            <span className="truncate text-sm font-medium">{activeItem?.eventName || activeItem?.clientName || "Sales OS"}</span>
+          </div>
+          {children}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+type ViewKey = "worklist" | "table" | "board";
+
+function ViewSwitcher({ active }: { active: ViewKey }): React.JSX.Element {
+  const items: { key: ViewKey; label: string; href: string; icon: typeof List }[] = [
+    { key: "worklist", label: "Worklist", href: "/salesos", icon: List },
+    { key: "table", label: "Table", href: "/salesos/table", icon: Table2 },
+    { key: "board", label: "Board", href: "/salesos/board", icon: Columns3 },
+  ];
+  return (
+    <div className="flex items-center gap-1 border-b border-white/10 px-3 py-2">
+      {items.map((it) => {
+        const on = active === it.key;
+        const Icon = it.icon;
+        return (
+          <Link
+            key={it.key}
+            href={it.href}
+            aria-current={on ? "page" : undefined}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${on ? "bg-white/[0.1] text-foreground" : "text-muted-foreground hover:bg-white/5 hover:text-foreground"}`}
+          >
+            <Icon className="size-4" /> {it.label}
+          </Link>
+        );
+      })}
     </div>
   );
 }

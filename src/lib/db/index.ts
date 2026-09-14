@@ -450,6 +450,13 @@ CREATE TABLE IF NOT EXISTS coaching_analyses (
   model      TEXT,               -- model that produced it
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS lead_status (
+  booking_id TEXT PRIMARY KEY,   -- bookings.booking_id
+  status     TEXT NOT NULL,      -- Sales OS board column: new | quote_sent | follow_up | action_needed | signed | archived
+  updated_at TEXT NOT NULL,
+  updated_by TEXT                 -- actor who moved it (attribution)
+);
 `;
 
 type DB = InstanceType<typeof Database>;

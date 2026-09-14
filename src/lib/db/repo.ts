@@ -893,6 +893,24 @@ export function getOpenLeads(todayYmd: string): BookingView[] {
   ).map(toBookingView);
 }
 
+/** Pipeline leads for the Sales OS table + board: everything not lost/cancelled with an upcoming (or
+ *  undated) event — INCLUDING signed wins (so the board's Signed column + the table can show them).
+ *  Newest-created first (matches the GSPRO Projects table default). */
+export function getPipelineLeads(todayYmd: string): BookingView[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM bookings
+         WHERE LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%dead%'
+           AND (event_date IS NULL OR event_date >= ?)
+         ORDER BY COALESCE(date_created, event_date, '') DESC`,
+      )
+      .all(todayYmd) as Record<string, unknown>[]
+  ).map(toBookingView);
+}
+
 /** Lost/cancelled quotes (the post-mortem set for the Lost Quotes tracker), most recent event first. */
 export function getLostQuotes(): BookingView[] {
   return (
@@ -2306,4 +2324,26 @@ export function saveCoachingAnalysis(callId: string, recap: CallRecap): void {
       model: recap.model ?? null,
       createdAt: new Date().toISOString(),
     });
+}
+
+// ---- Sales OS board status (manual Kanban column, overrides the derived default) -----------------
+
+export type LeadBoardStatus = "new" | "quote_sent" | "follow_up" | "action_needed" | "signed" | "archived";
+
+/** Manual board-status overrides, by booking id. Effective status = override ?? derived default. */
+export function getLeadStatusMap(): Map<string, LeadBoardStatus> {
+  const rows = getDb().prepare("SELECT booking_id, status FROM lead_status").all() as { booking_id: string; status: string }[];
+  const m = new Map<string, LeadBoardStatus>();
+  for (const r of rows) m.set(r.booking_id, r.status as LeadBoardStatus);
+  return m;
+}
+
+/** Set (or clear the row for) a lead's board status. */
+export function setLeadStatus(bookingId: string, status: LeadBoardStatus, actor?: string | null): void {
+  getDb()
+    .prepare(
+      `INSERT INTO lead_status (booking_id, status, updated_at, updated_by) VALUES (?,?,?,?)
+       ON CONFLICT(booking_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+    )
+    .run(bookingId, status, new Date().toISOString(), actor ?? null);
 }
