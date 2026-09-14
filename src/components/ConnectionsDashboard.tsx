@@ -86,6 +86,15 @@ export function ConnectionsDashboard({
     if (!conn.test) return;
     setTests((t) => ({ ...t, [conn.key]: { busy: true } }));
     try {
+      if (conn.test.kind === "gpstrackit") {
+        // Real GPS TrackIt check: list units. Non-null means the key works and vehicles are visible.
+        const r = await fetch("/api/eta/units", { cache: "no-store" });
+        const j = (await r.json().catch(() => ({}))) as { units?: unknown };
+        const ok = r.ok && j.units != null;
+        setTests((t) => ({ ...t, [conn.key]: { busy: false, ok, msg: ok ? "GPS TrackIt OK" : "No units — check GPSTRACKIT_API_KEY" } }));
+        if (ok) void refresh();
+        return;
+      }
       const r = await fetch("/api/integrations/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(conn.test) });
       const j = (await r.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       const msg = r.status === 401 ? "Needs admin PIN — test from Settings." : j.ok ? "Connection OK" : j.error || "Test failed";

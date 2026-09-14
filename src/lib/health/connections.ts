@@ -12,6 +12,7 @@ import { slackConfigured, slackAlertConfigured } from "@/lib/notify/slack";
 import { llmConfigured } from "@/lib/llm";
 import { getSettings } from "@/lib/settings";
 import { loadGpsConfig, gpsProviderById } from "@/lib/providers";
+import { zonarConfigured, rateLimitedUntil } from "@/lib/eta/zonar";
 
 export type ConnStatus = "ok" | "attention" | "off";
 export type ConnCategory = "Data pull" | "Communications" | "AI" | "GPS";
@@ -26,7 +27,8 @@ export interface Connection {
   lastAt: string | null; // ISO of the last good signal, when we have one
   fixHref: string | null; // where the team goes to fix it
   fixLabel: string | null;
-  test?: { kind: "sms" | "gps"; provider: string } | null; // testable live via /api/integrations/test
+  // Testable live: provider-module creds via /api/integrations/test, or GPS TrackIt via /api/eta/units.
+  test?: { kind: "sms" | "gps"; provider: string } | { kind: "gpstrackit" } | null;
 }
 
 const AGENT_FRESH_MIN = 30; // a heartbeat older than this means the puller isn't running
@@ -168,21 +170,63 @@ export function computeConnections(now: number = Date.now()): Connection[] {
 
   // ── GPS / live ETA ──
   const gpsId = getSettings().gpsProvider;
-  const gpsName = gpsProviderById(gpsId).name;
-  const gpsCfg = loadGpsConfig(gpsId);
-  const gpsOn = Object.values(gpsCfg).some((v) => v && v.trim());
-  out.push({
-    key: "gps",
-    label: "GPS / live ETA",
-    category: "GPS",
-    status: gpsOn ? "ok" : "off",
-    headline: gpsOn ? "Connected" : "Not connected",
-    detail: gpsOn ? `${gpsName} — live ETA computed on demand.` : `${gpsName} selected but no credentials yet.`,
-    lastAt: null,
-    fixHref: "/admin",
-    fixLabel: gpsOn ? "Settings" : "Configure",
-    test: { kind: "gps", provider: gpsId },
-  });
+  const gpsDef = gpsProviderById(gpsId);
+  if (gpsId === "zonar") {
+    // Zonar = GPS TrackIt (cloud-api.gpstrackit.com), the server-side source that powers live ETA and
+    // truck location viewable from anywhere (src/lib/eta/zonar.ts → liveEta.ts). Key-gated by
+    // GPSTRACKIT_API_KEY; may be temporarily backing off after a rate-limit.
+    const on = zonarConfigured();
+    const limited = on && rateLimitedUntil() > now;
+    out.push({
+      key: "gps",
+      label: "GPS / live ETA",
+      category: "GPS",
+      status: on ? (limited ? "attention" : "ok") : "off",
+      headline: on ? (limited ? "Rate-limited" : "Live") : "Not connected",
+      detail: on
+        ? limited
+          ? "GPS TrackIt is backing off after a rate-limit; live location resumes shortly."
+          : "GPS TrackIt — truck location + ETA, viewable from anywhere."
+        : "Set GPSTRACKIT_API_KEY to show live truck location + ETA from anywhere.",
+      lastAt: null,
+      fixHref: on ? null : "/admin",
+      fixLabel: on ? null : "Configure",
+      test: { kind: "gpstrackit" },
+    });
+  } else if (!gpsDef.serverSide) {
+    // Any other non-server-side provider: handled on the device, nothing to wire up server-side.
+    out.push({
+      key: "gps",
+      label: "GPS / live ETA",
+      category: "GPS",
+      status: "ok",
+      headline: "On the tablet",
+      detail: `${gpsDef.name} — handled on the truck tablet; nothing to configure here.`,
+      lastAt: null,
+      fixHref: null,
+      fixLabel: null,
+      test: null,
+    });
+  } else {
+    // API provider (Samsara/Motive): connected when its required credential(s) are stored. The Test
+    // button verifies them live against the provider's API.
+    const cfg = loadGpsConfig(gpsId);
+    const requiredKeys = gpsDef.fields.filter((f) => f.secret).map((f) => f.key);
+    const missing = requiredKeys.filter((k) => !(cfg[k] && cfg[k].trim()));
+    const on = requiredKeys.length > 0 && missing.length === 0;
+    out.push({
+      key: "gps",
+      label: "GPS / live ETA",
+      category: "GPS",
+      status: on ? "ok" : "off",
+      headline: on ? "Connected" : "Not connected",
+      detail: on ? `${gpsDef.name} — live ETA on demand.` : `${gpsDef.name} selected but credentials missing${missing.length ? ` (${missing.join(", ")})` : ""}.`,
+      lastAt: null,
+      fixHref: "/admin",
+      fixLabel: on ? "Settings" : "Configure",
+      test: { kind: "gps", provider: gpsId },
+    });
+  }
 
   // Problems first, then not-connected, then healthy — so what needs attention is on top.
   const rank: Record<ConnStatus, number> = { attention: 0, off: 1, ok: 2 };
