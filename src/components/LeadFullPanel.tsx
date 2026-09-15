@@ -11,6 +11,7 @@ import { ConversationFeed } from "@/components/ConversationFeed";
 import { OutreachPanel } from "@/components/OutreachPanel";
 import { LeadAsk } from "@/components/LeadAsk";
 import { CopyButton } from "@/components/CopyButton";
+import { QuoTextSend } from "@/components/QuoTextSend";
 import type { TimelineItem } from "@/lib/coach/feedTypes";
 
 interface FullLead {
@@ -196,10 +197,7 @@ function NextStep({ d, onReanalyze, reanalyzing }: { d: FullLead; onReanalyze: (
         </div>
       )}
       {d.brief?.textDraft && (
-        <div className="border-t border-[var(--row-rule)] pt-3">
-          <div className="mb-1.5 flex items-center justify-between"><div className="text-[10.5px] uppercase tracking-[0.1em] text-meta">Text follow-up</div><CopyButton text={d.brief.textDraft} /></div>
-          <p className="border border-border bg-[var(--row)] p-2.5 text-[13.5px]">{d.brief.textDraft}</p>
-        </div>
+        <QuoTextSend id={d.id} phone={d.clientPhone} clientName={d.clientName} canText={d.hasPhone} initialText={d.brief.textDraft} />
       )}
       {d.brief?.email.body && (
         <div className="border-t border-[var(--row-rule)] pt-3">
