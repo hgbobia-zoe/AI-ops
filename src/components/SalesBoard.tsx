@@ -11,14 +11,6 @@ import type { BoardStatus, LeadCard } from "@/lib/salesos/boardTypes";
 
 const money = (n: number | null): string => (n == null ? "" : "$" + Math.round(n).toLocaleString("en-US"));
 
-const COL_ACCENT: Record<BoardStatus, string> = {
-  new: "border-t-amber-500/60",
-  quote_sent: "border-t-sky-500/60",
-  follow_up: "border-t-violet-500/60",
-  action_needed: "border-t-rose-500/60",
-  signed: "border-t-emerald-500/60",
-};
-
 function whenLabel(dte: number | null): { text: string; hot: boolean } {
   if (dte == null) return { text: "no date", hot: false };
   if (dte < 0) return { text: `${Math.abs(dte)}d ago`, hot: false };
@@ -88,14 +80,14 @@ export function SalesBoard({
             onDragOver={(e) => { e.preventDefault(); setOverCol(col.key); }}
             onDragLeave={() => setOverCol((c) => (c === col.key ? null : c))}
             onDrop={(e) => { e.preventDefault(); const id = e.dataTransfer.getData("text/plain") || dragId; if (id) moveTo(id, col.key); setOverCol(null); setDragId(null); }}
-            className={`flex h-full min-w-72 flex-1 flex-col rounded-xl border border-t-2 bg-white/[0.02] ${COL_ACCENT[col.key]} ${isOver ? "border-white/30 bg-white/[0.05]" : "border-white/10"}`}
+            className={`flex h-full min-w-[200px] flex-1 flex-col border border-border bg-panel transition-colors ${isOver ? "border-foreground/30 bg-[var(--row-hover)]" : ""}`}
           >
-            <div className="flex items-center justify-between gap-2 px-3 py-2.5">
-              <span className="text-sm font-semibold">{col.label}</span>
-              <span className="rounded-full bg-white/[0.08] px-1.5 text-xs tabular-nums text-muted-foreground">{list.length}</span>
+            <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--row-rule)] bg-panel px-3 py-2.5">
+              <span className={`text-[12px] font-medium uppercase tracking-[0.1em] ${col.key === "signed" ? "text-muted-foreground" : "text-tertiary-text"}`}>{col.label}</span>
+              <span className="ml-auto text-[12px] tabular-nums text-meta">{list.length}</span>
             </div>
-            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
-              {list.length === 0 && <p className="px-1 py-6 text-center text-xs text-muted-foreground">{isOver ? "Drop here" : "Empty"}</p>}
+            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-1.5">
+              {list.length === 0 && <p className="px-1 py-6 text-center text-[12px] text-meta">{isOver ? "Drop here" : "Empty"}</p>}
               {list.map((c) => {
                 const w = whenLabel(c.daysToEvent);
                 return (
@@ -108,21 +100,19 @@ export function SalesBoard({
                     role="button"
                     tabIndex={0}
                     onKeyDown={(e) => { if (e.key === "Enter") router.push(`/salesos/${c.id}`); }}
-                    className={`group cursor-pointer rounded-lg border border-white/10 bg-background p-2.5 shadow-sm transition-opacity hover:border-white/25 ${dragId === c.id ? "opacity-40" : ""}`}
+                    className={`group cursor-pointer border border-border bg-card p-2.5 transition-colors hover:border-foreground/25 ${dragId === c.id ? "opacity-40" : ""}`}
                   >
-                    <div className="flex items-start gap-1.5">
-                      <GripVertical className="mt-0.5 size-3.5 shrink-0 cursor-grab text-muted-foreground/50" />
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium">{c.eventName || `Project ${c.id}`}</div>
-                        <div className="truncate text-[11px] text-muted-foreground">{c.clientName || "Unknown client"}</div>
-                      </div>
-                      <button onClick={(e) => { e.stopPropagation(); archive(c.id); }} title="Archive (drop off the board)" className="shrink-0 rounded p-0.5 text-muted-foreground/60 opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100">
+                    <div className="flex items-start gap-2">
+                      {showMoney && c.value != null && <span className="shrink-0 text-[15px] font-medium tabular-nums text-tertiary-text">{money(c.value)}</span>}
+                      <span className={`ml-auto shrink-0 text-[12px] tabular-nums ${w.hot ? "text-critical" : "text-meta"}`}>{w.text}</span>
+                      <button onClick={(e) => { e.stopPropagation(); archive(c.id); }} title="Archive (drop off the board)" className="-mr-0.5 shrink-0 rounded p-0.5 text-meta opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100">
                         <Archive className="size-3.5" />
                       </button>
                     </div>
-                    <div className="mt-1.5 flex items-center gap-2 pl-5 text-[11px]">
-                      <span className={w.hot ? "text-rose-200" : "text-muted-foreground"}>{w.text}</span>
-                      {showMoney && c.value != null && <span className="ml-auto tabular-nums text-amber-200">{money(c.value)}</span>}
+                    <div className="mt-1 truncate text-[14px] font-medium text-foreground">{c.eventName || `Project ${c.id}`}</div>
+                    <div className="flex items-center gap-1.5">
+                      <GripVertical className="size-3 shrink-0 cursor-grab text-meta/60" />
+                      <span className="truncate text-[12.5px] text-meta">{c.clientName || "Unknown client"}</span>
                     </div>
                   </div>
                 );
