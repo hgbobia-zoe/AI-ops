@@ -20,7 +20,7 @@ import {
   getRecentMessages,
   getRouteForDate,
 } from "@/lib/db/repo";
-import { DISPLAY_TZ, todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
+import { DISPLAY_TZ, todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
 import { reviewStopAddress } from "@/lib/addressReview";
 import { getSettings } from "@/lib/settings";
 import { getActiveVehicles } from "@/lib/vehicles";
@@ -105,6 +105,9 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
         </div>
       )}
 
+      {/* Scheduled time board — mirrors what's planned in Goodshuffle (not live) */}
+      {anyRoute && <TimeBoard fleet={fleet} isToday={isToday} />}
+
       {/* Fleet */}
       <section className="grid gap-4 lg:grid-cols-2">
         {fleet.map(({ truck, route }) => (
@@ -176,6 +179,99 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
         </>
       )}
     </div>
+  );
+}
+
+// ── Scheduled time board ──────────────────────────────────────────────────────
+const BOARD_START = 7;
+const BOARD_END = 19;
+const BOARD_HOURS = BOARD_END - BOARD_START;
+const LABEL_W = 184;
+
+function hourInTz(iso: string | undefined | null): number | null {
+  if (!iso) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: DISPLAY_TZ, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date(iso));
+    const h = Number(parts.find((p) => p.type === "hour")?.value);
+    const m = Number(parts.find((p) => p.type === "minute")?.value);
+    return Number.isNaN(h) ? null : h + (Number.isNaN(m) ? 0 : m) / 60;
+  } catch {
+    return null;
+  }
+}
+
+function TimeBoard({ fleet, isToday }: { fleet: { truck: { name: string; truckId: string }; route: Route | null }[]; isToday: boolean }): React.JSX.Element {
+  const rows = fleet.filter((f) => f.route);
+  const nowH = isToday ? hourInTz(new Date().toISOString()) : null;
+  const nowPct = nowH != null && nowH >= BOARD_START && nowH <= BOARD_END ? ((nowH - BOARD_START) / BOARD_HOURS) * 100 : null;
+  const hours = Array.from({ length: BOARD_HOURS + 1 }, (_, i) => BOARD_START + i);
+  const label = (h: number) => (h === 12 ? "12p" : h < 12 ? `${h}a` : `${h - 12}p`);
+
+  return (
+    <section className="overflow-x-auto border border-border">
+      <div className="min-w-[900px]">
+        {/* axis */}
+        <div className="flex border-b border-[var(--row-rule)]">
+          <div className="shrink-0" style={{ width: LABEL_W }} />
+          <div className="flex flex-1">
+            {hours.slice(0, -1).map((h) => (
+              <div key={h} className="flex-1 border-l border-[var(--grid-rule)] px-1 py-1 text-[10.5px] text-meta">{label(h)}</div>
+            ))}
+          </div>
+        </div>
+
+        {/* truck rows */}
+        {rows.map(({ truck, route }) => {
+          const r = route!;
+          const done = r.stops.filter((s) => s.state === "Completed" || s.state === "Returned").length;
+          return (
+            <div key={truck.truckId} className="flex border-b border-[var(--row-rule)] last:border-b-0">
+              <div className="flex shrink-0 flex-col justify-center px-3" style={{ width: LABEL_W }}>
+                <div className="text-[14px] font-medium">{truck.name}</div>
+                <div className="text-[12px] text-meta">{r.driverName || "No driver"} · {done}/{r.stops.length}</div>
+              </div>
+              <div className="relative flex-1" style={{ height: 48 }}>
+                {hours.slice(1, -1).map((h) => (
+                  <div key={h} className="absolute inset-y-0 w-px bg-[var(--grid-rule)]" style={{ left: `${((h - BOARD_START) / BOARD_HOURS) * 100}%` }} />
+                ))}
+                {nowPct != null && <div className="absolute inset-y-0 z-10 w-px bg-[#cfd3e5]/70" style={{ left: `${nowPct}%` }} />}
+                {r.stops.map((s) => {
+                  const start = hourInTz(s.plannedWindow || s.eta);
+                  if (start == null) return null;
+                  const clamped = Math.max(BOARD_START, Math.min(BOARD_END - 0.5, start));
+                  const leftPct = ((clamped - BOARD_START) / BOARD_HOURS) * 100;
+                  const finished = s.state === "Completed" || s.state === "Returned";
+                  const exception = s.state === "Exception";
+                  const pickup = s.kind === "pickup";
+                  const fill = finished ? "bg-[#262834] text-meta" : exception ? "bg-[#4a2a2e] text-[#e9e9ed] ring-1 ring-inset ring-critical" : "bg-[#3f424d] text-[#e9e9ed]";
+                  const ring = !finished && !exception && pickup ? "ring-1 ring-inset ring-attention/60" : "";
+                  return (
+                    <div
+                      key={s.stopId}
+                      title={`${s.sequence}. ${s.custName} · ${pickup ? "Pickup" : "Delivery"} · ${s.plannedWindow || s.eta ? formatClockTime(s.plannedWindow || s.eta || "") : "no time"} · ${s.state}`}
+                      className={`absolute top-1/2 flex h-[26px] -translate-y-1/2 items-center gap-1 overflow-hidden rounded-[2px] px-1.5 text-[11px] ${fill} ${ring}`}
+                      style={{ left: `${leftPct}%`, width: `max(${(0.7 / BOARD_HOURS) * 100}%, 72px)` }}
+                    >
+                      <span className={`shrink-0 text-[9px] font-semibold uppercase ${pickup ? "text-attention" : "text-tertiary-text"}`}>{pickup ? "P" : "D"}</span>
+                      <span className="truncate">{s.custName}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* legend */}
+      <div className="flex flex-wrap items-center gap-4 border-t border-[var(--row-rule)] px-3 py-2 text-[11.5px] text-meta">
+        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#3f424d]" /> Scheduled</span>
+        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#3f424d] ring-1 ring-inset ring-attention/60" /> Pickup (P)</span>
+        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#262834]" /> Done</span>
+        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#4a2a2e] ring-1 ring-inset ring-critical" /> Exception</span>
+        {isToday && <span className="flex items-center gap-1.5"><span className="h-3 w-px bg-[#cfd3e5]/70" /> Now</span>}
+      </div>
+    </section>
   );
 }
 
