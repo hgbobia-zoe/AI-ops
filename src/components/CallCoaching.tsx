@@ -5,8 +5,23 @@
 // Reused in two places: expanded inline under a call on the conversation timeline, and stacked in the
 // lead panel's Coaching tab. Pure presentation of the EXISTING analysis; no new inference here.
 
-import { GraduationCap, MessageSquareWarning, AlertCircle, CheckSquare } from "lucide-react";
-import type { CallCoachingItem } from "@/lib/coach/feedTypes";
+import { GraduationCap, MessageSquareWarning, AlertCircle, CheckSquare, Gauge } from "lucide-react";
+import type { CallCoachingItem, CallSignals } from "@/lib/coach/feedTypes";
+
+const MOMENTUM_TONE: Record<string, string> = { good: "text-emerald-300", warn: "text-amber-300", bad: "text-rose-300", neutral: "text-muted-foreground" };
+
+/** The instant, transcript-derived read (momentum, talk balance, pace, discovery questions). Available
+ *  before the AI recap is written. All computed facts, never invented. */
+export function CallSignalsStrip({ s }: { s: CallSignals }): React.JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
+      <span className="flex items-center gap-1 font-medium"><Gauge className={`size-3.5 ${MOMENTUM_TONE[s.momentum.tone]}`} /> <span className={MOMENTUM_TONE[s.momentum.tone]}>Momentum {s.momentum.score}% · {s.momentum.label}</span></span>
+      {s.repSharePct != null && <span className="text-muted-foreground">Talk balance <span className="text-foreground">{s.repSharePct}% you</span></span>}
+      {s.wordsPerMin != null && <span className="text-muted-foreground">Pace <span className="text-foreground">{s.wordsPerMin} wpm</span></span>}
+      <span className="text-muted-foreground">Discovery Qs <span className="text-foreground">{s.questions}</span></span>
+    </div>
+  );
+}
 
 export function CallCoaching({ data }: { data: CallCoachingItem }): React.JSX.Element {
   return (

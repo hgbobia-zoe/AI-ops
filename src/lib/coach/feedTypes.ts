@@ -17,6 +17,14 @@ export interface CallCoachingItem {
   concerns: string[]; // customer concerns raised
   actionItems: string[]; // what the rep committed to
 }
+/** Instant, deterministic call signals (computed from the transcript, no LLM) — available as soon as a
+ *  call has a transcript, before the AI recap is written. */
+export interface CallSignals {
+  wordsPerMin: number | null;
+  repSharePct: number | null; // rep's share of the talking, or null when the transcript isn't labelled
+  questions: number; // discovery questions asked
+  momentum: { score: number; label: string; tone: "good" | "warn" | "bad" | "neutral" };
+}
 export interface CallItem {
   kind: "call";
   id: string;
@@ -28,6 +36,7 @@ export interface CallItem {
   nextStep: string;
   analyzed: boolean;
   coaching: CallCoachingItem | null;
+  signals: CallSignals | null;
 }
 export interface EmailItem {
   kind: "email";

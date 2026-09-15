@@ -3,7 +3,9 @@
 
 import { getCallEventById, getCoachingAnalysis, getCommsForLead, type CoachableCall, type CommsEventView, type BookingView } from "@/lib/db/repo";
 import { getCustomerTextThread } from "@/lib/comms/openphone";
-import type { CallItem, TextItem, EmailItem, TimelineItem } from "./feedTypes";
+import { computeCallMetrics, momentumScore } from "@/lib/coach/metrics";
+import { ourPhoneDigits } from "@/lib/comms/identity";
+import type { CallItem, CallSignals, TextItem, EmailItem, TimelineItem } from "./feedTypes";
 
 /** All comms for a lead's conversation feed: the stored comms_events PLUS the live OpenPhone SMS thread
  *  (texts sent/received natively in Quo, or before our webhook, that never hit comms_events), deduped by
@@ -29,6 +31,7 @@ export function emailFeedItems(booking: BookingView | null | undefined): EmailIt
 
 /** Map coachable calls to feed items, pulling each call's Quo summary / recap. */
 export function callFeedItems(calls: CoachableCall[]): CallItem[] {
+  const ourDigits = ourPhoneDigits();
   return calls.map((c) => {
     const rc = getCoachingAnalysis(c.id);
     const ev = getCallEventById(c.id);
@@ -38,7 +41,15 @@ export function callFeedItems(calls: CoachableCall[]): CallItem[] {
       rc && ((rc.coachingNotes?.length ?? 0) || (rc.objections?.length ?? 0) || (rc.customerConcerns?.length ?? 0) || (rc.actionItems?.length ?? 0))
         ? { notes: rc.coachingNotes ?? [], objections: rc.objections ?? [], concerns: rc.customerConcerns ?? [], actionItems: rc.actionItems ?? [] }
         : null;
-    return { kind: "call", id: c.id, direction: c.direction, at: c.occurredAt ?? c.ts, durationSec: c.durationSec, sentiment: c.sentiment, summary, nextStep: rc?.nextStep ?? "", analyzed: !!rc, coaching };
+    // Instant signals: computed straight from the transcript, so they're ready before the AI recap is.
+    let signals: CallSignals | null = null;
+    if (ev?.transcript) {
+      const m = computeCallMetrics(ev.transcript, c.durationSec, ourDigits);
+      const repShare = m.speakers.find((s) => s.label === "Rep")?.share ?? null;
+      const mom = momentumScore({ sentiment: c.sentiment, repShare, questions: m.questions, hasNextStep: !!rc?.nextStep });
+      signals = { wordsPerMin: m.wordsPerMin, repSharePct: repShare != null ? Math.round(repShare * 100) : null, questions: m.questions, momentum: { score: mom.score, label: mom.label, tone: mom.tone } };
+    }
+    return { kind: "call", id: c.id, direction: c.direction, at: c.occurredAt ?? c.ts, durationSec: c.durationSec, sentiment: c.sentiment, summary, nextStep: rc?.nextStep ?? "", analyzed: !!rc, coaching, signals };
   });
 }
 

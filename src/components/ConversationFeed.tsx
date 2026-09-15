@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PhoneIncoming, PhoneOutgoing, ArrowRight, Sparkles, Mail, GraduationCap, ChevronDown } from "lucide-react";
-import { CallCoaching } from "@/components/CallCoaching";
+import { CallCoaching, CallSignalsStrip } from "@/components/CallCoaching";
 import type { TextItem, CallItem, EmailItem, TimelineItem } from "@/lib/coach/feedTypes";
 
 export type { TextItem, CallItem, EmailItem, TimelineItem } from "@/lib/coach/feedTypes";
@@ -100,15 +100,21 @@ function CallCard({ c, active }: { c: CallItem; active: boolean }): React.JSX.El
         <p className="mt-2 text-[11px] text-muted-foreground">{c.analyzed ? "No summary for this call." : "Not analyzed yet — a recap will appear here once it's coached."}</p>
       )}
 
-      {/* Coaching (the teaching layer) sits ON the call it's about, collapsed by default. */}
-      {c.coaching && (
+      {/* Coaching sits ON the call it's about, collapsed by default. Signals (from the transcript) are
+          ready immediately; the deeper recap notes appear underneath once the call has been analyzed. */}
+      {(c.signals || c.coaching) && (
         <div className="mt-2">
           <button onClick={() => setCoachOpen((o) => !o)} className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-200/80 transition-colors hover:text-amber-200">
             <GraduationCap className="size-3.5" /> {coachOpen ? "Hide coaching" : "Coaching"} <ChevronDown className={`size-3 transition-transform ${coachOpen ? "rotate-180" : ""}`} />
           </button>
           {coachOpen && (
-            <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.04] p-2.5">
-              <CallCoaching data={c.coaching} />
+            <div className="mt-2 space-y-2.5 rounded-lg border border-amber-500/20 bg-amber-500/[0.04] p-2.5">
+              {c.signals && <CallSignalsStrip s={c.signals} />}
+              {c.coaching ? (
+                <CallCoaching data={c.coaching} />
+              ) : (
+                <p className="text-[11px] text-muted-foreground">Full recap is still being generated. The signals above are ready now.</p>
+              )}
             </div>
           )}
         </div>

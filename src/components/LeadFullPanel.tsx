@@ -12,7 +12,7 @@ import { OutreachPanel } from "@/components/OutreachPanel";
 import { LeadAsk } from "@/components/LeadAsk";
 import { QuoTextSend } from "@/components/QuoTextSend";
 import { EmailSend } from "@/components/EmailSend";
-import { CallCoaching } from "@/components/CallCoaching";
+import { CallCoaching, CallSignalsStrip } from "@/components/CallCoaching";
 import type { TimelineItem, CallItem } from "@/lib/coach/feedTypes";
 
 interface FullLead {
@@ -95,7 +95,7 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
   }, [onClose]);
 
   const tel = d?.clientPhone?.replace(/[^\d+]/g, "") ?? "";
-  const coachedCalls = (d?.feed ?? []).filter((it): it is CallItem => it.kind === "call" && !!it.coaching);
+  const coachedCalls = (d?.feed ?? []).filter((it): it is CallItem => it.kind === "call" && (!!it.coaching || !!it.signals));
   const tabs: { key: Tab; label: string; icon: typeof Sparkles }[] = [
     { key: "next", label: "Next step", icon: Sparkles },
     { key: "outreach", label: "Outreach", icon: MessageSquare },
@@ -232,7 +232,10 @@ function CoachingTab({ calls }: { calls: CallItem[] }): React.JSX.Element {
               <span className="text-[11px] text-meta">{fmtWhen(c.at)}</span>
               {c.sentiment && <span className="text-[11px] capitalize text-meta">{c.sentiment}</span>}
             </div>
-            {c.coaching && <CallCoaching data={c.coaching} />}
+            <div className="space-y-2.5">
+              {c.signals && <CallSignalsStrip s={c.signals} />}
+              {c.coaching ? <CallCoaching data={c.coaching} /> : <p className="text-[11px] text-meta">Full recap is still being generated. The signals above are ready now.</p>}
+            </div>
           </div>
         );
       })}
