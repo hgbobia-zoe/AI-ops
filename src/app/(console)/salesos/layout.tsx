@@ -11,15 +11,12 @@ import { SalesShell } from "./SalesShell";
 
 export const dynamic = "force-dynamic";
 
-export default async function SalesOsLayout({ children, modal }: { children: React.ReactNode; modal: React.ReactNode }): Promise<React.JSX.Element> {
+export default async function SalesOsLayout({ children }: { children: React.ReactNode }): Promise<React.JSX.Element> {
   const showMoney = canSeeFinancials(await viewerRole());
   const cc = salesCommandCenter();
   return (
-    <>
-      <SalesShell queue={cc.items} showMoney={showMoney} needAttention={cc.needAttention} justReplied={cc.justReplied} totalPotential={cc.totalPotential}>
-        {children}
-      </SalesShell>
-      {modal}
-    </>
+    <SalesShell queue={cc.items} showMoney={showMoney} needAttention={cc.needAttention} justReplied={cc.justReplied} totalPotential={cc.totalPotential}>
+      {children}
+    </SalesShell>
   );
 }

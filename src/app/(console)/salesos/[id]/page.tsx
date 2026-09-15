@@ -1,10 +1,12 @@
-// A specific lead under /salesos/[id]: the shell renders the worklist with this lead pre-selected in the
-// detail panel; the full board opens as a modal (@modal/(.)[id]) on soft navigation. This route itself
-// renders nothing — kept so the URL resolves on a hard load / deep link.
+// A specific lead under /salesos/[id] — the full lead board (deep link / "Open full lead"). The shell
+// renders this as the detail for a lead-id path; the worklist owns the index and the board/table have
+// their own side-drawer preview.
+
+import { LeadBoard } from "../LeadBoard";
 
 export const dynamic = "force-dynamic";
 
-export default async function LeadDetailPage({ params }: { params: Promise<{ id: string }> }): Promise<null> {
-  await params;
-  return null;
+export default async function LeadDetailPage({ params }: { params: Promise<{ id: string }> }): Promise<React.JSX.Element> {
+  const { id } = await params;
+  return <LeadBoard id={id} />;
 }

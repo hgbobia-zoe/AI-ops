@@ -6,6 +6,7 @@
 import { AlertTriangle, CircleCheck, MessageSquare, Truck as TruckIcon, ExternalLink } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { ReopenButton } from "@/components/ReopenButton";
+import { CompleteStopButton } from "@/components/CompleteStopButton";
 import { RemoveStopButton } from "@/components/RemoveStopButton";
 import { CloseRouteButton } from "@/components/CloseRouteButton";
 import { ReopenRouteButton } from "@/components/ReopenRouteButton";
@@ -464,6 +465,9 @@ function StopLine({
           </span>
         )}
         <StateBadge state={stop.state} />
+        {!routeDone && !finished && (
+          <CompleteStopButton stopId={stop.stopId} custName={stop.custName} />
+        )}
         {stop.state === "Completed" && (
           <ReopenButton truckId={truckId} routeId={routeId} stopId={stop.stopId} />
         )}

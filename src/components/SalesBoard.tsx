@@ -8,6 +8,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive, GripVertical } from "lucide-react";
 import type { BoardStatus, LeadCard } from "@/lib/salesos/boardTypes";
+import { LeadDrawer } from "@/components/LeadDrawer";
 
 const money = (n: number | null): string => (n == null ? "" : "$" + Math.round(n).toLocaleString("en-US"));
 
@@ -32,6 +33,7 @@ export function SalesBoard({
   const [cards, setCards] = useState(initialCards);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<BoardStatus | null>(null);
+  const [drawerId, setDrawerId] = useState<string | null>(null);
 
   async function persist(id: string, status: BoardStatus | "archived"): Promise<void> {
     try {
@@ -70,7 +72,7 @@ export function SalesBoard({
   }
 
   return (
-    <div className="flex h-[calc(100dvh-3.25rem)] gap-3 overflow-x-auto p-4 md:p-5">
+    <div className="flex h-[calc(100dvh-6rem)] items-start gap-3 overflow-auto p-4 md:p-5">
       {columns.map((col) => {
         const list = cards[col.key];
         const isOver = overCol === col.key;
@@ -80,13 +82,13 @@ export function SalesBoard({
             onDragOver={(e) => { e.preventDefault(); setOverCol(col.key); }}
             onDragLeave={() => setOverCol((c) => (c === col.key ? null : c))}
             onDrop={(e) => { e.preventDefault(); const id = e.dataTransfer.getData("text/plain") || dragId; if (id) moveTo(id, col.key); setOverCol(null); setDragId(null); }}
-            className={`flex h-full min-w-[200px] flex-1 flex-col border border-border bg-panel transition-colors ${isOver ? "border-foreground/30 bg-[var(--row-hover)]" : ""}`}
+            className={`flex min-h-[120px] min-w-[200px] flex-1 flex-col border border-border bg-panel transition-colors ${isOver ? "border-foreground/30 bg-[var(--row-hover)]" : ""}`}
           >
             <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--row-rule)] bg-panel px-3 py-2.5">
               <span className={`text-[12px] font-medium uppercase tracking-[0.1em] ${col.key === "signed" ? "text-muted-foreground" : "text-tertiary-text"}`}>{col.label}</span>
               <span className="ml-auto text-[12px] tabular-nums text-meta">{list.length}</span>
             </div>
-            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-1.5">
+            <div className="space-y-1.5 p-1.5">
               {list.length === 0 && <p className="px-1 py-6 text-center text-[12px] text-meta">{isOver ? "Drop here" : "Empty"}</p>}
               {list.map((c) => {
                 const w = whenLabel(c.daysToEvent);
@@ -96,10 +98,10 @@ export function SalesBoard({
                     draggable
                     onDragStart={(e) => { e.dataTransfer.setData("text/plain", c.id); e.dataTransfer.effectAllowed = "move"; setDragId(c.id); }}
                     onDragEnd={() => { setDragId(null); setOverCol(null); }}
-                    onClick={() => router.push(`/salesos/${c.id}`)}
+                    onClick={() => setDrawerId(c.id)}
                     role="button"
                     tabIndex={0}
-                    onKeyDown={(e) => { if (e.key === "Enter") router.push(`/salesos/${c.id}`); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") setDrawerId(c.id); }}
                     className={`group cursor-pointer border border-border bg-card p-2.5 transition-colors hover:border-foreground/25 ${dragId === c.id ? "opacity-40" : ""}`}
                   >
                     <div className="flex items-start gap-2">
@@ -121,6 +123,7 @@ export function SalesBoard({
           </div>
         );
       })}
+      <LeadDrawer id={drawerId} onClose={() => setDrawerId(null)} />
     </div>
   );
 }

@@ -62,7 +62,9 @@ export function SalesShell({
   if (seg === "bid" || seg === "lost" || seg === "trends") return <>{children}</>;
 
   const view: ViewKey = seg === "table" ? "table" : seg === "board" ? "board" : "worklist";
-  if (view !== "worklist") {
+  // Table + Board are full-width views; a lead-id path (deep link / "Open full lead") renders the full
+  // lead board as children. Both sit under the shared view switcher.
+  if (view !== "worklist" || seg) {
     return (
       <div className="flex min-w-0 flex-1 flex-col">
         <ViewSwitcher active={view} />
@@ -74,8 +76,7 @@ export function SalesShell({
   const now = queue.filter((q) => tierOf(q) === "now");
   const today = queue.filter((q) => tierOf(q) === "today");
   const monitor = queue.filter((q) => tierOf(q) === "passive");
-  const urlId = seg || null; // a hard-load of /salesos/[id] pre-selects that lead in the panel
-  const activeId = selected ?? urlId ?? queue[0]?.id ?? null;
+  const activeId = selected ?? queue[0]?.id ?? null;
   const active = queue.find((q) => q.id === activeId) ?? null;
 
   const figures: Figure[] = [

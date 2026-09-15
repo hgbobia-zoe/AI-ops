@@ -794,7 +794,9 @@ export function getBookingsRevenueInRange(start: string, end: string): RevenueSp
        FROM bookings
        WHERE event_date >= ? AND event_date <= ? AND grand_total IS NOT NULL
          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
-         AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'`,
+         AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
+         AND LOWER(COALESCE(status_label,'')) NOT LIKE '%dead%'
+         AND LOWER(COALESCE(status_label,'')) NOT LIKE '%archiv%'`,
     )
     .get(start, end) as { signed_total: number | null; signed_n: number; pipeline_total: number | null; pipeline_n: number };
   return {
@@ -847,9 +849,18 @@ export function getPipelineBreakdown(today: string): PipelineBreakdown {
 
 /** Per-booking rows dated in [start,end] (for the finance event table). */
 export function getBookingsInRange(start: string, end: string): BookingView[] {
+  // Exclude lost / cancelled / dead / archived — those are not revenue we're going to make.
   return (
     getDb()
-      .prepare("SELECT * FROM bookings WHERE event_date >= ? AND event_date <= ? ORDER BY event_date")
+      .prepare(
+        `SELECT * FROM bookings
+         WHERE event_date >= ? AND event_date <= ?
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%dead%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%archiv%'
+         ORDER BY event_date`,
+      )
       .all(start, end) as Record<string, unknown>[]
   ).map(toBookingView);
 }
