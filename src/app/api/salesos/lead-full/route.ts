@@ -4,13 +4,13 @@
 
 import { NextResponse } from "next/server";
 import { getLead } from "@/lib/salesos/service";
-import { getBookingById, getCustomerState, getCommsForLead, getCustomerCallThread } from "@/lib/db/repo";
+import { getBookingById, getCustomerState, getCustomerCallThread } from "@/lib/db/repo";
 import { resolveDeterministic, fromStored, replyMinutesAgo } from "@/lib/salesos/stateService";
 import { nextBestAction, NBA_LABEL } from "@/lib/salesos/nba";
 import { STATE_LABEL } from "@/lib/salesos/state";
 import { STAGE_LABEL } from "@/lib/salesos/calc";
 import { callBriefFor } from "@/lib/salesos/callBrief";
-import { buildConversationFeed, emailFeedItems } from "@/lib/coach/feed";
+import { buildConversationFeed, emailFeedItems, conversationCommsForLead } from "@/lib/coach/feed";
 import { leadActivity } from "@/lib/salesos/audit";
 import { ourPhoneDigits, last10 } from "@/lib/comms/identity";
 import { getOpenphoneContactMap } from "@/lib/comms/openphone";
@@ -43,7 +43,7 @@ export async function GET(req: Request): Promise<NextResponse> {
   const custDigits = last10(lead.clientPhone);
   const contactMap = await getOpenphoneContactMap();
   const thread = custDigits ? getCustomerCallThread(custDigits, { ourDigits, contactMap, limit: 8 }) : [];
-  const comms = getCommsForLead(id, 60);
+  const comms = await conversationCommsForLead(id, lead.clientPhone, 60);
   const feed = buildConversationFeed(thread, comms, emailFeedItems(booking));
   const activity = leadActivity(id, 20).map((a) => ({ actor: a.actor, actionLabel: a.actionLabel, ts: a.ts, detail: a.detail?.source ? String(a.detail.source) : null }));
 

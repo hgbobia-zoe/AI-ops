@@ -10,11 +10,11 @@ import { OutreachPanel } from "@/components/OutreachPanel";
 import { ConversationFeed } from "@/components/ConversationFeed";
 import { CopyButton } from "@/components/CopyButton";
 import { LeadAsk } from "@/components/LeadAsk";
-import { buildConversationFeed, emailFeedItems } from "@/lib/coach/feed";
+import { buildConversationFeed, emailFeedItems, conversationCommsForLead } from "@/lib/coach/feed";
 import { LeadTabs } from "./LeadTabs";
 import { LeadCoachingInsight } from "./LeadCoachingInsight";
 import { getLead } from "@/lib/salesos/service";
-import { getCommsForLead, getBookingById, getCustomerState, getCustomerCallThread } from "@/lib/db/repo";
+import { getBookingById, getCustomerState, getCustomerCallThread } from "@/lib/db/repo";
 import { STAGE_LABEL, type SalesStage } from "@/lib/salesos/calc";
 import { resolveDeterministic, fromStored, replyMinutesAgo } from "@/lib/salesos/stateService";
 import { nextBestAction, NBA_LABEL } from "@/lib/salesos/nba";
@@ -47,7 +47,7 @@ export async function LeadBoard({ id }: { id: string }): Promise<React.JSX.Eleme
 
   await logLeadView(id); // audit trail: who viewed this lead (deduped per actor/30min)
   const activity = leadActivity(id, 30);
-  const conversation = getCommsForLead(id, 60); // texts + calls, for the chronological thread
+  const conversation = await conversationCommsForLead(id, lead.clientPhone, 60); // stored + live Quo texts
 
   // Evidence-driven state (stored AI-refined if we have it, else instant deterministic) + NBA v2.
   const booking = getBookingById(id);

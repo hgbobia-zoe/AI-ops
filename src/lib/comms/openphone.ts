@@ -7,6 +7,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getProviderConfig } from "@/lib/secrets";
 import { initialsOf } from "@/lib/salesos/noteFormat";
+import type { CommsEventView } from "@/lib/db/repo";
 
 export function openphoneApiKey(): string | null {
   return getProviderConfig("openphone", ["apiKey"]).apiKey ?? process.env.OPENPHONE_API_KEY ?? null;
@@ -196,6 +197,79 @@ export async function listOpenphoneCalls(
       occurredAt: (c.completedAt as string) ?? (c.createdAt as string) ?? null,
     }));
   return { calls, nextPageToken: (json.nextPageToken as string) ?? null };
+}
+
+export interface QuoMessage {
+  id: string;
+  direction: "inbound" | "outbound";
+  body: string;
+  occurredAt: string | null;
+}
+
+/** One page of SMS between our `phoneNumberId` and `participant` (E.164). Empty when not configured. */
+export async function listOpenphoneMessages(
+  phoneNumberId: string,
+  participant: string,
+  pageToken?: string | null,
+): Promise<{ messages: QuoMessage[]; nextPageToken: string | null }> {
+  const apiKey = openphoneApiKey();
+  if (!apiKey) return { messages: [], nextPageToken: null };
+  const q =
+    `/messages?phoneNumberId=${encodeURIComponent(phoneNumberId)}` +
+    `&participants=${encodeURIComponent(participant)}&maxResults=50` +
+    (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "");
+  const json = await opGet(q, apiKey);
+  if (!json) return { messages: [], nextPageToken: null };
+  const data = (json.data as Record<string, unknown>[]) ?? [];
+  const messages: QuoMessage[] = data
+    .filter((m) => m?.id)
+    .map((m) => ({
+      id: String(m.id),
+      direction: m.direction === "outgoing" || m.direction === "outbound" ? "outbound" : "inbound",
+      body: String((m.text ?? m.body ?? "") as string),
+      occurredAt: (m.createdAt as string) ?? null,
+    }));
+  return { messages, nextPageToken: (json.nextPageToken as string) ?? null };
+}
+
+/** The live SMS thread with a customer (by phone), pulled from OpenPhone across our numbers — including
+ *  texts sent/received natively in Quo or before our webhook, which never reached comms_events. Shaped
+ *  as CommsEventView (channel "sms", providerId = the OpenPhone message id, so it dedupes against stored
+ *  rows) so it drops straight into the conversation feed. Best-effort: [] on any error or unconfigured. */
+export async function getCustomerTextThread(customerPhone: string | null | undefined, opts: { limit?: number } = {}): Promise<CommsEventView[]> {
+  try {
+    const apiKey = openphoneApiKey();
+    const d10 = last10(customerPhone ?? "");
+    if (!apiKey || !d10) return [];
+    const participant = "+1" + d10;
+    const numbers = await getOpenphonePhoneNumbers();
+    const rows: CommsEventView[] = [];
+    for (const n of numbers) {
+      const { messages } = await listOpenphoneMessages(n.id, participant);
+      for (const m of messages) {
+        if (!m.body) continue;
+        rows.push({
+          id: m.id,
+          providerId: m.id,
+          leadId: null,
+          direction: m.direction,
+          channel: "sms",
+          fromPhone: m.direction === "inbound" ? participant : n.number,
+          toPhone: m.direction === "inbound" ? n.number : participant,
+          body: m.body,
+          actor: m.direction === "inbound" ? "Customer" : "Zoe",
+          occurredAt: m.occurredAt,
+          ts: m.occurredAt ?? new Date().toISOString(),
+        });
+      }
+    }
+    const seen = new Set<string>();
+    const dedup = rows.filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)));
+    dedup.sort((a, b) => (Date.parse(b.occurredAt ?? b.ts) || 0) - (Date.parse(a.occurredAt ?? a.ts) || 0));
+    return dedup.slice(0, opts.limit ?? 40);
+  } catch {
+    return [];
+  }
 }
 
 let contactsCache: { at: number; map: Map<string, string> } | null = null;

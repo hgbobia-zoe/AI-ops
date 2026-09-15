@@ -1,8 +1,20 @@
 // Build a conversation feed for a customer: their calls (from call_events, each with its AI summary +
 // next step) merged with their texts (from comms_events), chronological (oldest → newest). Server-only.
 
-import { getCallEventById, getCoachingAnalysis, type CoachableCall, type CommsEventView, type BookingView } from "@/lib/db/repo";
+import { getCallEventById, getCoachingAnalysis, getCommsForLead, type CoachableCall, type CommsEventView, type BookingView } from "@/lib/db/repo";
+import { getCustomerTextThread } from "@/lib/comms/openphone";
 import type { CallItem, TextItem, EmailItem, TimelineItem } from "./feedTypes";
+
+/** All comms for a lead's conversation feed: the stored comms_events PLUS the live OpenPhone SMS thread
+ *  (texts sent/received natively in Quo, or before our webhook, that never hit comms_events), deduped by
+ *  provider id. Best-effort — a live-pull failure falls back to the stored rows only. */
+export async function conversationCommsForLead(leadId: string, clientPhone: string | null | undefined, limit = 60): Promise<CommsEventView[]> {
+  const stored = getCommsForLead(leadId, limit);
+  const live = clientPhone ? await getCustomerTextThread(clientPhone, { limit: 40 }) : [];
+  if (!live.length) return stored;
+  const seen = new Set(stored.map((c) => c.providerId).filter(Boolean));
+  return [...stored, ...live.filter((l) => l.providerId && !seen.has(l.providerId))];
+}
 
 /** Email events we can see from Goodshuffle: sending a quote emails the client. */
 export function emailFeedItems(booking: BookingView | null | undefined): EmailItem[] {
