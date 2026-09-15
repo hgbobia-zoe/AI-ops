@@ -134,6 +134,9 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
               <a href={d.gsUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)]"><ExternalLink className="size-4" /> Goodshuffle</a>
             </div>
 
+            {/* quick context — enough to get oriented before reading the conversation */}
+            <LeadContextCard d={d} />
+
             {/* conversation feed */}
             <ConversationFeed items={d.feed} party={d.clientName || d.eventName} />
           </div>
@@ -161,6 +164,41 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
         </div>
       )}
     </aside>
+  );
+}
+
+function LeadContextCard({ d }: { d: FullLead }): React.JSX.Element {
+  return (
+    <section className="border border-border bg-[var(--row)] p-3">
+      {/* headline — where the customer stands + the one thing to do */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {d.state && (
+          <span className="text-[13px]"><span className="font-medium">{d.state.label}</span><span className="text-meta tabular-nums"> · {d.state.confidence}%</span></span>
+        )}
+        {d.nba && <span className="flex items-center gap-1 text-[13px] font-medium text-critical"><Sparkles className="size-3.5" /> {d.nba.label}</span>}
+      </div>
+      {d.nba?.objective && <p className="mt-1 text-[12.5px] text-tertiary-text">{d.nba.objective}</p>}
+
+      {/* key facts, at a glance */}
+      <dl className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px]">
+        <CtxFact label="Event" value={d.facts.eventDate} />
+        <CtxFact label="Quote sent" value={d.facts.quoteSent} />
+        {d.value != null && <CtxFact label="Value" value={money(d.value)} />}
+        {d.facts.deposit && <CtxFact label="Deposit" value={d.facts.deposit} />}
+      </dl>
+
+      {/* the short prior-contact note worth seeing before the thread */}
+      {d.clientNotes && <p className="mt-2.5 border-l-2 border-attention/40 pl-2 text-[12px] text-attention">{d.clientNotes}</p>}
+    </section>
+  );
+}
+
+function CtxFact({ label, value }: { label: string; value: string }): React.JSX.Element {
+  return (
+    <div className="flex min-w-0 gap-1.5">
+      <dt className="shrink-0 text-meta">{label}</dt>
+      <dd className="min-w-0 truncate text-tertiary-text">{value}</dd>
+    </div>
   );
 }
 
