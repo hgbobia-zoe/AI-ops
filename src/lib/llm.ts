@@ -40,18 +40,30 @@ export function llmModel(): string {
   return provider() === "anthropic" ? "claude-haiku-4-5-20251001" : "llama-3.1-8b-instant";
 }
 
+// Global communication rule, prepended to EVERY prose (non-JSON) LLM call so all generated writing —
+// drafts, coaching, answers — follows the house voice. Written with no dash glyphs itself. Deterministic
+// post-processing (humanize) still strips any dashes/emoji a model slips in; this steers it up front.
+const COMMS_STYLE =
+  "COMMUNICATION STYLE (applies to everything you write, customer- and rep-facing): Sound like a real " +
+  "person, never like an AI. Never use a dash as punctuation: no em dash, no en dash, and no hyphen with " +
+  "spaces around it used as a pause. Use a comma, a period, or a new sentence instead. A hyphen inside a " +
+  "single word (for example follow up written with a hyphen) is fine. No emojis. Keep sentences short, " +
+  "plain, warm, and direct.";
+
 export async function chat(
   messages: ChatMessage[],
   opts: { json?: boolean; temperature?: number; timeoutMs?: number; model?: string; maxTokens?: number } = {},
 ): Promise<ChatResult> {
   const p = provider();
   if (!p) return { ok: false, error: "LLM not configured (set ANTHROPIC_API_KEY or LLM_BASE_URL)" };
+  // JSON/classification calls stay untouched (no prose to style); prose calls get the house voice.
+  const msgs = opts.json ? messages : [{ role: "system" as const, content: COMMS_STYLE }, ...messages];
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 60000);
   try {
     return p === "anthropic"
-      ? await chatAnthropic(messages, opts, ctrl.signal)
-      : await chatOpenAI(messages, opts, ctrl.signal);
+      ? await chatAnthropic(msgs, opts, ctrl.signal)
+      : await chatOpenAI(msgs, opts, ctrl.signal);
   } catch (e) {
     return { ok: false, error: String(e) };
   } finally {

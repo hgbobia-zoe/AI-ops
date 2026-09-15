@@ -60,13 +60,20 @@ export interface OutreachDraft {
 
 const firstName = (name: string): string => (name || "").trim().split(/\s+/)[0] || "there";
 
-/** Strip em/en dashes so drafts read like a person texting, not a brochure. Em dash → comma; a dash
- *  between digits ("2–3") → "to"; stray en dash → comma. Applied to templates AND any LLM output. */
+/** Normalize generated copy so it reads like a real person, not AI. The house rule (global): NO dashes
+ *  used as punctuation anywhere, no emojis, short and plain. Em/en dash → comma; a dash between digits
+ *  ("2–3") → "to"; a spaced hyphen used as a pause ("quote over - happy") → comma (word-internal hyphens
+ *  like "follow-up" are left alone); emojis stripped. Newlines are preserved (email bodies keep shape).
+ *  Applied to templates AND any LLM output. */
 export function humanize(text: string): string {
   return (text || "")
-    .replace(/(\d)\s*[—–]\s*(\d)/g, "$1 to $2")
-    .replace(/\s*[—–]\s*/g, ", ")
-    .replace(/\s{2,}/g, " ")
+    .replace(/(\d)[ \t]*[—–][ \t]*(\d)/g, "$1 to $2") // number range → "to"
+    .replace(/[ \t]*[—–][ \t]*/g, ", ") // em/en dash → comma
+    .replace(/[ \t]+-[ \t]+/g, ", ") // spaced hyphen used as a dash → comma
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu, "") // strip emoji
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+([,.!?;:])/g, "$1") // no space before punctuation left by a removal
+    .replace(/[ \t]+$/gm, "")
     .trim();
 }
 

@@ -38,6 +38,25 @@ const lead = (stage: OutreachLead["stage"]): OutreachLead => ({
   stage,
 });
 
+describe("outreach — humanize (house voice: no dashes, no emoji)", () => {
+  it("turns em/en dashes into commas", () => {
+    expect(humanize("it's Zoe Events — happy to help")).toBe("it's Zoe Events, happy to help");
+    expect(humanize("quote is in your inbox – I'd love to help")).toBe("quote is in your inbox, I'd love to help");
+  });
+  it("turns a spaced hyphen used as a dash into a comma but leaves word hyphens alone", () => {
+    expect(humanize("sent your quote over - happy to walk through the follow-up")).toBe("sent your quote over, happy to walk through the follow-up");
+  });
+  it("converts number ranges to 'to'", () => {
+    expect(humanize("give it 2–3 days")).toBe("give it 2 to 3 days");
+  });
+  it("strips emojis", () => {
+    expect(humanize("Thanks so much 😊🎉 talk soon")).toBe("Thanks so much talk soon");
+  });
+  it("preserves newlines (email bodies keep their shape)", () => {
+    expect(humanize("Hi Devin,\n\nYour quote — is ready.\n\nBest,\nZoe Events")).toBe("Hi Devin,\n\nYour quote, is ready.\n\nBest,\nZoe Events");
+  });
+});
+
 describe("outreach — templateOutreach", () => {
   it("uses the first name and the event DATE (never the internal project name) in the message", () => {
     const d = templateOutreach(lead("follow_up"), summarizeComms(null, null));

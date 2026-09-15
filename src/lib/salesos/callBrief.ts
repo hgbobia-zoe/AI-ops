@@ -6,6 +6,7 @@
 // Drafts are starting points for the rep to edit — nothing sends automatically.
 
 import type { CustomerState } from "./state";
+import { humanize } from "./outreach";
 
 export interface CallBriefTemplate {
   blocker: string | null; // the likely blocker, if the state implies one (INFERENCE)
@@ -105,11 +106,15 @@ const BRIEF: Record<CustomerState, CallBriefTemplate> = {
 export function callBriefFor(state: CustomerState, name: string): CallBriefTemplate {
   const first = (name || "").trim().split(/\s+/)[0] || "there";
   const t = BRIEF[state];
-  const sub = (s: string): string => s.replace(/\{first\}/g, first);
+  // Fill in the name, then run the house communication rule over every field: no dashes, no emoji,
+  // natural. (humanize preserves the email body's line breaks.)
+  const sub = (s: string): string => humanize(s.replace(/\{first\}/g, first));
   return {
     ...t,
+    blocker: t.blocker ? humanize(t.blocker) : null,
     opening: sub(t.opening),
     primaryQuestion: sub(t.primaryQuestion),
+    watchFor: t.watchFor.map((w) => humanize(w)),
     textDraft: sub(t.textDraft),
     email: { subject: sub(t.email.subject), body: sub(t.email.body) },
   };
