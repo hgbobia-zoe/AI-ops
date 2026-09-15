@@ -5,9 +5,10 @@
 // that's where the coaching items live. The selected call is highlighted; every call links into its
 // full analysis. Scrolls to newest on open.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { PhoneIncoming, PhoneOutgoing, ArrowRight, Sparkles, Mail } from "lucide-react";
+import { PhoneIncoming, PhoneOutgoing, ArrowRight, Sparkles, Mail, GraduationCap, ChevronDown } from "lucide-react";
+import { CallCoaching } from "@/components/CallCoaching";
 import type { TextItem, CallItem, EmailItem, TimelineItem } from "@/lib/coach/feedTypes";
 
 export type { TextItem, CallItem, EmailItem, TimelineItem } from "@/lib/coach/feedTypes";
@@ -75,6 +76,7 @@ function CallCard({ c, active }: { c: CallItem; active: boolean }): React.JSX.El
   const inbound = c.direction === "inbound";
   const Icon = inbound ? PhoneIncoming : PhoneOutgoing;
   const dur = fmtDuration(c.durationSec);
+  const [coachOpen, setCoachOpen] = useState(false);
   return (
     <div className={`rounded-xl border p-3 ${active ? "border-white/25 bg-white/[0.06] ring-1 ring-white/15" : "border-violet-500/20 bg-violet-500/[0.05]"}`}>
       <div className="flex items-center gap-2">
@@ -96,6 +98,20 @@ function CallCard({ c, active }: { c: CallItem; active: boolean }): React.JSX.El
         </div>
       ) : (
         <p className="mt-2 text-[11px] text-muted-foreground">{c.analyzed ? "No summary for this call." : "Not analyzed yet — a recap will appear here once it's coached."}</p>
+      )}
+
+      {/* Coaching (the teaching layer) sits ON the call it's about, collapsed by default. */}
+      {c.coaching && (
+        <div className="mt-2">
+          <button onClick={() => setCoachOpen((o) => !o)} className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-200/80 transition-colors hover:text-amber-200">
+            <GraduationCap className="size-3.5" /> {coachOpen ? "Hide coaching" : "Coaching"} <ChevronDown className={`size-3 transition-transform ${coachOpen ? "rotate-180" : ""}`} />
+          </button>
+          {coachOpen && (
+            <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.04] p-2.5">
+              <CallCoaching data={c.coaching} />
+            </div>
+          )}
+        </div>
       )}
 
       {!active && (

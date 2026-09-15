@@ -6,13 +6,14 @@
 // stays interactive beside it, so a rep can click tile → tile. Read-only except the reused panels.
 
 import { useCallback, useEffect, useState } from "react";
-import { X, Phone, MessageSquare, Mail, ExternalLink, Sparkles, AlertTriangle, ListChecks, Search, RefreshCw } from "lucide-react";
+import { X, Phone, MessageSquare, Mail, ExternalLink, Sparkles, AlertTriangle, ListChecks, Search, RefreshCw, GraduationCap, PhoneIncoming, PhoneOutgoing } from "lucide-react";
 import { ConversationFeed } from "@/components/ConversationFeed";
 import { OutreachPanel } from "@/components/OutreachPanel";
 import { LeadAsk } from "@/components/LeadAsk";
 import { QuoTextSend } from "@/components/QuoTextSend";
 import { EmailSend } from "@/components/EmailSend";
-import type { TimelineItem } from "@/lib/coach/feedTypes";
+import { CallCoaching } from "@/components/CallCoaching";
+import type { TimelineItem, CallItem } from "@/lib/coach/feedTypes";
 
 interface FullLead {
   id: string;
@@ -39,8 +40,13 @@ interface FullLead {
   activity: { actor: string; actionLabel: string; ts: string; detail: string | null }[];
 }
 
-type Tab = "next" | "outreach" | "details" | "ask";
+type Tab = "next" | "outreach" | "coaching" | "details" | "ask";
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
+const fmtWhen = (iso: string | null): string => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "" : d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+};
 
 export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { name: string; quoUserId: string | null; initials: string }; onClose: () => void }): React.JSX.Element {
   const [d, setD] = useState<FullLead | null>(null);
@@ -89,9 +95,11 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
   }, [onClose]);
 
   const tel = d?.clientPhone?.replace(/[^\d+]/g, "") ?? "";
+  const coachedCalls = (d?.feed ?? []).filter((it): it is CallItem => it.kind === "call" && !!it.coaching);
   const tabs: { key: Tab; label: string; icon: typeof Sparkles }[] = [
     { key: "next", label: "Next step", icon: Sparkles },
     { key: "outreach", label: "Outreach", icon: MessageSquare },
+    ...(coachedCalls.length ? [{ key: "coaching" as Tab, label: "Coaching", icon: GraduationCap }] : []),
     { key: "details", label: "Details", icon: ListChecks },
     { key: "ask", label: "Ask", icon: Search },
   ];
@@ -146,6 +154,7 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
           <div className="p-4">
             {tab === "next" && <NextStep d={d} onReanalyze={reanalyze} reanalyzing={reanalyzing} />}
             {tab === "outreach" && <OutreachPanel id={d.id} viewer={viewer} />}
+            {tab === "coaching" && <CoachingTab calls={coachedCalls} />}
             {tab === "details" && <Details d={d} />}
             {tab === "ask" && <LeadAsk id={d.id} />}
           </div>
@@ -202,6 +211,31 @@ function NextStep({ d, onReanalyze, reanalyzing }: { d: FullLead; onReanalyze: (
       {d.brief?.email.body && (
         <EmailSend id={d.id} clientName={d.clientName} clientEmail={d.clientEmail} canEmail={d.hasEmail} initialSubject={d.brief.email.subject} initialBody={d.brief.email.body} />
       )}
+    </div>
+  );
+}
+
+function CoachingTab({ calls }: { calls: CallItem[] }): React.JSX.Element {
+  if (calls.length === 0) return <p className="text-[13px] text-meta">No coached calls yet for this lead. Coaching appears here once a call has been analyzed.</p>;
+  const ordered = [...calls].reverse(); // newest first
+  return (
+    <div className="space-y-4">
+      <p className="text-[12px] text-meta">Coaching from your calls with this customer, newest first — the same notes shown under each call on the timeline.</p>
+      {ordered.map((c) => {
+        const inbound = c.direction === "inbound";
+        const Icon = inbound ? PhoneIncoming : PhoneOutgoing;
+        return (
+          <div key={c.id} className="rounded-lg border border-border bg-[var(--row)] p-3">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-violet-500/15"><Icon className="size-3 text-violet-300" /></span>
+              <div className="flex-1 text-[12.5px] font-medium">{inbound ? "Inbound call" : "Outbound call"}</div>
+              <span className="text-[11px] text-meta">{fmtWhen(c.at)}</span>
+              {c.sentiment && <span className="text-[11px] capitalize text-meta">{c.sentiment}</span>}
+            </div>
+            {c.coaching && <CallCoaching data={c.coaching} />}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -9,6 +9,14 @@ export interface TextItem {
   actor: string | null;
   at: string | null;
 }
+/** The teaching layer from a call's recap, surfaced next to the call. Present only when analyzed and
+ *  at least one field is non-empty. */
+export interface CallCoachingItem {
+  notes: string[]; // coaching critique — what the rep could tighten
+  objections: { objection: string; response: string }[];
+  concerns: string[]; // customer concerns raised
+  actionItems: string[]; // what the rep committed to
+}
 export interface CallItem {
   kind: "call";
   id: string;
@@ -19,6 +27,7 @@ export interface CallItem {
   summary: string[]; // key points, or the Quo summary as one bullet
   nextStep: string;
   analyzed: boolean;
+  coaching: CallCoachingItem | null;
 }
 export interface EmailItem {
   kind: "email";

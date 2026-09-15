@@ -33,7 +33,12 @@ export function callFeedItems(calls: CoachableCall[]): CallItem[] {
     const rc = getCoachingAnalysis(c.id);
     const ev = getCallEventById(c.id);
     const summary = rc?.keyPoints?.length ? rc.keyPoints : ev?.summary ? [ev.summary] : [];
-    return { kind: "call", id: c.id, direction: c.direction, at: c.occurredAt ?? c.ts, durationSec: c.durationSec, sentiment: c.sentiment, summary, nextStep: rc?.nextStep ?? "", analyzed: !!rc };
+    // The teaching layer, only when the recap actually carries some (no empty coaching blocks).
+    const coaching =
+      rc && ((rc.coachingNotes?.length ?? 0) || (rc.objections?.length ?? 0) || (rc.customerConcerns?.length ?? 0) || (rc.actionItems?.length ?? 0))
+        ? { notes: rc.coachingNotes ?? [], objections: rc.objections ?? [], concerns: rc.customerConcerns ?? [], actionItems: rc.actionItems ?? [] }
+        : null;
+    return { kind: "call", id: c.id, direction: c.direction, at: c.occurredAt ?? c.ts, durationSec: c.durationSec, sentiment: c.sentiment, summary, nextStep: rc?.nextStep ?? "", analyzed: !!rc, coaching };
   });
 }
 
