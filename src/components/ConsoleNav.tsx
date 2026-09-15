@@ -1,126 +1,136 @@
 "use client";
 
-// The platform's left-nav "blades". Each feature is a blade here — add a new one to
-// BLADES and it appears in the rail. Active state follows the current path.
+// The platform's left-nav rail (Nocturne redesign). Text-only blades grouped Operations / Sales /
+// Company; hierarchy is size + colour + a 3px active bar (no fill, no icons). Add a feature → add a
+// blade to the right group. Active state follows the current path.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  LayoutDashboard,
-  Radar,
-  Truck,
-  ShieldAlert,
-  Users,
-  DollarSign,
-  TrendingUp,
-  UserRound,
-  History,
-  Workflow,
-  Download,
-  Settings,
-  UserCog,
-  HeartPulse,
-  LogOut,
-  Sparkles,
-  Target,
-  Headphones,
-  type LucideIcon,
-} from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
 
 interface Blade {
   href: string;
   label: string;
-  icon: LucideIcon;
-  /** Only show to roles that can see financials ($). */
-  financial?: boolean;
-  /** Only show to roles that can see coaching (sensitive call transcripts). */
-  coaching?: boolean;
+  financial?: boolean; // only where role can see $
+  coaching?: boolean; // only where role can see call transcripts
 }
 
-// Add a feature → add a blade.
-const BLADES: Blade[] = [
-  { href: "/dashboard", label: "Command Center", icon: LayoutDashboard },
-  { href: "/ops", label: "Ops Manager", icon: Radar },
-  { href: "/dispatch", label: "Dispatch", icon: Truck },
-  { href: "/risk", label: "Event Risk", icon: ShieldAlert },
-  { href: "/staffing", label: "Staffing", icon: Users },
-  { href: "/finance", label: "Financial", icon: DollarSign, financial: true },
-  { href: "/sales", label: "Sales", icon: TrendingUp },
-  { href: "/salesos", label: "Sales OS", icon: Target },
-  { href: "/coaching", label: "Coaching", icon: Headphones, coaching: true },
-  { href: "/customers", label: "Customers", icon: UserRound },
-  { href: "/history", label: "History", icon: History },
-  { href: "/automation", label: "Automation", icon: Workflow },
+const GROUPS: { label: string; blades: Blade[] }[] = [
+  {
+    label: "Operations",
+    blades: [
+      { href: "/dashboard", label: "Command Center" },
+      { href: "/ops", label: "Ops Manager" },
+      { href: "/dispatch", label: "Dispatch" },
+      { href: "/risk", label: "Event Risk" },
+      { href: "/staffing", label: "Staffing" },
+      { href: "/finance", label: "Financial", financial: true },
+    ],
+  },
+  {
+    label: "Sales",
+    blades: [
+      { href: "/sales", label: "Sales" },
+      { href: "/salesos", label: "Sales OS" },
+      { href: "/coaching", label: "Coaching", coaching: true },
+      { href: "/customers", label: "Customers" },
+    ],
+  },
+  {
+    label: "Company",
+    blades: [
+      { href: "/history", label: "History" },
+      { href: "/automation", label: "Automation" },
+    ],
+  },
 ];
 
-export function ConsoleNav({ role }: { role: Role }) {
+export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: string }): React.JSX.Element {
   const pathname = usePathname();
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
+  const canSee = (b: Blade) => (!b.financial || canSeeFinancials(role)) && (!b.coaching || canSeeCoaching(role));
 
-  const blades = BLADES.filter((b) => (!b.financial || canSeeFinancials(role)) && (!b.coaching || canSeeCoaching(role)));
-  const bottom: Blade[] = [];
-  if (canManageSettings(role)) bottom.push({ href: "/admin/pull", label: "Pull Routes", icon: Download });
-  if (canManageSettings(role)) bottom.push({ href: "/admin/health", label: "Connections", icon: HeartPulse });
-  if (canManageUsers(role)) bottom.push({ href: "/admin/users", label: "Team", icon: UserCog });
-  if (canManageSettings(role)) bottom.push({ href: "/admin", label: "Settings", icon: Settings });
+  const admin: Blade[] = [];
+  if (canManageSettings(role)) admin.push({ href: "/admin/pull", label: "Pull Routes" });
+  if (canManageSettings(role)) admin.push({ href: "/admin/health", label: "Connections" });
+  if (canManageUsers(role)) admin.push({ href: "/admin/users", label: "Team" });
+  if (canManageSettings(role)) admin.push({ href: "/admin", label: "Settings" });
 
   const logout = async () => {
     await fetch("/api/auth/login", { method: "DELETE" });
     window.location.href = "/login";
   };
 
+  const name = viewerName?.trim() || "Zoe Operations";
+  const initials = name.split(/\s+/).map((p) => p[0]).slice(0, 2).join("").toUpperCase() || "ZO";
+
   return (
-    <aside className="flex shrink-0 flex-col border-b border-white/10 bg-background md:sticky md:top-0 md:h-dvh md:w-60 md:border-b-0 md:border-r">
-      {/* Brand */}
-      <div className="flex items-center gap-2.5 px-4 py-4 md:px-5 md:py-5">
-        <span className="btn-hero flex size-9 items-center justify-center rounded-xl">
-          <Sparkles className="size-5" />
-        </span>
-        <div className="leading-tight">
-          <div className="text-sm font-semibold">Zoe Ops</div>
-          <div className="text-[11px] text-muted-foreground">{ROLE_LABEL[role]}</div>
-        </div>
+    <aside className="flex shrink-0 flex-col border-b border-border bg-sidebar md:sticky md:top-0 md:h-dvh md:w-[212px] md:border-b-0 md:border-r">
+      {/* Wordmark */}
+      <div className="flex items-center gap-2.5 px-4 py-4 md:px-[18px]">
+        <span className="flex size-7 items-center justify-center rounded border border-border text-[13px] font-medium text-foreground">Z</span>
+        <span className="text-[13.5px] font-medium text-foreground">Zoe Operations</span>
       </div>
 
-      {/* Blades */}
-      <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:min-h-0 md:flex-1 md:flex-col md:overflow-y-auto md:px-3">
-        {blades.map((b) => (
-          <BladeLink key={b.href} blade={b} active={isActive(b.href)} />
-        ))}
+      {/* Blade groups */}
+      <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:min-h-0 md:flex-1 md:flex-col md:gap-0 md:overflow-x-visible md:overflow-y-auto md:px-0 md:pb-2">
+        {GROUPS.map((g) => {
+          const items = g.blades.filter(canSee);
+          if (items.length === 0) return null;
+          return (
+            <div key={g.label} className="contents md:mt-2 md:block">
+              <div className="hidden px-[18px] pt-3 pb-1 text-[10.5px] font-medium uppercase tracking-[0.1em] text-meta md:block">{g.label}</div>
+              {items.map((b) => (
+                <NavItem key={b.href} blade={b} active={isActive(b.href)} />
+              ))}
+            </div>
+          );
+        })}
       </nav>
 
-      {/* Bottom */}
-      <div className="flex gap-1 px-2 pb-2 md:flex-col md:px-3 md:pb-4">
-        {bottom.map((b) => (
-          <BladeLink key={b.href} blade={b} active={isActive(b.href)} />
-        ))}
-        <button
-          onClick={logout}
-          className="flex items-center gap-2.5 whitespace-nowrap border-l-2 border-transparent px-3 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-white/[0.04] hover:text-foreground"
-        >
-          <LogOut className="size-[18px] shrink-0" />
-          <span>Sign out</span>
+      {/* Admin links */}
+      {admin.length > 0 && (
+        <div className="flex gap-1 border-t border-border px-2 py-2 md:flex-col md:gap-0 md:px-0 md:py-2">
+          {admin.map((b) => (
+            <Link
+              key={b.href}
+              href={b.href}
+              aria-current={isActive(b.href) ? "page" : undefined}
+              className={`whitespace-nowrap border-l-[3px] px-[18px] py-[6px] text-[12.5px] transition-colors ${
+                isActive(b.href) ? "border-foreground text-foreground" : "border-transparent text-meta hover:text-tertiary-text hover:bg-[var(--row-hover)]"
+              }`}
+            >
+              {b.label}
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {/* Viewer */}
+      <div className="flex items-center gap-2.5 border-t border-border px-[18px] py-3">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded border border-border text-[11px] font-medium text-tertiary-text">{initials}</span>
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="truncate text-[12.5px] font-medium text-foreground">{name}</div>
+          <div className="text-[11px] text-meta">{ROLE_LABEL[role]}</div>
+        </div>
+        <button onClick={logout} className="text-[11.5px] font-medium uppercase tracking-[0.06em] text-meta transition-colors hover:text-foreground" title="Sign out">
+          Sign out
         </button>
       </div>
     </aside>
   );
 }
 
-function BladeLink({ blade, active }: { blade: Blade; active: boolean }) {
-  const Icon = blade.icon;
+function NavItem({ blade, active }: { blade: Blade; active: boolean }): React.JSX.Element {
   return (
     <Link
       href={blade.href}
       aria-current={active ? "page" : undefined}
-      className={`flex items-center gap-2.5 whitespace-nowrap border-l-2 px-3 py-2.5 text-sm font-medium transition-colors ${
-        active
-          ? "border-foreground bg-white/[0.06] text-foreground"
-          : "border-transparent text-muted-foreground hover:bg-white/[0.04] hover:text-foreground"
+      className={`block whitespace-nowrap border-l-[3px] px-[18px] py-[7px] text-[13.5px] transition-colors ${
+        active ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground hover:bg-[var(--row-hover)]"
       }`}
     >
-      <Icon className="size-[18px] shrink-0" />
-      <span>{blade.label}</span>
+      {blade.label}
     </Link>
   );
 }

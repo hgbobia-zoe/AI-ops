@@ -1,25 +1,13 @@
 import type { Metadata, Viewport } from "next";
-import { Crimson_Pro, Inter, Jost } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
-// Match the zoeeventsdmv.com brand type system:
-//   Crimson Pro (serif) → headings · Inter → body · Jost → buttons/labels.
-// All self-hosted by next/font (no runtime request to Google — works offline on
-// the truck tablets).
-const serif = Crimson_Pro({
-  variable: "--font-serif",
-  subsets: ["latin"],
-  style: ["normal", "italic"],
-});
-
+// Single typeface across the console (Nocturne redesign): Inter, self-hosted by
+// next/font (no runtime request to Google — works offline on the truck tablets).
+// Hierarchy is size + colour + weight (never above 600), not multiple families.
 const sans = Inter({
   variable: "--font-body",
-  subsets: ["latin"],
-});
-
-const label = Jost({
-  variable: "--font-jost",
   subsets: ["latin"],
 });
 
@@ -47,7 +35,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`dark ${sans.variable} ${serif.variable} ${label.variable} h-full antialiased`}
+      className={`dark ${sans.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         {children}

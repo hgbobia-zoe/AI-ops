@@ -52,3 +52,5 @@ worker.env
 *.db-wal
 tok.tmp
 token.tmp
+design_handoff_zoe_ops_redesign/
+Form and repo connection.zip

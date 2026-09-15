@@ -7,12 +7,20 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  /* Brand type system (matches zoeeventsdmv.com): Inter body, Crimson Pro serif
-     headings, Jost for buttons/labels. */
+  /* Single typeface (Nocturne redesign): Inter everywhere. Hierarchy = size + colour + weight. */
   --font-sans: var(--font-body), system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  --font-heading: var(--font-serif), Georgia, serif;
-  --font-label: var(--font-jost), system-ui, sans-serif;
+  /* Semantic + surface tokens exposed as Tailwind utilities (text-positive, bg-panel, text-meta, …). */
+  --color-positive: var(--positive);
+  --color-attention: var(--attention);
+  --color-critical: var(--critical);
+  --color-panel: var(--panel);
+  --color-row: var(--row);
+  --color-lifted: var(--lifted);
+  --color-meta: var(--text-meta);
+  --color-secondary-text: var(--text-secondary);
+  --color-tertiary-text: var(--text-tertiary);
+  --color-rule: var(--row-rule);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -76,8 +84,8 @@
   --chart-3: oklch(0.55 0 0);
   --chart-4: oklch(0.7 0 0);
   --chart-5: oklch(0.82 0 0);
-  /* Flat, Grafana/Datadog style — square corners everywhere. */
-  --radius: 0rem;
+  /* Nocturne: small radii on controls/cards (3–4px); panels/rows use rounded-none in markup. */
+  --radius: 0.25rem;
   --sidebar: oklch(0.99 0 0);
   --sidebar-foreground: oklch(0.16 0 0);
   --sidebar-primary: oklch(0.16 0 0);
@@ -89,39 +97,55 @@
 }
 
 .dark {
-  /* Grafana/Datadog black — near-black canvas, panels a hair lighter, hairline borders. */
-  --background: oklch(0.11 0 0);
-  --foreground: oklch(0.96 0 0);
-  --card: oklch(0.155 0 0);
-  --card-foreground: oklch(0.96 0 0);
-  --popover: oklch(0.155 0 0);
-  --popover-foreground: oklch(0.96 0 0);
-  /* Primary is near-white with black text — the high-contrast action target. */
-  --primary: oklch(0.97 0 0);
-  --primary-foreground: oklch(0.14 0 0);
-  --secondary: oklch(0.22 0 0);
-  --secondary-foreground: oklch(0.96 0 0);
-  --muted: oklch(0.2 0 0);
-  --muted-foreground: oklch(0.64 0 0);
-  --accent: oklch(0.22 0 0);
-  --accent-foreground: oklch(0.96 0 0);
-  --destructive: oklch(0.72 0 0);
-  --border: oklch(1 0 0 / 9%);
-  --input: oklch(1 0 0 / 12%);
-  --ring: oklch(0.7 0 0);
-  --chart-1: oklch(0.96 0 0);
-  --chart-2: oklch(0.78 0 0);
-  --chart-3: oklch(0.62 0 0);
-  --chart-4: oklch(0.46 0 0);
-  --chart-5: oklch(0.34 0 0);
-  --sidebar: oklch(0.13 0 0);
-  --sidebar-foreground: oklch(0.96 0 0);
-  --sidebar-primary: oklch(0.97 0 0);
-  --sidebar-primary-foreground: oklch(0.14 0 0);
-  --sidebar-accent: oklch(0.22 0 0);
-  --sidebar-accent-foreground: oklch(0.96 0 0);
-  --sidebar-border: oklch(1 0 0 / 9%);
-  --sidebar-ring: oklch(0.7 0 0);
+  /* Nocturne — indigo-tinted near-black canvas, panels a hair lighter, hairline borders. */
+  --background: #161826;
+  --foreground: #e9e9ed;
+  --card: #232532;
+  --card-foreground: #e9e9ed;
+  --popover: #232532;
+  --popover-foreground: #e9e9ed;
+  /* Primary = the high-contrast near-white used for the active/action target. */
+  --primary: #e9e9ed;
+  --primary-foreground: #161826;
+  --secondary: #23252f;
+  --secondary-foreground: #e9e9ed;
+  --muted: #1c1e2a;
+  --muted-foreground: #9397ab;
+  --accent: #1e2030;
+  --accent-foreground: #e9e9ed;
+  --destructive: #df837a;
+  --border: #262834;
+  --input: #262834;
+  --ring: #9184d9;
+  --chart-1: #e9e9ed;
+  --chart-2: #cfd3e5;
+  --chart-3: #9397ab;
+  --chart-4: #595d6c;
+  --chart-5: #3f424d;
+  --sidebar: #131521;
+  --sidebar-foreground: #9397ab;
+  --sidebar-primary: #e9e9ed;
+  --sidebar-primary-foreground: #161826;
+  --sidebar-accent: #1e2030;
+  --sidebar-accent-foreground: #e9e9ed;
+  --sidebar-border: #262834;
+  --sidebar-ring: #9184d9;
+
+  /* Extended Nocturne tokens (surfaces, rules, text tiers, semantics, swatches). */
+  --panel: #181a28;
+  --row: #1c1e2a;
+  --row-hover: #1e2030;
+  --lifted: #23252f;
+  --row-rule: #1f2130;
+  --grid-rule: #22242f;
+  --text-secondary: #cfd3e5;
+  --text-tertiary: #b2b6ca;
+  --text-meta: #75798c;
+  --bar: #3f424d;
+  --bar-2: #595d6c;
+  --positive: #86c3a2;
+  --attention: #d4b36b;
+  --critical: #df837a;
 }
 
 @layer base {
@@ -130,17 +154,12 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* Tabular numerals across the whole console — figures line up in rows/tables. */
+    font-variant-numeric: tabular-nums;
   }
   html {
     @apply font-sans;
     color-scheme: dark;
-  }
-  /* Brand pairing (like zoeeventsdmv.com): serif headings, Jost on buttons. */
-  h1, h2, h3, h4, h5, h6 {
-    font-family: var(--font-heading);
-  }
-  button {
-    font-family: var(--font-label);
   }
 }
 
@@ -156,19 +175,10 @@
   }
 }
 
-/* Grafana/Datadog flat: square corners everywhere (unlayered so it beats utilities). */
-[class*="rounded"] {
-  border-radius: 0 !important;
-}
-/* Minimalist, Apple-style scrollbars: thin, rounded thumb, no arrow buttons, and effectively
-   invisible until you hover/scroll the region. Track stays transparent (flat) — no boxed ends. */
+/* Nocturne scrollbars: thin, flat track, subtle #3f424d thumb, no arrow buttons. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-*:hover,
-*:focus-within {
-  scrollbar-color: color-mix(in srgb, var(--foreground) 24%, transparent) transparent;
+  scrollbar-color: var(--bar, #3f424d) transparent;
 }
 ::-webkit-scrollbar {
   width: 8px;
@@ -186,17 +196,21 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 999px;
+  background: var(--bar, #3f424d);
+  border-radius: 4px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
-:hover::-webkit-scrollbar-thumb,
-:focus-within::-webkit-scrollbar-thumb {
-  background-color: color-mix(in srgb, var(--foreground) 22%, transparent);
+::-webkit-scrollbar-thumb:hover {
+  background: var(--bar-2, #595d6c);
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover {
-  background-color: color-mix(in srgb, var(--foreground) 42%, transparent);
-  background-clip: content-box;
+
+/* Nocturne focus ring — accent used ONLY for focus-visible + text selection. */
+::selection {
+  background: color-mix(in srgb, var(--ring) 35%, transparent);
+}
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
