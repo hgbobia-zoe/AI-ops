@@ -1,63 +1,48 @@
 "use client";
 
-// Master-detail shell for Sales OS. Left: the ranked action worklist (scorecard + filter tabs + lead
-// rows), a persistent sidebar on desktop and a drawer on mobile. Right: the selected lead's board
-// (children). Selection is URL-driven (Link → /salesos/[id]) so the board is server-rendered, but the
-// worklist persists and highlights the active lead without a full navigation. The analytical sub-views
-// (Bid / Lost / Trends) render full-bleed — the shell steps out of the way for those.
+// Sales OS worklist (Nocturne redesign): an action-queue table grouped Act now / Today / Monitor,
+// beside a 420px detail panel that previews the selected lead (state, next-best-action, evidence). Row
+// click selects into the panel (local state — no navigation); "Open full lead" opens the full board in
+// the modal. The analytical sub-views (Bid/Lost/Trends) and the Table/Board views render full-width.
+// All data is the existing QueueItem[]; nothing is fetched here.
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Sparkles, PanelLeftOpen, X, CalendarRange, Scale, TrendingDown, MessageCircle, Zap, List, Table2, Columns3 } from "lucide-react";
+import { useRouter, usePathname } from "next/navigation";
+import { List, Table2, Columns3, ExternalLink } from "lucide-react";
 import type { QueueItem } from "@/lib/salesos/commandCenter";
-import { NBA_LABEL, type NbaAction } from "@/lib/salesos/nba";
-import type { CustomerState } from "@/lib/salesos/state";
-
-type Filter = "all" | "attention" | "replied";
-const FILTERS: { key: Filter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "attention", label: "Attention" },
-  { key: "replied", label: "Replied" },
-];
-
-const ACTION_STYLE: Record<NbaAction, string> = {
-  CALL_NOW: "border-rose-500/50 bg-rose-500/15 text-rose-100",
-  HANDLE_OBJECTION: "border-amber-500/50 bg-amber-500/15 text-amber-100",
-  CLOSE: "border-emerald-500/50 bg-emerald-500/15 text-emerald-100",
-  ESCALATE: "border-fuchsia-500/50 bg-fuchsia-500/15 text-fuchsia-100",
-  VERIFY_AVAILABILITY: "border-sky-500/40 bg-sky-500/10 text-sky-100",
-  CONFIRM_LOGISTICS: "border-sky-500/40 bg-sky-500/10 text-sky-100",
-  ASK_DISCOVERY: "border-sky-500/40 bg-sky-500/10 text-sky-100",
-  REVIEW_QUOTE: "border-white/20 bg-white/5 text-foreground",
-  SEND_SMS: "border-sky-500/40 bg-sky-500/10 text-sky-100",
-  FOLLOW_UP: "border-white/15 bg-white/5 text-muted-foreground",
-  WAIT: "border-white/10 bg-white/5 text-muted-foreground",
-  NO_ACTION: "border-white/10 bg-white/5 text-muted-foreground",
-};
-
-const STATE_TONE: Partial<Record<CustomerState, string>> = {
-  PRICE_OBJECTION: "text-amber-300",
-  COMPETITOR_COMPARISON: "text-amber-300",
-  READY_TO_BOOK: "text-emerald-300",
-  EVALUATING: "text-sky-300",
-  DORMANT: "text-muted-foreground",
-};
+import { NBA_LABEL } from "@/lib/salesos/nba";
+import { FigureStrip, ActionVerb, tierBar, tierActionTone, tierValueText, tableCls, theadCls, thCls, type Tier, type Figure } from "@/components/console-primitives";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
-const needsAttention = (a: NbaAction): boolean => a !== "WAIT" && a !== "NO_ACTION";
 
+// Tier from the transparent NBA priority (≥80 act now, ≥45 today, else monitor).
+function tierOf(it: QueueItem): Tier {
+  const p = it.nba.priority;
+  if (p >= 80) return "now";
+  if (p >= 45) return "today";
+  return "passive";
+}
+function eventWhen(dte: number | null): { text: string; hot: boolean } {
+  if (dte == null) return { text: "no date", hot: false };
+  if (dte < 0) return { text: `${Math.abs(dte)}d ago`, hot: false };
+  if (dte === 0) return { text: "today", hot: true };
+  if (dte === 1) return { text: "tomorrow", hot: true };
+  return { text: `in ${dte}d`, hot: dte <= 14 };
+}
 function repliedLabel(mins: number | null): string | null {
   if (mins == null) return null;
-  if (mins < 60) return `replied ${mins}m ago`;
-  if (mins < 1440) return `replied ${Math.round(mins / 60)}h ago`;
-  return null;
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1440) return `${Math.round(mins / 60)}h ago`;
+  return `${Math.round(mins / 1440)}d ago`;
 }
+const isInferred = (src: string): boolean => src === "inbound_reply" || src === "derived" || src === "inferred";
+
+type ViewKey = "worklist" | "table" | "board";
 
 export function SalesShell({
   queue,
   showMoney,
-  needAttention,
   justReplied,
   totalPotential,
   children,
@@ -70,16 +55,13 @@ export function SalesShell({
   children: React.ReactNode;
 }): React.JSX.Element {
   const pathname = usePathname();
-  const [drawer, setDrawer] = useState(false);
-  const [filter, setFilter] = useState<Filter>("all");
-  useEffect(() => setDrawer(false), [pathname]); // hooks before any early return
+  const router = useRouter();
+  const [selected, setSelected] = useState<string | null>(null);
 
   const seg = pathname.split("/")[2] ?? "";
-  // The analytical sub-views own the whole pane — no worklist rail, no view switcher.
   if (seg === "bid" || seg === "lost" || seg === "trends") return <>{children}</>;
 
   const view: ViewKey = seg === "table" ? "table" : seg === "board" ? "board" : "worklist";
-  // Table + Board are full-width views (still under the shared view switcher).
   if (view !== "worklist") {
     return (
       <div className="flex min-w-0 flex-1 flex-col">
@@ -89,141 +71,212 @@ export function SalesShell({
     );
   }
 
-  const activeId = pathname.match(/^\/salesos\/([^/]+)/)?.[1] ?? queue[0]?.id ?? null;
-  const activeItem = queue.find((q) => q.id === activeId) ?? null;
+  const now = queue.filter((q) => tierOf(q) === "now");
+  const today = queue.filter((q) => tierOf(q) === "today");
+  const monitor = queue.filter((q) => tierOf(q) === "passive");
+  const urlId = seg || null; // a hard-load of /salesos/[id] pre-selects that lead in the panel
+  const activeId = selected ?? urlId ?? queue[0]?.id ?? null;
+  const active = queue.find((q) => q.id === activeId) ?? null;
 
-  const counts: Record<Filter, number> = {
-    all: queue.length,
-    attention: queue.filter((q) => needsAttention(q.nba.action)).length,
-    replied: queue.filter((q) => q.repliedMinutesAgo != null && q.repliedMinutesAgo <= 1440).length,
-  };
-
-  const shown = queue.filter((q) => {
-    if (filter === "attention") return needsAttention(q.nba.action);
-    if (filter === "replied") return q.repliedMinutesAgo != null && q.repliedMinutesAgo <= 1440;
-    return true;
-  });
-
-  const listBody = (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between gap-2 px-4 pt-4 md:pt-5">
-        <h1 className="flex items-center gap-2 text-lg font-bold tracking-tight">
-          <Sparkles className="size-5" /> Sales OS
-        </h1>
-        <button onClick={() => setDrawer(false)} className="text-muted-foreground lg:hidden" aria-label="Close">
-          <X className="size-5" />
-        </button>
-      </div>
-
-      {/* Scorecard — the operator's at-a-glance state */}
-      <div className="grid grid-cols-3 gap-1.5 px-3 pt-3">
-        <Stat icon={Zap} label="Attention" value={needAttention} tone="text-foreground" />
-        <Stat icon={MessageCircle} label="Replied" value={justReplied} tone="text-sky-200" />
-        <Stat label={showMoney ? "Pipeline" : "Open"} value={showMoney ? money(totalPotential) : queue.length} tone="text-amber-200" />
-      </div>
-
-      {/* Global sub-views */}
-      <div className="flex flex-wrap gap-1.5 px-3 pt-2 text-xs">
-        <Link href="/salesos/trends" className="flex items-center gap-1 border border-white/10 px-2 py-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground">
-          <CalendarRange className="size-3.5" /> Trends
-        </Link>
-        {showMoney && (
-          <Link href="/salesos/bid" className="flex items-center gap-1 border border-white/10 px-2 py-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground">
-            <Scale className="size-3.5" /> Bid review
-          </Link>
-        )}
-        <Link href="/salesos/lost" className="flex items-center gap-1 border border-white/10 px-2 py-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground">
-          <TrendingDown className="size-3.5" /> Lost quotes
-        </Link>
-      </div>
-
-      {/* Filter tabs — one line, no wrap */}
-      <div className="flex gap-1 px-3 pt-3">
-        {FILTERS.map((t) => {
-          const on = filter === t.key;
-          return (
-            <button
-              key={t.key}
-              onClick={() => setFilter(t.key)}
-              className={`flex min-w-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                on ? "bg-white/[0.1] text-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <span className="truncate">{t.label}</span>
-              <span className="tabular-nums opacity-60">{counts[t.key]}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
-        {shown.length === 0 ? (
-          <p className="px-2 py-8 text-center text-sm text-muted-foreground">{queue.length === 0 ? "No open leads — the pipeline is clear." : "No leads match this filter."}</p>
-        ) : (
-          <ol className="space-y-1">
-            {shown.map((it) => {
-              const on = it.id === activeId;
-              const replied = repliedLabel(it.repliedMinutesAgo);
-              const dte = it.daysToEvent;
-              const when = dte == null ? "no date" : dte < 0 ? `${Math.abs(dte)}d ago` : dte === 0 ? "today" : dte === 1 ? "tomorrow" : `in ${dte}d`;
-              return (
-                <li key={it.id}>
-                  <Link
-                    href={`/salesos/${it.id}`}
-                    onClick={() => setDrawer(false)}
-                    aria-current={on ? "page" : undefined}
-                    className={`block rounded-lg border px-2.5 py-2 transition-colors ${on ? "border-white/15 bg-white/[0.08]" : "border-transparent hover:bg-white/[0.04]"}`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium">{it.eventName || it.clientName || `Project ${it.id}`}</span>
-                      {replied && <span className="ml-auto shrink-0 rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-px text-[9px] text-sky-200">{replied}</span>}
-                    </div>
-                    <div className="mt-1 flex items-center gap-1.5">
-                      <span className={`shrink-0 rounded border px-1.5 py-px text-[10px] font-semibold ${ACTION_STYLE[it.nba.action]}`}>{NBA_LABEL[it.nba.action]}</span>
-                      <span className={`shrink-0 text-[10px] font-medium ${STATE_TONE[it.state.state] ?? "text-muted-foreground"}`}>{it.stateLabel}</span>
-                    </div>
-                    <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <span className={dte != null && dte >= 0 && dte <= 14 ? "text-rose-200" : ""}>{when}</span>
-                      {showMoney && it.value != null && <span className="ml-auto tabular-nums text-amber-200">{money(it.value)}</span>}
-                    </div>
-                  </Link>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </div>
-    </div>
-  );
+  const figures: Figure[] = [
+    { label: "Act now", value: now.length, tone: now.length ? "critical" : "default" },
+    { label: "Today", value: today.length, tone: today.length ? "attention" : "default" },
+    { label: "Replied 24h", value: justReplied },
+    ...(showMoney
+      ? ([{ label: "Open", value: queue.length, sep: true }, { label: "Pipeline", value: money(totalPotential) }] as Figure[])
+      : ([{ label: "Open", value: queue.length, sep: true }] as Figure[])),
+  ];
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <ViewSwitcher active="worklist" />
-      <div className="flex flex-col lg:flex-row lg:items-start">
-        {/* Sidebar (large screens) */}
-        <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-dvh lg:w-[340px] lg:shrink-0 lg:flex-col lg:border-r lg:border-white/10">
-          {listBody}
+      <div className="flex flex-wrap items-end justify-between gap-4 px-6 pt-4 pb-3">
+        <h1 className="text-[22px] font-medium tracking-tight">Sales OS</h1>
+        <FigureStrip figures={figures} />
+      </div>
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_420px]">
+        {/* Action queue */}
+        <div className="min-w-0 overflow-auto border-t border-border">
+          {queue.length === 0 ? (
+            <p className="px-6 py-16 text-center text-[13.5px] text-muted-foreground">No active opportunities.</p>
+          ) : (
+            <table className={tableCls}>
+              <colgroup>
+                <col style={{ width: "88px" }} />
+                <col />
+                <col style={{ width: "150px" }} />
+                <col style={{ width: "180px" }} />
+                <col style={{ width: "150px" }} />
+                <col style={{ width: "96px" }} />
+              </colgroup>
+              <thead className={theadCls}>
+                <tr>
+                  <th className={`${thCls} text-right`}>Value</th>
+                  <th className={thCls}>Opportunity</th>
+                  <th className={thCls}>State</th>
+                  <th className={thCls}>Last signal</th>
+                  <th className={thCls}>Next action</th>
+                  <th className={thCls}>Event</th>
+                </tr>
+              </thead>
+              <Group label="Act now" tone="text-critical" items={now} activeId={activeId} onSelect={setSelected} showMoney={showMoney} />
+              <Group label="Today" tone="text-attention" items={today} activeId={activeId} onSelect={setSelected} showMoney={showMoney} />
+              <Group label="Monitor" tone="text-muted-foreground" items={monitor} activeId={activeId} onSelect={setSelected} showMoney={showMoney} />
+            </table>
+          )}
+        </div>
+
+        {/* Detail panel */}
+        <aside className="hidden min-w-0 flex-col border-l border-t border-border bg-panel xl:flex">
+          {active ? <DetailPanel it={active} showMoney={showMoney} onOpenFull={() => router.push(`/salesos/${active.id}`)} /> : <p className="p-6 text-[13.5px] text-muted-foreground">Select an opportunity.</p>}
         </aside>
-
-        {/* Drawer (small/medium screens) */}
-        {drawer && <div className="fixed inset-0 z-40 bg-background lg:hidden">{listBody}</div>}
-
-        {/* Detail pane */}
-        <section className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 border-b border-white/10 p-3 lg:hidden">
-            <button onClick={() => setDrawer(true)} className="flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-sm text-muted-foreground">
-              <PanelLeftOpen className="size-4" /> Leads
-            </button>
-            <span className="truncate text-sm font-medium">{activeItem?.eventName || activeItem?.clientName || "Sales OS"}</span>
-          </div>
-          {children}
-        </section>
       </div>
     </div>
   );
 }
 
-type ViewKey = "worklist" | "table" | "board";
+function Group({
+  label,
+  tone,
+  items,
+  activeId,
+  onSelect,
+  showMoney,
+}: {
+  label: string;
+  tone: string;
+  items: QueueItem[];
+  activeId: string | null;
+  onSelect: (id: string) => void;
+  showMoney: boolean;
+}): React.JSX.Element | null {
+  if (items.length === 0) return null;
+  return (
+    <tbody>
+      <tr>
+        <td colSpan={6} className="bg-background px-2.5 pt-4 pb-1.5">
+          <span className={`text-[11px] font-medium uppercase tracking-[0.12em] ${tone}`}>{label}</span>
+          <span className="ml-2 text-[11px] tabular-nums text-meta">{items.length}</span>
+        </td>
+      </tr>
+      {items.map((it) => {
+        const tier = it.nba.priority >= 80 ? "now" : it.nba.priority >= 45 ? "today" : ("passive" as Tier);
+        const on = it.id === activeId;
+        const when = eventWhen(it.daysToEvent);
+        const replied = repliedLabel(it.repliedMinutesAgo);
+        return (
+          <tr
+            key={it.id}
+            onClick={() => onSelect(it.id)}
+            aria-current={on ? "true" : undefined}
+            className={`cursor-pointer border-t border-[var(--row-rule)] transition-colors ${on ? "bg-lifted" : "hover:bg-[var(--row-hover)]"}`}
+          >
+            <td className={`px-2.5 py-2.5 text-right text-[15px] font-medium tabular-nums ${tierValueText(tier)} ${tierBar(tier)}`}>{showMoney ? money(it.value) : "—"}</td>
+            <td className="px-2.5 py-2.5">
+              <div className={`truncate text-[14px] font-medium ${tierValueText(tier)}`} title={it.eventName || it.clientName}>{it.eventName || it.clientName || `Project ${it.id}`}</div>
+              <div className="truncate text-[12px] text-meta">{it.clientName || "Unknown client"}</div>
+            </td>
+            <td className="px-2.5 py-2.5">
+              <div className="text-[13px] text-tertiary-text">{it.stateLabel}</div>
+              <div className="text-[12px] text-meta">{isInferred(it.state.source) ? `Inferred · ${it.state.confidence.toFixed(2)}` : "Verified"}</div>
+            </td>
+            <td className="px-2.5 py-2.5">
+              {replied && it.lastReplyPreview ? (
+                <>
+                  <div className="truncate text-[13px] text-tertiary-text" title={it.lastReplyPreview}>{it.lastReplyPreview}</div>
+                  <div className="text-[12px] text-meta">replied {replied}</div>
+                </>
+              ) : (
+                <span className="text-[13px] text-meta">—</span>
+              )}
+            </td>
+            <td className="px-2.5 py-2.5">
+              <ActionVerb primary={NBA_LABEL[it.nba.action]} tone={tierActionTone(tier)} />
+            </td>
+            <td className="px-2.5 py-2.5">
+              <div className={`text-[13px] tabular-nums ${when.hot ? "text-critical" : "text-tertiary-text"}`}>{when.text}</div>
+            </td>
+          </tr>
+        );
+      })}
+    </tbody>
+  );
+}
+
+function DetailPanel({ it, showMoney, onOpenFull }: { it: QueueItem; showMoney: boolean; onOpenFull: () => void }): React.JSX.Element {
+  const when = eventWhen(it.daysToEvent);
+  const inferred = isInferred(it.state.source);
+  const tier: Tier = it.nba.priority >= 80 ? "now" : it.nba.priority >= 45 ? "today" : "passive";
+  return (
+    <div className="flex h-full flex-col overflow-y-auto">
+      {/* Sticky header */}
+      <div className="sticky top-0 z-10 border-b border-border bg-panel p-5">
+        <div className="text-[22px] font-medium tracking-tight">{it.eventName || it.clientName || `Project ${it.id}`}</div>
+        <div className="mt-0.5 flex items-baseline gap-3">
+          {showMoney && <span className="text-[20px] font-medium tabular-nums">{money(it.value)}</span>}
+          <span className="text-[14px] text-tertiary-text">{it.clientName || "Unknown client"}</span>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button onClick={onOpenFull} className="flex items-center gap-1.5 rounded border border-foreground/80 px-3 py-1.5 text-[12.5px] text-foreground transition-colors hover:bg-[var(--row-hover)]">Open full lead</button>
+          <a href={`https://pro.goodshuffle.com/app/project/detail?id=${it.id}`} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 rounded border border-[var(--bar)] px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)]">
+            <ExternalLink className="size-3.5" /> Goodshuffle
+          </a>
+        </div>
+      </div>
+
+      <div className="space-y-5 p-5">
+        {/* NEXT / WHY / OBJECTIVE / DO NOT */}
+        <div className="space-y-3">
+          <Field label="Next">
+            <span className={`text-[16px] font-semibold ${tierActionTone(tier)}`}>{NBA_LABEL[it.nba.action]}</span>
+          </Field>
+          {it.nba.reason && <Field label="Why"><span className="text-[13.5px] text-tertiary-text">{it.nba.reason}</span></Field>}
+          <Field label="Objective"><span className="text-[13.5px]">{it.nba.objective}</span></Field>
+          {it.nba.doNot && <Field label="Do not"><span className="text-[13.5px] text-attention">{it.nba.doNot}</span></Field>}
+        </div>
+
+        {/* Facts */}
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-t border-[var(--row-rule)] pt-4">
+          <Fact label="State" value={it.stateLabel} meta={inferred ? `Inferred · ${it.state.confidence.toFixed(2)}` : "Verified"} />
+          <Fact label="Event date" value={it.eventDate ?? "Not set"} meta={when.text} metaHot={when.hot} />
+          {showMoney && <Fact label="Value" value={money(it.value)} />}
+          <Fact label="Last reply" value={repliedLabel(it.repliedMinutesAgo) ? `${repliedLabel(it.repliedMinutesAgo)}` : "—"} />
+        </div>
+
+        {/* Evidence */}
+        {inferred && it.state.evidence && (
+          <div className="border-t border-[var(--row-rule)] pt-4">
+            <div className="mb-1.5 text-[10.5px] uppercase tracking-[0.1em] text-meta">Evidence</div>
+            <p className="border-l-2 border-[var(--bar-2)] pl-3 text-[13.5px] italic text-secondary-text">“{it.state.evidence}”</p>
+          </div>
+        )}
+
+        <p className="border-t border-[var(--row-rule)] pt-4 text-[12px] text-meta">
+          State is FACT from Goodshuffle where known, otherwise inferred from the customer&apos;s own reply. Review before acting — nothing sends on its own.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div className="grid grid-cols-[104px_1fr] gap-3">
+      <div className="pt-0.5 text-[10.5px] uppercase tracking-[0.1em] text-meta">{label}</div>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+function Fact({ label, value, meta, metaHot }: { label: string; value: string; meta?: string; metaHot?: boolean }): React.JSX.Element {
+  return (
+    <div>
+      <div className="text-[10.5px] uppercase tracking-[0.1em] text-meta">{label}</div>
+      <div className="mt-0.5 text-[15px] tabular-nums">{value}</div>
+      {meta && <div className={`text-[12px] ${metaHot ? "text-critical" : "text-meta"}`}>{meta}</div>}
+    </div>
+  );
+}
 
 function ViewSwitcher({ active }: { active: ViewKey }): React.JSX.Element {
   const items: { key: ViewKey; label: string; href: string; icon: typeof List }[] = [
@@ -232,30 +285,16 @@ function ViewSwitcher({ active }: { active: ViewKey }): React.JSX.Element {
     { key: "board", label: "Board", href: "/salesos/board", icon: Columns3 },
   ];
   return (
-    <div className="flex items-center gap-1 border-b border-white/10 px-3 py-2">
+    <div className="flex items-center gap-5 px-6 pt-4">
       {items.map((it) => {
         const on = active === it.key;
         const Icon = it.icon;
         return (
-          <Link
-            key={it.key}
-            href={it.href}
-            aria-current={on ? "page" : undefined}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${on ? "bg-white/[0.1] text-foreground" : "text-muted-foreground hover:bg-white/5 hover:text-foreground"}`}
-          >
+          <Link key={it.key} href={it.href} aria-current={on ? "page" : undefined} className={`flex items-center gap-1.5 text-[13.5px] transition-colors ${on ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
             <Icon className="size-4" /> {it.label}
           </Link>
         );
       })}
-    </div>
-  );
-}
-
-function Stat({ icon: Icon, label, value, tone }: { icon?: typeof Zap; label: string; value: string | number; tone: string }): React.JSX.Element {
-  return (
-    <div className="surface border border-white/5 p-2">
-      <div className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-muted-foreground">{Icon && <Icon className="size-3" />} {label}</div>
-      <div className={`mt-0.5 text-lg font-bold tabular-nums ${tone}`}>{value}</div>
     </div>
   );
 }

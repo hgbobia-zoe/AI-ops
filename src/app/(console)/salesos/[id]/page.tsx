@@ -1,11 +1,10 @@
-// A specific lead's board inside the Sales OS master-detail. Thin wrapper — the worklist rail comes
-// from the shell (layout); all the lead content lives in LeadBoard, shared with the index view.
-
-import { LeadBoard } from "../LeadBoard";
+// A specific lead under /salesos/[id]: the shell renders the worklist with this lead pre-selected in the
+// detail panel; the full board opens as a modal (@modal/(.)[id]) on soft navigation. This route itself
+// renders nothing — kept so the URL resolves on a hard load / deep link.
 
 export const dynamic = "force-dynamic";
 
-export default async function LeadDetailPage({ params }: { params: Promise<{ id: string }> }): Promise<React.JSX.Element> {
-  const { id } = await params;
-  return <LeadBoard id={id} />;
+export default async function LeadDetailPage({ params }: { params: Promise<{ id: string }> }): Promise<null> {
+  await params;
+  return null;
 }
