@@ -4,16 +4,7 @@
 // this blade is the "who's present" detail with day navigation.
 
 import Link from "next/link";
-import {
-  Users,
-  UserRound,
-  Truck,
-  PackageCheck,
-  PackageOpen,
-  Briefcase,
-  ChevronLeft,
-  ChevronRight,
-} from "lucide-react";
+import { Truck, PackageCheck, PackageOpen, Briefcase, ChevronLeft, ChevronRight } from "lucide-react";
 import { DatePicker } from "@/components/DatePicker";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import {
@@ -32,6 +23,7 @@ import { getRouteForDate } from "@/lib/db/repo";
 import { crewForRoute } from "@/lib/crewRules";
 import { todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
 import type { Route } from "@/lib/types";
+import { FigureStrip, type Figure } from "@/components/console-primitives";
 
 export const dynamic = "force-dynamic";
 
@@ -67,27 +59,29 @@ export default async function StaffingPage({
   const routeEndUnix = latestStopUnix(routes);
   const unloadCrew = dedupById([...distinctPrepAfter(crewD, routeEndUnix), ...distinctByRole(crewNext, "prep")]);
 
+  const figures: Figure[] = [
+    { label: "Drivers", value: `${driversD.length}/${routes.length}`, tone: driversD.length < routes.length ? "critical" : "default" },
+    { label: "Prep", value: prepPrev.length },
+    ...(hasPickups ? ([{ label: "Unload", value: unloadCrew.length, tone: unloadCrew.length === 0 ? "attention" : "default" }] as Figure[]) : []),
+    { label: "Office", value: officeD.length },
+    { label: "Open shift", value: openShifts.length, tone: openShifts.length ? "critical" : "default", sep: true },
+  ];
+
   return (
-    <main className="mx-auto max-w-3xl p-5 pb-16 md:p-8">
+    <main className="p-6">
       {isToday && <AutoRefresh seconds={60} />}
-      <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="flex items-center gap-2 text-3xl font-bold tracking-tight">
-            <Users className="size-7" /> Staffing
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {driversD.length} driver{driversD.length === 1 ? "" : "s"} · {prepPrev.length} prep (day before) ·{" "}
-            {routes.length} route{routes.length === 1 ? "" : "s"}
-          </p>
+          <h1 className="text-[22px] font-medium tracking-tight">Staffing</h1>
+          <p className="text-[12.5px] text-meta">{formatYmdLong(date)} · {routes.length} route{routes.length === 1 ? "" : "s"}</p>
         </div>
-        <DateNav date={date} today={today} />
+        <div className="flex items-end gap-6">
+          <FigureStrip figures={figures} />
+          <DateNav date={date} today={today} />
+        </div>
       </header>
 
-      {!configured && (
-        <div className="mb-6 border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
-          Connecteam isn&apos;t connected — no crew data to show.
-        </div>
-      )}
+      {!configured && <p className="mb-6 text-[12.5px] text-attention">Connecteam isn&apos;t connected — no crew data to show.</p>}
 
       {/* Open shifts (scheduled but unassigned) + suggested crew — top of the page so gaps are seen first. */}
       <OpenShiftsPanel openShifts={openShifts} verified={crewDResult.ok} />
@@ -129,50 +123,38 @@ export default async function StaffingPage({
       )}
 
       {/* Routes + crew each needs (tent rules) */}
-      <section className="mb-2 space-y-2">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          <Truck className="size-4" /> Routes &amp; crew needed
-        </h2>
+      <section className="mb-2">
+        <h2 className="mb-1.5 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Routes &amp; crew needed</h2>
         {routes.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No active routes for {isToday ? "today" : formatYmdLong(date)}.</p>
+          <p className="text-[13px] text-meta">No active routes for {isToday ? "today" : formatYmdLong(date)}.</p>
         ) : (
-          routes.map((r) => {
-            const need = crewForRoute(r.stops.map((s) => s.items ?? []));
-            const first = earliestStopOfRoute(r);
-            return (
-              <div key={r.routeId} className="surface flex flex-wrap items-center justify-between gap-3 border border-white/5 p-3">
-                <div className="flex items-center gap-2.5">
-                  <span className="btn-hero flex size-8 items-center justify-center">
-                    <Truck className="size-4" />
-                  </span>
+          <div className="border border-border">
+            {routes.map((r) => {
+              const need = crewForRoute(r.stops.map((s) => s.items ?? []));
+              const first = earliestStopOfRoute(r);
+              return (
+                <div key={r.routeId} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--row-rule)] px-3 py-2.5 first:border-t-0">
                   <div>
-                    <div className="font-medium">
-                      {r.truckId}
-                      {r.driverName ? ` · ${r.driverName}` : ""}
-                    </div>
-                    <div className="text-xs text-muted-foreground">{r.stops.length} stops</div>
+                    <div className="text-[14px] font-medium">{r.truckId}{r.driverName ? ` · ${r.driverName}` : ""}</div>
+                    <div className="text-[12px] text-meta">{r.stops.length} stops</div>
                   </div>
-                </div>
-                <div className="flex items-center gap-5">
-                  <div>
-                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Crew needed</div>
-                    <div className="flex items-center gap-1.5 font-semibold tabular-nums">
-                      {need.crew}
-                      {need.hasTent && (
-                        <span className="bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-black">
-                          {need.reasons[need.reasons.length - 1] ?? "tent"}
-                        </span>
-                      )}
+                  <div className="flex items-center gap-6">
+                    <div>
+                      <div className="text-[10.5px] uppercase tracking-[0.1em] text-meta">Crew needed</div>
+                      <div className="flex items-center gap-1.5 text-[15px] font-medium tabular-nums">
+                        {need.crew}
+                        {need.hasTent && <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-attention">{need.reasons[need.reasons.length - 1] ?? "tent"}</span>}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[10.5px] uppercase tracking-[0.1em] text-meta">First stop</div>
+                      <div className="text-[15px] font-medium tabular-nums">{first ? formatClockTime(first) : "—"}</div>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">First stop</div>
-                    <div className="font-semibold tabular-nums">{first ? formatClockTime(first) : "—"}</div>
-                  </div>
                 </div>
-              </div>
-            );
-          })
+              );
+            })}
+          </div>
         )}
       </section>
     </main>
@@ -235,24 +217,22 @@ function RoleSection({
   crew: CrewMember[];
   emptyText: string;
 }): React.JSX.Element {
+  void icon;
   return (
-    <section className="mb-8 space-y-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
-          {icon} {title}
-        </h2>
-        <span className="text-xs text-muted-foreground">{when}</span>
+    <section className="mb-6">
+      <div className="mb-1.5 flex items-baseline justify-between gap-2">
+        <h2 className="text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">{title}</h2>
+        <span className="text-[12px] text-meta">{when}</span>
       </div>
       {crew.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{emptyText}</p>
+        <p className="text-[13px] text-meta">{emptyText}</p>
       ) : (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="border border-border">
           {crew.map((c) => (
-            <span key={c.userId} className="inline-flex items-center gap-1.5 border border-white/10 bg-white/5 px-2.5 py-1 text-sm">
-              <UserRound className="size-3.5 text-muted-foreground" />
-              {c.name}
-              {c.title && <span className="text-[11px] text-muted-foreground">· {c.title}</span>}
-            </span>
+            <div key={c.userId} className="flex items-center justify-between border-t border-[var(--row-rule)] px-3 py-2 text-[13.5px] first:border-t-0">
+              <span className="font-medium">{c.name}</span>
+              {c.title && <span className="text-[12px] uppercase tracking-[0.06em] text-meta">{c.title}</span>}
+            </div>
           ))}
         </div>
       )}
@@ -267,11 +247,11 @@ function DateNav({ date, today }: { date: string; today: string }): React.JSX.El
   const href = (d: string) => (d === today ? "/staffing" : `/staffing?date=${d}`);
   return (
     <div className="flex items-center gap-1.5">
-      <Link href={href(prev)} aria-label="Previous day" className="flex size-9 items-center justify-center border border-white/10 text-muted-foreground hover:text-foreground">
+      <Link href={href(prev)} aria-label="Previous day" className="flex size-9 items-center justify-center rounded border border-border text-muted-foreground transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
         <ChevronLeft className="size-4" />
       </Link>
       <DatePicker date={date} today={today} basePath="/staffing" />
-      <Link href={href(next)} aria-label="Next day" className="flex size-9 items-center justify-center border border-white/10 text-muted-foreground hover:text-foreground">
+      <Link href={href(next)} aria-label="Next day" className="flex size-9 items-center justify-center rounded border border-border text-muted-foreground transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
         <ChevronRight className="size-4" />
       </Link>
     </div>
