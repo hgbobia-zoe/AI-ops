@@ -15,7 +15,7 @@ import { leadActivity } from "@/lib/salesos/audit";
 import { ourPhoneDigits, last10 } from "@/lib/comms/identity";
 import { getOpenphoneContactMap } from "@/lib/comms/openphone";
 import { formatYmdLong } from "@/lib/dates";
-import { viewerRole } from "@/lib/auth/getSession";
+import { viewerRole, viewerFirstName } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +34,7 @@ export async function GET(req: Request): Promise<NextResponse> {
   const cstate = stored ? fromStored(stored) : booking ? resolveDeterministic(booking) : null;
   const repliedMinutesAgo = replyMinutesAgo(id);
   const nba = cstate ? nextBestAction({ state: cstate.state, value: lead.value, daysToEvent: lead.signals.daysToEvent, repliedMinutesAgo }) : null;
-  const brief = cstate ? callBriefFor(cstate.state, lead.clientName) : null;
+  const brief = cstate ? callBriefFor(cstate.state, lead.clientName, await viewerFirstName()) : null;
 
   const dte = lead.signals.daysToEvent;
   const eventWhen = dte == null ? "No event date" : dte < 0 ? `${Math.abs(dte)} days ago` : dte === 0 ? "Today" : dte === 1 ? "Tomorrow" : `In ${dte} days`;

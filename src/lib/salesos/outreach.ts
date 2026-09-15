@@ -46,6 +46,7 @@ export interface OutreachLead {
   eventDateLong: string | null; // formatted, e.g. "Saturday, Sep 20"
   daysToEvent: number | null;
   stage: SalesStage;
+  repFirstName?: string | null; // the signed-in rep, so a text reads "Hi Ivy, this is Sarah..."
 }
 
 export type OutreachSource = "template" | "ai";
@@ -81,9 +82,13 @@ export function humanize(text: string): string {
 export function templateOutreach(lead: OutreachLead, comms: CommsSummary): OutreachDraft {
   const fn = firstName(lead.firstName);
   // Customer-facing copy refers to the event by DATE, never the internal project name (often just a
-  // last name — "your Dixon event" reads oddly to the client). "your event on Sept 24th".
+  // last name, "your Dixon event" reads oddly to the client). "your event on Sept 24th".
   const evOn = lead.eventDateLong ? `your event on ${lead.eventDateLong}` : "your event";
+  const EvOn = evOn.charAt(0).toUpperCase() + evOn.slice(1); // sentence-start form
   const when = lead.eventDateLong ? ` on ${lead.eventDateLong}` : "";
+  // The rep introduces themselves by name when we know it, else the company. "Hi Ivy, this is Sarah..."
+  const rep = (lead.repFirstName ?? "").trim();
+  const intro = rep ? `this is ${rep} from Zoe Events` : "it's Zoe Events & Party Rentals";
 
   // A caution surfaces when the history says "stop chasing the same way".
   let caution: string | null = null;
@@ -96,28 +101,28 @@ export function templateOutreach(lead: OutreachLead, comms: CommsSummary): Outre
 
   switch (lead.stage) {
     case "unsent":
-      sms = `Hi ${fn}, it's Zoe Events & Party Rentals. Your quote for ${evOn} is ready to go. Want me to send it over, or is there anything you'd like to tweak first?`;
+      sms = `Hi ${fn}, ${intro}. Your quote for ${evOn} is ready to go. Want me to send it over, or is there anything you'd like to tweak first?`;
       callStrategy = `Quick call to confirm the details (date, count, delivery), then send the quote on the spot. Goal is to get it out today.`;
       cadence = "Now, it hasn't gone out yet.";
       break;
     case "awaiting":
-      sms = `Hi ${fn}, just making sure the quote for ${evOn} came through okay. Happy to answer any questions whenever you're ready.`;
+      sms = `Hi ${fn}, ${intro}. Just making sure the quote for ${evOn} came through okay. Happy to answer any questions whenever you're ready.`;
       callStrategy = `Keep it light, the quote is still fresh. A soft "did it come through?" beats a hard push. Save the real follow-up for a few days out.`;
       cadence = "Give it 2 to 3 days before a real follow-up.";
       break;
     case "follow_up":
-      sms = `Hi ${fn}, following up on your quote for ${evOn}. Happy to tweak anything or answer questions. Are you leaning toward moving forward?`;
+      sms = `Hi ${fn}, ${intro}. Following up on your quote for ${evOn}. Happy to tweak anything or answer questions. Are you leaning toward moving forward?`;
       callStrategy = `Reference the quote, ask an open question (what's holding it up?), and offer to adjust. Listen for the real objection.`;
       cadence = "Today.";
       break;
     case "cold":
-      sms = `Hi ${fn}, checking in one last time on your rental quote for ${evOn}. Should I keep it open for you, or have your plans changed? Either way, just let me know.`;
+      sms = `Hi ${fn}, ${intro}. Checking in one last time on your rental quote for ${evOn}. Should I keep it open for you, or have your plans changed? Either way, just let me know.`;
       callStrategy = `A respectful last attempt, give them an easy out. If no answer, try a different contact or channel, or mark it lost. Don't repeat the same chase.`;
       cadence = "Soon, then close it out.";
       break;
     case "closing":
     default:
-      sms = `Hi ${fn}, ${evOn} is coming up fast. Want to lock in your rentals? I can hold your items today so nothing sells out before your date.`;
+      sms = `Hi ${fn}, ${intro}. ${EvOn} is coming up fast. Want to lock in your rentals? I can hold your items today so nothing sells out before your date.`;
       callStrategy = `Lead with the date${when}. Create real urgency, availability isn't guaranteed until it's signed. Offer to send the contract right now.`;
       cadence = "Now, the event is close and it's still unsigned.";
       break;

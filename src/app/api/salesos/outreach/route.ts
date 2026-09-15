@@ -4,6 +4,7 @@
 import { NextResponse } from "next/server";
 import { draftLeadOutreach } from "@/lib/salesos/outreachService";
 import { logSalesEvent } from "@/lib/salesos/audit";
+import { viewerFirstName } from "@/lib/auth/getSession";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   const id = (body.id ?? "").trim();
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
-  const result = await draftLeadOutreach(id);
+  const result = await draftLeadOutreach(id, await viewerFirstName());
   if (!result) return NextResponse.json({ error: "lead not found" }, { status: 404 });
   await logSalesEvent("OUTREACH_DRAFTED", id, { source: result.draft.source, stage: result.stage });
   return NextResponse.json(result);

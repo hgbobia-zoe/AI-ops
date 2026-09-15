@@ -39,6 +39,19 @@ export async function viewerInitials(): Promise<string | null> {
   }
 }
 
+/** The signed-in rep's FIRST name (for personalizing outreach: "Hi Ivy, this is Sarah..."), or null
+ *  when unknown (auth off, or no name on file) — callers fall back to "it's Zoe Events". */
+export async function viewerFirstName(): Promise<string | null> {
+  const s = await getSession();
+  if (!s) return null;
+  try {
+    const name = getUser(s.uid)?.name?.trim();
+    return name ? name.split(/\s+/)[0] : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The signed-in rep's linked Quo/OpenPhone user id, or null — so a text they send is attributed to
  *  them in Quo AND tagged with their initials, automatically, without a per-message picker. */
 export async function viewerQuoUserId(): Promise<string | null> {

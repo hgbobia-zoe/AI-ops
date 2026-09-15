@@ -39,7 +39,10 @@ const SYSTEM =
   "context note (e.g. on leave, deferred to another contact). " +
   "Write like a real person texting a customer: warm, natural, and concise. Contractions are good. Do NOT " +
   "sound like a brochure or a mass marketing blast, and do NOT use buzzwords like 'unforgettable'. " +
-  "Refer to the customer's event by its DATE — 'your event on {eventDateLong}' — and NEVER by the internal " +
+  "Open the text by greeting the customer by first name and introducing the rep by name: " +
+  "'Hi {customer first name}, this is {repFirstName} from Zoe Events, ...'. If repFirstName is empty, use " +
+  "'Hi {customer first name}, it's Zoe Events, ...' instead. " +
+  "Refer to the customer's event by its DATE, 'your event on {eventDateLong}', and NEVER by the internal " +
   "project name (it's often just a last name and reads oddly to the client). If no date is given, say " +
   "'your event'. " +
   "CRITICAL STYLE RULE: never use an em dash or en dash (— or –) anywhere — use commas, periods, or a new " +
@@ -61,6 +64,7 @@ async function llmDraft(lead: OutreachLead, clientName: string, eventDate: strin
     stage: lead.stage,
     stageMeaning: STAGE_LABEL[lead.stage],
     client: clientName,
+    repFirstName: lead.repFirstName ?? "", // the signed-in rep — introduce them by name in the opening
     internalProjectName: lead.eventName, // context only — do NOT use in the customer-facing copy
     eventDate,
     eventDateLong: lead.eventDateLong ?? null, // say "your event on {this}"
@@ -95,8 +99,9 @@ async function llmDraft(lead: OutreachLead, clientName: string, eventDate: strin
   }
 }
 
-/** Draft the next outreach for a lead: template baseline, LLM-refined against the real comms history. */
-export async function draftLeadOutreach(id: string): Promise<OutreachResult | null> {
+/** Draft the next outreach for a lead: template baseline, LLM-refined against the real comms history.
+ *  `repFirstName` (the signed-in rep) personalizes the opening: "Hi {customer}, this is {rep}...". */
+export async function draftLeadOutreach(id: string, repFirstName?: string | null): Promise<OutreachResult | null> {
   const l = getLead(id);
   if (!l) return null;
 
@@ -107,6 +112,7 @@ export async function draftLeadOutreach(id: string): Promise<OutreachResult | nu
     eventDateLong: l.eventDate ? formatYmdLong(l.eventDate) : null,
     daysToEvent: l.signals.daysToEvent,
     stage: l.stage,
+    repFirstName: repFirstName ?? null,
   };
 
   let draft = templateOutreach(oLead, comms);

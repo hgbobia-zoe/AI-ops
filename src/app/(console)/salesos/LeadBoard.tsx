@@ -25,7 +25,7 @@ import { logLeadView, leadActivity } from "@/lib/salesos/audit";
 import { formatYmdLong } from "@/lib/dates";
 import { ourPhoneDigits, last10 } from "@/lib/comms/identity";
 import { getOpenphoneContactMap } from "@/lib/comms/openphone";
-import { viewerRole, viewerInitials, viewerQuoUserId, currentActor } from "@/lib/auth/getSession";
+import { viewerRole, viewerInitials, viewerQuoUserId, currentActor, viewerFirstName } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
@@ -55,10 +55,10 @@ export async function LeadBoard({ id }: { id: string }): Promise<React.JSX.Eleme
   const cstate = stored ? fromStored(stored) : booking ? resolveDeterministic(booking) : null;
   const repliedMinutesAgo = replyMinutesAgo(id);
   const nba = cstate ? nextBestAction({ state: cstate.state, value: lead.value, daysToEvent: lead.signals.daysToEvent, repliedMinutesAgo }) : null;
-  const brief = cstate ? callBriefFor(cstate.state, lead.clientName) : null;
   const coachOn = coachBridgeConfigured();
   const coachInitials = coachOn ? await viewerInitials() : null;
-  const [viewerName, viewerQuo, viewerInits] = await Promise.all([currentActor(), viewerQuoUserId(), viewerInitials()]);
+  const [viewerName, viewerQuo, viewerInits, repFirst] = await Promise.all([currentActor(), viewerQuoUserId(), viewerInitials(), viewerFirstName()]);
+  const brief = cstate ? callBriefFor(cstate.state, lead.clientName, repFirst) : null;
   const outreachViewer = { name: viewerName.label, quoUserId: viewerQuo, initials: viewerInits };
 
   // The customer's coachable calls (fetched once) → the Coaching tab.

@@ -67,6 +67,16 @@ describe("outreach — templateOutreach", () => {
     expect(d.source).toBe("template");
   });
 
+  it("introduces the rep by name when one is provided", () => {
+    const d = templateOutreach({ ...lead("unsent"), repFirstName: "Sarah" }, summarizeComms(null, null));
+    expect(d.sms.startsWith("Hi Devin, this is Sarah from Zoe Events.")).toBe(true);
+  });
+
+  it("falls back to the company intro when no rep name is known", () => {
+    const d = templateOutreach(lead("unsent"), summarizeComms(null, null));
+    expect(d.sms).toContain("it's Zoe Events & Party Rentals");
+  });
+
   it("surfaces a client-context caution when one exists", () => {
     const d = templateOutreach(lead("cold"), summarizeComms(GRADY_NOTES, "DEVIN IS ON PATERNITY LEAVE"));
     expect(d.caution).toMatch(/paternity leave/i);
