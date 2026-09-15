@@ -53,6 +53,7 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<Tab>("next");
   const [reanalyzing, setReanalyzing] = useState(false);
+  const [scrollTo, setScrollTo] = useState<null | "text" | "email">(null);
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -94,6 +95,19 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Text/Email buttons jump to the in-app send box (in the Next step tab), scrolling it into view.
+  useEffect(() => {
+    if (!scrollTo || tab !== "next") return;
+    const id = scrollTo === "text" ? "lead-send-text" : "lead-send-email";
+    const raf = requestAnimationFrame(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setScrollTo(null);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [scrollTo, tab]);
+
+  const jumpTo = (target: "text" | "email"): void => { setTab("next"); setScrollTo(target); };
+
   const tel = d?.clientPhone?.replace(/[^\d+]/g, "") ?? "";
   const coachedCalls = (d?.feed ?? []).filter((it): it is CallItem => it.kind === "call" && (!!it.coaching || !!it.signals));
   const tabs: { key: Tab; label: string; icon: typeof Sparkles }[] = [
@@ -129,8 +143,8 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
             </div>
             <div className="flex flex-wrap gap-2">
               {d.hasPhone && <a href={`tel:${tel}`} className="flex items-center gap-1.5 rounded border border-foreground/70 px-3 py-1.5 text-[12.5px] transition-colors hover:bg-[var(--row-hover)]"><Phone className="size-4" /> Call</a>}
-              {d.hasPhone && <a href={`sms:${tel}`} className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)]"><MessageSquare className="size-4" /> Text</a>}
-              {d.hasEmail && <a href={`mailto:${d.clientEmail}`} className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)]"><Mail className="size-4" /> Email</a>}
+              {d.hasPhone && <button type="button" onClick={() => jumpTo("text")} className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)]"><MessageSquare className="size-4" /> Text</button>}
+              {d.hasEmail && <button type="button" onClick={() => jumpTo("email")} className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)]"><Mail className="size-4" /> Email</button>}
               <a href={d.gsUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)]"><ExternalLink className="size-4" /> Goodshuffle</a>
             </div>
 
@@ -244,10 +258,14 @@ function NextStep({ d, onReanalyze, reanalyzing }: { d: FullLead; onReanalyze: (
         </div>
       )}
       {d.brief?.textDraft && (
-        <QuoTextSend id={d.id} phone={d.clientPhone} clientName={d.clientName} canText={d.hasPhone} initialText={d.brief.textDraft} />
+        <div id="lead-send-text">
+          <QuoTextSend id={d.id} phone={d.clientPhone} clientName={d.clientName} canText={d.hasPhone} initialText={d.brief.textDraft} />
+        </div>
       )}
       {d.brief?.email.body && (
-        <EmailSend id={d.id} clientName={d.clientName} clientEmail={d.clientEmail} canEmail={d.hasEmail} initialSubject={d.brief.email.subject} initialBody={d.brief.email.body} />
+        <div id="lead-send-email">
+          <EmailSend id={d.id} clientName={d.clientName} clientEmail={d.clientEmail} canEmail={d.hasEmail} initialSubject={d.brief.email.subject} initialBody={d.brief.email.body} />
+        </div>
       )}
     </div>
   );
