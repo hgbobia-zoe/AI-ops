@@ -2,13 +2,14 @@
 
 // App-wide data-health banner: warns when the Goodshuffle Auto-Pull isn't running or GSPRO is signed
 // out (so the board isn't silently showing stale/empty data). It renders the server's initial verdict,
-// then polls /api/health so it updates live — and, crucially, DISAPPEARS ON ITS OWN once the problem
-// is resolved (no navigation needed). Still dismissible per-issue for the session; a different problem
-// re-shows, and a resolved-then-new problem clears the old dismissal.
+// then polls /api/health so it updates live — and DISAPPEARS ON ITS OWN once the problem is resolved
+// (a fresh successful pull), no navigation needed. It is intentionally NOT dismissible: a stale-data
+// warning must not be clickable-away while the issue is still live — it goes only when the data is
+// actually current again.
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { AlertTriangle, X } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 
 interface Banner {
   level: "error" | "warn";
@@ -20,33 +21,17 @@ const POLL_MS = 45_000;
 
 export function PullHealthBanner({ initial, href = "/admin/pull" }: { initial: Banner | null; href?: string }): React.JSX.Element | null {
   const [banner, setBanner] = useState<Banner | null>(initial);
-  const [dismissedTitle, setDismissedTitle] = useState<string | null>(null);
-
-  // Read any session dismissal for the current banner once mounted.
-  useEffect(() => {
-    if (!banner) return;
-    try {
-      if (sessionStorage.getItem(`zoePullBanner:${banner.title}`) === "1") setDismissedTitle(banner.title);
-    } catch {
-      /* ignore */
-    }
-  }, [banner]);
 
   const poll = useCallback(async () => {
     try {
       const r = await fetch("/api/health", { cache: "no-store" });
       if (!r.ok) return; // forbidden / offline — leave the current verdict as-is
       const j = (await r.json()) as { banner: Banner | null };
-      setBanner(j.banner);
-      // Problem cleared → forget any stale dismissal so the next problem shows.
-      if (!j.banner) {
-        setDismissedTitle(null);
-        try { sessionStorage.removeItem(`zoePullBanner:${initial?.title ?? ""}`); } catch { /* ignore */ }
-      }
+      setBanner(j.banner); // null once resolved → banner clears itself
     } catch {
       /* transient — keep showing what we have */
     }
-  }, [initial]);
+  }, []);
 
   useEffect(() => {
     const id = setInterval(poll, POLL_MS);
@@ -54,7 +39,6 @@ export function PullHealthBanner({ initial, href = "/admin/pull" }: { initial: B
   }, [poll]);
 
   if (!banner) return null; // resolved → gone on its own
-  if (dismissedTitle === banner.title) return null; // dismissed this exact issue this session
 
   const tone =
     banner.level === "error"
@@ -70,20 +54,6 @@ export function PullHealthBanner({ initial, href = "/admin/pull" }: { initial: B
           Fix it →
         </Link>
       </div>
-      <button
-        onClick={() => {
-          try {
-            sessionStorage.setItem(`zoePullBanner:${banner.title}`, "1");
-          } catch {
-            /* ignore */
-          }
-          setDismissedTitle(banner.title);
-        }}
-        aria-label="Dismiss"
-        className="shrink-0 rounded p-0.5 opacity-70 hover:bg-white/10 hover:opacity-100"
-      >
-        <X className="size-4" />
-      </button>
     </div>
   );
 }

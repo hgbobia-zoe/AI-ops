@@ -40,6 +40,22 @@ describe("pullBannerState", () => {
     expect(pullBannerState(now)).toBeNull();
   });
 
+  it("a live 'error' heartbeat is superseded by a fresh route pull → no banner", () => {
+    const now = Date.now();
+    recordAgentHeartbeat("extension", "error", "no result", new Date(now - 2 * 60_000)); // 2m ago, live
+    recordPull("route:E450", 5, new Date(now - 1 * 60_000)); // 1m ago → data IS current
+    expect(pullBannerState(now)).toBeNull();
+  });
+
+  it("a live 'error' heartbeat with stale routes → warns", () => {
+    const now = Date.now();
+    recordAgentHeartbeat("extension", "error", "no result", new Date(now - 2 * 60_000)); // live
+    recordPull("route:E450", 5, new Date(now - 3 * 3_600_000)); // 3h ago → still stale
+    const b = pullBannerState(now);
+    expect(b?.level).toBe("warn");
+    expect(b?.title).toMatch(/hit a problem/i);
+  });
+
   it("no live heartbeat + old routes → warns with the age", () => {
     const now = Date.now();
     recordPull("route:E450", 5, new Date(now - 30 * 3_600_000)); // 30h ago

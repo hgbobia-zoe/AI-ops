@@ -96,7 +96,9 @@ export function pullBannerState(now: number = Date.now(), agentFreshMin = 30, ro
     .filter(([k]) => k.startsWith("route:"))
     .map(([, v]) => Date.parse(v.at))
     .filter((t) => !Number.isNaN(t));
-  const routeAgeH = routeAts.length ? (now - Math.max(...routeAts)) / 3_600_000 : Infinity;
+  const lastRouteAt = routeAts.length ? Math.max(...routeAts) : NaN;
+  const routeAgeH = routeAts.length ? (now - lastRouteAt) / 3_600_000 : Infinity;
+  const routeAgeMin = routeAgeH * 60;
   const lastPullPhrase = routeAts.length ? `Last route pull ${Math.round(routeAgeH)}h ago.` : "Routes have never been pulled.";
 
   // A live extension heartbeat is the most precise signal.
@@ -105,8 +107,13 @@ export function pullBannerState(now: number = Date.now(), agentFreshMin = 30, ro
       return { level: "error", title: "Goodshuffle is signed out — auto-pull can't run", detail: "Open pro.goodshuffle.com on the office machine and sign in; data will refresh within a few minutes." };
     if (agent.status === "no_tab")
       return { level: "warn", title: "Auto-pull has no Goodshuffle tab open", detail: "Open pro.goodshuffle.com (signed in) in the office browser so the pull can run." };
-    if (agent.status === "error")
+    if (agent.status === "error") {
+      // A transient/partial error is RESOLVED once a successful route pull lands. If routes are fresh
+      // (a good pull within the freshness window), the data is current — don't alarm over a stale error
+      // heartbeat. The banner returns only while routes are ALSO stale (a real, unresolved problem).
+      if (routeAgeMin <= agentFreshMin) return null;
       return { level: "warn", title: "Auto-pull hit a problem", detail: `${agent.detail ?? "Last pull errored."} ${lastPullPhrase}` };
+    }
     return null; // status ok and recent → all good
   }
 
