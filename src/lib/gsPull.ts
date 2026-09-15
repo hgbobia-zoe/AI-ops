@@ -131,7 +131,8 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var photoOps=all.filter(function(o){ return o.op==="photo_upload" && o.transactionId && o.payload && o.payload.photoIds && o.payload.photoIds.length; });
         var noteOps=all.filter(function(o){ return o.op==="note_append" && o.transactionId && o.payload && o.payload.line; });
         var teamOps=all.filter(function(o){ return o.op==="add_team_member" && o.transactionId && o.payload && o.payload.userID; });
-        var pushed=0, failed=0, notes=0, team=0, chain=Promise.resolve();
+        var emailOps=all.filter(function(o){ return o.op==="email_send" && o.transactionId && o.payload && o.payload.content; });
+        var pushed=0, failed=0, notes=0, team=0, emails=0, chain=Promise.resolve();
         // add_team_member: add a GSPRO user (Warehouse Desktop) to the project team on a signed project.
         teamOps.forEach(function(o){ chain=chain.then(function(){
           var body=new URLSearchParams({ transactionID:String(o.transactionId), userID:String(o.payload.userID), linkType:String(o.payload.linkType||"OTHER") });
@@ -162,8 +163,26 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             }).then(function(ok){ if(ok)notes++; else failed++; return ackOp(o.id,ok,"note_append_failed"); }).catch(function(){ failed++; return ackOp(o.id,false,"note_append_error"); });
           });
         });
-        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team}; });
-      }).catch(function(){ return {pushed:0, failed:0, notes:0}; });
+        // email_send: reply into the project's CLIENT email thread (continues it; Goodshuffle appends the
+        // signature). Read the thread, take the latest message's id + recipients + subject, POST sendMessage.
+        emailOps.forEach(function(o){
+          chain=chain.then(function(){
+            return fetch("/app/conversation/getMessagesForTransaction?transactionID="+encodeURIComponent(o.transactionId),{headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(cv){
+              var msgs=(cv&&cv.client&&cv.client.messages)||[];
+              if(!msgs.length) throw "no_thread";
+              var last=msgs[msgs.length-1];
+              var recips=(last.clientRecipients||[]).map(function(rp){ return {contactID:rp.contactID, email:rp.email, name:rp.name, phone:rp.phone, isCurrentUser:!!rp.isCurrentUser, isEmailValid:true, deliveryConfirmedDate:null, messageOpenedDate:null, hardBouncedDate:null, droppedMessageDate:null}; });
+              if(!recips.length) throw "no_recipient";
+              var subj=(o.payload.subject||last.subject||"");
+              if(!/^re:/i.test(subj)) subj="Re: "+subj;
+              var txID=Number(o.transactionId); if(!txID) txID=o.transactionId;
+              var payload={ messageID:last.id, transactionID:txID, content:o.payload.content, recipients:recips, subject:subj, messageType:"CLIENT", attachments:[] };
+              return fetch("/app/conversation/sendMessage",{method:"POST",headers:{"content-type":"application/json","x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include",body:JSON.stringify(payload)}).then(function(r){ return r.ok; });
+            }).then(function(ok){ if(ok)emails++; else failed++; return ackOp(o.id,ok,"email_send_failed"); }).catch(function(e){ failed++; return ackOp(o.id,false,"email_send_"+(typeof e==="string"?e:"error")); });
+          });
+        });
+        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails}; });
+      }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0}; });
     }
 
     // Finish a cycle: one-shot fades the banner; auto keeps a persistent status with the last-run time.

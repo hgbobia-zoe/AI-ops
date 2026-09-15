@@ -20,9 +20,10 @@ export type SalesAction =
   | "CALL_DEBRIEF"
   | "INBOUND_SMS"
   | "BOARD_MOVE"
-  | "STATE_REANALYZED";
+  | "STATE_REANALYZED"
+  | "EMAIL_SENT";
 
-export const SALES_ACTIONS: SalesAction[] = ["LEAD_VIEWED", "OUTREACH_DRAFTED", "MESSAGE_SENT", "LOSS_REASON_TAGGED", "BID_REVIEWED", "CALL_LOGGED", "CALL_DEBRIEF", "INBOUND_SMS", "BOARD_MOVE", "STATE_REANALYZED"];
+export const SALES_ACTIONS: SalesAction[] = ["LEAD_VIEWED", "OUTREACH_DRAFTED", "MESSAGE_SENT", "LOSS_REASON_TAGGED", "BID_REVIEWED", "CALL_LOGGED", "CALL_DEBRIEF", "INBOUND_SMS", "BOARD_MOVE", "STATE_REANALYZED", "EMAIL_SENT"];
 
 export const ACTION_LABEL: Record<SalesAction, string> = {
   LEAD_VIEWED: "Viewed lead",
@@ -35,6 +36,7 @@ export const ACTION_LABEL: Record<SalesAction, string> = {
   INBOUND_SMS: "Customer replied (SMS)",
   BOARD_MOVE: "Moved on board",
   STATE_REANALYZED: "Re-analyzed state",
+  EMAIL_SENT: "Sent email (GS thread)",
 };
 
 /** Record a sales action against a lead, attributed to the current actor. `actorLabel` overrides the
