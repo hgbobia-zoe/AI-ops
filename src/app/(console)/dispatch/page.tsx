@@ -26,6 +26,7 @@ import { getSettings } from "@/lib/settings";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { STATE_VISUAL } from "@/lib/stateVisual";
 import type { Route, Stop } from "@/lib/types";
+import { FigureStrip, type Figure } from "@/components/console-primitives";
 
 export const dynamic = "force-dynamic";
 
@@ -42,13 +43,13 @@ export default async function DispatchPage({
   const date = sp?.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : today;
   const ignitionUrl = getSettings().ignitionUrl;
   return (
-    <main className="mx-auto max-w-6xl p-5 pb-16 md:p-8">
+    <main className="p-6">
       {ignitionUrl && (
         <a
           href={ignitionUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="mb-4 inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+          className="mb-4 inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground"
         >
           <ExternalLink className="size-3.5" /> Open Ignition (live fleet)
         </a>
@@ -70,23 +71,36 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
   const truckName = (id: string | null) =>
     trucks.find((t) => t.truckId === id)?.name ?? id ?? "—";
 
+  const withRoute = fleet.filter((f) => f.route);
+  const allStops = withRoute.flatMap((f) => f.route!.stops);
+  const doneStops = allStops.filter((s) => s.state === "Completed" || s.state === "Returned").length;
+  const driversAssigned = withRoute.filter((f) => f.route!.driverName).length;
+  const figures: Figure[] = [
+    { label: "Routes", value: withRoute.length },
+    { label: "Stops done", value: `${doneStops}/${allStops.length}` },
+    { label: "Exceptions", value: exceptions.length, tone: exceptions.length ? "critical" : "default" },
+    { label: "Drivers", value: `${driversAssigned}/${withRoute.length}`, tone: driversAssigned < withRoute.length ? "attention" : "default", sep: true },
+  ];
+
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6">
+    <div className="w-full space-y-6">
       {isToday && <AutoRefresh seconds={15} />}
 
-      <header className="flex flex-wrap items-center justify-between gap-3">
+      <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dispatch</h1>
-          <p className="text-sm text-muted-foreground">
-            {trucks.length} trucks ·{" "}
-            {isToday ? "live view · refreshes automatically" : isFuture ? "upcoming — planning view" : "history view"}
+          <h1 className="text-[22px] font-medium tracking-tight">Dispatch</h1>
+          <p className="text-[12.5px] text-meta">
+            {trucks.length} trucks · {isToday ? "live view · refreshes automatically" : isFuture ? "upcoming — planning view" : "history view"}
           </p>
         </div>
-        <DateNav date={date} today={today} />
+        <div className="flex items-end gap-6">
+          <FigureStrip figures={figures} />
+          <DateNav date={date} today={today} />
+        </div>
       </header>
 
       {!anyRoute && (
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-muted-foreground">
+        <div className="rounded border border-border bg-panel p-4 text-sm text-muted-foreground">
           No routes scheduled for {isToday ? "today" : formatYmdLong(date)}.
         </div>
       )}
@@ -115,7 +129,7 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
             {exceptions.map((x) => (
               <div
                 key={x.exceptionId}
-                className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-sm"
+                className="flex items-start gap-3 rounded border border-border bg-panel p-3 text-sm"
               >
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                 <div className="min-w-0 flex-1">
@@ -138,10 +152,10 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
         {messages.length === 0 ? (
           <p className="text-sm text-muted-foreground">No messages sent yet.</p>
         ) : (
-          <div className="divide-y divide-white/5 rounded-xl border border-white/10">
+          <div className="divide-y divide-[var(--row-rule)] rounded border border-border">
             {messages.map((m, i) => (
               <details key={i} className="group [&_summary]:list-none">
-                <summary className="flex cursor-pointer items-center gap-3 p-3 text-sm hover:bg-white/[0.03]">
+                <summary className="flex cursor-pointer items-center gap-3 p-3 text-sm hover:bg-panel">
                   <MessageSquare className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-90" />
                   <span className="w-36 shrink-0 truncate text-muted-foreground" title={m.toPhone ?? undefined}>
                     {m.recipientName ?? m.toPhone}
@@ -175,7 +189,7 @@ function DateNav({ date, today }: { date: string; today: string }) {
       <Link
         href={href(prev)}
         aria-label="Previous day"
-        className="flex size-9 items-center justify-center rounded-lg border border-white/10 text-muted-foreground hover:text-foreground"
+        className="flex size-9 items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground"
       >
         <ChevronLeft className="size-4" />
       </Link>
@@ -183,14 +197,14 @@ function DateNav({ date, today }: { date: string; today: string }) {
       <Link
         href={href(next)}
         aria-label="Next day"
-        className="flex size-9 items-center justify-center rounded-lg border border-white/10 text-muted-foreground hover:text-foreground"
+        className="flex size-9 items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground"
       >
         <ChevronRight className="size-4" />
       </Link>
       {!isToday && (
         <Link
           href="/dispatch"
-          className="ml-1 rounded-lg border border-white/10 px-2.5 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+          className="ml-1 rounded-lg border border-border px-2.5 py-1.5 text-sm text-muted-foreground hover:text-foreground"
         >
           Today
         </Link>
@@ -216,17 +230,17 @@ function TruckCard({
 
   return (
     <div
-      className={`surface space-y-4 rounded-2xl border border-white/5 p-5 ${
+      className={`surface space-y-4 border border-border p-5 ${
         route?.status === "done" ? "opacity-60" : ""
       }`}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <span className="btn-hero flex size-9 items-center justify-center rounded-xl">
-            <TruckIcon className="size-5" />
+          <span className="flex size-9 items-center justify-center rounded border border-border text-tertiary-text">
+            <TruckIcon className="size-4" />
           </span>
           <div>
-            <div className="font-semibold">{name}</div>
+            <div className="text-[14px] font-medium">{name}</div>
             <div className="text-xs text-muted-foreground">
               {route ? routeStatusLabel(route, done, total) : noRouteLabel}
             </div>
@@ -243,13 +257,13 @@ function TruckCard({
       </div>
 
       {total > 0 && (
-        <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+        <div className="h-1.5 overflow-hidden rounded-full bg-[var(--row-hover)]">
           <div className="h-full bg-foreground transition-all" style={{ width: `${pct}%` }} />
         </div>
       )}
 
       {active && (
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+        <div className="rounded border border-border bg-panel p-3">
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
             Current stop
           </div>
@@ -287,7 +301,7 @@ function TruckCard({
         (() => {
           const items = (route.stops ?? []).flatMap((s) => s.items ?? []);
           return items.length > 0 ? (
-            <div className="border-t border-white/5 pt-3">
+            <div className="border-t border-border pt-3">
               <QuoteReviewButton items={items} eventName={`${route.truckId} route`} />
             </div>
           ) : null;
@@ -295,7 +309,7 @@ function TruckCard({
 
       {/* Driver assignment (feeds the Event Risk Engine's staffing checks). */}
       {route && route.status !== "done" && (
-        <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-3">
+        <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
           <span className="text-xs text-muted-foreground">Driver</span>
           <DriverAssign routeId={route.routeId} date={route.date} driverName={route.driverName} />
         </div>
@@ -303,7 +317,7 @@ function TruckCard({
 
       {/* Office control: force-close a route the driver couldn't finish on the tablet. */}
       {route && (
-        <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-3">
+        <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
           {route.status === "done" ? (
             <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
               <CircleCheck className="size-3.5" /> Route closed — reopen to adjust stops
@@ -341,22 +355,15 @@ function StopLine({
   // Business/office stops with restricted hours — so a truck doesn't show up while closed.
   const addr = reviewStopAddress({ address: stop.address, name: stop.custName, whenIso: stop.plannedWindow || stop.eta });
   return (
-    <li className="rounded-lg border border-white/5 p-2.5">
+    <li className="rounded-lg border border-border p-2.5">
       <div className="flex items-center gap-2">
         <span className="w-5 shrink-0 text-center text-xs text-muted-foreground">{stop.sequence}</span>
         <span className="flex-1 truncate text-sm">{stop.custName}</span>
         {stop.kind === "pickup" && (
-          <span className="shrink-0 rounded bg-amber-400/90 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-black">
-            Pickup
-          </span>
+          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-attention">Pickup</span>
         )}
         {addr.class === "business" && (
-          <span
-            title={addr.note}
-            className={`shrink-0 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-              addr.hoursRisk ? "bg-red-500/90 text-white" : "border border-amber-400/60 text-amber-300"
-            }`}
-          >
+          <span title={addr.note} className={`shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] ${addr.hoursRisk ? "text-critical" : "text-attention"}`}>
             {addr.hoursRisk ? "May be closed" : "Business"}
           </span>
         )}
@@ -374,7 +381,7 @@ function StopLine({
         )}
       </div>
       {addr.hoursRisk && (
-        <div className="mt-1 pl-7 text-[11px] text-red-300">⚠ {addr.note}</div>
+        <div className="mt-1 pl-7 text-[11px] text-critical">⚠ {addr.note}</div>
       )}
       {hasProof && (
         <div className="mt-2 flex flex-wrap items-center gap-2 pl-7">
@@ -390,7 +397,7 @@ function StopLine({
               <img
                 src={`/api/pod/${stop.signatureId}`}
                 alt="signature"
-                className="h-14 w-24 rounded border border-white/10 bg-white object-contain"
+                className="h-14 w-24 rounded border border-border bg-white object-contain"
               />
             </a>
           )}
@@ -403,7 +410,7 @@ function StopLine({
 function StateBadge({ state }: { state: Stop["state"] }) {
   const v = STATE_VISUAL[state];
   return (
-    <span className="flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-medium">
+    <span className="flex items-center gap-1 rounded-full bg-[var(--row-hover)] px-2 py-0.5 text-[11px] font-medium">
       <span className={`size-2 rounded-full ${v.dot}`} />
       {v.label}
     </span>
@@ -413,7 +420,7 @@ function StateBadge({ state }: { state: Stop["state"] }) {
 function StatusTag({ status }: { status: string | null }) {
   const label = status ?? "—";
   return (
-    <span className="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+    <span className="shrink-0 rounded bg-[var(--row-hover)] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
       {label}
     </span>
   );

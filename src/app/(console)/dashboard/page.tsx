@@ -24,25 +24,25 @@ const money = (n: number | null | undefined): string => (n == null ? "—" : "$"
 const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? "" : "s"}`;
 
 const STATUS_META: Record<OpStatus, { label: string; cls: string }> = {
-  quiet: { label: "Quiet", cls: "border-white/15 bg-white/5 text-muted-foreground" },
-  normal: { label: "Normal", cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" },
-  busy: { label: "Busy", cls: "border-sky-500/40 bg-sky-500/10 text-sky-300" },
-  "at-risk": { label: "At risk", cls: "border-red-500/40 bg-red-500/10 text-red-300" },
+  quiet: { label: "Quiet", cls: "text-meta" },
+  normal: { label: "Normal", cls: "text-positive" },
+  busy: { label: "Busy", cls: "text-tertiary-text" },
+  "at-risk": { label: "At risk", cls: "text-critical" },
 };
 
-const P_TONE: Record<Priority, string> = { critical: "border-l-red-500", high: "border-l-orange-500", medium: "border-l-amber-500", info: "border-l-white/20" };
+const P_TONE: Record<Priority, string> = { critical: "border-l-critical", high: "border-l-attention", medium: "border-l-attention/60", info: "border-l-transparent" };
 const P_CHIP: Record<Priority, string> = {
-  critical: "bg-red-500/15 text-red-300",
-  high: "bg-orange-500/15 text-orange-300",
-  medium: "bg-amber-500/15 text-amber-300",
-  info: "bg-white/10 text-muted-foreground",
+  critical: "text-critical",
+  high: "text-attention",
+  medium: "text-attention",
+  info: "text-meta",
 };
 
 const CAP_TONE: Record<string, string> = {
-  CONSTRAINED: "text-red-300 border-red-500/40 bg-red-500/10",
-  TIGHT: "text-amber-300 border-amber-500/40 bg-amber-500/10",
-  UNVERIFIED: "text-muted-foreground border-white/15 bg-white/5",
-  AVAILABLE: "text-emerald-300 border-emerald-500/40 bg-emerald-500/10",
+  CONSTRAINED: "text-critical",
+  TIGHT: "text-attention",
+  UNVERIFIED: "text-meta",
+  AVAILABLE: "text-positive",
 };
 
 // Focus filters — clicking a tile or chip narrows the page to one lane for a clean, single-purpose
@@ -58,11 +58,11 @@ const FOCUS_GROUPS: Record<Focus, ReadonlySet<string> | null> = {
 const FOCUS_KEYS: Focus[] = ["all", "attention", "today", "people", "revenue"];
 
 const REV_STATUS: Record<RevenueStatus, { label: string; pill: string; text: string }> = {
-  met: { label: "Target met", pill: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300", text: "text-emerald-300" },
-  likely: { label: "Target likely", pill: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300", text: "text-emerald-300" },
-  "at-risk": { label: "At risk", pill: "border-red-500/40 bg-red-500/10 text-red-300", text: "text-red-300" },
-  "no-target": { label: "No target set", pill: "border-white/15 bg-white/5 text-muted-foreground", text: "text-muted-foreground" },
-  "no-data": { label: "No data", pill: "border-white/15 bg-white/5 text-muted-foreground", text: "text-muted-foreground" },
+  met: { label: "Target met", pill: "text-positive", text: "text-positive" },
+  likely: { label: "Target likely", pill: "text-positive", text: "text-positive" },
+  "at-risk": { label: "At risk", pill: "text-critical", text: "text-critical" },
+  "no-target": { label: "No target set", pill: "text-meta", text: "text-meta" },
+  "no-data": { label: "No data", pill: "text-meta", text: "text-meta" },
 };
 
 /** Deterministic one-liner for the revenue status — prepended to the AI summary. Rules calculate. */
@@ -114,26 +114,24 @@ export default async function DashboardPage({
       <AutoRefresh seconds={120} />
 
       {/* Header */}
-      <header className="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Command Center</h1>
-          <p className="text-sm text-muted-foreground">{formatYmdLong(c.today)}</p>
+          <h1 className="text-[22px] font-medium tracking-tight">Command Center</h1>
+          <p className="text-[12.5px] text-meta">{formatYmdLong(c.today)}</p>
         </div>
-        <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-medium ${s.cls}`}>
-          <CircleDot className="size-3.5" /> {s.label}
+        <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium uppercase tracking-[0.08em] ${s.cls}`}>
+          <CircleDot className="size-3" /> {s.label}
         </span>
       </header>
 
-      {/* Focus filter — click to declutter down to one lane (tiles below do the same) */}
-      <div className="mb-5 flex flex-wrap gap-2">
+      {/* Focus filter — flat tabs */}
+      <div className="mb-5 flex flex-wrap gap-5 border-b border-border pb-2">
         {chips.map((ch) => (
           <Link
             key={ch.key}
             href={focusHref(ch.key)}
             aria-current={focus === ch.key ? "page" : undefined}
-            className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-              focus === ch.key ? "border-foreground bg-white/10 font-medium text-foreground" : "border-white/10 text-muted-foreground hover:bg-white/5"
-            }`}
+            className={`text-[13.5px] transition-colors ${focus === ch.key ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
           >
             {ch.label}
           </Link>
@@ -142,8 +140,8 @@ export default async function DashboardPage({
 
       {/* AI Operations Summary — deterministic facts (revenue verdict + ops), then interpretation */}
       {summary && show("brief") && (
-        <div className="mb-5 flex items-start gap-2.5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-          <Sparkles className="mt-0.5 size-4 shrink-0 text-sky-300" />
+        <div className="mb-5 flex items-start gap-2.5 border border-border bg-panel p-4">
+          <Sparkles className="mt-0.5 size-4 shrink-0 text-tertiary-text" />
           <p className="text-sm leading-relaxed text-foreground/90">{summary}</p>
         </div>
       )}
@@ -178,9 +176,9 @@ export default async function DashboardPage({
       {show("attention") && nextActions.length > 0 && (
         <section className="mb-6">
           <SectionHead icon={<ListChecks className="size-4" />} title="Next actions" href="/ops" hrefLabel="Ops Manager" />
-          <div className="rounded-2xl border border-white/10 p-1">
+          <div className="border border-border p-1">
             {nextActions.map((a) => (
-              <Link key={a.key} href={a.href} className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-white/[0.04]">
+              <Link key={a.key} href={a.href} className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm hover:bg-[var(--row-hover)]">
                 <span className={`size-1.5 shrink-0 rounded-full ${a.priority === "critical" ? "bg-red-500" : a.priority === "high" ? "bg-orange-500" : "bg-amber-500"}`} />
                 <span className="min-w-0 flex-1 truncate">{a.text}</span>
                 <ArrowRight className="size-3.5 shrink-0 text-muted-foreground" />
@@ -195,13 +193,13 @@ export default async function DashboardPage({
       <section className="mb-6">
         <SectionHead icon={<Radar className="size-4" />} title="Attention required" href="/ops" hrefLabel="Ops Manager" />
         {attention.length === 0 ? (
-          <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/[0.06] p-4 text-sm text-emerald-200">
+          <div className="border border-border bg-panel p-4 text-sm text-positive">
             All operations are currently on track.
           </div>
         ) : (
           <div className="space-y-1.5">
             {attention.map((i) => (
-              <Link key={i.key} href={i.href} className={`flex items-center gap-3 rounded-lg border border-l-[3px] border-white/10 bg-white/[0.02] px-3 py-2.5 hover:bg-white/[0.05] ${P_TONE[i.priority]}`}>
+              <Link key={i.key} href={i.href} className={`flex items-center gap-3 rounded-lg border border-l-[3px] border-border bg-panel px-3 py-2.5 hover:bg-[var(--row-hover)] ${P_TONE[i.priority]}`}>
                 <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${P_CHIP[i.priority]}`}>{i.priority}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{i.title}</span>
@@ -222,7 +220,7 @@ export default async function DashboardPage({
         {show("todayOps") && (
         <section>
           <SectionHead icon={<Truck className="size-4" />} title="Today's operations" href="/dispatch" hrefLabel="Dispatch" />
-          <div className="rounded-2xl border border-white/10 p-4">
+          <div className="border border-border p-4">
             <div className="grid grid-cols-3 gap-3 text-center">
               <Stat n={c.today_ops.stops} label="stops" />
               <Stat n={c.today_ops.deliveries} label="deliveries" />
@@ -234,14 +232,14 @@ export default async function DashboardPage({
             <div className="mt-4 space-y-2">
               <ProgressRow done={c.today_ops.completed} total={c.today_ops.stops} inProgress={c.today_ops.inProgress} remaining={c.today_ops.remaining} />
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <span className="inline-flex items-center gap-1"><CircleCheck className="size-3.5 text-emerald-400" /> {c.today_ops.completed} done</span>
-                <span className="inline-flex items-center gap-1"><CircleDot className="size-3.5 text-sky-400" /> {c.today_ops.inProgress} in progress</span>
+                <span className="inline-flex items-center gap-1"><CircleCheck className="size-3.5 text-positive" /> {c.today_ops.completed} done</span>
+                <span className="inline-flex items-center gap-1"><CircleDot className="size-3.5 text-tertiary-text" /> {c.today_ops.inProgress} in progress</span>
                 <span className="inline-flex items-center gap-1"><Clock className="size-3.5" /> {c.today_ops.remaining} remaining</span>
                 <span className="inline-flex items-center gap-1"><Truck className="size-3.5" /> {c.today_ops.driversAssigned} drivers assigned</span>
-                {c.today_ops.exceptions > 0 && <span className="inline-flex items-center gap-1 text-amber-400"><AlertTriangle className="size-3.5" /> {c.today_ops.exceptions} exceptions</span>}
+                {c.today_ops.exceptions > 0 && <span className="inline-flex items-center gap-1 text-attention"><AlertTriangle className="size-3.5" /> {c.today_ops.exceptions} exceptions</span>}
               </div>
               {showMoney && c.today_ops.scheduledRevenue != null && (
-                <div className="pt-1 text-sm"><span className="text-muted-foreground">Scheduled revenue today: </span><span className="font-semibold text-emerald-300">{money(c.today_ops.scheduledRevenue)}</span></div>
+                <div className="pt-1 text-sm"><span className="text-muted-foreground">Scheduled revenue today: </span><span className="font-semibold text-positive">{money(c.today_ops.scheduledRevenue)}</span></div>
               )}
             </div>
           </div>
@@ -251,7 +249,7 @@ export default async function DashboardPage({
         {show("people") && (
         <section>
           <SectionHead icon={<Users className="size-4" />} title="People on schedule" href="/staffing" hrefLabel="Staffing" />
-          <div className="rounded-2xl border border-white/10 p-4">
+          <div className="border border-border p-4">
             {!c.people.verified ? (
               <p className="text-sm text-muted-foreground">Staffing unavailable — Connecteam not connected. <Link href="/admin" className="underline">Connect →</Link></p>
             ) : c.people.peopleCount === 0 ? (
@@ -267,7 +265,7 @@ export default async function DashboardPage({
                     <div key={idx} className="flex items-center gap-2 text-sm">
                       <span className="w-16 shrink-0 tabular-nums text-muted-foreground">{a.start}</span>
                       <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                      <span className="shrink-0 rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">{a.role}</span>
+                      <span className="shrink-0 rounded bg-[var(--row-hover)] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">{a.role}</span>
                     </div>
                   ))}
                 </div>
@@ -285,7 +283,7 @@ export default async function DashboardPage({
         {show("capacity") && (
         <section>
           <SectionHead icon={<Gauge className="size-4" />} title="Upcoming capacity" href="/risk" hrefLabel="Event Risk" />
-          <div className="rounded-2xl border border-white/10 p-4">
+          <div className="border border-border p-4">
             {c.capacity.length === 0 ? (
               <p className="text-sm text-muted-foreground">No capacity pressure detected in the upcoming days.</p>
             ) : (
@@ -308,12 +306,12 @@ export default async function DashboardPage({
         {show("outlook") && (
         <section>
           <SectionHead icon={<CalendarDays className="size-4" />} title="7-day outlook" href="/sales" hrefLabel="Sales" />
-          <div className="rounded-2xl border border-white/10 p-2">
+          <div className="border border-border p-2">
             {c.outlook.map((d) => (
-              <div key={d.date} className={`flex items-center gap-3 rounded-lg px-2 py-1.5 ${d.isToday ? "bg-white/[0.04]" : ""}`}>
+              <div key={d.date} className={`flex items-center gap-3 rounded-lg px-2 py-1.5 ${d.isToday ? "bg-[var(--row-hover)]" : ""}`}>
                 <span className="w-10 shrink-0 text-sm font-medium text-muted-foreground">{d.dow}</span>
                 <span className="w-12 shrink-0 text-sm tabular-nums">{d.jobs || "—"}<span className="text-[10px] text-muted-foreground"> jobs</span></span>
-                {showMoney && <span className="w-24 shrink-0 text-sm tabular-nums text-emerald-300">{d.revenue != null ? money(d.revenue) : ""}</span>}
+                {showMoney && <span className="w-24 shrink-0 text-sm tabular-nums text-positive">{d.revenue != null ? money(d.revenue) : ""}</span>}
                 <span className="flex-1" />
                 {d.verdict && d.verdict !== "AVAILABLE" && <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold ${CAP_TONE[d.verdict] ?? CAP_TONE.UNVERIFIED}`}>{d.verdict}</span>}
               </div>
@@ -330,11 +328,11 @@ export default async function DashboardPage({
           {show("revenue") && (
           <section>
             <SectionHead icon={<DollarSign className="size-4" />} title="Revenue vs target" href="/sales" hrefLabel="Sales" />
-            <div className="rounded-2xl border border-white/10 p-4">
+            <div className="border border-border p-4">
               {/* Headline: committed / target + the deterministic status verdict */}
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <div>
-                  <div className="text-2xl font-bold tabular-nums text-emerald-300">
+                  <div className="text-2xl font-bold tabular-nums text-positive">
                     {money(rev.committed)} <span className="text-base font-medium text-muted-foreground">/ {money(rev.target)}</span>
                   </div>
                   <div className="mt-0.5 text-xs text-muted-foreground">{rev.pctOfTarget ?? 0}% of {rev.periodLabel} target · {rev.pctElapsed}% of month elapsed</div>
@@ -344,8 +342,8 @@ export default async function DashboardPage({
               {/* Path to target — committed vs what's still needed vs what could close it */}
               <div className="mt-4 grid grid-cols-3 gap-3">
                 <MetricCol label="Remaining" value={money(rev.remaining)} tone="text-foreground" hint="to target" />
-                <MetricCol label="Open quotes" value={money(rev.pipeline)} tone="text-amber-300" hint="could still close" />
-                <MetricCol label="Best case" value={money(rev.ceiling)} tone="text-emerald-300" hint="if all close" />
+                <MetricCol label="Open quotes" value={money(rev.pipeline)} tone="text-attention" hint="could still close" />
+                <MetricCol label="Best case" value={money(rev.ceiling)} tone="text-positive" hint="if all close" />
               </div>
               <p className={`mt-3 text-xs ${REV_STATUS[rev.status].text}`}>
                 {rev.status === "met" ? `Committed bookings already cover the ${rev.periodLabel} target.`
@@ -367,10 +365,10 @@ export default async function DashboardPage({
           {show("salesPipeline") && (
           <section>
             <SectionHead icon={<Boxes className="size-4" />} title="Sales pipeline" href="/sales" hrefLabel="Sales" />
-            <div className="rounded-2xl border border-white/10 p-4">
+            <div className="border border-border p-4">
               <div className="space-y-2.5">
-                <PipeRow label="Signed (committed)" count={c.pipeline.signed.count} value={money(c.pipeline.signed.value)} tone="bg-emerald-500/60" />
-                <PipeRow label="Open quotes (action needed)" count={c.pipeline.quote.count} value={money(c.pipeline.quote.value)} tone="bg-amber-500/50" />
+                <PipeRow label="Signed (committed)" count={c.pipeline.signed.count} value={money(c.pipeline.signed.value)} tone="bg-positive/70" />
+                <PipeRow label="Open quotes (action needed)" count={c.pipeline.quote.count} value={money(c.pipeline.quote.value)} tone="bg-attention/70" />
                 <PipeRow label="Lost / cancelled" count={c.pipeline.lost.count} value={money(c.pipeline.lost.value)} tone="bg-white/15" muted />
               </div>
               <p className="mt-3 text-[11px] text-muted-foreground">Upcoming bookings by Goodshuffle status. Finer stages (leads, follow-up, likely) aren&apos;t exposed by Goodshuffle — this is the real 3-way split.</p>
@@ -388,11 +386,11 @@ function PulseCard({ icon, label, big, sub, href, warn, tone, unit, active }: { 
     <Link
       href={href}
       aria-current={active ? "page" : undefined}
-      className={`surface rounded-2xl border p-4 transition-colors ${active ? "border-foreground/50 bg-white/[0.05]" : "border-white/5 hover:border-white/15"}`}
+      className={`border bg-panel p-4 transition-colors ${active ? "border-foreground/40" : "border-border hover:border-foreground/20"}`}
     >
-      <div className="mb-1.5 flex items-center gap-1.5 text-xs uppercase tracking-wide text-muted-foreground">{icon} {label}</div>
-      <div className={`text-2xl font-bold tabular-nums md:text-3xl ${tone === "good" ? "text-emerald-300" : ""}`}>{big}{unit && <span className="ml-1 text-sm font-medium text-muted-foreground">{unit}</span>}</div>
-      {sub && <div className={`mt-0.5 truncate text-xs ${warn ? "text-amber-400" : "text-muted-foreground"}`}>{sub}</div>}
+      <div className="mb-1.5 flex items-center gap-1.5 text-[10.5px] uppercase tracking-[0.1em] text-meta">{icon} {label}</div>
+      <div className={`text-[28px] font-medium leading-none tabular-nums ${tone === "good" ? "text-positive" : ""}`}>{big}{unit && <span className="ml-1 text-[13px] font-normal text-meta">{unit}</span>}</div>
+      {sub && <div className={`mt-1 truncate text-[12px] ${warn ? "text-attention" : "text-meta"}`}>{sub}</div>}
     </Link>
   );
 }
@@ -418,9 +416,9 @@ function Stat({ n, label }: { n: number; label: string }): React.JSX.Element {
 function ProgressRow({ done, total, inProgress, remaining }: { done: number; total: number; inProgress: number; remaining: number }): React.JSX.Element {
   const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
   return (
-    <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-white/5">
-      <div className="bg-emerald-500/70" style={{ width: `${pct(done)}%` }} />
-      <div className="bg-sky-500/70" style={{ width: `${pct(inProgress)}%` }} />
+    <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-[var(--row-hover)]">
+      <div className="bg-positive" style={{ width: `${pct(done)}%` }} />
+      <div className="bg-[var(--bar-2)]" style={{ width: `${pct(inProgress)}%` }} />
       <div className="bg-white/10" style={{ width: `${pct(remaining)}%` }} />
     </div>
   );
@@ -447,7 +445,7 @@ function MonthTrend({ months, targetLine }: { months: { label: string; signedRev
           return (
             <div
               key={m.label}
-              className="flex-1 rounded-sm bg-emerald-500/50"
+              className="flex-1 rounded-sm bg-positive/70"
               style={{ height: `${Math.max(h, m.signedRevenue ? 4 : 0)}%` }}
               title={`${m.label}: ${m.signedRevenue == null ? "—" : "$" + Math.round(m.signedRevenue).toLocaleString()}`}
             />
