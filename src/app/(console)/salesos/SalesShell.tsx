@@ -63,10 +63,11 @@ export function SalesShell({
   const seg = pathname.split("/")[2] ?? "";
   if (seg === "bid" || seg === "lost" || seg === "trends") return <>{children}</>;
 
-  const view: ViewKey = seg === "table" ? "table" : seg === "board" ? "board" : "worklist";
-  // Table + Board are full-width views; a lead-id path (deep link / "Open full lead") renders the full
-  // lead board as children. Both sit under the shared view switcher.
-  if (view !== "worklist" || seg) {
+  // Board is the default view (/salesos redirects to /salesos/board). The worklist lives at
+  // /salesos/worklist and is rendered by this shell; every other path (board, table, a lead-id deep
+  // link) renders its own page as children under the shared view switcher.
+  const view: ViewKey = seg === "worklist" ? "worklist" : seg === "table" ? "table" : "board";
+  if (seg !== "worklist") {
     return (
       <div className="flex min-w-0 flex-1 flex-col">
         <ViewSwitcher active={view} />
@@ -202,9 +203,9 @@ function Group({
 
 function ViewSwitcher({ active }: { active: ViewKey }): React.JSX.Element {
   const items: { key: ViewKey; label: string; href: string; icon: typeof List }[] = [
-    { key: "worklist", label: "Worklist", href: "/salesos", icon: List },
-    { key: "table", label: "Table", href: "/salesos/table", icon: Table2 },
     { key: "board", label: "Board", href: "/salesos/board", icon: Columns3 },
+    { key: "worklist", label: "Worklist", href: "/salesos/worklist", icon: List },
+    { key: "table", label: "Table", href: "/salesos/table", icon: Table2 },
   ];
   return (
     <div className="flex items-center gap-5 px-6 pt-4">
