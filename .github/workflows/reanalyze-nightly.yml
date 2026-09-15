@@ -1,0 +1,37 @@
+# Nightly customer-state re-analysis. Hits the token-gated batch endpoint so each open lead's state is
+# recomputed from its FULL context (Goodshuffle activity log + messages), not just contact recency —
+# which is what turns a false "Dormant" (team actually reached them, it's in the notes) back to active.
+#
+# Setup (one-time): add two repo secrets in Settings → Secrets and variables → Actions:
+#   • REANALYZE_TOKEN — the SAME value set as the Fly secret REANALYZE_TOKEN on the app.
+#   • APP_BASE_URL    — optional; defaults to https://zoe-dispatch.fly.dev.
+# Nothing runs (endpoint returns 503) until REANALYZE_TOKEN is set on the app.
+
+name: Nightly re-analyze lead states
+
+on:
+  schedule:
+    # 05:00 UTC = midnight US Eastern in winter (EST, UTC-5). During EDT (UTC-4) this fires at 01:00 ET.
+    # A nightly state refresh doesn't need to land exactly on midnight, so a single fixed UTC time is fine.
+    - cron: "0 5 * * *"
+  workflow_dispatch: {} # allow a manual run from the Actions tab
+
+jobs:
+  reanalyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger batch re-analyze
+        env:
+          REANALYZE_TOKEN: ${{ secrets.REANALYZE_TOKEN }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+        run: |
+          if [ -z "$REANALYZE_TOKEN" ]; then
+            echo "REANALYZE_TOKEN secret is not set — skipping."; exit 0
+          fi
+          BASE="${APP_BASE_URL:-https://zoe-dispatch.fly.dev}"
+          echo "POST $BASE/api/salesos/reanalyze-batch"
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $REANALYZE_TOKEN" \
+            "$BASE/api/salesos/reanalyze-batch")
+          echo "HTTP $code"; cat /tmp/out.json; echo
+          test "$code" = "200"

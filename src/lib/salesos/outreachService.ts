@@ -39,6 +39,9 @@ const SYSTEM =
   "context note (e.g. on leave, deferred to another contact). " +
   "Write like a real person texting a customer: warm, natural, and concise. Contractions are good. Do NOT " +
   "sound like a brochure or a mass marketing blast, and do NOT use buzzwords like 'unforgettable'. " +
+  "Refer to the customer's event by its DATE — 'your event on {eventDateLong}' — and NEVER by the internal " +
+  "project name (it's often just a last name and reads oddly to the client). If no date is given, say " +
+  "'your event'. " +
   "CRITICAL STYLE RULE: never use an em dash or en dash (— or –) anywhere — use commas, periods, or a new " +
   "sentence instead. No emojis. Sign texts as Zoe Events. The rep will review and send it themselves, so " +
   "never imply it was already sent. " +
@@ -58,8 +61,9 @@ async function llmDraft(lead: OutreachLead, clientName: string, eventDate: strin
     stage: lead.stage,
     stageMeaning: STAGE_LABEL[lead.stage],
     client: clientName,
-    event: lead.eventName,
+    internalProjectName: lead.eventName, // context only — do NOT use in the customer-facing copy
     eventDate,
+    eventDateLong: lead.eventDateLong ?? null, // say "your event on {this}"
     daysToEvent: lead.daysToEvent,
     clientContextNote: clientContext ?? "",
     commsHistory: (history ?? "").slice(0, 6000) || "(no prior contact logged)",

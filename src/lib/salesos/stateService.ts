@@ -3,7 +3,7 @@
 //   • resolveAndStore: on a new inbound reply (or on demand), the AI classifies the reply and refines
 //     the state (INFERENCE), stored with confidence + the quote. Falls back to deterministic silently.
 
-import { getBookingById, getLatestInboundForLead, getLastCommsAt, getCustomerState, upsertCustomerState, type BookingView, type CustomerStateRow } from "@/lib/db/repo";
+import { getBookingById, getLatestInboundForLead, getLastCommsAt, getCommsForLead, getCustomerState, upsertCustomerState, type BookingView, type CustomerStateRow } from "@/lib/db/repo";
 import { sentFromStatus } from "./calc";
 import { chat, llmConfigured } from "@/lib/llm";
 import { todayInOpsTz } from "@/lib/dates";
@@ -148,6 +148,64 @@ export async function debriefCall(leadId: string, text: string): Promise<Resolve
     resolved = foldReply(base, cls);
   }
   return storeIfChanged(leadId, resolved);
+}
+
+// ── Full context re-analysis (reads the Goodshuffle activity log + messages, not just recency) ──────
+const CONTEXT_STATES: CustomerState[] = ["EVALUATING", "PRICE_OBJECTION", "LOGISTICS_OBJECTION", "PRODUCT_UNCERTAINTY", "COMPETITOR_COMPARISON", "READY_TO_BOOK", "DORMANT", "QUOTED"];
+const CONTEXT_SYSTEM =
+  "You are analyzing everything known about ONE event-rental lead — the Goodshuffle ACTIVITY LOG (dated " +
+  "notes of calls/texts/emails the sales team logged), recent messages, and status — to determine the " +
+  "CUSTOMER's CURRENT sales state. Weigh the MOST RECENT dated entries most: if the team recently REACHED " +
+  "the customer (they answered, replied, or gave any signal), the lead is NOT dormant even if the quote is " +
+  "old. Only use DORMANT when there has been NO successful contact for a long stretch AND recent attempts " +
+  "went unanswered. Allowed states: EVALUATING (weighing it / awaiting their update), PRICE_OBJECTION, " +
+  "LOGISTICS_OBJECTION, PRODUCT_UNCERTAINTY, COMPETITOR_COMPARISON, READY_TO_BOOK, DORMANT, QUOTED (unclear). " +
+  "Judge the CUSTOMER, not the rep. Output RAW JSON ONLY — no markdown/fences — exactly: " +
+  '{"state":"...","confidence":0.0,"evidence":"the most recent relevant fact from the log","reason":"one short sentence of why"}.';
+
+/** Re-analyze a lead's state from its FULL context — the Goodshuffle activity log (internal notes),
+ *  client note, and recent messages — not just contact recency. Fixes false "Dormant" when the team
+ *  actually reached the customer (it's logged in the notes). FACT states (WON/LOST/NEW) always win.
+ *  Stores the refreshed state. Best-effort: no LLM / unparseable ⇒ keeps the deterministic state. */
+export async function reanalyzeLead(leadId: string): Promise<ResolvedState | null> {
+  const b = getBookingById(leadId);
+  if (!b) return null;
+  const base = resolveDeterministic(b);
+  // Signed / lost / not-yet-sent are FACTs — no re-interpretation.
+  if (base.state === "WON" || base.state === "LOST" || base.state === "NEW" || !llmConfigured()) {
+    upsertCustomerState({ leadId, state: base.state, confidence: base.confidence, evidence: base.evidence, source: base.source, reason: base.reason });
+    return base;
+  }
+  const today = todayInOpsTz();
+  const comms = getCommsForLead(leadId, 12)
+    .reverse()
+    .map((c) => `${c.direction === "inbound" ? "Customer" : c.channel === "call" ? "Call" : "Zoe"}: ${(c.body ?? "").slice(0, 300)}`)
+    .join("\n");
+  const parts = [
+    `Today: ${today}`,
+    `Goodshuffle status: ${b.statusLabel}`,
+    b.quoteSentDate ? `Quote sent: ${b.quoteSentDate}` : "",
+    b.clientNotes ? `Client note: ${b.clientNotes.slice(0, 600)}` : "",
+    b.internalNotes ? `Activity log (dated notes of calls/texts/emails):\n${b.internalNotes.slice(0, 3000)}` : "",
+    comms ? `Recent messages (oldest→newest):\n${comms}` : "",
+  ].filter(Boolean).join("\n\n");
+
+  const r = await chat([{ role: "system", content: CONTEXT_SYSTEM }, { role: "user", content: parts }], { json: true, temperature: 0, timeoutMs: 40000, model: process.env.COACH_MODEL?.trim() || undefined });
+  let resolved = base;
+  if (r.ok && r.text) {
+    try {
+      const p = extractJson(r.text) as { state?: unknown; confidence?: unknown; evidence?: unknown; reason?: unknown };
+      const state = CONTEXT_STATES.includes(p.state as CustomerState) ? (p.state as CustomerState) : base.state;
+      const confidence = typeof p.confidence === "number" ? Math.min(1, Math.max(0, p.confidence)) : 0.6;
+      const evidence = typeof p.evidence === "string" && p.evidence.trim() ? p.evidence.trim() : base.evidence;
+      const reason = typeof p.reason === "string" && p.reason.trim() ? `INFERENCE (from notes + messages): ${p.reason.trim()}` : base.reason;
+      resolved = { state, confidence, evidence, source: "notes", reason };
+    } catch {
+      /* keep deterministic */
+    }
+  }
+  upsertCustomerState({ leadId, state: resolved.state, confidence: resolved.confidence, evidence: resolved.evidence, source: resolved.source, reason: resolved.reason });
+  return resolved;
 }
 
 /** Persist a resolved state only when it meaningfully changed (state or source), preserving the

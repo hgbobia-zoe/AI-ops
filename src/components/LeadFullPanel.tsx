@@ -5,8 +5,8 @@
 // text/email briefs), Outreach (live draft), Details (priority + facts + activity), Ask (AI). The board
 // stays interactive beside it, so a rep can click tile → tile. Read-only except the reused panels.
 
-import { useEffect, useState } from "react";
-import { X, Phone, MessageSquare, Mail, ExternalLink, Sparkles, AlertTriangle, ListChecks, Search } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { X, Phone, MessageSquare, Mail, ExternalLink, Sparkles, AlertTriangle, ListChecks, Search, RefreshCw } from "lucide-react";
 import { ConversationFeed } from "@/components/ConversationFeed";
 import { OutreachPanel } from "@/components/OutreachPanel";
 import { LeadAsk } from "@/components/LeadAsk";
@@ -45,6 +45,16 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
   const [d, setD] = useState<FullLead | null>(null);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<Tab>("next");
+  const [reanalyzing, setReanalyzing] = useState(false);
+
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      const r = await fetch(`/api/salesos/lead-full?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+      setD(r.ok ? await r.json() : null);
+    } catch {
+      /* leave prior data in place */
+    }
+  }, [id]);
 
   useEffect(() => {
     setD(null);
@@ -58,6 +68,18 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [id]);
+
+  const reanalyze = useCallback(async (): Promise<void> => {
+    setReanalyzing(true);
+    try {
+      const r = await fetch("/api/salesos/reanalyze", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) });
+      if (r.ok) await load(); // pull the refreshed state (+ everything derived from it)
+    } catch {
+      /* best-effort — button just re-enables */
+    } finally {
+      setReanalyzing(false);
+    }
+  }, [id, load]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -121,7 +143,7 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
           </div>
 
           <div className="p-4">
-            {tab === "next" && <NextStep d={d} />}
+            {tab === "next" && <NextStep d={d} onReanalyze={reanalyze} reanalyzing={reanalyzing} />}
             {tab === "outreach" && <OutreachPanel id={d.id} viewer={viewer} />}
             {tab === "details" && <Details d={d} />}
             {tab === "ask" && <LeadAsk id={d.id} />}
@@ -132,13 +154,26 @@ export function LeadFullPanel({ id, viewer, onClose }: { id: string; viewer: { n
   );
 }
 
-function NextStep({ d }: { d: FullLead }): React.JSX.Element {
+function NextStep({ d, onReanalyze, reanalyzing }: { d: FullLead; onReanalyze: () => void; reanalyzing: boolean }): React.JSX.Element {
   return (
     <div className="space-y-4">
       {d.state && (
         <div className="border-b border-[var(--row-rule)] pb-3">
-          <div className="mb-0.5 flex items-center justify-between text-[10.5px] uppercase tracking-[0.1em] text-meta"><span>Customer state</span><span className="tabular-nums">{d.state.confidence}%</span></div>
-          <div className="text-[15px] font-medium">{d.state.label}</div>
+          <div className="mb-0.5 flex items-center justify-between text-[10.5px] uppercase tracking-[0.1em] text-meta">
+            <span>Customer state</span>
+            <span className="tabular-nums">{d.state.confidence}%</span>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[15px] font-medium">{d.state.label}</div>
+            <button
+              onClick={onReanalyze}
+              disabled={reanalyzing}
+              title="Re-read the notes + messages and recompute this state"
+              className="flex shrink-0 items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-60"
+            >
+              <RefreshCw className={`size-3 ${reanalyzing ? "animate-spin" : ""}`} /> {reanalyzing ? "Analyzing…" : "Re-analyze"}
+            </button>
+          </div>
           {d.state.reason && <p className="mt-0.5 text-[12.5px] text-meta">{d.state.reason}</p>}
           {d.state.evidence && <p className="mt-1 border-l-2 border-[var(--bar-2)] pl-2 text-[12.5px] italic text-secondary-text">“{d.state.evidence}”</p>}
         </div>

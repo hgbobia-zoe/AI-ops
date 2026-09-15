@@ -86,7 +86,7 @@ export async function LeadBoard({ id }: { id: string }): Promise<React.JSX.Eleme
           </div>
           <div className="text-lg font-semibold">{STATE_LABEL_V2[cstate.state]}</div>
           {cstate.reason && <p className="mt-0.5 text-xs text-muted-foreground">{cstate.reason}</p>}
-          {cstate.evidence && cstate.source === "inbound_reply" && (
+          {cstate.evidence && (cstate.source === "inbound_reply" || cstate.source === "notes") && (
             <p className="mt-1 border-l-2 border-sky-500/40 pl-2 text-xs italic text-sky-200/90">“{cstate.evidence}”</p>
           )}
         </div>

@@ -35,7 +35,7 @@ export const STATE_LABEL: Record<CustomerState, string> = {
 
 export const ALL_CUSTOMER_STATES: CustomerState[] = Object.keys(STATE_LABEL) as CustomerState[];
 
-export type StateSource = "goodshuffle" | "inbound_reply" | "inactivity" | "derived";
+export type StateSource = "goodshuffle" | "inbound_reply" | "inactivity" | "derived" | "notes";
 
 export interface ResolvedState {
   state: CustomerState;

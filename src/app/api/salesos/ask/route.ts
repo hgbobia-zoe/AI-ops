@@ -54,7 +54,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     `Goodshuffle status: ${lead.statusLabel || "(none)"}`,
     `Event date: ${lead.eventDate ?? "not set"} (${eventWhen})`,
     showMoney && lead.value != null ? `Quote total: $${Math.round(lead.value).toLocaleString("en-US")}` : "",
-    cstate ? `Customer state: ${STATE_LABEL[cstate.state]}${cstate.reason ? ` — ${cstate.reason}` : ""}${cstate.evidence && cstate.source === "inbound_reply" ? ` (they said: "${cstate.evidence}")` : ""}` : "",
+    cstate ? `Customer state: ${STATE_LABEL[cstate.state]}${cstate.reason ? ` — ${cstate.reason}` : ""}${cstate.evidence && (cstate.source === "inbound_reply" || cstate.source === "notes") ? ` (they said: "${cstate.evidence}")` : ""}` : "",
     nba ? `Recommended next step: ${nba.objective}${nba.doNot ? ` (do NOT: ${nba.doNot})` : ""}` : "",
     lead.clientNotes ? `Client note: ${lead.clientNotes.slice(0, 500)}` : "",
     lead.internalNotes ? `Prior contact log (Goodshuffle):\n${lead.internalNotes.slice(0, 2500)}` : "",

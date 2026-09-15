@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { getBookingById, insertMessage, smsRecentlySent, enqueueGsOp, insertCommsEventIfNew } from "@/lib/db/repo";
 import { sendSms } from "@/lib/notify/sms";
 import { getSettings } from "@/lib/settings";
-import { viewerInitials, viewerQuoUserId } from "@/lib/auth/getSession";
+import { viewerInitials, viewerQuoUserId, authEnabled } from "@/lib/auth/getSession";
 import { openphoneUserInitials } from "@/lib/comms/openphone";
 import { salesOsNoteLine } from "@/lib/salesos/noteFormat";
 import { logSalesEvent } from "@/lib/salesos/audit";
@@ -34,9 +34,12 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
   const id = (body.id ?? "").trim();
   const text = (body.body ?? "").trim();
-  // Sender attribution: an explicit "Send as" pick wins; otherwise the signed-in rep's linked Quo user
-  // (so a logged-in rep is attributed automatically, no picker needed).
-  const userId = (body.userId ?? "").trim() || (await viewerQuoUserId()) || undefined;
+  // Sender attribution — NO impersonation. With per-user login on, a rep can ONLY send as themselves:
+  // the sender is always their own linked Quo user (a client-supplied userId is ignored). Falls back to
+  // the shared SalesOS number if they haven't linked a Quo account. Only when login is off (single
+  // operator) does an explicit userId apply.
+  const linkedQuo = (await viewerQuoUserId()) || undefined;
+  const userId = authEnabled() ? linkedQuo : ((body.userId ?? "").trim() || linkedQuo || undefined);
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
   if (!text) return NextResponse.json({ error: "message body required" }, { status: 400 });
   if (text.length > MAX_LEN) return NextResponse.json({ error: `message too long (max ${MAX_LEN})` }, { status: 400 });

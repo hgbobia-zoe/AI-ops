@@ -39,10 +39,12 @@ const lead = (stage: OutreachLead["stage"]): OutreachLead => ({
 });
 
 describe("outreach — templateOutreach", () => {
-  it("uses the first name and event in the message", () => {
+  it("uses the first name and the event DATE (never the internal project name) in the message", () => {
     const d = templateOutreach(lead("follow_up"), summarizeComms(null, null));
     expect(d.sms).toContain("Devin");
-    expect(d.sms).toContain("UDC Banquet");
+    // Customer-facing copy references the date, not the internal project name.
+    expect(d.sms).toContain("your event on Saturday, Sep 20");
+    expect(d.sms).not.toContain("UDC Banquet");
     expect(d.source).toBe("template");
   });
 

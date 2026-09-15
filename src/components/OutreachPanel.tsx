@@ -4,14 +4,8 @@
 // against the real Goodshuffle comms history, template fallback). The rep can EDIT the text and Send it
 // via Quo (OpenPhone) — a per-message human approval + confirm; the send master-switch is server-side.
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Sparkles, MessageSquare, Phone, Clock, AlertTriangle, Copy, Check, Send, X } from "lucide-react";
-
-interface QuoRep {
-  id: string;
-  initials: string;
-  name: string;
-}
 
 interface Draft {
   sms: string;
@@ -57,25 +51,10 @@ export function OutreachPanel({ id, viewer }: { id: string; viewer?: { name: str
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [send, setSend] = useState<SendState>({ status: "idle" });
-  const [reps, setReps] = useState<QuoRep[]>([]);
-  // "Send as" defaults to the logged-in user (their linked Quo number) now that per-person login is on;
-  // they can override to another rep. Empty = the shared SalesOS number (only if they're not linked).
-  const [sendAs, setSendAs] = useState(viewer?.quoUserId ?? "");
+  // No impersonation: the text always goes out as the signed-in rep (their linked Quo number). The
+  // server enforces this — it ignores any client-supplied sender. If they haven't linked Quo, it falls
+  // back to the shared SalesOS number. So there's no "send as someone else" picker.
   const viewerLinked = Boolean(viewer?.quoUserId);
-
-  // Load the Quo users once, for the "Send as" picker.
-  useEffect(() => {
-    let live = true;
-    fetch("/api/salesos/quo-users")
-      .then((r) => (r.ok ? r.json() : { users: [] }))
-      .then((j: { users?: QuoRep[] }) => {
-        if (live) setReps((j.users ?? []).filter((u) => u.initials));
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, []);
 
   const draft = async (): Promise<void> => {
     setLoading(true);
@@ -98,7 +77,8 @@ export function OutreachPanel({ id, viewer }: { id: string; viewer?: { name: str
     setSend({ status: "sending" });
     try {
       const edited = !!result && smsText.trim() !== result.draft.sms.trim();
-      const res = await fetch("/api/salesos/send-sms", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, body: smsText, userId: sendAs || undefined, edited }) });
+      // No userId — the server attributes the send to the signed-in rep (no impersonation).
+      const res = await fetch("/api/salesos/send-sms", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, body: smsText, edited }) });
       const j = (await res.json()) as { ok?: boolean; disabled?: boolean; duplicate?: boolean; message?: string; error?: string };
       if (j.ok) setSend({ status: "sent", message: j.duplicate ? j.message : "Sent via Quo" });
       else setSend({ status: "error", message: j.error ?? "Send failed" });
@@ -146,27 +126,20 @@ export function OutreachPanel({ id, viewer }: { id: string; viewer?: { name: str
 
             {/* Send via Quo — per-message human approval with an explicit confirm + preview */}
             {result.canText && (() => {
-              const selectedRep = reps.find((r) => r.id === sendAs);
-              const senderLabel = selectedRep ? `${selectedRep.initials} — ${selectedRep.name}` : viewer?.name ? `${viewer.name} · shared SalesOS number` : "the shared SalesOS number";
+              const senderLabel = viewerLinked
+                ? `you${viewer?.initials ? ` · ${viewer.initials}` : ""}${viewer?.name ? ` — ${viewer.name}` : ""}`
+                : "the shared SalesOS number";
               return (
                 <div className="mt-1 space-y-2">
                   {send.status === "idle" && (
                     <div className="flex flex-wrap items-center gap-2">
-                      <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                        Send as
-                        <select value={sendAs} onChange={(e) => setSendAs(e.target.value)} className="border border-white/15 bg-transparent px-1.5 py-1 text-xs outline-none focus:border-white/30">
-                          <option value="">{viewerLinked ? "Shared SalesOS number" : "SalesOS (shared)"}</option>
-                          {reps.map((r) => (
-                            <option key={r.id} value={r.id}>
-                              {r.id === viewer?.quoUserId ? `You · ${r.initials} — ${r.name}` : `${r.initials} — ${r.name}`}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                        Sends as <span className="text-foreground">{senderLabel}</span>
+                      </span>
                       <button onClick={() => setSend({ status: "confirming" })} className="flex items-center gap-1.5 border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-100 hover:bg-emerald-500/20">
                         <Send className="size-3.5" /> Send via Quo
                       </button>
-                      {!viewerLinked && !sendAs && reps.length > 0 && (
+                      {!viewerLinked && (
                         <span className="text-[10px] text-amber-300/80">Link your Quo in Team to send as you.</span>
                       )}
                     </div>

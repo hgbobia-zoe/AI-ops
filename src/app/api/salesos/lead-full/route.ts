@@ -61,7 +61,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     eventWhen,
     value: showMoney ? lead.value : null,
     gsUrl: `https://pro.goodshuffle.com/app/project/detail?id=${lead.id}`,
-    state: cstate ? { label: STATE_LABEL[cstate.state], reason: cstate.reason ?? null, evidence: cstate.source === "inbound_reply" ? cstate.evidence ?? null : null, confidence: Math.round(cstate.confidence * 100) } : null,
+    state: cstate ? { label: STATE_LABEL[cstate.state], reason: cstate.reason ?? null, evidence: (cstate.source === "inbound_reply" || cstate.source === "notes") ? cstate.evidence ?? null : null, confidence: Math.round(cstate.confidence * 100) } : null,
     nba: nba ? { label: NBA_LABEL[nba.action], objective: nba.objective, doNot: nba.doNot ?? null, reason: nba.reason ?? null } : null,
     brief: brief && brief.opening ? { blocker: brief.blocker, opening: brief.opening, primaryQuestion: brief.primaryQuestion, watchFor: brief.watchFor, textDraft: brief.textDraft, email: brief.email } : null,
     feed,
