@@ -8,10 +8,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter, usePathname } from "next/navigation";
-import { List, Table2, Columns3, ExternalLink } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { List, Table2, Columns3 } from "lucide-react";
 import type { QueueItem } from "@/lib/salesos/commandCenter";
 import { NBA_LABEL } from "@/lib/salesos/nba";
+import { LeadSidePanel } from "@/components/LeadSidePanel";
 import { FigureStrip, ActionVerb, tierBar, tierActionTone, tierValueText, tableCls, theadCls, thCls, type Tier, type Figure } from "@/components/console-primitives";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
@@ -45,6 +46,7 @@ export function SalesShell({
   showMoney,
   justReplied,
   totalPotential,
+  viewer,
   children,
 }: {
   queue: QueueItem[];
@@ -52,10 +54,10 @@ export function SalesShell({
   needAttention: number;
   justReplied: number;
   totalPotential: number | null;
+  viewer: { name: string; quoUserId: string | null; initials: string };
   children: React.ReactNode;
 }): React.JSX.Element {
   const pathname = usePathname();
-  const router = useRouter();
   const [selected, setSelected] = useState<string | null>(null);
 
   const seg = pathname.split("/")[2] ?? "";
@@ -76,8 +78,6 @@ export function SalesShell({
   const now = queue.filter((q) => tierOf(q) === "now");
   const today = queue.filter((q) => tierOf(q) === "today");
   const monitor = queue.filter((q) => tierOf(q) === "passive");
-  const activeId = selected ?? queue[0]?.id ?? null;
-  const active = queue.find((q) => q.id === activeId) ?? null;
 
   const figures: Figure[] = [
     { label: "Act now", value: now.length, tone: now.length ? "critical" : "default" },
@@ -96,43 +96,38 @@ export function SalesShell({
         <FigureStrip figures={figures} />
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_420px]">
-        {/* Action queue */}
-        <div className="min-w-0 overflow-auto border-t border-border">
-          {queue.length === 0 ? (
-            <p className="px-6 py-16 text-center text-[13.5px] text-muted-foreground">No active opportunities.</p>
-          ) : (
-            <table className={tableCls}>
-              <colgroup>
-                <col style={{ width: "88px" }} />
-                <col />
-                <col style={{ width: "150px" }} />
-                <col style={{ width: "180px" }} />
-                <col style={{ width: "150px" }} />
-                <col style={{ width: "96px" }} />
-              </colgroup>
-              <thead className={theadCls}>
-                <tr>
-                  <th className={`${thCls} text-right`}>Value</th>
-                  <th className={thCls}>Opportunity</th>
-                  <th className={thCls}>State</th>
-                  <th className={thCls}>Last signal</th>
-                  <th className={thCls}>Next action</th>
-                  <th className={thCls}>Event</th>
-                </tr>
-              </thead>
-              <Group label="Act now" tone="text-critical" items={now} activeId={activeId} onSelect={setSelected} showMoney={showMoney} />
-              <Group label="Today" tone="text-attention" items={today} activeId={activeId} onSelect={setSelected} showMoney={showMoney} />
-              <Group label="Monitor" tone="text-muted-foreground" items={monitor} activeId={activeId} onSelect={setSelected} showMoney={showMoney} />
-            </table>
-          )}
-        </div>
-
-        {/* Detail panel */}
-        <aside className="hidden min-w-0 flex-col border-l border-t border-border bg-panel xl:flex">
-          {active ? <DetailPanel it={active} showMoney={showMoney} onOpenFull={() => router.push(`/salesos/${active.id}`)} /> : <p className="p-6 text-[13.5px] text-muted-foreground">Select an opportunity.</p>}
-        </aside>
+      {/* Action queue — full width. Clicking a row opens the full lead in an overlay side panel. */}
+      <div className="min-w-0 flex-1 overflow-auto border-t border-border">
+        {queue.length === 0 ? (
+          <p className="px-6 py-16 text-center text-[13.5px] text-muted-foreground">No active opportunities.</p>
+        ) : (
+          <table className={tableCls}>
+            <colgroup>
+              <col style={{ width: "88px" }} />
+              <col />
+              <col style={{ width: "150px" }} />
+              <col style={{ width: "180px" }} />
+              <col style={{ width: "150px" }} />
+              <col style={{ width: "96px" }} />
+            </colgroup>
+            <thead className={theadCls}>
+              <tr>
+                <th className={`${thCls} text-right`}>Value</th>
+                <th className={thCls}>Opportunity</th>
+                <th className={thCls}>State</th>
+                <th className={thCls}>Last signal</th>
+                <th className={thCls}>Next action</th>
+                <th className={thCls}>Event</th>
+              </tr>
+            </thead>
+            <Group label="Act now" tone="text-critical" items={now} activeId={selected} onSelect={setSelected} showMoney={showMoney} />
+            <Group label="Today" tone="text-attention" items={today} activeId={selected} onSelect={setSelected} showMoney={showMoney} />
+            <Group label="Monitor" tone="text-muted-foreground" items={monitor} activeId={selected} onSelect={setSelected} showMoney={showMoney} />
+          </table>
+        )}
       </div>
+
+      {selected && <LeadSidePanel id={selected} viewer={viewer} onClose={() => setSelected(null)} />}
     </div>
   );
 }
@@ -202,80 +197,6 @@ function Group({
         );
       })}
     </tbody>
-  );
-}
-
-function DetailPanel({ it, showMoney, onOpenFull }: { it: QueueItem; showMoney: boolean; onOpenFull: () => void }): React.JSX.Element {
-  const when = eventWhen(it.daysToEvent);
-  const inferred = isInferred(it.state.source);
-  const tier: Tier = it.nba.priority >= 80 ? "now" : it.nba.priority >= 45 ? "today" : "passive";
-  return (
-    <div className="flex h-full flex-col overflow-y-auto">
-      {/* Sticky header */}
-      <div className="sticky top-0 z-10 border-b border-border bg-panel p-5">
-        <div className="text-[22px] font-medium tracking-tight">{it.eventName || it.clientName || `Project ${it.id}`}</div>
-        <div className="mt-0.5 flex items-baseline gap-3">
-          {showMoney && <span className="text-[20px] font-medium tabular-nums">{money(it.value)}</span>}
-          <span className="text-[14px] text-tertiary-text">{it.clientName || "Unknown client"}</span>
-        </div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <button onClick={onOpenFull} className="flex items-center gap-1.5 rounded border border-foreground/80 px-3 py-1.5 text-[12.5px] text-foreground transition-colors hover:bg-[var(--row-hover)]">Open full lead</button>
-          <a href={`https://pro.goodshuffle.com/app/project/detail?id=${it.id}`} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 rounded border border-[var(--bar)] px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)]">
-            <ExternalLink className="size-3.5" /> Goodshuffle
-          </a>
-        </div>
-      </div>
-
-      <div className="space-y-5 p-5">
-        {/* NEXT / WHY / OBJECTIVE / DO NOT */}
-        <div className="space-y-3">
-          <Field label="Next">
-            <span className={`text-[16px] font-semibold ${tierActionTone(tier)}`}>{NBA_LABEL[it.nba.action]}</span>
-          </Field>
-          {it.nba.reason && <Field label="Why"><span className="text-[13.5px] text-tertiary-text">{it.nba.reason}</span></Field>}
-          <Field label="Objective"><span className="text-[13.5px]">{it.nba.objective}</span></Field>
-          {it.nba.doNot && <Field label="Do not"><span className="text-[13.5px] text-attention">{it.nba.doNot}</span></Field>}
-        </div>
-
-        {/* Facts */}
-        <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-t border-[var(--row-rule)] pt-4">
-          <Fact label="State" value={it.stateLabel} meta={inferred ? `Inferred · ${it.state.confidence.toFixed(2)}` : "Verified"} />
-          <Fact label="Event date" value={it.eventDate ?? "Not set"} meta={when.text} metaHot={when.hot} />
-          {showMoney && <Fact label="Value" value={money(it.value)} />}
-          <Fact label="Last reply" value={repliedLabel(it.repliedMinutesAgo) ? `${repliedLabel(it.repliedMinutesAgo)}` : "—"} />
-        </div>
-
-        {/* Evidence */}
-        {inferred && it.state.evidence && (
-          <div className="border-t border-[var(--row-rule)] pt-4">
-            <div className="mb-1.5 text-[10.5px] uppercase tracking-[0.1em] text-meta">Evidence</div>
-            <p className="border-l-2 border-[var(--bar-2)] pl-3 text-[13.5px] italic text-secondary-text">“{it.state.evidence}”</p>
-          </div>
-        )}
-
-        <p className="border-t border-[var(--row-rule)] pt-4 text-[12px] text-meta">
-          State is FACT from Goodshuffle where known, otherwise inferred from the customer&apos;s own reply. Review before acting — nothing sends on its own.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
-  return (
-    <div className="grid grid-cols-[104px_1fr] gap-3">
-      <div className="pt-0.5 text-[10.5px] uppercase tracking-[0.1em] text-meta">{label}</div>
-      <div className="min-w-0">{children}</div>
-    </div>
-  );
-}
-function Fact({ label, value, meta, metaHot }: { label: string; value: string; meta?: string; metaHot?: boolean }): React.JSX.Element {
-  return (
-    <div>
-      <div className="text-[10.5px] uppercase tracking-[0.1em] text-meta">{label}</div>
-      <div className="mt-0.5 text-[15px] tabular-nums">{value}</div>
-      {meta && <div className={`text-[12px] ${metaHot ? "text-critical" : "text-meta"}`}>{meta}</div>}
-    </div>
   );
 }
 

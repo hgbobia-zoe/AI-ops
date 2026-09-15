@@ -17,13 +17,19 @@ export interface CallCoachingItem {
   concerns: string[]; // customer concerns raised
   actionItems: string[]; // what the rep committed to
 }
+export interface CallGauge {
+  pct: number; // marker position 0..100 along the track
+  label: string; // human verdict, e.g. "Good pace"
+  tone: "good" | "warn" | "bad" | "neutral";
+}
 /** Instant, deterministic call signals (computed from the transcript, no LLM) — available as soon as a
- *  call has a transcript, before the AI recap is written. */
+ *  call has a transcript, before the AI recap is written. Gauges drive the slider indicators. */
 export interface CallSignals {
   wordsPerMin: number | null;
   repSharePct: number | null; // rep's share of the talking, or null when the transcript isn't labelled
   questions: number; // discovery questions asked
   momentum: { score: number; label: string; tone: "good" | "warn" | "bad" | "neutral" };
+  gauges: { speed: CallGauge | null; balance: CallGauge | null; tone: CallGauge | null };
 }
 export interface CallItem {
   kind: "call";

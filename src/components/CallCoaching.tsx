@@ -6,19 +6,43 @@
 // lead panel's Coaching tab. Pure presentation of the EXISTING analysis; no new inference here.
 
 import { GraduationCap, MessageSquareWarning, AlertCircle, CheckSquare, Gauge } from "lucide-react";
-import type { CallCoachingItem, CallSignals } from "@/lib/coach/feedTypes";
+import type { CallCoachingItem, CallSignals, CallGauge } from "@/lib/coach/feedTypes";
 
 const MOMENTUM_TONE: Record<string, string> = { good: "text-emerald-300", warn: "text-amber-300", bad: "text-rose-300", neutral: "text-muted-foreground" };
+const DOT_TONE: Record<string, string> = { good: "bg-emerald-400", warn: "bg-amber-400", bad: "bg-rose-400", neutral: "bg-white/70" };
 
-/** The instant, transcript-derived read (momentum, talk balance, pace, discovery questions). Available
- *  before the AI recap is written. All computed facts, never invented. */
+/** A slim slider gauge: a red→amber→green track with a marker at the computed position. Quick visual
+ *  read of one metric (pace / talk balance / customer tone). */
+function GaugeBar({ label, g }: { label: string; g: CallGauge }): React.JSX.Element {
+  return (
+    <div>
+      <div className="mb-0.5 flex items-center justify-between text-[10.5px]">
+        <span className="uppercase tracking-[0.08em] text-meta">{label}</span>
+        <span className={MOMENTUM_TONE[g.tone]}>{g.label}</span>
+      </div>
+      <div className="relative h-1.5 rounded-full bg-gradient-to-r from-rose-500/30 via-amber-500/30 to-emerald-500/30">
+        <div className={`absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-black/50 ${DOT_TONE[g.tone]}`} style={{ left: `${Math.max(3, Math.min(97, g.pct))}%` }} />
+      </div>
+    </div>
+  );
+}
+
+/** The instant, transcript-derived read (momentum, then slider gauges for pace / talk balance / tone,
+ *  plus discovery-question count). Available before the AI recap is written. Computed facts, never invented. */
 export function CallSignalsStrip({ s }: { s: CallSignals }): React.JSX.Element {
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
-      <span className="flex items-center gap-1 font-medium"><Gauge className={`size-3.5 ${MOMENTUM_TONE[s.momentum.tone]}`} /> <span className={MOMENTUM_TONE[s.momentum.tone]}>Momentum {s.momentum.score}% · {s.momentum.label}</span></span>
-      {s.repSharePct != null && <span className="text-muted-foreground">Talk balance <span className="text-foreground">{s.repSharePct}% you</span></span>}
-      {s.wordsPerMin != null && <span className="text-muted-foreground">Pace <span className="text-foreground">{s.wordsPerMin} wpm</span></span>}
-      <span className="text-muted-foreground">Discovery Qs <span className="text-foreground">{s.questions}</span></span>
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
+        <span className="flex items-center gap-1 font-medium"><Gauge className={`size-3.5 ${MOMENTUM_TONE[s.momentum.tone]}`} /> <span className={MOMENTUM_TONE[s.momentum.tone]}>Momentum {s.momentum.score}% · {s.momentum.label}</span></span>
+        <span className="text-muted-foreground">{s.questions} discovery Q{s.questions === 1 ? "" : "s"}</span>
+      </div>
+      {(s.gauges.speed || s.gauges.balance || s.gauges.tone) && (
+        <div className="space-y-1.5">
+          {s.gauges.speed && <GaugeBar label="Talking speed" g={s.gauges.speed} />}
+          {s.gauges.balance && <GaugeBar label="Talk balance" g={s.gauges.balance} />}
+          {s.gauges.tone && <GaugeBar label="Customer tone" g={s.gauges.tone} />}
+        </div>
+      )}
     </div>
   );
 }

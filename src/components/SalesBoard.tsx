@@ -8,7 +8,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive, GripVertical } from "lucide-react";
 import type { BoardStatus, LeadCard } from "@/lib/salesos/boardTypes";
-import { LeadFullPanel } from "@/components/LeadFullPanel";
+import { LeadSidePanel } from "@/components/LeadSidePanel";
 
 const money = (n: number | null): string => (n == null ? "" : "$" + Math.round(n).toLocaleString("en-US"));
 
@@ -74,8 +74,8 @@ export function SalesBoard({
   }
 
   return (
-    <div className="flex h-[calc(100dvh-6rem)]">
-      <div className="flex min-w-0 flex-1 items-start gap-3 overflow-auto p-4 md:p-5">
+    <div className="h-[calc(100dvh-6rem)]">
+      <div className="flex h-full items-start gap-3 overflow-auto p-4 md:p-5">
       {columns.map((col) => {
         const list = cards[col.key];
         const isOver = overCol === col.key;
@@ -127,11 +127,7 @@ export function SalesBoard({
         );
       })}
       </div>
-      {drawerId && (
-        <div className="w-full max-w-[480px] shrink-0 md:w-[460px]">
-          <LeadFullPanel id={drawerId} viewer={viewer} onClose={() => setDrawerId(null)} />
-        </div>
-      )}
+      {drawerId && <LeadSidePanel id={drawerId} viewer={viewer} onClose={() => setDrawerId(null)} />}
     </div>
   );
 }

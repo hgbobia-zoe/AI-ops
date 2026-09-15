@@ -64,6 +64,13 @@ export async function viewerQuoUserId(): Promise<string | null> {
   }
 }
 
+/** The viewer bundle the lead side panel needs (name for "sends as", linked Quo id, initials). One
+ *  call for every view (worklist/table/board) so they open the same full lead panel. */
+export async function viewerForPanel(): Promise<{ name: string; quoUserId: string | null; initials: string }> {
+  const [actor, quo, initials] = await Promise.all([currentActor(), viewerQuoUserId(), viewerInitials()]);
+  return { name: actor.label, quoUserId: quo, initials: initials ?? "" };
+}
+
 export interface Actor {
   id: string; // user id, or "anon" when login is off
   label: string; // human name for the audit trail

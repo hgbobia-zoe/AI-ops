@@ -3,7 +3,7 @@
 
 import { getCallEventById, getCoachingAnalysis, getCommsForLead, type CoachableCall, type CommsEventView, type BookingView } from "@/lib/db/repo";
 import { getCustomerTextThread } from "@/lib/comms/openphone";
-import { computeCallMetrics, momentumScore } from "@/lib/coach/metrics";
+import { computeCallMetrics, momentumScore, speedGauge, balanceGauge, sentimentGauge } from "@/lib/coach/metrics";
 import { ourPhoneDigits } from "@/lib/comms/identity";
 import type { CallItem, CallSignals, TextItem, EmailItem, TimelineItem } from "./feedTypes";
 
@@ -47,7 +47,13 @@ export function callFeedItems(calls: CoachableCall[]): CallItem[] {
       const m = computeCallMetrics(ev.transcript, c.durationSec, ourDigits);
       const repShare = m.speakers.find((s) => s.label === "Rep")?.share ?? null;
       const mom = momentumScore({ sentiment: c.sentiment, repShare, questions: m.questions, hasNextStep: !!rc?.nextStep });
-      signals = { wordsPerMin: m.wordsPerMin, repSharePct: repShare != null ? Math.round(repShare * 100) : null, questions: m.questions, momentum: { score: mom.score, label: mom.label, tone: mom.tone } };
+      signals = {
+        wordsPerMin: m.wordsPerMin,
+        repSharePct: repShare != null ? Math.round(repShare * 100) : null,
+        questions: m.questions,
+        momentum: { score: mom.score, label: mom.label, tone: mom.tone },
+        gauges: { speed: speedGauge(m.wordsPerMin), balance: balanceGauge(repShare), tone: sentimentGauge(c.sentiment) },
+      };
     }
     return { kind: "call", id: c.id, direction: c.direction, at: c.occurredAt ?? c.ts, durationSec: c.durationSec, sentiment: c.sentiment, summary, nextStep: rc?.nextStep ?? "", analyzed: !!rc, coaching, signals };
   });

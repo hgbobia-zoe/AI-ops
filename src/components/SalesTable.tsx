@@ -5,9 +5,9 @@
 // the table. Rows open the lead in the worklist detail.
 
 import { useState, useMemo } from "react";
-import Link from "next/link";
 import { ArrowUp, ArrowDown } from "lucide-react";
 import { BOARD_COLUMNS, STATUS_LABEL, type LeadCard } from "@/lib/salesos/boardTypes";
+import { LeadSidePanel } from "@/components/LeadSidePanel";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
 const shortDate = (ymd: string | null): string => {
@@ -34,10 +34,11 @@ const STATUS_ORDER: Record<string, number> = Object.fromEntries(BOARD_COLUMNS.ma
 type SortKey = "project" | "client" | "status" | "value" | "netPaid" | "remaining" | "quoteSent" | "eventDate" | "created";
 const num = (n: number | null): number => (n == null ? -1 : n);
 
-export function SalesTable({ cards, showMoney }: { cards: LeadCard[]; showMoney: boolean }): React.JSX.Element {
+export function SalesTable({ cards, showMoney, viewer }: { cards: LeadCard[]; showMoney: boolean; viewer: { name: string; quoUserId: string | null; initials: string } }): React.JSX.Element {
   const [filter, setFilter] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("eventDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [selected, setSelected] = useState<string | null>(null);
 
   const counts = useMemo(() => Object.fromEntries(BOARD_COLUMNS.map((c) => [c.key, cards.filter((l) => l.status === c.key).length])), [cards]);
 
@@ -128,8 +129,13 @@ export function SalesTable({ cards, showMoney }: { cards: LeadCard[]; showMoney:
               <tr><td colSpan={showMoney ? 9 : 6} className="p-8 text-center text-muted-foreground">No leads{filter ? " in this status" : ""}.</td></tr>
             ) : (
               rows.map((l) => (
-                <tr key={l.id} className="transition-colors hover:bg-white/[0.03]">
-                  <td className="p-2.5"><Link href={`/salesos/${l.id}`} className="font-medium hover:underline">{l.eventName || `Project ${l.id}`}</Link></td>
+                <tr
+                  key={l.id}
+                  onClick={() => setSelected(l.id)}
+                  aria-current={selected === l.id ? "true" : undefined}
+                  className={`cursor-pointer transition-colors ${selected === l.id ? "bg-white/[0.06]" : "hover:bg-white/[0.03]"}`}
+                >
+                  <td className="p-2.5 font-medium">{l.eventName || `Project ${l.id}`}</td>
                   <td className="p-2.5 text-muted-foreground">{l.clientName || "—"}</td>
                   <td className="p-2.5"><span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${STATUS_CHIP[l.status]}`}>{STATUS_LABEL[l.status]}</span></td>
                   {showMoney && <td className="p-2.5 text-right tabular-nums">{money(l.value)}</td>}
@@ -144,6 +150,8 @@ export function SalesTable({ cards, showMoney }: { cards: LeadCard[]; showMoney:
           </tbody>
         </table>
       </div>
+
+      {selected && <LeadSidePanel id={selected} viewer={viewer} onClose={() => setSelected(null)} />}
     </main>
   );
 }

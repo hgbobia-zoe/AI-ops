@@ -5,7 +5,7 @@
 // steps aside for them and shows them full-width.
 
 import { salesCommandCenter } from "@/lib/salesos/commandCenter";
-import { viewerRole } from "@/lib/auth/getSession";
+import { viewerRole, viewerForPanel } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 import { SalesShell } from "./SalesShell";
 
@@ -14,8 +14,9 @@ export const dynamic = "force-dynamic";
 export default async function SalesOsLayout({ children }: { children: React.ReactNode }): Promise<React.JSX.Element> {
   const showMoney = canSeeFinancials(await viewerRole());
   const cc = salesCommandCenter();
+  const viewer = await viewerForPanel();
   return (
-    <SalesShell queue={cc.items} showMoney={showMoney} needAttention={cc.needAttention} justReplied={cc.justReplied} totalPotential={cc.totalPotential}>
+    <SalesShell queue={cc.items} showMoney={showMoney} needAttention={cc.needAttention} justReplied={cc.justReplied} totalPotential={cc.totalPotential} viewer={viewer}>
       {children}
     </SalesShell>
   );
