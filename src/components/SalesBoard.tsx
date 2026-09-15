@@ -8,7 +8,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive, GripVertical } from "lucide-react";
 import type { BoardStatus, LeadCard } from "@/lib/salesos/boardTypes";
-import { LeadDrawer } from "@/components/LeadDrawer";
+import { LeadFullPanel } from "@/components/LeadFullPanel";
 
 const money = (n: number | null): string => (n == null ? "" : "$" + Math.round(n).toLocaleString("en-US"));
 
@@ -24,10 +24,12 @@ export function SalesBoard({
   columns,
   initialCards,
   showMoney,
+  viewer,
 }: {
   columns: { key: BoardStatus; label: string }[];
   initialCards: Record<BoardStatus, LeadCard[]>;
   showMoney: boolean;
+  viewer: { name: string; quoUserId: string | null; initials: string };
 }): React.JSX.Element {
   const router = useRouter();
   const [cards, setCards] = useState(initialCards);
@@ -72,7 +74,8 @@ export function SalesBoard({
   }
 
   return (
-    <div className="flex h-[calc(100dvh-6rem)] items-start gap-3 overflow-auto p-4 md:p-5">
+    <div className="flex h-[calc(100dvh-6rem)]">
+      <div className="flex min-w-0 flex-1 items-start gap-3 overflow-auto p-4 md:p-5">
       {columns.map((col) => {
         const list = cards[col.key];
         const isOver = overCol === col.key;
@@ -123,7 +126,12 @@ export function SalesBoard({
           </div>
         );
       })}
-      <LeadDrawer id={drawerId} onClose={() => setDrawerId(null)} />
+      </div>
+      {drawerId && (
+        <div className="w-full max-w-[480px] shrink-0 md:w-[460px]">
+          <LeadFullPanel id={drawerId} viewer={viewer} onClose={() => setDrawerId(null)} />
+        </div>
+      )}
     </div>
   );
 }
