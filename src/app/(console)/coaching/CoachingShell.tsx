@@ -8,7 +8,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Headphones, PhoneIncoming, PhoneOutgoing, SmilePlus, Meh, Frown, PanelLeftOpen, X } from "lucide-react";
+import { Headphones, PhoneIncoming, PhoneOutgoing, PanelLeftOpen, X } from "lucide-react";
 import type { CoachableCall } from "@/lib/db/repo";
 import { BackfillDriver } from "./BackfillDriver";
 import { NameEnricher } from "./NameEnricher";
@@ -23,9 +23,9 @@ const FILTERS: { key: Filter; label: string }[] = [
 ];
 
 const SENTIMENT_CHIP: Record<string, string> = {
-  positive: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-  negative: "border-rose-500/30 bg-rose-500/10 text-rose-300",
-  neutral: "border-white/10 bg-white/5 text-muted-foreground",
+  positive: "text-positive",
+  negative: "text-critical",
+  neutral: "text-meta",
 };
 
 function fmtDuration(sec: number | null): string {
@@ -53,11 +53,6 @@ function dayLabel(iso: string | null): string {
 function initials(name: string): string {
   const parts = name.replace(/[^A-Za-z0-9 ]/g, "").trim().split(/\s+/).filter(Boolean);
   return (parts[0]?.[0] ?? "?").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
-}
-function SentIcon({ s }: { s: string }): React.JSX.Element {
-  if (s === "positive") return <SmilePlus className="size-3" />;
-  if (s === "negative") return <Frown className="size-3" />;
-  return <Meh className="size-3" />;
 }
 
 export function CoachingShell({ calls, unanalyzed, children }: { calls: CoachableCall[]; unanalyzed: number; children: React.ReactNode }): React.JSX.Element {
@@ -166,25 +161,23 @@ export function CoachingShell({ calls, unanalyzed, children }: { calls: Coachabl
                         href={`/coaching/${c.id}`}
                         onClick={() => setDrawer(false)}
                         aria-current={on ? "page" : undefined}
-                        className={`flex items-center gap-2.5 rounded-lg border px-2.5 py-2 transition-colors ${
-                          on ? "border-white/15 bg-white/[0.08]" : "border-transparent hover:bg-white/[0.04]"
+                        className={`flex items-center gap-2.5 border-l-2 px-2.5 py-2 transition-colors ${
+                          on ? "border-foreground bg-[var(--row-hover)]" : "border-transparent hover:bg-[var(--row-hover)]"
                         }`}
                       >
-                        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-[11px] font-semibold text-muted-foreground">
+                        <span className="flex size-8 shrink-0 items-center justify-center rounded border border-border text-[11px] font-medium text-tertiary-text">
                           {named ? initials(c.caller) : c.direction === "outgoing" ? <PhoneOutgoing className="size-3.5" /> : <PhoneIncoming className="size-3.5" />}
                         </span>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
-                            <span className="truncate text-sm font-medium">{c.caller}</span>
-                            {cv.count > 1 && <span className="shrink-0 rounded-full bg-white/[0.08] px-1.5 text-[10px] tabular-nums text-muted-foreground">{cv.count}</span>}
+                            <span className="truncate text-[14px] font-medium">{c.caller}</span>
+                            {cv.count > 1 && <span className="shrink-0 text-[10px] tabular-nums text-meta">{cv.count}</span>}
                           </div>
-                          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <div className="flex items-center gap-1 text-[11px] text-meta">
                             <span>{fmtTime(c.occurredAt ?? c.ts)}</span>
                             <span>· {fmtDuration(c.durationSec)}</span>
                             {c.sentiment && (
-                              <span className={`ml-auto inline-flex items-center gap-0.5 rounded-full border px-1.5 py-px text-[9px] font-medium capitalize ${SENTIMENT_CHIP[c.sentiment] ?? SENTIMENT_CHIP.neutral}`}>
-                                <SentIcon s={c.sentiment} /> {c.sentiment}
-                              </span>
+                              <span className={`ml-auto text-[10px] font-medium uppercase tracking-[0.06em] ${SENTIMENT_CHIP[c.sentiment] ?? SENTIMENT_CHIP.neutral}`}>{c.sentiment}</span>
                             )}
                           </div>
                         </div>
