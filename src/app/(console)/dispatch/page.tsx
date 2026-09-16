@@ -21,6 +21,7 @@ import {
   getRecentMessages,
   getRouteForDate,
 } from "@/lib/db/repo";
+import { findRouteHealthIssues } from "@/lib/dispatch/routeHealth";
 import { DISPLAY_TZ, todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
 import { reviewStopAddress } from "@/lib/addressReview";
 import { getSettings } from "@/lib/settings";
@@ -43,6 +44,7 @@ export default async function DispatchPage({
   const today = todayInOpsTz();
   const date = sp?.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : today;
   const ignitionUrl = getSettings().ignitionUrl;
+  const overdue = findRouteHealthIssues();
   return (
     <main className="p-6">
       {ignitionUrl && (
@@ -55,8 +57,33 @@ export default async function DispatchPage({
           <ExternalLink className="size-3.5" /> Open Ignition (live fleet)
         </a>
       )}
+      {overdue.length > 0 && <OverdueRoutesBanner issues={overdue} />}
       <DispatchBoard date={date} today={today} />
     </main>
+  );
+}
+
+function OverdueRoutesBanner({ issues }: { issues: ReturnType<typeof findRouteHealthIssues> }): React.JSX.Element {
+  return (
+    <div className="mb-4 rounded border border-rose-500/40 bg-rose-500/[0.08] p-3 text-rose-100">
+      <div className="flex items-center gap-2 text-[13px] font-semibold">
+        <AlertTriangle className="size-4 shrink-0" />
+        {issues.length} route{issues.length === 1 ? "" : "s"} still open past the delivery date — needs action
+      </div>
+      <ul className="mt-2 space-y-1 text-[12.5px]">
+        {issues.slice(0, 8).map((i) => {
+          const n = i.incompleteStops.length;
+          return (
+            <li key={i.routeId} className="flex flex-wrap items-baseline gap-x-2">
+              <Link href={`/dispatch?date=${i.date}`} className="font-medium underline underline-offset-2 hover:opacity-80">{i.truckLabel}</Link>
+              <span className="text-rose-200/80">{i.date} · {i.daysOverdue}d overdue{i.driverName ? ` · ${i.driverName}` : ""}</span>
+              <span className="text-rose-100">{n === 0 ? "route not closed" : `${n}/${i.totalStops} stop${n === 1 ? "" : "s"} not completed`}</span>
+            </li>
+          );
+        })}
+        {issues.length > 8 && <li className="text-rose-200/70">…and {issues.length - 8} more.</li>}
+      </ul>
+    </div>
   );
 }
 

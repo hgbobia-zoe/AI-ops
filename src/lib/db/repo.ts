@@ -235,6 +235,16 @@ export function reopenRoute(routeId: string): { ok: boolean; status?: RouteStatu
   return { ok: true, status };
 }
 
+/** Every route that isn't closed yet (status != 'done'), oldest date first. For the route-health
+ *  check: routes past their scheduled delivery date, or still carrying stops that aren't completed,
+ *  that need the team's action. */
+export function getOpenRoutes(): Route[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM routes WHERE status != 'done' ORDER BY date ASC, truck_id")
+    .all() as RouteRow[];
+  return rows.map(buildRoute);
+}
+
 export interface UnfinishedStop {
   stopId: string;
   routeId: string;

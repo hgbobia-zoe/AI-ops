@@ -24,6 +24,13 @@ export async function register(): Promise<void> {
     } catch {
       /* never let the timer crash the process */
     }
+    try {
+      // Notify the team about routes still open past their delivery date (deduped, ops Slack channel).
+      const { runRouteHealthCheck } = await import("@/lib/dispatch/routeHealth");
+      await runRouteHealthCheck();
+    } catch {
+      /* best-effort — never crash the timer */
+    }
   };
 
   // Check every 15 minutes, plus once ~1 min after boot.

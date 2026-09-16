@@ -25,6 +25,7 @@ export interface PullState {
   sources?: Record<string, SourceFreshness>;
   lastStaleAlertAt?: string;
   agent?: AgentHeartbeat; // last heartbeat from the Auto-Pull extension (drives the "not signed in" banner)
+  routeHealthAlerted?: Record<string, string>; // routeId → ISO we last Slack-alerted it (overdue routes)
   // Legacy single-value fields (kept so the existing freshness banner keeps working).
   lastPullAt?: string;
   lastStops?: number;
@@ -62,6 +63,17 @@ export function recordPull(source: string, count: number, now: Date = new Date()
 export function markStaleAlerted(now: Date = new Date()): void {
   const s = getPullState();
   s.lastStaleAlertAt = now.toISOString();
+  save(s);
+}
+
+/** The route-health dedup map (routeId → last-alerted ISO), so an overdue route is Slack-alerted once
+ *  and only re-alerted after a cool-off. Persisted so it survives restarts. */
+export function getRouteHealthAlerted(): Record<string, string> {
+  return getPullState().routeHealthAlerted ?? {};
+}
+export function setRouteHealthAlerted(map: Record<string, string>): void {
+  const s = getPullState();
+  s.routeHealthAlerted = map;
   save(s);
 }
 
