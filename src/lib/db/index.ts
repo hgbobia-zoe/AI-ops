@@ -457,6 +457,49 @@ CREATE TABLE IF NOT EXISTS lead_status (
   updated_at TEXT NOT NULL,
   updated_by TEXT                 -- actor who moved it (attribution)
 );
+
+-- Guided Sales Intake: one structured record per sales call. Deterministic capture (rules calculate,
+-- no AI). Tri-state logistics preserved as text ('yes'|'no'|'not_sure'|'' unanswered) — UNKNOWN is never
+-- collapsed to No. Goodshuffle result fields fill in only once the shell is actually created.
+CREATE TABLE IF NOT EXISTS sales_intake (
+  id                  TEXT PRIMARY KEY,     -- INTK-<uuid>
+  status              TEXT NOT NULL,        -- draft | ready | creating | created | failed
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  created_by          TEXT,                 -- actor label (currentActor)
+  source              TEXT,                 -- 'manual' | 'quo'
+  call_id             TEXT,                 -- future: linked Quo call id
+  first_name          TEXT,
+  last_name           TEXT,
+  phone               TEXT,
+  email               TEXT,
+  customer_type       TEXT,                 -- 'commercial' | 'residential'
+  event_type          TEXT,                 -- reuse EventType: wedding | corporate | social | other
+  event_type_other    TEXT,
+  guest_count         INTEGER,              -- null when unknown or unanswered
+  guest_count_unknown INTEGER DEFAULT 0,    -- 1 = customer doesn't know (distinct from unanswered)
+  event_date          TEXT,                 -- YYYY-MM-DD
+  event_start_time    TEXT,                 -- HH:MM
+  event_end_time      TEXT,                 -- HH:MM
+  venue_name          TEXT,
+  street_address      TEXT,
+  city                TEXT,
+  state               TEXT,
+  zip                 TEXT,
+  location_type       TEXT,                 -- residential | venue | hotel | corporate | school | park | other
+  delivery_required   TEXT,                 -- yes | no | not_sure | ''
+  setup_required      TEXT,
+  pickup_required     TEXT,
+  access_notes        TEXT,                 -- JSON of the branched logistics answers
+  logistics_notes     TEXT,
+  sales_notes         TEXT,
+  gs_contact_id       TEXT,                 -- Goodshuffle client contactID
+  gs_project_id       TEXT,                 -- Goodshuffle project/quote id
+  gs_project_url      TEXT,
+  gs_status           TEXT,                 -- queued | created | failed | unavailable
+  gs_error            TEXT,
+  completed_at        TEXT
+);
 `;
 
 type DB = InstanceType<typeof Database>;

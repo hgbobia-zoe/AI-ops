@@ -30,6 +30,7 @@ const GROUPS: { label: string; blades: Blade[] }[] = [
   {
     label: "Sales",
     blades: [
+      { href: "/intake", label: "Guided Intake" },
       { href: "/sales", label: "Sales" },
       { href: "/salesos", label: "Sales OS" },
       { href: "/coaching", label: "Coaching", coaching: true },

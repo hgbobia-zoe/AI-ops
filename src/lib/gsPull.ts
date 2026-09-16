@@ -132,7 +132,8 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var noteOps=all.filter(function(o){ return o.op==="note_append" && o.transactionId && o.payload && o.payload.line; });
         var teamOps=all.filter(function(o){ return o.op==="add_team_member" && o.transactionId && o.payload && o.payload.userID; });
         var emailOps=all.filter(function(o){ return o.op==="email_send" && o.transactionId && o.payload && o.payload.content; });
-        var pushed=0, failed=0, notes=0, team=0, emails=0, chain=Promise.resolve();
+        var createOps=all.filter(function(o){ return o.op==="create_project" && o.payload && o.payload.intakeId; });
+        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, chain=Promise.resolve();
         // add_team_member: add a GSPRO user (Warehouse Desktop) to the project team on a signed project.
         teamOps.forEach(function(o){ chain=chain.then(function(){
           var body=new URLSearchParams({ transactionID:String(o.transactionId), userID:String(o.payload.userID), linkType:String(o.payload.linkType||"OTHER") });
@@ -181,8 +182,31 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             }).then(function(ok){ if(ok)emails++; else failed++; return ackOp(o.id,ok,"email_send_failed"); }).catch(function(e){ failed++; return ackOp(o.id,false,"email_send_"+(typeof e==="string"?e:"error")); });
           });
         });
-        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails}; });
-      }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0}; });
+        // create_project: create a NEW Goodshuffle project shell for a guided-intake record. createNewProject
+        // makes a blank draft and redirects to /app/project/detail?id=<newId>; stash the structured intake in
+        // the project's internal notes (saveEventNotes), then post the new id back so our app + the success
+        // screen update. No inventory, no pricing — the salesperson adds those in Goodshuffle.
+        createOps.forEach(function(o){
+          chain=chain.then(function(){
+            return fetch("/app/project/createNewProject",{headers:{accept:"text/html"},credentials:"include"}).then(function(r){
+              var m=String(r.url||"").match(/[?&]id=(\d+)/); var pid=m?m[1]:null;
+              if(!pid) throw "no_id";
+              var body=new URLSearchParams({ transactionID:String(pid), clientVisibleNotes:"", internalNotes:String(o.payload.notes||""), fulfillmentNotes:"" });
+              return fetch("/app/vendorTransaction/saveEventNotes",{method:"POST",headers:{"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"},credentials:"include",body:body}).then(function(){ return pid; });
+            }).then(function(pid){
+              created++;
+              var url="https://pro.goodshuffle.com/app/project/detail?id="+pid;
+              return fetch(API+"/api/gs/intake-result",{method:"POST",headers:POSTH(),body:JSON.stringify({intakeId:o.payload.intakeId, projectId:pid, url:url, ok:true})}).catch(function(){}).then(function(){ return ackOp(o.id,true); });
+            }).catch(function(e){
+              failed++;
+              var reason=(typeof e==="string"?e:"error");
+              fetch(API+"/api/gs/intake-result",{method:"POST",headers:POSTH(),body:JSON.stringify({intakeId:o.payload.intakeId, ok:false, error:"create_project_"+reason})}).catch(function(){});
+              return ackOp(o.id,false,"create_project_"+reason);
+            });
+          });
+        });
+        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, created:created}; });
+      }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0, created:0}; });
     }
 
     // Finish a cycle: one-shot fades the banner; auto keeps a persistent status with the last-run time.
