@@ -22,6 +22,9 @@ import {
   getRouteForDate,
 } from "@/lib/db/repo";
 import { findRouteHealthIssues } from "@/lib/dispatch/routeHealth";
+import { ClosePastRoutesButton } from "@/components/ClosePastRoutesButton";
+import { viewerRole } from "@/lib/auth/getSession";
+import { canManageSettings } from "@/lib/auth/roles";
 import { DISPLAY_TZ, todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
 import { reviewStopAddress } from "@/lib/addressReview";
 import { getSettings } from "@/lib/settings";
@@ -45,6 +48,7 @@ export default async function DispatchPage({
   const date = sp?.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : today;
   const ignitionUrl = getSettings().ignitionUrl;
   const overdue = findRouteHealthIssues();
+  const canClose = canManageSettings(await viewerRole());
   return (
     <main className="p-6">
       {ignitionUrl && (
@@ -57,18 +61,19 @@ export default async function DispatchPage({
           <ExternalLink className="size-3.5" /> Open Ignition (live fleet)
         </a>
       )}
-      {overdue.length > 0 && <OverdueRoutesBanner issues={overdue} />}
+      {overdue.length > 0 && <OverdueRoutesBanner issues={overdue} canClose={canClose} />}
       <DispatchBoard date={date} today={today} />
     </main>
   );
 }
 
-function OverdueRoutesBanner({ issues }: { issues: ReturnType<typeof findRouteHealthIssues> }): React.JSX.Element {
+function OverdueRoutesBanner({ issues, canClose }: { issues: ReturnType<typeof findRouteHealthIssues>; canClose: boolean }): React.JSX.Element {
   return (
     <div className="mb-4 rounded border border-rose-500/40 bg-rose-500/[0.08] p-3 text-rose-100">
-      <div className="flex items-center gap-2 text-[13px] font-semibold">
+      <div className="flex flex-wrap items-center gap-2 text-[13px] font-semibold">
         <AlertTriangle className="size-4 shrink-0" />
         {issues.length} route{issues.length === 1 ? "" : "s"} still open past the delivery date — needs action
+        {canClose && <span className="ml-auto"><ClosePastRoutesButton count={issues.length} /></span>}
       </div>
       <ul className="mt-2 space-y-1 text-[12.5px]">
         {issues.slice(0, 8).map((i) => {
