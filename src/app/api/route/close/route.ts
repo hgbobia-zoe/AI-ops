@@ -8,6 +8,7 @@
 import { NextResponse } from "next/server";
 import { closeOneRoute } from "@/lib/dispatch/closeRoute";
 import { slackNotify } from "@/lib/notify/slack";
+import { currentActor } from "@/lib/auth/getSession";
 
 export const dynamic = "force-dynamic";
 
@@ -30,11 +31,12 @@ export async function POST(req: Request): Promise<NextResponse> {
   // If the route was closed with stops still unfinished, they need rescheduling — tell
   // dispatch on Slack (only on the first close, not a repeat of an already-closed route).
   if (!result.already && result.incomplete && result.incomplete.length > 0) {
+    const by = (await currentActor()).label; // who closed it, for the notification
     const list = result.incomplete
       .map((s) => `#${s.sequence} ${s.custName || "—"} (${s.state})`)
       .join(", ");
     void slackNotify(
-      `⚠️ *${result.truckId ?? "Route"} route closed with ${result.incomplete.length} unfinished stop${result.incomplete.length === 1 ? "" : "s"}* — needs rescheduling: ${list}`,
+      `⚠️ *${result.truckId ?? "Route"} route closed by ${by} with ${result.incomplete.length} unfinished stop${result.incomplete.length === 1 ? "" : "s"}* — needs rescheduling: ${list}`,
     );
   }
   return NextResponse.json(result);

@@ -8,7 +8,7 @@ import { NextResponse } from "next/server";
 import { findRouteHealthIssues } from "@/lib/dispatch/routeHealth";
 import { closeOneRoute } from "@/lib/dispatch/closeRoute";
 import { slackNotify } from "@/lib/notify/slack";
-import { viewerRole } from "@/lib/auth/getSession";
+import { viewerRole, currentActor } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
@@ -23,9 +23,11 @@ function tokenOk(req: Request): boolean {
 
 export async function POST(req: Request): Promise<NextResponse> {
   // Either an Owner/Admin in the app, or the internal jobs token.
-  if (!tokenOk(req) && !canManageSettings(await viewerRole())) {
+  const viaToken = tokenOk(req);
+  if (!viaToken && !canManageSettings(await viewerRole())) {
     return NextResponse.json({ error: "unauthorized" }, { status: 403 });
   }
+  const by = viaToken ? "a scheduled job" : (await currentActor()).label; // who ran the bulk close
 
   const past = findRouteHealthIssues(); // open routes with date < today
   let closed = 0;
@@ -44,7 +46,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   // One summary to the ops channel (not one message per route).
   if (closed > 0) {
-    const lines = [`:white_check_mark: *Closed ${closed} past route${closed === 1 ? "" : "s"}* that were still open past their delivery date.`];
+    const lines = [`:white_check_mark: *${by} closed ${closed} past route${closed === 1 ? "" : "s"}* that were still open past their delivery date.`];
     if (rescheduling.length > 0) {
       const totalStops = rescheduling.reduce((s, r) => s + r.stops, 0);
       lines.push(`⚠️ ${rescheduling.length} of them had ${totalStops} unfinished stop${totalStops === 1 ? "" : "s"} that now need rescheduling:`);
