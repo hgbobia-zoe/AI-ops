@@ -188,12 +188,21 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         // screen update. No inventory, no pricing — the salesperson adds those in Goodshuffle.
         createOps.forEach(function(o){
           chain=chain.then(function(){
+            var GH={"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"};
+            var pid=null;
             return fetch("/app/project/createNewProject",{headers:{accept:"text/html"},credentials:"include"}).then(function(r){
-              var m=String(r.url||"").match(/[?&]id=(\d+)/); var pid=m?m[1]:null;
+              var m=String(r.url||"").match(/[?&]id=(\d+)/); pid=m?m[1]:null;
               if(!pid) throw "no_id";
-              var body=new URLSearchParams({ transactionID:String(pid), clientVisibleNotes:"", internalNotes:String(o.payload.notes||""), fulfillmentNotes:"" });
-              return fetch("/app/vendorTransaction/saveEventNotes",{method:"POST",headers:{"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"},credentials:"include",body:body}).then(function(){ return pid; });
-            }).then(function(pid){
+              // Set name / date / times / event type / head count in one call (saveEventDetails). Best-effort:
+              // the shell exists either way, so a details hiccup never loses the project.
+              var d=o.payload.details||{};
+              var det=new URLSearchParams({ transactionID:String(pid), eventName:String(d.eventName||""), fromDateStr:String(d.fromDateStr||""), fromTimeStr:String(d.fromTimeStr||""), toDateStr:String(d.toDateStr||""), toTimeStr:String(d.toTimeStr||""), eventType:String(d.eventType||""), headCount:String(d.headCount||"") });
+              return fetch("/app/vendorTransaction/saveEventDetails",{method:"POST",headers:GH,credentials:"include",body:det}).catch(function(){});
+            }).then(function(){
+              // Stash the full structured intake into the project's internal notes.
+              var nb=new URLSearchParams({ transactionID:String(pid), clientVisibleNotes:"", internalNotes:String(o.payload.notes||""), fulfillmentNotes:"" });
+              return fetch("/app/vendorTransaction/saveEventNotes",{method:"POST",headers:GH,credentials:"include",body:nb}).catch(function(){});
+            }).then(function(){
               created++;
               var url="https://pro.goodshuffle.com/app/project/detail?id="+pid;
               return fetch(API+"/api/gs/intake-result",{method:"POST",headers:POSTH(),body:JSON.stringify({intakeId:o.payload.intakeId, projectId:pid, url:url, ok:true})}).catch(function(){}).then(function(){ return ackOp(o.id,true); });

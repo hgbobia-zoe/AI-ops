@@ -5,6 +5,44 @@
 
 import type { Intake, TriState } from "./types";
 
+// ── Goodshuffle saveEventDetails formats (captured live on a TEST project) ──────────────────────────
+// POST /app/vendorTransaction/saveEventDetails (form-encoded): transactionID, eventName, fromDateStr,
+// fromTimeStr, toDateStr, toTimeStr, eventType, headCount. Dates are "MMM D YYYY" ("Sep 25 2026"); times
+// are "h:mm AM/PM" ("3:00 PM"); eventType is the Goodshuffle label ("Wedding"); headCount is a plain number.
+const GS_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const GS_EVENT_TYPE: Record<string, string> = { wedding: "Wedding", corporate: "Corporate" }; // only labels confirmed to exist; others left blank
+
+export function gsDate(ymd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || "");
+  if (!m) return "";
+  const mo = Number(m[2]);
+  if (mo < 1 || mo > 12) return "";
+  return `${GS_MONTHS[mo - 1]} ${Number(m[3])} ${m[1]}`;
+}
+export function gsTime(hhmm: string): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || "");
+  if (!m) return "";
+  let h = Number(m[1]);
+  const ap = h >= 12 ? "PM" : "AM";
+  h = h % 12; if (h === 0) h = 12;
+  return `${h}:${m[2]} ${ap}`;
+}
+
+/** The saveEventDetails field set for a new project shell, from the intake. Single-day event (to = from).
+ *  Fields we can't map cleanly (an event type outside the confirmed list) are left blank, never guessed. */
+export function gsEventDetails(i: Intake): Record<string, string> {
+  const d = gsDate(i.eventDate);
+  return {
+    eventName: suggestEventName(i),
+    fromDateStr: d,
+    fromTimeStr: gsTime(i.eventStartTime),
+    toDateStr: d,
+    toTimeStr: gsTime(i.eventEndTime),
+    eventType: GS_EVENT_TYPE[i.eventType] ?? "",
+    headCount: i.guestCount != null ? String(i.guestCount) : "",
+  };
+}
+
 const EVENT_TYPE_LABEL: Record<string, string> = { wedding: "Wedding", corporate: "Corporate", social: "Social / Private", other: "Other" };
 const LOCATION_TYPE_LABEL: Record<string, string> = { residential: "Residential", venue: "Event venue", hotel: "Hotel", corporate: "Corporate / Office", school: "School", park: "Park / Public space", other: "Other" };
 

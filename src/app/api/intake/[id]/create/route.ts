@@ -7,7 +7,7 @@
 import { NextResponse } from "next/server";
 import { getIntake, updateIntake } from "@/lib/intake/store";
 import { missingRequired } from "@/lib/intake/types";
-import { formatIntakeNotes, suggestEventName } from "@/lib/intake/format";
+import { formatIntakeNotes, suggestEventName, gsEventDetails } from "@/lib/intake/format";
 import { logIntakeEvent } from "@/lib/intake/audit";
 import { enqueueGsOp } from "@/lib/db/repo";
 
@@ -28,7 +28,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
   // Queue the create for the logged-in office session. eventName is stashed in the notes header until the
   // Goodshuffle rename endpoint is wired.
-  enqueueGsOp({ op: "create_project", label: `guided intake ${suggestEventName(intake)}`, payload: { intakeId: intake.id, eventName: suggestEventName(intake), notes: formatIntakeNotes(intake) } });
+  enqueueGsOp({ op: "create_project", label: `guided intake ${suggestEventName(intake)}`, payload: { intakeId: intake.id, eventName: suggestEventName(intake), notes: formatIntakeNotes(intake), details: gsEventDetails(intake) } });
   updateIntake(id, { status: "creating", gsStatus: "queued" });
   await logIntakeEvent("GS_SHELL_QUEUED", id, { name: suggestEventName(intake) });
 
