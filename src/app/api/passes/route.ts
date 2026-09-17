@@ -20,7 +20,7 @@ export async function GET(req: Request): Promise<NextResponse> {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  let body: { name?: string; expiresAt?: string; phone?: string };
+  let body: { name?: string; expiresAt?: string; phone?: string; scope?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -29,6 +29,9 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const name = (body.name ?? "").trim();
   if (!name) return NextResponse.json({ error: "name_required" }, { status: 400 });
+
+  // driver = kiosk route checklist (mark progress); board = office dispatch board (view). Default driver.
+  const scope = body.scope === "board" ? "board" : "driver";
 
   const ms = Date.parse((body.expiresAt ?? "").trim());
   if (!Number.isFinite(ms)) return NextResponse.json({ error: "bad_expiry" }, { status: 400 });
@@ -39,6 +42,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     id: newPassToken(),
     name,
     phone: (body.phone ?? "").trim() || null,
+    scope,
     createdBy: actor.label,
     expiresAt: new Date(ms).toISOString(),
   });

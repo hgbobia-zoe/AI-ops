@@ -5,7 +5,10 @@
 // any pass on the spot. A pass grants a scoped board-only "guest" session — no money, no settings.
 
 import { useCallback, useEffect, useState } from "react";
-import { KeyRound, Plus, Copy, Check, Send, Ban, Loader2, Clock, ShieldCheck } from "lucide-react";
+import { KeyRound, Plus, Copy, Check, Send, Ban, Loader2, Clock, ShieldCheck, Truck, LayoutGrid } from "lucide-react";
+
+type Scope = "driver" | "board";
+const SCOPE_LABEL: Record<string, string> = { driver: "Driver (kiosk)", drive: "Driver (kiosk)", board: "Dispatcher (board)" };
 
 interface Pass {
   id: string;
@@ -47,6 +50,7 @@ export function ShiftPassesAdmin(): React.JSX.Element {
   const [passes, setPasses] = useState<Pass[] | null>(null);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [scope, setScope] = useState<Scope>("driver");
   const [ends, setEnds] = useState(defaultEnd);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,7 +91,7 @@ export function ShiftPassesAdmin(): React.JSX.Element {
       const r = await fetch("/api/passes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), phone: phone.trim() || undefined, expiresAt: new Date(ms).toISOString() }),
+        body: JSON.stringify({ name: name.trim(), phone: phone.trim() || undefined, scope, expiresAt: new Date(ms).toISOString() }),
       });
       const j = (await r.json()) as { pass?: Pass; error?: string };
       if (!r.ok || !j.pass) {
@@ -120,8 +124,10 @@ export function ShiftPassesAdmin(): React.JSX.Element {
           <KeyRound className="size-7" /> Shift Passes
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Give a contractor or temp worker a link that opens the dispatch board for a single shift. It expires when you say,
-          you can revoke it anytime, and it can never see money or settings — just the board and the driver screens.
+          Give a temp driver or contractor a link that opens their screen for a single shift — no login. A <b>Driver</b> pass
+          opens the kiosk route checklist so they can mark stops en route / arrived / complete and add photos, just like the
+          tablet. A <b>Dispatcher</b> pass opens the office board (view). Either expires when you say, can be revoked anytime,
+          and never sees money or settings.
         </p>
       </header>
 
@@ -130,9 +136,36 @@ export function ShiftPassesAdmin(): React.JSX.Element {
         <h2 className="flex items-center gap-2 text-lg font-semibold">
           <Plus className="size-4" /> New pass
         </h2>
+        <div className="space-y-1.5">
+          <span className="text-sm font-medium">Pass type</span>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {([
+              { v: "driver" as Scope, icon: Truck, title: "Driver", sub: "Kiosk route + mark progress" },
+              { v: "board" as Scope, icon: LayoutGrid, title: "Dispatcher", sub: "Office board (view only)" },
+            ]).map((o) => {
+              const active = scope === o.v;
+              return (
+                <button
+                  key={o.v}
+                  type="button"
+                  onClick={() => setScope(o.v)}
+                  className={`flex items-start gap-2.5 rounded-xl border p-3 text-left transition-colors ${
+                    active ? "border-foreground bg-foreground/10" : "border-white/10 hover:bg-accent"
+                  }`}
+                >
+                  <o.icon className={`mt-0.5 size-4 shrink-0 ${active ? "" : "text-muted-foreground"}`} />
+                  <span>
+                    <span className="block text-sm font-medium">{o.title}</span>
+                    <span className="block text-xs text-muted-foreground">{o.sub}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="space-y-1.5">
-            <span className="text-sm font-medium">Contractor name</span>
+            <span className="text-sm font-medium">{scope === "board" ? "Dispatcher name" : "Driver name"}</span>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -174,7 +207,7 @@ export function ShiftPassesAdmin(): React.JSX.Element {
         {justMade && (
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
             <div className="mb-2 text-sm font-medium text-emerald-200">
-              Pass ready for {justMade.name} — ends {fmtWhen(justMade.expiresAt)}
+              {SCOPE_LABEL[justMade.scope] ?? "Pass"} ready for {justMade.name} — ends {fmtWhen(justMade.expiresAt)}
             </div>
             <PassLinkRow pass={justMade} onSent={load} />
           </div>
@@ -196,6 +229,10 @@ export function ShiftPassesAdmin(): React.JSX.Element {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="font-medium">{p.name}</span>
+                  <span className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                    {p.scope === "board" ? <LayoutGrid className="size-3" /> : <Truck className="size-3" />}
+                    {SCOPE_LABEL[p.scope] ?? p.scope}
+                  </span>
                   <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium capitalize ${STATUS_STYLE[p.status]}`}>{p.status}</span>
                 </div>
                 {p.status === "active" && (
