@@ -29,7 +29,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
   // Queue the create for the logged-in office session. eventName is stashed in the notes header until the
   // Goodshuffle rename endpoint is wired.
-  enqueueGsOp({ op: "create_project", label: `guided intake ${suggestEventName(intake)}`, payload: { intakeId: intake.id, eventName: suggestEventName(intake), notes: formatIntakeNotes(intake), details: gsEventDetails(intake), addItems: autoAddItems() } });
+  enqueueGsOp({ op: "create_project", label: `guided intake ${suggestEventName(intake)}`, payload: { intakeId: intake.id, eventName: suggestEventName(intake), notes: formatIntakeNotes(intake), details: gsEventDetails(intake), addItems: autoAddItems(intake) } });
   updateIntake(id, { status: "creating", gsStatus: "queued" });
   await logIntakeEvent("GS_SHELL_QUEUED", id, { name: suggestEventName(intake) });
 
