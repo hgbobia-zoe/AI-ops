@@ -15,7 +15,7 @@ import {
   LayoutGrid, Tag, Building2, Wrench,
   Gauge, ListChecks, Truck, AlertTriangle, Users, DollarSign,
   TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
-  RefreshCw, Plug, UsersRound, Settings, KeyRound,
+  RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -57,6 +57,7 @@ const GROUPS: Group[] = [
       { href: "/salesos", label: "Sales OS", icon: Target },
       { href: "/coaching", label: "Coaching", icon: GraduationCap, coaching: true },
       { href: "/customers", label: "Customers", icon: Contact },
+      { href: "/pricing", label: "Delivery Pricing", icon: Calculator },
     ],
   },
   {
