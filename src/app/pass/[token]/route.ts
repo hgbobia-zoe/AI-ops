@@ -8,12 +8,13 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getShiftPass, touchShiftPass } from "@/lib/db/repo";
 import { isPassLive, passSession } from "@/lib/auth/pass";
 import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
+import { publicOrigin } from "@/lib/http/origin";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ token: string }> }): Promise<NextResponse> {
   const { token } = await ctx.params;
-  const origin = req.nextUrl.origin;
+  const origin = publicOrigin(req);
 
   const secret = process.env.APP_SESSION_TOKEN;
   // Gate disabled → the whole app is open anyway; a pass link just lands on the board.

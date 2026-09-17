@@ -7,6 +7,7 @@ import { getShiftPass } from "@/lib/db/repo";
 import { sendSms } from "@/lib/notify/sms";
 import { getSettings } from "@/lib/settings";
 import { viewerQuoUserId } from "@/lib/auth/getSession";
+import { publicOrigin } from "@/lib/http/origin";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   const phone = (body.phone ?? "").trim() || (pass.phone ?? "").trim();
   if (!phone) return NextResponse.json({ ok: false, error: "No phone number for this pass — add one first." });
 
-  const url = `${new URL(req.url).origin}/pass/${pass.id}`;
+  const url = `${publicOrigin(req)}/pass/${pass.id}`;
   const first = (pass.name || "there").split(/\s+/)[0];
   const text =
     `Hi ${first}, here is your Zoe Events shift access. Open this link on your phone or tablet to see today's dispatch: ${url} ` +

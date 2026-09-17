@@ -6,6 +6,7 @@ import { NextResponse } from "next/server";
 import { listShiftPasses, createShiftPass } from "@/lib/db/repo";
 import { newPassToken, passStatus } from "@/lib/auth/pass";
 import { currentActor } from "@/lib/auth/getSession";
+import { publicOrigin } from "@/lib/http/origin";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ function withStatus(origin: string) {
 }
 
 export async function GET(req: Request): Promise<NextResponse> {
-  const origin = new URL(req.url).origin;
+  const origin = publicOrigin(req);
   return NextResponse.json({ passes: listShiftPasses().map(withStatus(origin)) });
 }
 
@@ -42,6 +43,6 @@ export async function POST(req: Request): Promise<NextResponse> {
     expiresAt: new Date(ms).toISOString(),
   });
 
-  const origin = new URL(req.url).origin;
+  const origin = publicOrigin(req);
   return NextResponse.json({ pass: withStatus(origin)(pass) });
 }
