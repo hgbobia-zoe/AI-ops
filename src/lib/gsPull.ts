@@ -133,6 +133,16 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var teamOps=all.filter(function(o){ return o.op==="add_team_member" && o.transactionId && o.payload && o.payload.userID; });
         var emailOps=all.filter(function(o){ return o.op==="email_send" && o.transactionId && o.payload && o.payload.content; });
         var createOps=all.filter(function(o){ return o.op==="create_project" && o.payload && o.payload.intakeId; });
+        // Goodshuffle only CREATES a project on a real navigation (a fetch just returns the SPA shell), so we
+        // open createNewProject in a POPUP. Do it HERE, synchronously right after the outbox fetch, so we're
+        // still inside the bookmarklet click's transient activation (~5s) and the popup isn't blocked. The
+        // popup navigates, creates the draft, redirects to detail?id=<n>, which we read same-origin, then we
+        // close it. Activation is consumed by one window.open, so we create at most ONE project per pull
+        // cycle; any extra create ops wait for the next cycle. If the popup is blocked (no gesture / blocker),
+        // we skip creating this cycle and leave the op pending to retry.
+        var createPopup=null;
+        if(createOps.length){ try{ createPopup=window.open("/app/project/createNewProject","gscreate","width=520,height=640,left=40,top=40"); }catch(e){ createPopup=null; } }
+        function popNewId(w){ return new Promise(function(resolve){ if(!w){ resolve(null); return; } var n=0; var iv=setInterval(function(){ n++; var got=null; try{ var h=w.location.href; if(h && h.indexOf("about:blank")<0){ var m=h.match(/[?&]id=(\d+)/); if(m) got=m[1]; } }catch(e){} if(got){ clearInterval(iv); resolve(got); } else if(n>80){ clearInterval(iv); resolve(null); } }, 250); }); }
         var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, chain=Promise.resolve();
         // add_team_member: add a GSPRO user (Warehouse Desktop) to the project team on a signed project.
         teamOps.forEach(function(o){ chain=chain.then(function(){
@@ -186,12 +196,14 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         // makes a blank draft and redirects to /app/project/detail?id=<newId>; stash the structured intake in
         // the project's internal notes (saveEventNotes), then post the new id back so our app + the success
         // screen update. No inventory, no pricing — the salesperson adds those in Goodshuffle.
-        createOps.forEach(function(o){
+        // Only the first pending create uses the popup (one navigation per gesture); the rest retry next cycle.
+        (createOps.length && createPopup ? [createOps[0]] : []).forEach(function(o){
           chain=chain.then(function(){
             var GH={"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"};
             var pid=null;
-            return fetch("/app/project/createNewProject",{headers:{accept:"text/html"},credentials:"include"}).then(function(r){
-              var m=String(r.url||"").match(/[?&]id=(\d+)/); pid=m?m[1]:null;
+            return popNewId(createPopup).then(function(newId){
+              try{ if(createPopup) createPopup.close(); }catch(e){}
+              pid=newId;
               if(!pid) throw "no_id";
               // Set name / date / times / event type / head count in one call (saveEventDetails). Best-effort:
               // the shell exists either way, so a details hiccup never loses the project.
