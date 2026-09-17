@@ -32,7 +32,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
   }
 
   return (
-    <div className="flex min-h-dvh flex-col md:flex-row">
+    <div className="flex min-h-dvh flex-col lg:flex-row">
       <ConsoleNav role={role} viewerName={actor.label} />
       <div className="flex min-w-0 flex-1 flex-col">
         <StatusBar integrations={integrations} />
