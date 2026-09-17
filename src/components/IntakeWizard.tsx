@@ -87,7 +87,6 @@ export function IntakeWizard(): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>("start");
   const [intake, setIntake] = useState<Intake | null>(null);
   const [stepIdx, setStepIdx] = useState(0);
-  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -115,21 +114,29 @@ export function IntakeWizard(): React.JSX.Element {
   }, [intake, flush]);
 
   async function start(): Promise<void> {
-    setStarting(true); setError(null);
+    setError(null);
     try {
       const r = await fetch("/api/intake", { method: "POST" });
       const j = (await r.json()) as { intake?: Intake };
       if (j.intake) { setIntake(j.intake); setStepIdx(0); setPhase("wizard"); }
-      else setError("Couldn't start a call. Try again.");
-    } catch { setError("Couldn't start a call. Try again."); }
-    finally { setStarting(false); }
+      else setError("Couldn't start a new project. Try again.");
+    } catch { setError("Couldn't start a new project. Try again."); }
   }
 
+  // Start a new project immediately on entry — no "Start" gate. Runs once (ref guards React's
+  // double-invoke in dev + any re-render). A failure drops to the retry state below.
+  const bootstrapped = useRef(false);
+  useEffect(() => {
+    if (bootstrapped.current) return;
+    bootstrapped.current = true;
+    void start();
+  }, []);
+
   function next(): void { flushNow(); if (stepIdx < steps.length - 1) setStepIdx((n) => n + 1); else setPhase("review"); }
-  function back(): void { flushNow(); if (stepIdx > 0) setStepIdx((n) => n - 1); else setPhase("start"); }
+  function back(): void { flushNow(); if (stepIdx > 0) setStepIdx((n) => n - 1); }
   function jumpTo(id: StepId): void { const idx = steps.findIndex((s) => s.id === id); if (idx >= 0) { setStepIdx(idx); setPhase("wizard"); } }
 
-  if (phase === "start") return <StartScreen onStart={start} starting={starting} error={error} />;
+  if (phase === "start") return <BootScreen error={error} onRetry={start} />;
   if (!intake) return <div className="p-8 text-[13px] text-meta">Loading…</div>;
   if (phase === "review") return <ReviewScreen intake={intake} onEdit={jumpTo} onBack={() => { setPhase("wizard"); setStepIdx(steps.length - 1); }} onCreate={() => submit(intake, setPhase, setError, setIntake)} error={error} />;
   if (phase === "submitting" || phase === "creating") return <CreatingScreen intake={intake} setIntake={setIntake} setPhase={setPhase} />;
@@ -148,7 +155,9 @@ export function IntakeWizard(): React.JSX.Element {
         </div>
       </div>
       <div className="mt-6 flex items-center justify-between gap-3">
-        <button onClick={back} className="flex items-center gap-1.5 rounded border border-border px-3 py-2 text-[13.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)]"><ArrowLeft className="size-4" /> Back</button>
+        {stepIdx > 0
+          ? <button onClick={back} className="flex items-center gap-1.5 rounded border border-border px-3 py-2 text-[13.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)]"><ArrowLeft className="size-4" /> Back</button>
+          : <span />}
         <button onClick={next} disabled={!step.canNext(intake)} className="flex items-center gap-1.5 rounded border border-foreground/70 bg-foreground/[0.06] px-5 py-2 text-[14px] font-medium transition-colors hover:bg-[var(--row-hover)] disabled:cursor-not-allowed disabled:opacity-40">
           {stepIdx === steps.length - 1 ? "Review" : "Next"} <ArrowRight className="size-4" />
         </button>
@@ -172,21 +181,26 @@ async function submit(intake: Intake, setPhase: (p: Phase) => void, setError: (e
 
 // ── Screens ────────────────────────────────────────────────────────────────────
 
-function StartScreen({ onStart, starting, error }: { onStart: () => void; starting: boolean; error: string | null }): React.JSX.Element {
+// Entry state: New Project starts immediately (auto-started on mount), so this only shows a brief
+// loading beat — or a retry if creating the draft failed. No "Start" gate.
+function BootScreen({ error, onRetry }: { error: string | null; onRetry: () => void }): React.JSX.Element {
   return (
     <div className="mx-auto flex min-h-[calc(100dvh-8rem)] max-w-xl flex-col items-center justify-center px-4 text-center">
-      <div className="flex size-14 items-center justify-center rounded border border-border bg-panel"><FolderPlus className="size-6 text-foreground" /></div>
-      <h1 className="mt-5 text-[26px] font-medium tracking-tight">New Project</h1>
-      <p className="mt-2 max-w-md text-[14px] text-meta">Start a new customer project. The same discovery every time — customer, event, location, logistics — then create the Goodshuffle project shell. Rental inventory is added in Goodshuffle after.</p>
-      <div className="mt-5 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[12px] text-meta">
-        {SECTIONS.map((s, i) => (
-          <span key={s.label} className="flex items-center gap-2">{i > 0 && <span className="text-border">→</span>}{s.label}</span>
-        ))}
-      </div>
-      <button onClick={onStart} disabled={starting} className="mt-7 flex items-center gap-2 rounded border border-foreground/70 bg-foreground/[0.06] px-6 py-3 text-[15px] font-medium transition-colors hover:bg-[var(--row-hover)] disabled:opacity-50">
-        {starting ? <><Loader2 className="size-4 animate-spin" /> Starting…</> : <>Start</>}
-      </button>
-      {error && <p className="mt-3 text-[13px] text-critical">{error}</p>}
+      {error ? (
+        <>
+          <div className="flex size-14 items-center justify-center rounded border border-border bg-panel"><FolderPlus className="size-6 text-foreground" /></div>
+          <h1 className="mt-5 text-[22px] font-medium tracking-tight">New Project</h1>
+          <p className="mt-2 text-[13.5px] text-critical">{error}</p>
+          <button onClick={onRetry} className="mt-5 flex items-center gap-2 rounded border border-foreground/70 bg-foreground/[0.06] px-6 py-3 text-[15px] font-medium transition-colors hover:bg-[var(--row-hover)]">
+            <RefreshCw className="size-4" /> Try again
+          </button>
+        </>
+      ) : (
+        <>
+          <Loader2 className="size-7 animate-spin text-foreground" />
+          <p className="mt-3 text-[13.5px] text-meta">Starting a new project…</p>
+        </>
+      )}
     </div>
   );
 }
