@@ -317,6 +317,31 @@ export function CurrentStopView({
 // visible (drivers shouldn't wonder where a line went) but demoted below the physical items.
 const NON_GEAR = /delivery|pick\s*-?\s*up|waiver|discount|gratuity|damage|deposit|insurance|surcharge|\bfees?\b|\btax\b|appreciation/i;
 
+// A small square product thumbnail. Falls back to a neutral package icon tile when there's no image
+// URL, or when the image fails to load (broken/expired Goodshuffle URL) — the load list never breaks.
+function ItemThumb({ src }: { src?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <span className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-muted-foreground">
+        <Package className="size-5" />
+      </span>
+    );
+  }
+  return (
+    // Goodshuffle CDN thumbnail on an external, per-item domain — a plain img is correct here
+    // (next/image would need every S3/CDN host pre-registered); lazy + graceful onError fallback.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="size-11 shrink-0 rounded-lg border border-white/10 bg-white/[0.03] object-cover"
+    />
+  );
+}
+
 /** The stop's load list: physical items first (name × qty), fee/service lines demoted underneath.
  *  Collapsible so a big order doesn't bury the action buttons; the header shows the gear count. */
 function ItemManifest({ items, kind }: { items: NonNullable<Stop["items"]>; kind?: "delivery" | "pickup" }) {
@@ -341,10 +366,11 @@ function ItemManifest({ items, kind }: { items: NonNullable<Stop["items"]>; kind
       </button>
       {open && (
         <div className="border-t border-white/5 px-5 py-3">
-          <ul className="space-y-1.5">
+          <ul className="space-y-2">
             {gear.map((i, idx) => (
-              <li key={idx} className="flex items-baseline justify-between gap-4 text-base">
-                <span>{i.name}</span>
+              <li key={idx} className="flex items-center gap-3 text-base">
+                <ItemThumb src={i.image} />
+                <span className="min-w-0 flex-1">{i.name}</span>
                 <span className="shrink-0 font-bold tabular-nums text-primary">×{i.quantity ?? 1}</span>
               </li>
             ))}

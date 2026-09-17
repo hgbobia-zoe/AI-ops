@@ -131,9 +131,9 @@ export interface Stop {
   dayOfPhone?: string;
   plannedWindow?: string;
   eta?: string;
-  /** Goodshuffle line items for this stop's event (name + qty). Drives crew-size rules
-   *  (tent → 2, 40x60 → 3) and, later, LLM quote review. Optional; absent on old pulls. */
-  items?: { name: string; quantity?: number }[];
+  /** Goodshuffle line items for this stop's event (name + qty, and a product photo URL when GS has one).
+   *  Drives crew-size rules (tent → 2, 40x60 → 3), the driver load list, and LLM quote review. Optional. */
+  items?: { name: string; quantity?: number; image?: string }[];
   /** Goodshuffle waypoint transaction id — the match key for writing back to Goodshuffle
    *  (e.g. removing this stop's waypoint from its route). Absent on manual/old pulls. */
   txId?: string;
