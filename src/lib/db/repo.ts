@@ -3,6 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "./index";
+import { todayInOpsTz } from "@/lib/dates";
 import { logChange } from "@/lib/history/store";
 import type { Route, RouteStatus, Stop, StopState } from "@/lib/types";
 import type { CallRecap } from "@/lib/coach/recap";
@@ -99,12 +100,30 @@ function buildRoute(row: RouteRow): Route {
   };
 }
 
-/** The current route for a truck (latest), with its stops in order. */
+/** The current route for a truck (latest by write time), with its stops in order. NOTE: "latest" is by
+ *  updated_at, so with the multi-week pull seeding future days this can be a FUTURE route — the tablet
+ *  must use getActiveRouteForTruck instead. Kept for tests + callers that want the most-recent write. */
 export function getRoute(truckId: string): Route | null {
   const row = getDb()
     .prepare("SELECT * FROM routes WHERE truck_id = ? ORDER BY updated_at DESC LIMIT 1")
     .get(truckId) as RouteRow | undefined;
   return row ? buildRoute(row) : null;
+}
+
+/** The route a TABLET/kiosk should show for its truck: TODAY's route (ops timezone), else the most
+ *  recent still-unfinished route from on/before today (an overnight or carried-over job). Never a
+ *  FUTURE route — the multi-week pull seeds days ahead, and the driver screen must stay on today, not
+ *  jump to whatever was imported last. Returns null when the truck has nothing active → "no route yet". */
+export function getActiveRouteForTruck(truckId: string, today: string = todayInOpsTz()): Route | null {
+  const db = getDb();
+  const todays = db
+    .prepare("SELECT * FROM routes WHERE truck_id = ? AND date = ? ORDER BY updated_at DESC LIMIT 1")
+    .get(truckId, today) as RouteRow | undefined;
+  if (todays) return buildRoute(todays);
+  const carry = db
+    .prepare("SELECT * FROM routes WHERE truck_id = ? AND date <= ? AND status != 'done' ORDER BY date DESC LIMIT 1")
+    .get(truckId, today) as RouteRow | undefined;
+  return carry ? buildRoute(carry) : null;
 }
 
 /** A route by its id, with stops. */
