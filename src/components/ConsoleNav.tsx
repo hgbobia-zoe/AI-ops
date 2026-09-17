@@ -15,7 +15,7 @@ import {
   LayoutGrid, Tag, Building2, Wrench,
   Gauge, ListChecks, Truck, AlertTriangle, Users, DollarSign,
   TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
-  RefreshCw, Plug, UsersRound, Settings,
+  RefreshCw, Plug, UsersRound, Settings, Radar,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -36,6 +36,11 @@ interface Group {
 // Command Center is the main hub / 10k-ft view, so it sits on its own at the top of the nav, outside
 // (and above) the expandable sections — not nested inside Operations.
 const HUB: Blade = { href: "/dashboard", label: "Command Center", icon: Gauge };
+
+// Event Radar — early-demand intelligence. A first-class module in its own right (Event Radar detects
+// future demand; Sales OS converts it), so it sits standalone at the top alongside Command Center
+// rather than nested under Sales or Operations.
+const RADAR: Blade = { href: "/radar", label: "Event Radar", icon: Radar };
 
 const GROUPS: Group[] = [
   {
@@ -114,9 +119,12 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
     ? "New Project"
     : isActive(HUB.href)
       ? HUB.label
-      : parents.flatMap((g) => g.blades).find((b) => isActive(b.href))?.label ?? "Zoe Operations";
+      : isActive(RADAR.href)
+        ? RADAR.label
+        : parents.flatMap((g) => g.blades).find((b) => isActive(b.href))?.label ?? "Zoe Operations";
 
   const HubIcon = HUB.icon;
+  const RadarIcon = RADAR.icon;
 
   // The nav body — shared by the desktop sidebar and the mobile drawer. `withClose` adds the drawer's ✕.
   const panel = (withClose: boolean): React.JSX.Element => (
@@ -144,6 +152,19 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
         >
           <HubIcon className={`size-[17px] shrink-0 ${isActive(HUB.href) ? "text-foreground" : "text-meta"}`} />
           {HUB.label}
+        </Link>
+
+        {/* Event Radar — standalone first-class module, pinned at the top beside Command Center */}
+        <Link
+          href={RADAR.href}
+          onClick={close}
+          aria-current={isActive(RADAR.href) ? "page" : undefined}
+          className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
+            isActive(RADAR.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
+          }`}
+        >
+          <RadarIcon className={`size-[17px] shrink-0 ${isActive(RADAR.href) ? "text-foreground" : "text-meta"}`} />
+          {RADAR.label}
         </Link>
 
         {/* Expandable section parents → sub-blades */}
