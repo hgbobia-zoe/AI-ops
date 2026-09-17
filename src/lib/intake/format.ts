@@ -45,6 +45,8 @@ export function gsEventDetails(i: Intake): Record<string, string> {
 
 const EVENT_TYPE_LABEL: Record<string, string> = { wedding: "Wedding", corporate: "Corporate", social: "Social / Private", other: "Other" };
 const LOCATION_TYPE_LABEL: Record<string, string> = { residential: "Residential", venue: "Event venue", hotel: "Hotel", corporate: "Corporate / Office", school: "School", park: "Park / Public space", other: "Other" };
+// Delivery is base mileage + an optional time-window upgrade; standard = default window, no upgrade line.
+const DELIVERY_TIER_LABEL: Record<string, string> = { standard: "Standard (9am to 8pm, no upgrade)", premium: "Premium Window (2 hours, +$100)", exact: "Exact Time (+$150)", elite: "Elite Hour (1 hour, +$200)" };
 
 export function eventTypeLabel(i: Intake): string {
   if (i.eventType === "other") return i.eventTypeOther.trim() || "Other";
@@ -109,7 +111,7 @@ export function formatIntakeNotes(i: Intake): string {
     "",
     "-- LOGISTICS --",
     `Delivery: ${tri(i.deliveryRequired)}`,
-    ...(i.deliveryTier ? [`Delivery time: ${i.deliveryTier === "standard" ? "Standard (9am to 8pm)" : i.deliveryTier === "premium" ? "Premium (2-hour window)" : "Exact (30-minute window)"}`] : []),
+    ...(i.deliveryTier ? [`Delivery window: ${DELIVERY_TIER_LABEL[i.deliveryTier] ?? i.deliveryTier}`] : []),
     `Setup: ${tri(i.setupRequired)}`,
     `Pickup: ${tri(i.pickupRequired)}`,
     ...(access.length ? ["Access:", ...access.map((x) => `  • ${x}`)] : []),

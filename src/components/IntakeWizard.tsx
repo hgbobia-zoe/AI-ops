@@ -39,9 +39,10 @@ type StepId =
   | "location" | "locationType" | "delivery" | "deliveryTier" | "setup" | "pickup" | "access" | "notes";
 
 const DELIVERY_TIERS: { v: Intake["deliveryTier"]; label: string; window: string }[] = [
-  { v: "standard", label: "Standard time", window: "9am to 8pm window" },
-  { v: "premium", label: "Premium time", window: "2-hour window" },
-  { v: "exact", label: "Exact time", window: "30-minute window" },
+  { v: "standard", label: "Standard window", window: "9am to 8pm · no upgrade" },
+  { v: "premium", label: "Premium Window", window: "2-hour window · +$100" },
+  { v: "exact", label: "Exact Time", window: "30-minute window · +$150" },
+  { v: "elite", label: "Elite Hour", window: "1-hour window · +$200" },
 ];
 
 interface StepDef {

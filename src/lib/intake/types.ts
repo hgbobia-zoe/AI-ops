@@ -4,7 +4,7 @@
 
 export type TriState = "yes" | "no" | "not_sure" | ""; // '' = unanswered
 export type CustomerType = "commercial" | "residential" | "";
-export type DeliveryTier = "standard" | "premium" | "exact" | ""; // delivery time-window: standard 9a-8p, premium 2hr, exact 30min
+export type DeliveryTier = "standard" | "premium" | "exact" | "elite" | ""; // window upgrade over base delivery: standard 9a-8p (no upgrade), premium 2hr $100, exact $150, elite 1hr $200
 export type IntakeEventType = "wedding" | "corporate" | "social" | "other" | ""; // reuse Sales OS EventType
 export type LocationType = "residential" | "venue" | "hotel" | "corporate" | "school" | "park" | "other" | "";
 export type IntakeStatus = "draft" | "ready" | "creating" | "created" | "failed";
