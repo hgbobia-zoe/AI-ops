@@ -224,7 +224,9 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
                 var groups=(cv&&cv.lineItemGroupsToLoad)||[];
                 var rentalGrp=null, logiGrp=null;
                 for(var i=0;i<groups.length;i++){ if(groups[i].logisticsContainer){ if(logiGrp==null) logiGrp=groups[i].id; } else if(rentalGrp==null){ rentalGrp=groups[i].id; } }
-                if(rentalGrp==null && groups.length) rentalGrp=groups[0].id;
+                // Never fall back to the Logistics container for rental items — a fresh shell has ONLY a
+                // Logistics group until the first rental item creates a Rental group, so misrouting the waiver
+                // there would be wrong. If there's no rental group, skip the simple items rather than misplace.
                 var addChain=Promise.resolve();
                 if(rentalGrp!=null){ items.forEach(function(it){ addChain=addChain.then(function(){
                   var body=JSON.stringify({ transactionID:Number(pid), lineItemGroupID:rentalGrp, parentRelationID:null, relationType:null, fulfillment:false, inventoryTypeStr:it.inventoryTypeStr, rateType:it.rateType, itemID:it.itemID, unitPrice:(it.unitPrice||0), quantity:(it.quantity||1) });
