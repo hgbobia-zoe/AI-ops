@@ -32,6 +32,7 @@ interface Row {
   zip: string | null;
   location_type: string | null;
   delivery_required: string | null;
+  delivery_flexible: string | null;
   delivery_tier: string | null;
   setup_required: string | null;
   pickup_required: string | null;
@@ -83,6 +84,7 @@ function toIntake(r: Row): Intake {
     zip: r.zip ?? "",
     locationType: (r.location_type as Intake["locationType"]) ?? "",
     deliveryRequired: (r.delivery_required as Intake["deliveryRequired"]) ?? "",
+    deliveryFlexible: (r.delivery_flexible as Intake["deliveryFlexible"]) ?? "",
     deliveryTier: (r.delivery_tier as Intake["deliveryTier"]) ?? "",
     setupRequired: (r.setup_required as Intake["setupRequired"]) ?? "",
     pickupRequired: (r.pickup_required as Intake["pickupRequired"]) ?? "",
@@ -123,6 +125,7 @@ const COLS: { [K in keyof IntakePatch]-?: { col: string; enc?: (v: NonNullable<I
   zip: { col: "zip" },
   locationType: { col: "location_type" },
   deliveryRequired: { col: "delivery_required" },
+  deliveryFlexible: { col: "delivery_flexible" },
   deliveryTier: { col: "delivery_tier" },
   setupRequired: { col: "setup_required" },
   pickupRequired: { col: "pickup_required" },

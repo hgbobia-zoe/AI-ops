@@ -4,7 +4,7 @@
 
 export type TriState = "yes" | "no" | "not_sure" | ""; // '' = unanswered
 export type CustomerType = "commercial" | "residential" | "";
-export type DeliveryTier = "standard" | "premium" | "exact" | "elite" | ""; // window upgrade over base delivery: standard 9a-8p (no upgrade), premium 2hr $100, exact $150, elite 1hr $200
+export type DeliveryTier = "standard" | "premium" | "exact" | ""; // window upgrade over base delivery: standard 9a-8p (no upgrade), premium 2hr $100, exact $150
 export type IntakeEventType = "wedding" | "corporate" | "social" | "other" | ""; // reuse Sales OS EventType
 export type LocationType = "residential" | "venue" | "hotel" | "corporate" | "school" | "park" | "other" | "";
 export type IntakeStatus = "draft" | "ready" | "creating" | "created" | "failed";
@@ -49,9 +49,10 @@ export interface Intake {
   zip: string;
   locationType: LocationType;
   deliveryRequired: TriState;
-  deliveryTier: DeliveryTier;
-  setupRequired: TriState;
-  pickupRequired: TriState;
+  deliveryFlexible: TriState; // can we deliver the day before AND pick up the day after (free, flexible)?
+  deliveryTier: DeliveryTier; // only gathered when delivery is NOT flexible (needs a same-day window)
+  setupRequired: TriState; // wants setup help → Event Readiness
+  pickupRequired: TriState; // repurposed: wants BREAKDOWN help (gather chairs, cushions…) → Event Readiness
   accessNotes: AccessNotes;
   logisticsNotes: string;
   salesNotes: string;

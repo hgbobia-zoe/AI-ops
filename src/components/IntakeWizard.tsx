@@ -35,14 +35,13 @@ const LOCATION_TYPES: { v: Intake["locationType"]; label: string }[] = [
 
 // ── Step registry (branching via `when`) ───────────────────────────────────────
 type StepId =
-  | "customer" | "eventType" | "customerType" | "guests" | "date" | "times"
-  | "location" | "locationType" | "delivery" | "deliveryTier" | "setup" | "pickup" | "access" | "notes";
+  | "customer" | "eventType" | "customerType" | "locationType" | "guests" | "date" | "times"
+  | "location" | "delivery" | "deliveryFlexible" | "deliveryTier" | "setup" | "pickup" | "access" | "notes";
 
 const DELIVERY_TIERS: { v: Intake["deliveryTier"]; label: string; window: string }[] = [
   { v: "standard", label: "Standard window", window: "9am to 8pm · no upgrade" },
   { v: "premium", label: "Premium Window", window: "2-hour window · +$100" },
   { v: "exact", label: "Exact Time", window: "30-minute window · +$150" },
-  { v: "elite", label: "Elite Hour", window: "1-hour window · +$200" },
 ];
 
 // Section grouping for the progress rail — the familiar project mental model a Goodshuffle user already
@@ -50,10 +49,10 @@ const DELIVERY_TIERS: { v: Intake["deliveryTier"]; label: string; window: string
 // array still drives the actual sequence and branching.
 const SECTIONS: { label: string; steps: StepId[] }[] = [
   { label: "Customer", steps: ["customer"] },
-  { label: "Event", steps: ["eventType", "customerType", "guests"] },
+  { label: "Event", steps: ["eventType", "customerType", "locationType", "guests"] },
   { label: "Schedule", steps: ["date", "times"] },
-  { label: "Location", steps: ["location", "locationType"] },
-  { label: "Logistics", steps: ["delivery", "deliveryTier", "setup", "pickup", "access"] },
+  { label: "Location", steps: ["location"] },
+  { label: "Logistics", steps: ["delivery", "deliveryFlexible", "deliveryTier", "setup", "pickup", "access"] },
   { label: "Notes", steps: ["notes"] },
 ];
 const sectionIndexOf = (id: StepId | undefined): number => (id ? SECTIONS.findIndex((s) => s.steps.includes(id)) : 0);
@@ -66,19 +65,22 @@ interface StepDef {
   canNext: (i: Intake) => boolean;
 }
 
+const wantsDelivery = (i: Intake): boolean => i.deliveryRequired === "yes" || i.deliveryRequired === "not_sure";
+
 const STEPS: StepDef[] = [
   { id: "customer", title: "Who are we helping?", subtitle: "Capture this while you have them on the line.", canNext: (i) => !!i.firstName.trim() && !!i.lastName.trim() && phoneOk(i.phone) && EMAIL_RE.test(i.email) },
   { id: "eventType", title: "What type of event is this?", canNext: (i) => !!i.eventType && (i.eventType !== "other" || !!i.eventTypeOther.trim()) },
   { id: "customerType", title: "Commercial or residential?", canNext: (i) => !!i.customerType },
+  { id: "locationType", title: "What kind of location?", canNext: () => true },
   { id: "guests", title: "About how many guests?", subtitle: "A rough number is fine.", canNext: (i) => i.guestCount != null || i.guestCountUnknown },
   { id: "date", title: "What's the event date?", canNext: (i) => !!i.eventDate },
   { id: "times", title: "What time does it start and end?", canNext: (i) => !i.eventStartTime || !i.eventEndTime || i.eventEndTime > i.eventStartTime },
   { id: "location", title: "Where's the event?", canNext: () => true },
-  { id: "locationType", title: "What kind of location?", canNext: () => true },
   { id: "delivery", title: "Will they need delivery?", canNext: () => true },
-  { id: "deliveryTier", title: "Which delivery time window?", subtitle: "Adds the matching item to the quote.", when: (i) => i.deliveryRequired === "yes" || i.deliveryRequired === "not_sure", canNext: () => true },
-  { id: "setup", title: "Will we set anything up?", canNext: () => true },
-  { id: "pickup", title: "Will we pick everything up after?", canNext: () => true },
+  { id: "deliveryFlexible", title: "Can we deliver the day before and pick up the day after?", subtitle: "We allow it at no extra cost — the flexibility lets us work around other jobs. If not, we'll pin down a delivery window next.", when: wantsDelivery, canNext: () => true },
+  { id: "deliveryTier", title: "Which delivery window do they need?", subtitle: "They need same-day delivery, so lock in how tight the window has to be.", when: (i) => wantsDelivery(i) && i.deliveryFlexible === "no", canNext: () => true },
+  { id: "setup", title: "Do they want setup help?", subtitle: "Setting up rental equipment on site → Event Readiness Service.", canNext: () => true },
+  { id: "pickup", title: "Do they want breakdown help?", subtitle: "Helping tear down after — gathering chairs, removing cushions, etc. → Event Readiness Service.", canNext: () => true },
   { id: "access", title: "A quick logistics check", subtitle: "Just the basics — the full survey happens later.", when: (i) => i.deliveryRequired !== "no" || i.setupRequired !== "no" || i.pickupRequired !== "no", canNext: () => true },
   { id: "notes", title: "Anything else worth noting?", subtitle: "Free-form. Keep facts in the fields above; put color here.", canNext: () => true },
 ];
@@ -242,6 +244,7 @@ function StepBody({ step, intake, set }: { step: StepDef; intake: Intake; set: (
     case "location": return <LocationStep intake={intake} set={set} />;
     case "locationType": return <ChoiceGrid options={LOCATION_TYPES} value={intake.locationType} onChange={(v) => set({ locationType: v })} cols={2} />;
     case "delivery": return <TriChoice value={intake.deliveryRequired} onChange={(v) => set({ deliveryRequired: v })} />;
+    case "deliveryFlexible": return <TriChoice value={intake.deliveryFlexible} onChange={(v) => set({ deliveryFlexible: v, ...(v !== "no" ? { deliveryTier: "" } : {}) })} />;
     case "deliveryTier": return (
       <div className="space-y-2.5">
         {DELIVERY_TIERS.map((t) => {
@@ -344,13 +347,85 @@ function LocationStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) =
   return (
     <div className="space-y-3">
       <TextField label="Venue / location name" value={intake.venueName} onChange={(v) => set({ venueName: v })} placeholder="Leave blank if it's the customer's home" autoFocus />
-      <TextField label="Street address" value={intake.streetAddress} onChange={(v) => set({ streetAddress: v })} />
+      <AddressAutocomplete intake={intake} set={set} />
       <div className="grid grid-cols-[1fr_88px_110px] gap-3">
         <TextField label="City" value={intake.city} onChange={(v) => set({ city: v })} />
         <TextField label="State" value={intake.state} onChange={(v) => set({ state: v })} />
         <TextField label="ZIP" value={intake.zip} onChange={(v) => set({ zip: v })} />
       </div>
-      <p className="text-[11px] text-meta">Don&apos;t infer the address — capture only what the customer gives you.</p>
+      <p className="text-[11px] text-meta">Start typing the street address to search — pick a match to fill city, state, and ZIP.</p>
+    </div>
+  );
+}
+
+// US state name → 2-letter, so a picked address matches the manual convention (Photon returns full names).
+const US_STATE_ABBR: Record<string, string> = { "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE", "district of columbia": "DC", "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS", "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD", "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS", "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY", "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC", "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY" };
+const abbrState = (s: string): string => US_STATE_ABBR[s.trim().toLowerCase()] ?? s;
+
+interface PhotonProps { name?: string; housenumber?: string; street?: string; city?: string; district?: string; state?: string; postcode?: string; countrycode?: string }
+
+// Free address autocomplete via Photon (komoot, OpenStreetMap) — no API key, CORS-enabled. Picking a
+// suggestion fills street/city/state/ZIP; the salesperson can still edit any field afterward.
+function AddressAutocomplete({ intake, set }: { intake: Intake; set: (p: IntakePatch) => void }): React.JSX.Element {
+  const [suggestions, setSuggestions] = useState<PhotonProps[]>([]);
+  const [open, setOpen] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seq = useRef(0);
+
+  const onType = (v: string): void => {
+    set({ streetAddress: v });
+    if (timer.current) clearTimeout(timer.current);
+    const q = v.trim();
+    if (q.length < 4) { setSuggestions([]); setOpen(false); return; }
+    const my = ++seq.current;
+    timer.current = setTimeout(() => {
+      void (async () => {
+        try {
+          const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=6&lang=en`);
+          const j = (await r.json()) as { features?: { properties: PhotonProps }[] };
+          if (my !== seq.current) return; // a newer keystroke won
+          const feats = (j.features ?? []).map((f) => f.properties).filter((p) => (p.street || p.name) && p.city);
+          setSuggestions(feats.slice(0, 6));
+          setOpen(feats.length > 0);
+        } catch { /* autocomplete is best-effort */ }
+      })();
+    }, 300);
+  };
+
+  const pick = (p: PhotonProps): void => {
+    const street = [p.housenumber, p.street].filter(Boolean).join(" ") || p.name || intake.streetAddress;
+    set({ streetAddress: street, city: p.city || p.district || intake.city, state: p.state ? abbrState(p.state) : intake.state, zip: p.postcode || intake.zip });
+    setOpen(false); setSuggestions([]);
+    seq.current++; // ignore any in-flight response
+  };
+
+  const fmt = (p: PhotonProps): string => [[p.housenumber, p.street].filter(Boolean).join(" ") || p.name, p.city, p.state && abbrState(p.state), p.postcode].filter(Boolean).join(", ");
+
+  return (
+    <div className="relative">
+      <label className="block">
+        <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">Street address</span>
+        <input
+          value={intake.streetAddress}
+          onChange={(e) => onType(e.target.value)}
+          onFocus={() => { if (suggestions.length) setOpen(true); }}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          autoComplete="off"
+          placeholder="Start typing to search…"
+          className="w-full rounded border border-border bg-[var(--row)] px-3 py-2.5 text-[15px] outline-none focus:border-foreground/40"
+        />
+      </label>
+      {open && suggestions.length > 0 && (
+        <ul className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded border border-border bg-panel shadow-lg">
+          {suggestions.map((p, i) => (
+            <li key={i}>
+              <button type="button" onMouseDown={(e) => { e.preventDefault(); pick(p); }} className="block w-full px-3 py-2 text-left text-[13px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
+                {fmt(p)}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -392,7 +467,7 @@ function ReviewScreen({ intake, onEdit, onBack, onCreate, error }: { intake: Int
         <ReviewSection title="Customer" onEdit={() => onEdit("customer")} rows={[["Name", [intake.firstName, intake.lastName].filter(Boolean).join(" ")], ["Phone", intake.phone], ["Email", intake.email]]} />
         <ReviewSection title="Event" onEdit={() => onEdit("eventType")} rows={[["Type", intake.eventType === "other" ? intake.eventTypeOther || "Other" : intake.eventType || "—"], ["Setting", intake.customerType || "—"], ["Guests", intake.guestCount != null ? String(intake.guestCount) : intake.guestCountUnknown ? "Unknown" : "Not asked"], ["Date", intake.eventDate || "—"], ["Time", intake.eventStartTime ? `${intake.eventStartTime}${intake.eventEndTime ? ` – ${intake.eventEndTime}` : ""}` : "—"]]} />
         <ReviewSection title="Location" onEdit={() => onEdit("location")} rows={[["Venue", intake.venueName || "—"], ["Address", [intake.streetAddress, intake.city, intake.state, intake.zip].filter(Boolean).join(", ") || "—"], ["Type", intake.locationType || "—"]]} />
-        <ReviewSection title="Logistics" onEdit={() => onEdit("delivery")} rows={[["Delivery", triLabel(intake.deliveryRequired)], ...(intake.deliveryTier ? [["Delivery time", DELIVERY_TIERS.find((t) => t.v === intake.deliveryTier)?.label ?? "—"] as [string, string]] : []), ["Setup", triLabel(intake.setupRequired)], ["Pickup", triLabel(intake.pickupRequired)]]} />
+        <ReviewSection title="Logistics" onEdit={() => onEdit("delivery")} rows={[["Delivery", triLabel(intake.deliveryRequired)], ...(intake.deliveryFlexible ? [["Flexible (day before/after)", triLabel(intake.deliveryFlexible)] as [string, string]] : []), ...(intake.deliveryTier ? [["Delivery window", DELIVERY_TIERS.find((t) => t.v === intake.deliveryTier)?.label ?? "—"] as [string, string]] : []), ["Setup help", triLabel(intake.setupRequired)], ["Breakdown help", triLabel(intake.pickupRequired)]]} />
         <ReviewSection title="Notes" onEdit={() => onEdit("notes")} rows={[["Sales notes", intake.salesNotes || "—"]]} />
       </div>
 

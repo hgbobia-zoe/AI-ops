@@ -12,8 +12,8 @@ describe("autoAddSimpleItems", () => {
   });
 
   it("adds the time-window upgrade when delivery is wanted", () => {
-    const items = autoAddSimpleItems({ ...base, deliveryRequired: "yes", deliveryTier: "elite" });
-    expect(items).toContainEqual(DELIVERY_WINDOW_ITEMS.elite);
+    const items = autoAddSimpleItems({ ...base, deliveryRequired: "yes", deliveryTier: "exact" });
+    expect(items).toContainEqual(DELIVERY_WINDOW_ITEMS.exact);
   });
 
   it("standard tier adds no upgrade line (just the waiver)", () => {
@@ -43,6 +43,15 @@ describe("autoAddLogisticsLegs", () => {
 
   it("adds Event Readiness when setup is required", () => {
     expect(autoAddLogisticsLegs({ ...base, setupRequired: "yes" })).toContainEqual(EVENT_READINESS_LEG);
+  });
+
+  it("adds Event Readiness when breakdown help is wanted (pickupRequired)", () => {
+    expect(autoAddLogisticsLegs({ ...base, deliveryRequired: "no", pickupRequired: "yes" })).toContainEqual(EVENT_READINESS_LEG);
+  });
+
+  it("adds Event Readiness only once when both setup and breakdown are on", () => {
+    const legs = autoAddLogisticsLegs({ ...base, deliveryRequired: "no", setupRequired: "yes", pickupRequired: "yes" });
+    expect(legs.filter((l) => l.itemID === EVENT_READINESS_LEG.itemID)).toHaveLength(1);
   });
 
   it("adds both when delivery and setup are both on", () => {

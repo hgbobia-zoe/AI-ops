@@ -488,9 +488,10 @@ CREATE TABLE IF NOT EXISTS sales_intake (
   zip                 TEXT,
   location_type       TEXT,                 -- residential | venue | hotel | corporate | school | park | other
   delivery_required   TEXT,                 -- yes | no | not_sure | ''
-  delivery_tier       TEXT,                 -- standard | premium | exact | '' (delivery time-window tier)
+  delivery_flexible   TEXT,                 -- yes | no | not_sure | '' (can deliver day before / pick up day after, free)
+  delivery_tier       TEXT,                 -- standard | premium | exact | '' (only when NOT flexible)
   setup_required      TEXT,
-  pickup_required     TEXT,
+  pickup_required     TEXT,                 -- repurposed: wants breakdown help → Event Readiness
   access_notes        TEXT,                 -- JSON of the branched logistics answers
   logistics_notes     TEXT,
   sales_notes         TEXT,
@@ -541,6 +542,7 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "line_items", type: "TEXT" }, // JSON string[] of line-item titles (event-type classification)
   { table: "bookings", column: "wd_member_added", type: "TEXT" }, // ISO ts once Warehouse Desktop was queued onto a signed project's GSPRO team (add-once)
   { table: "sales_intake", column: "delivery_tier", type: "TEXT" }, // delivery time-window tier (standard/premium/exact)
+  { table: "sales_intake", column: "delivery_flexible", type: "TEXT" }, // can deliver day before / pick up day after (free)
 ];
 
 function migrate(db: DB): void {

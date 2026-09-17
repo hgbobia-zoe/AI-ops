@@ -43,7 +43,6 @@ export const DELIVERY_WINDOW_ITEMS: Record<string, GsAddItem | null> = {
   standard: null, // default 9am-8pm window, no upgrade charge
   premium: { itemID: 1206112916, inventoryTypeStr: "SERVICE", rateType: "FLAT_FEE", unitPrice: 0, quantity: 1, label: "Premium Window (2 hours) — $100" },
   exact: { itemID: 1206113729, inventoryTypeStr: "SERVICE", rateType: "FLAT_FEE", unitPrice: 0, quantity: 1, label: "Exact Time — $150" },
-  elite: { itemID: 1206113924, inventoryTypeStr: "SERVICE", rateType: "FLAT_FEE", unitPrice: 0, quantity: 1, label: "Elite Hour — $200" },
 };
 
 // ── LOGISTICS legs (Logistics group, need a geocoded delivery location) ──────────────────────────────
@@ -51,11 +50,12 @@ export const DELIVERY_WINDOW_ITEMS: Record<string, GsAddItem | null> = {
 // Base delivery = the calculated mileage charge. Added as-is at the $25 base flat fee (mileage = 0 for now).
 export const BASE_DELIVERY_LEG: GsLogisticsLeg = { itemID: 392868144, title: "Standard Delivery", rateType: "FLAT_FEE_WITH_MILEAGE", eventTimeLineMarker: "DROP_OFF", label: "Delivery (base fee)" };
 
-// When SETUP is needed: Event Readiness Service (tiered by order value — $75/$150/$250/$350+; added as-is at
-// the $75 base for now, pricing logic to follow).
+// When SETUP or BREAKDOWN help is wanted: Event Readiness Service (setup and/or teardown labor — gathering
+// chairs, removing cushions, etc.; tiered by order value $75/$150/$250/$350+, added as-is at the $75 base
+// for now, pricing logic to follow).
 export const EVENT_READINESS_LEG: GsLogisticsLeg = { itemID: 481935095, title: "Event Readiness Service", rateType: "FLAT_FEE_WITH_MILEAGE", eventTimeLineMarker: "DROP_OFF", label: "Event Readiness Service" };
 
-type IntakeSlice = { setupRequired: string; deliveryTier: string; deliveryRequired: string };
+type IntakeSlice = { setupRequired: string; deliveryTier: string; deliveryRequired: string; pickupRequired?: string };
 
 /** SIMPLE items for the Rental Items group. Damage waiver on every quote; the delivery time-window upgrade
  *  whenever delivery is wanted (standard tier adds no upgrade line). These never need a location. */
@@ -69,10 +69,11 @@ export function autoAddSimpleItems(intake: IntakeSlice): GsAddItem[] {
 }
 
 /** LOGISTICS legs for the Logistics group — added only when we have a geocoded delivery location (the drainer
- *  passes an empty list otherwise). Base delivery when delivery is wanted; Event Readiness when setup is. */
+ *  passes an empty list otherwise). Base delivery when delivery is wanted; Event Readiness when the customer
+ *  wants setup OR breakdown help. */
 export function autoAddLogisticsLegs(intake: IntakeSlice): GsLogisticsLeg[] {
   const legs: GsLogisticsLeg[] = [];
   if (intake.deliveryRequired !== "no") legs.push(BASE_DELIVERY_LEG);
-  if (intake.setupRequired === "yes") legs.push(EVENT_READINESS_LEG);
+  if (intake.setupRequired === "yes" || intake.pickupRequired === "yes") legs.push(EVENT_READINESS_LEG);
   return legs;
 }
