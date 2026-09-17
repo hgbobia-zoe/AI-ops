@@ -502,6 +502,22 @@ CREATE TABLE IF NOT EXISTS sales_intake (
   gs_error            TEXT,
   completed_at        TEXT
 );
+
+-- Shift Passes — time-limited, revocable, link-based access for contractors / temp workers. A pass is
+-- minted by an owner/admin, handed over as a /pass/<token> link (optionally texted via Quo), and grants
+-- a scoped "guest" session (dispatch board view + the driver surface; NO money, settings, or supervisor
+-- writes). The token IS the id (opaque, unguessable). expires_at is the hard cutoff; revoked_at kills it early.
+CREATE TABLE IF NOT EXISTS shift_passes (
+  id           TEXT PRIMARY KEY,      -- opaque token, also the URL segment
+  name         TEXT NOT NULL,         -- contractor name (attribution + how it reads in the list)
+  phone        TEXT,                  -- optional, so we can text them the link via Quo
+  scope        TEXT NOT NULL DEFAULT 'drive',  -- 'drive' = view board + drive (only scope for now)
+  created_by   TEXT,                  -- actor label who generated it
+  created_at   TEXT NOT NULL,
+  expires_at   TEXT NOT NULL,         -- ISO — hard expiry
+  revoked_at   TEXT,                  -- ISO — set to kill the pass before it expires (null = live)
+  last_seen_at TEXT                   -- ISO — last time the pass was used (shown in the admin list)
+);
 `;
 
 type DB = InstanceType<typeof Database>;

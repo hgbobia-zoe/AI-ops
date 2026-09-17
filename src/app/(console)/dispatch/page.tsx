@@ -93,6 +93,9 @@ function OverdueRoutesBanner({ issues, canClose }: { issues: ReturnType<typeof f
 }
 
 async function DispatchBoard({ date, today }: { date: string; today: string }) {
+  // Shift Pass (guest) holders drive a read-mostly board: they can mark stops complete, but the
+  // supervisor controls (assign driver, close/reopen a route, reopen/remove a stop) are hidden.
+  const canSupervise = (await viewerRole()) !== "guest";
   const trucks = getActiveVehicles();
   const fleet = trucks.map((t) => ({ truck: t, route: getRouteForDate(t.truckId, date) }));
   const isToday = date === today;
@@ -148,6 +151,7 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
             key={truck.truckId}
             name={truck.name}
             route={route}
+            canSupervise={canSupervise}
             noRouteLabel={isToday ? "No route scheduled today" : "No route this day"}
           />
         ))}
@@ -372,10 +376,12 @@ function DateNav({ date, today }: { date: string; today: string }) {
 function TruckCard({
   name,
   route,
+  canSupervise = true,
   noRouteLabel = "No route scheduled",
 }: {
   name: string;
   route: Route | null;
+  canSupervise?: boolean;
   noRouteLabel?: string;
 }) {
   const stops = route?.stops ?? [];
@@ -446,6 +452,7 @@ function TruckCard({
               truckId={route.truckId}
               routeId={route.routeId}
               routeDone={route.status === "done"}
+              canSupervise={canSupervise}
             />
           ))}
         </ul>
@@ -463,16 +470,16 @@ function TruckCard({
           ) : null;
         })()}
 
-      {/* Driver assignment (feeds the Event Risk Engine's staffing checks). */}
-      {route && route.status !== "done" && (
+      {/* Driver assignment (feeds the Event Risk Engine's staffing checks). Supervisor-only. */}
+      {route && route.status !== "done" && canSupervise && (
         <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
           <span className="text-xs text-muted-foreground">Driver</span>
           <DriverAssign routeId={route.routeId} date={route.date} driverName={route.driverName} />
         </div>
       )}
 
-      {/* Office control: force-close a route the driver couldn't finish on the tablet. */}
-      {route && (
+      {/* Office control: force-close a route the driver couldn't finish on the tablet. Supervisor-only. */}
+      {route && canSupervise && (
         <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
           {route.status === "done" ? (
             <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -497,11 +504,13 @@ function StopLine({
   truckId,
   routeId,
   routeDone,
+  canSupervise = true,
 }: {
   stop: Stop;
   truckId: string;
   routeId: string;
   routeDone: boolean;
+  canSupervise?: boolean;
 }) {
   const hasProof = (stop.photoIds?.length ?? 0) > 0 || Boolean(stop.signatureId);
   const finished = stop.state === "Completed" || stop.state === "Returned";
@@ -527,10 +536,10 @@ function StopLine({
         {!routeDone && !finished && (
           <CompleteStopButton stopId={stop.stopId} custName={stop.custName} />
         )}
-        {stop.state === "Completed" && (
+        {stop.state === "Completed" && canSupervise && (
           <ReopenButton truckId={truckId} routeId={routeId} stopId={stop.stopId} />
         )}
-        {canPull && (
+        {canPull && canSupervise && (
           <RemoveStopButton
             routeId={routeId}
             stopId={stop.stopId}

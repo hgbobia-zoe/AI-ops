@@ -82,6 +82,8 @@ export async function currentActor(): Promise<Actor> {
   if (!authEnabled()) return { id: "anon", label: "Unattributed (login off)" };
   const s = await getSession();
   if (!s) return { id: "anon", label: "Unattributed" };
+  // A Shift Pass holder isn't in the users table — attribute to the contractor's name on the pass.
+  if (s.role === "guest") return { id: s.uid, label: s.name?.trim() ? `${s.name.trim()} (Shift Pass)` : "Shift Pass" };
   try {
     const u = getUser(s.uid);
     return { id: s.uid, label: u?.name?.trim() || u?.username || s.uid };

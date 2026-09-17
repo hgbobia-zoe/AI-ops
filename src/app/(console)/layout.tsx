@@ -2,11 +2,15 @@
 // feature. Wraps Dashboard / Dispatch / Event Risk / Settings. The tablet (/kiosk,
 // /route, /select) and customer (/track) pages live outside this group — no shell.
 
+import { redirect } from "next/navigation";
 import { ConsoleNav } from "@/components/ConsoleNav";
 import { PullHealthBanner } from "@/components/PullHealthBanner";
 import { StatusBar, type StatusIntegration } from "@/components/StatusBar";
-import { viewerRole, currentActor } from "@/lib/auth/getSession";
+import { GuestShellBar } from "@/components/GuestShellBar";
+import { viewerRole, currentActor, getSession } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
+import { getShiftPass, touchShiftPass } from "@/lib/db/repo";
+import { isPassLive, passIdFromUid } from "@/lib/auth/pass";
 import { pullBannerState } from "@/lib/pull/state";
 import { computeConnections, type ConnStatus } from "@/lib/health/connections";
 
@@ -15,6 +19,22 @@ const TONE: Record<ConnStatus, StatusIntegration["tone"]> = { ok: "ok", attentio
 export default async function ConsoleLayout({ children }: { children: React.ReactNode }) {
   const role = await viewerRole();
   const actor = await currentActor();
+
+  // Shift Pass holder → confirm the pass is still live (this is where a REVOKE takes effect — the cookie
+  // carries expiry, but revocation is a DB fact), then render a stripped, board-only shell. No nav blades,
+  // no health banners, no integrations: a contractor sees the board and nothing else.
+  if (role === "guest") {
+    const session = await getSession();
+    const pass = getShiftPass(passIdFromUid(session?.uid) ?? "");
+    if (!isPassLive(pass)) redirect("/pass-expired");
+    touchShiftPass(pass.id);
+    return (
+      <div className="flex min-h-dvh flex-col">
+        <GuestShellBar name={pass.name} expiresAt={pass.expiresAt} />
+        <div className="min-w-0 flex-1">{children}</div>
+      </div>
+    );
+  }
   // Only staff who can act on it (open GSPRO / manage the pull) see the data-health banner + integrations.
   const canManage = canManageSettings(role);
   const banner = canManage ? pullBannerState() : null;

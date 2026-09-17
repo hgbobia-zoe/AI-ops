@@ -2418,3 +2418,89 @@ export function setLeadStatus(bookingId: string, status: LeadBoardStatus, actor?
     )
     .run(bookingId, status, new Date().toISOString(), actor ?? null);
 }
+
+// ---- Shift Passes — time-limited, revocable contractor access links --------------------------------
+
+export interface ShiftPass {
+  id: string; // opaque token (URL segment)
+  name: string; // contractor name
+  phone: string | null;
+  scope: string; // "drive"
+  createdBy: string | null;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  lastSeenAt: string | null;
+}
+
+interface ShiftPassRow {
+  id: string;
+  name: string;
+  phone: string | null;
+  scope: string;
+  created_by: string | null;
+  created_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+  last_seen_at: string | null;
+}
+
+const passOf = (r: ShiftPassRow): ShiftPass => ({
+  id: r.id,
+  name: r.name,
+  phone: r.phone,
+  scope: r.scope,
+  createdBy: r.created_by,
+  createdAt: r.created_at,
+  expiresAt: r.expires_at,
+  revokedAt: r.revoked_at,
+  lastSeenAt: r.last_seen_at,
+});
+
+export interface NewShiftPass {
+  id: string;
+  name: string;
+  phone?: string | null;
+  scope?: string;
+  createdBy?: string | null;
+  expiresAt: string; // ISO
+}
+
+/** Insert a new pass. Caller supplies the (unguessable) token as `id`. */
+export function createShiftPass(p: NewShiftPass): ShiftPass {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO shift_passes (id, name, phone, scope, created_by, created_at, expires_at)
+       VALUES (?,?,?,?,?,?,?)`,
+    )
+    .run(p.id, p.name.trim(), p.phone?.trim() || null, p.scope ?? "drive", p.createdBy ?? null, now, p.expiresAt);
+  return getShiftPass(p.id)!;
+}
+
+export function getShiftPass(id: string): ShiftPass | null {
+  if (!id) return null;
+  const row = getDb().prepare("SELECT * FROM shift_passes WHERE id = ?").get(id) as ShiftPassRow | undefined;
+  return row ? passOf(row) : null;
+}
+
+/** Newest first. */
+export function listShiftPasses(): ShiftPass[] {
+  const rows = getDb().prepare("SELECT * FROM shift_passes ORDER BY created_at DESC").all() as ShiftPassRow[];
+  return rows.map(passOf);
+}
+
+/** Kill a pass immediately (sets revoked_at if not already revoked). Returns the updated pass. */
+export function revokeShiftPass(id: string): ShiftPass | null {
+  getDb().prepare("UPDATE shift_passes SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").run(new Date().toISOString(), id);
+  return getShiftPass(id);
+}
+
+/** Record that a pass was just used (for the admin list). Best-effort, cheap. */
+export function touchShiftPass(id: string): void {
+  try {
+    getDb().prepare("UPDATE shift_passes SET last_seen_at = ? WHERE id = ?").run(new Date().toISOString(), id);
+  } catch {
+    /* non-critical */
+  }
+}

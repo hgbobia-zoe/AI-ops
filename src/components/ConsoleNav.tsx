@@ -15,7 +15,7 @@ import {
   LayoutGrid, Tag, Building2, Wrench,
   Gauge, ListChecks, Truck, AlertTriangle, Users, DollarSign,
   TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
-  RefreshCw, Plug, UsersRound, Settings,
+  RefreshCw, Plug, UsersRound, Settings, KeyRound,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -82,6 +82,7 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
   if (canManageSettings(role)) adminBlades.push({ href: "/admin/pull", label: "Pull Routes", icon: RefreshCw });
   if (canManageSettings(role)) adminBlades.push({ href: "/admin/health", label: "Connections", icon: Plug });
   if (canManageUsers(role)) adminBlades.push({ href: "/admin/users", label: "Team", icon: UsersRound });
+  if (canManageSettings(role)) adminBlades.push({ href: "/admin/passes", label: "Shift Passes", icon: KeyRound });
   if (canManageSettings(role)) adminBlades.push({ href: "/admin", label: "Settings", icon: Settings });
 
   const parents: Group[] = [

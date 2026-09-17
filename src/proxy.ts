@@ -16,6 +16,8 @@ import { canSeeFinancials, canManageSettings, canSeeCoaching } from "@/lib/auth/
 const PUBLIC: string[] = [
   "/login",
   "/join", // invite acceptance — the invitee isn't logged in yet (token-gated by the invite itself)
+  "/pass", // Shift Pass gateway — the visitor has no session yet; the token IS the credential
+  "/pass-expired", // dead-end for an ended/invalid pass (no session)
   "/api/auth",
   "/track",
   // Driver tablets are bound to a TRUCK, not a person (device binding, no login), so the whole
@@ -43,7 +45,31 @@ function isPublicPath(pathname: string): boolean {
 
 const isFinancial = (p: string): boolean => p === "/finance" || p.startsWith("/finance/") || p.startsWith("/api/finance");
 const isSettings = (p: string): boolean =>
-  p === "/admin" || p.startsWith("/admin/") || p.startsWith("/api/settings") || p.startsWith("/api/integrations") || p.startsWith("/api/auth/users");
+  p === "/admin" ||
+  p.startsWith("/admin/") ||
+  p.startsWith("/api/settings") ||
+  p.startsWith("/api/integrations") ||
+  p.startsWith("/api/auth/users") ||
+  p.startsWith("/api/passes"); // generating / listing / revoking / texting Shift Passes — owner/admin only
+
+// A Shift Pass (guest) is scoped HARD to the dispatch board + the (already public) driver surface. It
+// is deny-by-default: only these prefixes are reachable, so no money, settings, coaching, sales, or the
+// supervisor board writes under /api/route/* are ever exposed to a contractor's link.
+const GUEST_ALLOW: string[] = [
+  "/dispatch",
+  "/track",
+  "/kiosk",
+  "/select",
+  "/route",
+  "/api/eta", // live GPS/ETA the board reads
+  "/api/dispatch/route-health", // board health strip (read-only)
+  "/api/vehicles",
+  "/api/action", // driver taps (also public)
+  "/api/pod", // driver photo/signature (also public)
+  "/api/kiosk",
+  "/api/route/stop/complete", // "drive": mark a stop done. NOT remove/reopen/close/driver (supervisor).
+];
+const guestAllowed = (p: string): boolean => GUEST_ALLOW.some((a) => p === a || p.startsWith(a + "/"));
 // Post-call coaching — sensitive transcripts + recaps, owner/admin only.
 const isCoaching = (p: string): boolean => p === "/coaching" || p.startsWith("/coaching/") || p.startsWith("/api/coaching");
 
@@ -60,6 +86,14 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
 
   const session = await verifySession(req.cookies.get(SESSION_COOKIE)?.value, secret);
   if (!session) return deny(req, "auth");
+
+  // Shift Pass holders are scoped hard, before any staff role gate — deny-by-default outside the board
+  // + driver surface. (Revocation is checked server-side in the console layout; expiry is in the cookie.)
+  if (session.role === "guest") {
+    if (guestAllowed(pathname)) return NextResponse.next();
+    if (pathname.startsWith("/api/")) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    return NextResponse.redirect(new URL("/dispatch", req.nextUrl)); // never bounce a guest to "/" (loops)
+  }
 
   if (isFinancial(pathname) && !canSeeFinancials(session.role)) return deny(req, "forbidden");
   if (isSettings(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
