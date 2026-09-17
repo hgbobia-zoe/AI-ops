@@ -488,6 +488,7 @@ CREATE TABLE IF NOT EXISTS sales_intake (
   zip                 TEXT,
   location_type       TEXT,                 -- residential | venue | hotel | corporate | school | park | other
   delivery_required   TEXT,                 -- yes | no | not_sure | ''
+  delivery_tier       TEXT,                 -- standard | premium | exact | '' (delivery time-window tier)
   setup_required      TEXT,
   pickup_required     TEXT,
   access_notes        TEXT,                 -- JSON of the branched logistics answers
@@ -539,6 +540,7 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "call_events", column: "name_attempted_at", type: "TEXT" }, // last time we tried (and failed) to resolve a name — throttles the name-enrichment loop, retried after a cooldown
   { table: "bookings", column: "line_items", type: "TEXT" }, // JSON string[] of line-item titles (event-type classification)
   { table: "bookings", column: "wd_member_added", type: "TEXT" }, // ISO ts once Warehouse Desktop was queued onto a signed project's GSPRO team (add-once)
+  { table: "sales_intake", column: "delivery_tier", type: "TEXT" }, // delivery time-window tier (standard/premium/exact)
 ];
 
 function migrate(db: DB): void {

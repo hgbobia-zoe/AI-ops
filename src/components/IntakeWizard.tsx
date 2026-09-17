@@ -36,7 +36,13 @@ const LOCATION_TYPES: { v: Intake["locationType"]; label: string }[] = [
 // ── Step registry (branching via `when`) ───────────────────────────────────────
 type StepId =
   | "customer" | "eventType" | "customerType" | "guests" | "date" | "times"
-  | "location" | "locationType" | "delivery" | "setup" | "pickup" | "access" | "notes";
+  | "location" | "locationType" | "delivery" | "deliveryTier" | "setup" | "pickup" | "access" | "notes";
+
+const DELIVERY_TIERS: { v: Intake["deliveryTier"]; label: string; window: string }[] = [
+  { v: "standard", label: "Standard time", window: "9am to 8pm window" },
+  { v: "premium", label: "Premium time", window: "2-hour window" },
+  { v: "exact", label: "Exact time", window: "30-minute window" },
+];
 
 interface StepDef {
   id: StepId;
@@ -56,6 +62,7 @@ const STEPS: StepDef[] = [
   { id: "location", title: "Where's the event?", canNext: () => true },
   { id: "locationType", title: "What kind of location?", canNext: () => true },
   { id: "delivery", title: "Will they need delivery?", canNext: () => true },
+  { id: "deliveryTier", title: "Which delivery time window?", subtitle: "Adds the matching item to the quote.", when: (i) => i.deliveryRequired === "yes" || i.deliveryRequired === "not_sure", canNext: () => true },
   { id: "setup", title: "Will we set anything up?", canNext: () => true },
   { id: "pickup", title: "Will we pick everything up after?", canNext: () => true },
   { id: "access", title: "A quick logistics check", subtitle: "Just the basics — the full survey happens later.", when: (i) => i.deliveryRequired !== "no" || i.setupRequired !== "no" || i.pickupRequired !== "no", canNext: () => true },
@@ -192,6 +199,19 @@ function StepBody({ step, intake, set }: { step: StepDef; intake: Intake; set: (
     case "location": return <LocationStep intake={intake} set={set} />;
     case "locationType": return <ChoiceGrid options={LOCATION_TYPES} value={intake.locationType} onChange={(v) => set({ locationType: v })} cols={2} />;
     case "delivery": return <TriChoice value={intake.deliveryRequired} onChange={(v) => set({ deliveryRequired: v })} />;
+    case "deliveryTier": return (
+      <div className="space-y-2.5">
+        {DELIVERY_TIERS.map((t) => {
+          const on = intake.deliveryTier === t.v;
+          return (
+            <button key={t.v} onClick={() => set({ deliveryTier: on ? "" : t.v })} className={`flex w-full items-center justify-between rounded border px-4 py-4 text-left transition-colors ${on ? "border-foreground/70 bg-foreground/[0.08]" : "border-border hover:bg-[var(--row-hover)]"}`}>
+              <span className="flex items-center gap-2">{on && <Check className="size-4" />}<span className="text-[15px] font-medium">{t.label}</span></span>
+              <span className="text-[12.5px] text-meta">{t.window}</span>
+            </button>
+          );
+        })}
+      </div>
+    );
     case "setup": return <TriChoice value={intake.setupRequired} onChange={(v) => set({ setupRequired: v })} />;
     case "pickup": return <TriChoice value={intake.pickupRequired} onChange={(v) => set({ pickupRequired: v })} />;
     case "access": return <AccessStep intake={intake} set={set} />;
@@ -329,7 +349,7 @@ function ReviewScreen({ intake, onEdit, onBack, onCreate, error }: { intake: Int
         <ReviewSection title="Customer" onEdit={() => onEdit("customer")} rows={[["Name", [intake.firstName, intake.lastName].filter(Boolean).join(" ")], ["Phone", intake.phone], ["Email", intake.email]]} />
         <ReviewSection title="Event" onEdit={() => onEdit("eventType")} rows={[["Type", intake.eventType === "other" ? intake.eventTypeOther || "Other" : intake.eventType || "—"], ["Setting", intake.customerType || "—"], ["Guests", intake.guestCount != null ? String(intake.guestCount) : intake.guestCountUnknown ? "Unknown" : "Not asked"], ["Date", intake.eventDate || "—"], ["Time", intake.eventStartTime ? `${intake.eventStartTime}${intake.eventEndTime ? ` – ${intake.eventEndTime}` : ""}` : "—"]]} />
         <ReviewSection title="Location" onEdit={() => onEdit("location")} rows={[["Venue", intake.venueName || "—"], ["Address", [intake.streetAddress, intake.city, intake.state, intake.zip].filter(Boolean).join(", ") || "—"], ["Type", intake.locationType || "—"]]} />
-        <ReviewSection title="Logistics" onEdit={() => onEdit("delivery")} rows={[["Delivery", triLabel(intake.deliveryRequired)], ["Setup", triLabel(intake.setupRequired)], ["Pickup", triLabel(intake.pickupRequired)]]} />
+        <ReviewSection title="Logistics" onEdit={() => onEdit("delivery")} rows={[["Delivery", triLabel(intake.deliveryRequired)], ...(intake.deliveryTier ? [["Delivery time", DELIVERY_TIERS.find((t) => t.v === intake.deliveryTier)?.label ?? "—"] as [string, string]] : []), ["Setup", triLabel(intake.setupRequired)], ["Pickup", triLabel(intake.pickupRequired)]]} />
         <ReviewSection title="Notes" onEdit={() => onEdit("notes")} rows={[["Sales notes", intake.salesNotes || "—"]]} />
       </div>
 

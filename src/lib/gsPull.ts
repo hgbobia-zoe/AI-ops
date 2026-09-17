@@ -203,6 +203,23 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
               var nb=new URLSearchParams({ transactionID:String(pid), clientVisibleNotes:"", internalNotes:String(o.payload.notes||""), fulfillmentNotes:"" });
               return fetch("/app/vendorTransaction/saveEventNotes",{method:"POST",headers:GH,credentials:"include",body:nb}).catch(function(){});
             }).then(function(){
+              // Auto-add standard line items (e.g. the damage waiver on every quote). Adding an item needs
+              // the project's default line-item group id, from initContractView. Best-effort per item.
+              var items=(o.payload.addItems||[]);
+              if(!items.length) return;
+              return fetch("/app/vendorTransaction/initContractView?transactionID="+encodeURIComponent(pid),{headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}).then(function(r){ return r.json(); }).then(function(cv){
+                var groups=(cv&&cv.lineItemGroupsToLoad)||[];
+                var grp=null; for(var i=0;i<groups.length;i++){ if(!groups[i].logisticsContainer){ grp=groups[i].id; break; } }
+                if(grp==null && groups.length) grp=groups[0].id;
+                if(grp==null) return;
+                var addChain=Promise.resolve();
+                items.forEach(function(it){ addChain=addChain.then(function(){
+                  var body=JSON.stringify({ transactionID:Number(pid), lineItemGroupID:grp, parentRelationID:null, relationType:null, fulfillment:false, inventoryTypeStr:it.inventoryTypeStr, rateType:it.rateType, itemID:it.itemID, unitPrice:(it.unitPrice||0), quantity:(it.quantity||1) });
+                  return fetch("/app/transactionItemRelation/addInventoryItemToContract",{method:"POST",headers:{"content-type":"application/json","x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include",body:body}).catch(function(){});
+                }); });
+                return addChain;
+              }).catch(function(){});
+            }).then(function(){
               created++;
               var url="https://pro.goodshuffle.com/app/project/detail?id="+pid;
               return fetch(API+"/api/gs/intake-result",{method:"POST",headers:POSTH(),body:JSON.stringify({intakeId:o.payload.intakeId, projectId:pid, url:url, ok:true})}).catch(function(){}).then(function(){ return ackOp(o.id,true); });

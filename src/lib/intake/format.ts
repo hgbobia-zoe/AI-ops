@@ -109,6 +109,7 @@ export function formatIntakeNotes(i: Intake): string {
     "",
     "-- LOGISTICS --",
     `Delivery: ${tri(i.deliveryRequired)}`,
+    ...(i.deliveryTier ? [`Delivery time: ${i.deliveryTier === "standard" ? "Standard (9am to 8pm)" : i.deliveryTier === "premium" ? "Premium (2-hour window)" : "Exact (30-minute window)"}`] : []),
     `Setup: ${tri(i.setupRequired)}`,
     `Pickup: ${tri(i.pickupRequired)}`,
     ...(access.length ? ["Access:", ...access.map((x) => `  • ${x}`)] : []),
