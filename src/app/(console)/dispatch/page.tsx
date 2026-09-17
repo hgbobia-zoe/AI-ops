@@ -233,6 +233,24 @@ function hourInTz(iso: string | undefined | null): number | null {
   }
 }
 
+const LANE_H = 30; // px per stacked marker lane — overlapping stops stack instead of hiding each other
+const MARKER_PCT = 10; // approx marker footprint (%) used to detect horizontal overlap when packing
+
+// Greedy lane packing: markers whose footprints would overlap get pushed to a lower lane, so every stop
+// stays visible even when several share a time (or have none). Returns a lane index per input stop.
+function packLanes(xs: number[]): { lanes: number[]; count: number } {
+  const order = xs.map((x, i) => ({ i, x })).sort((a, b) => a.x - b.x);
+  const laneEnds: number[] = []; // right edge (in %) of the last marker placed in each lane
+  const lanes = new Array<number>(xs.length).fill(0);
+  for (const { i, x } of order) {
+    let L = 0;
+    while (L < laneEnds.length && x < laneEnds[L]) L++;
+    lanes[i] = L;
+    laneEnds[L] = x + MARKER_PCT;
+  }
+  return { lanes, count: Math.max(1, laneEnds.length) };
+}
+
 function TimeBoard({ fleet, isToday }: { fleet: { truck: { name: string; truckId: string }; route: Route | null }[]; isToday: boolean }): React.JSX.Element {
   const rows = fleet.filter((f) => f.route);
   const nowH = isToday ? hourInTz(new Date().toISOString()) : null;
@@ -257,22 +275,30 @@ function TimeBoard({ fleet, isToday }: { fleet: { truck: { name: string; truckId
         {rows.map(({ truck, route }) => {
           const r = route!;
           const done = r.stops.filter((s) => s.state === "Completed" || s.state === "Returned").length;
+          const track = BOARD_END - 0.5 - BOARD_START; // usable span in hours
+          // Place every stop. Timed stops sit at their scheduled time; stops Goodshuffle left untimed are
+          // still shown — spread across the day by route order — so all stops appear, not just timed ones.
+          const positioned = r.stops.map((s, i) => {
+            const h = hourInTz(s.plannedWindow || s.eta);
+            const timed = h != null;
+            const hour = timed ? h : BOARD_START + ((i + 0.5) / Math.max(1, r.stops.length)) * track;
+            const clamped = Math.max(BOARD_START, Math.min(BOARD_END - 0.5, hour));
+            return { s, timed, leftPct: ((clamped - BOARD_START) / BOARD_HOURS) * 100 };
+          });
+          const { lanes, count } = packLanes(positioned.map((p) => p.leftPct));
+          const rowH = Math.max(48, count * LANE_H + 8);
           return (
             <div key={truck.truckId} className="flex border-b border-[var(--row-rule)] last:border-b-0">
               <div className="flex shrink-0 flex-col justify-center px-3" style={{ width: LABEL_W }}>
                 <div className="text-[14px] font-medium">{truck.name}</div>
                 <div className="text-[12px] text-meta">{r.driverName || "No driver"} · {done}/{r.stops.length}</div>
               </div>
-              <div className="relative flex-1" style={{ height: 48 }}>
+              <div className="relative flex-1" style={{ height: rowH }}>
                 {hours.slice(1, -1).map((h) => (
                   <div key={h} className="absolute inset-y-0 w-px bg-[var(--grid-rule)]" style={{ left: `${((h - BOARD_START) / BOARD_HOURS) * 100}%` }} />
                 ))}
                 {nowPct != null && <div className="absolute inset-y-0 z-10 w-px bg-[#cfd3e5]/70" style={{ left: `${nowPct}%` }} />}
-                {r.stops.map((s) => {
-                  const start = hourInTz(s.plannedWindow || s.eta);
-                  if (start == null) return null;
-                  const clamped = Math.max(BOARD_START, Math.min(BOARD_END - 0.5, start));
-                  const leftPct = ((clamped - BOARD_START) / BOARD_HOURS) * 100;
+                {positioned.map(({ s, timed, leftPct }, i) => {
                   const finished = s.state === "Completed" || s.state === "Returned";
                   const exception = s.state === "Exception";
                   const pickup = s.kind === "pickup";
@@ -281,9 +307,9 @@ function TimeBoard({ fleet, isToday }: { fleet: { truck: { name: string; truckId
                   return (
                     <div
                       key={s.stopId}
-                      title={`${s.sequence}. ${s.custName} · ${pickup ? "Pickup" : "Delivery"} · ${s.plannedWindow || s.eta ? formatClockTime(s.plannedWindow || s.eta || "") : "no time"} · ${s.state}`}
-                      className={`absolute top-1/2 flex h-[26px] -translate-y-1/2 items-center gap-1 overflow-hidden rounded-[2px] px-1.5 text-[11px] ${fill} ${ring}`}
-                      style={{ left: `${leftPct}%`, width: `max(${(0.7 / BOARD_HOURS) * 100}%, 72px)` }}
+                      title={`${s.sequence}. ${s.custName} · ${pickup ? "Pickup" : "Delivery"} · ${timed ? formatClockTime(s.plannedWindow || s.eta || "") : "no scheduled time"} · ${s.state}`}
+                      className={`absolute flex h-[26px] items-center gap-1 overflow-hidden rounded-[2px] px-1.5 text-[11px] ${fill} ${ring} ${timed ? "" : "border border-dashed border-meta/60"}`}
+                      style={{ left: `${leftPct}%`, top: lanes[i] * LANE_H + 4, width: `max(${(0.7 / BOARD_HOURS) * 100}%, 72px)` }}
                     >
                       <span className={`shrink-0 text-[9px] font-semibold uppercase ${pickup ? "text-attention" : "text-tertiary-text"}`}>{pickup ? "P" : "D"}</span>
                       <span className="truncate">{s.custName}</span>
@@ -302,6 +328,7 @@ function TimeBoard({ fleet, isToday }: { fleet: { truck: { name: string; truckId
         <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#3f424d] ring-1 ring-inset ring-attention/60" /> Pickup (P)</span>
         <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#262834]" /> Done</span>
         <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#4a2a2e] ring-1 ring-inset ring-critical" /> Exception</span>
+        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] border border-dashed border-meta/60" /> No scheduled time</span>
         {isToday && <span className="flex items-center gap-1.5"><span className="h-3 w-px bg-[#cfd3e5]/70" /> Now</span>}
       </div>
     </section>
