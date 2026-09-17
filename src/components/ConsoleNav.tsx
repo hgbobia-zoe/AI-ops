@@ -33,12 +33,15 @@ interface Group {
   blades: Blade[];
 }
 
+// Command Center is the main hub / 10k-ft view, so it sits on its own at the top of the nav, outside
+// (and above) the expandable sections — not nested inside Operations.
+const HUB: Blade = { href: "/dashboard", label: "Command Center", icon: Gauge };
+
 const GROUPS: Group[] = [
   {
     label: "Operations",
     icon: LayoutGrid,
     blades: [
-      { href: "/dashboard", label: "Command Center", icon: Gauge },
       { href: "/ops", label: "Ops Manager", icon: ListChecks },
       { href: "/dispatch", label: "Dispatch", icon: Truck },
       { href: "/risk", label: "Event Risk", icon: AlertTriangle },
@@ -107,7 +110,13 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
 
   // The label of the current screen, for the mobile top bar (mirrors Goodshuffle showing the page title).
   const isNewProject = pathname === "/intake" || pathname.startsWith("/intake/");
-  const activeLabel = isNewProject ? "New Project" : parents.flatMap((g) => g.blades).find((b) => isActive(b.href))?.label ?? "Zoe Operations";
+  const activeLabel = isNewProject
+    ? "New Project"
+    : isActive(HUB.href)
+      ? HUB.label
+      : parents.flatMap((g) => g.blades).find((b) => isActive(b.href))?.label ?? "Zoe Operations";
+
+  const HubIcon = HUB.icon;
 
   // The nav body — shared by the desktop sidebar and the mobile drawer. `withClose` adds the drawer's ✕.
   const panel = (withClose: boolean): React.JSX.Element => (
@@ -123,8 +132,21 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
         )}
       </div>
 
-      {/* Expandable section parents → sub-blades */}
+      {/* Command Center — the hub / 10k-ft view, pinned at the top above the sections */}
       <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1">
+        <Link
+          href={HUB.href}
+          onClick={close}
+          aria-current={isActive(HUB.href) ? "page" : undefined}
+          className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
+            isActive(HUB.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
+          }`}
+        >
+          <HubIcon className={`size-[17px] shrink-0 ${isActive(HUB.href) ? "text-foreground" : "text-meta"}`} />
+          {HUB.label}
+        </Link>
+
+        {/* Expandable section parents → sub-blades */}
         {parents.map((g) => {
           const isOpen = openGroups.has(g.label);
           const GIcon = g.icon;
