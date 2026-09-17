@@ -30,7 +30,6 @@ const GROUPS: { label: string; blades: Blade[] }[] = [
   {
     label: "Sales",
     blades: [
-      { href: "/intake", label: "Guided Intake" },
       { href: "/sales", label: "Sales" },
       { href: "/salesos", label: "Sales OS" },
       { href: "/coaching", label: "Coaching", coaching: true },
@@ -71,6 +70,20 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
       <div className="flex items-center gap-2.5 px-4 py-4 md:px-[18px]">
         <span className="flex size-7 items-center justify-center rounded border border-border text-[13px] font-medium text-foreground">Z</span>
         <span className="text-[13.5px] font-medium text-foreground">Zoe Operations</span>
+      </div>
+
+      {/* Primary action — start a new customer project (the guided intake). Mirrors Goodshuffle's
+          "Create New Project" as the way a salesperson begins, in Zoe's own nav style. */}
+      <div className="px-2 pb-1 md:px-3 md:pb-2">
+        <Link
+          href="/intake"
+          aria-current={isActive("/intake") ? "page" : undefined}
+          className={`flex items-center gap-2 whitespace-nowrap rounded border px-3 py-2 text-[13.5px] font-medium transition-colors ${
+            isActive("/intake") ? "border-foreground bg-foreground/[0.07] text-foreground" : "border-border text-foreground hover:bg-[var(--row-hover)]"
+          }`}
+        >
+          <span aria-hidden className="text-[15px] leading-none text-tertiary-text">+</span> New Project
+        </Link>
       </div>
 
       {/* Blade groups */}
