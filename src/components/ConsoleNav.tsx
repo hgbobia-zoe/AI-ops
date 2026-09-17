@@ -99,21 +99,6 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
         )}
       </div>
 
-      {/* Primary action — start a new customer project (the guided intake). Mirrors Goodshuffle's
-          "Create New Project" as the way a salesperson begins, in Zoe's own nav style. */}
-      <div className="px-2 pb-1 lg:px-3 lg:pb-2">
-        <Link
-          href="/intake"
-          onClick={close}
-          aria-current={isActive("/intake") ? "page" : undefined}
-          className={`flex items-center gap-2 whitespace-nowrap rounded border px-3 py-2 text-[13.5px] font-medium transition-colors ${
-            isActive("/intake") ? "border-foreground bg-foreground/[0.07] text-foreground" : "border-border text-foreground hover:bg-[var(--row-hover)]"
-          }`}
-        >
-          <span aria-hidden className="text-[15px] leading-none text-tertiary-text">+</span> New Project
-        </Link>
-      </div>
-
       {/* Blade groups */}
       <nav className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
         {GROUPS.map((g) => {
@@ -149,6 +134,21 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
         </div>
       )}
 
+      {/* Primary action — start a new customer project (the guided intake). Sits at the bottom, just
+          above the viewer, mirroring Goodshuffle's "Create New Project" placement. */}
+      <div className="border-t border-border px-2 py-2 lg:px-3">
+        <Link
+          href="/intake"
+          onClick={close}
+          aria-current={isActive("/intake") ? "page" : undefined}
+          className={`flex items-center justify-center gap-2 whitespace-nowrap rounded border px-3 py-2 text-[13.5px] font-medium transition-colors ${
+            isActive("/intake") ? "border-foreground bg-foreground/[0.07] text-foreground" : "border-border text-foreground hover:bg-[var(--row-hover)]"
+          }`}
+        >
+          <span aria-hidden className="text-[15px] leading-none text-tertiary-text">+</span> New Project
+        </Link>
+      </div>
+
       {/* Viewer */}
       <div className="flex items-center gap-2.5 border-t border-border px-[18px] py-3">
         <span className="flex size-7 shrink-0 items-center justify-center rounded border border-border text-[11px] font-medium text-tertiary-text">{initials}</span>
@@ -171,13 +171,6 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
           <Menu className="size-5" />
         </button>
         <span className="truncate text-[15px] font-medium text-foreground">{activeLabel}</span>
-        <Link
-          href="/intake"
-          aria-label="New Project"
-          className="ml-auto flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] font-medium text-foreground transition-colors hover:bg-[var(--row-hover)]"
-        >
-          <span aria-hidden className="text-[15px] leading-none text-tertiary-text">+</span> New
-        </Link>
       </div>
 
       {/* Drawer backdrop */}
