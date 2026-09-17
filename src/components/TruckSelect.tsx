@@ -25,11 +25,25 @@ export function TruckSelect() {
   const [picked, setPicked] = useState<Vehicle | null>(null);
 
   useEffect(() => {
+    // A Shift Pass link can pre-assign a truck (?truck=<id>) — bind it and go straight to the route,
+    // skipping the picker. An unknown id just falls back to the normal picker.
+    const want = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("truck") : null;
     fetchVehicles()
-      .then(setVehicles)
-      .catch(() => setError("Could not load trucks."))
-      .finally(() => setLoading(false));
-  }, []);
+      .then((vs) => {
+        const match = want ? vs.find((v) => v.truckId === want) : null;
+        if (match) {
+          bindTruck(match.truckId, match.name);
+          router.replace("/kiosk");
+          return; // keep the loader up while we redirect — don't flash the picker
+        }
+        setVehicles(vs);
+        setLoading(false);
+      })
+      .catch(() => {
+        setError("Could not load trucks.");
+        setLoading(false);
+      });
+  }, [router]);
 
   function confirmBind() {
     if (!picked) return;

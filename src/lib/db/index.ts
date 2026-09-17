@@ -516,7 +516,9 @@ CREATE TABLE IF NOT EXISTS shift_passes (
   created_at   TEXT NOT NULL,
   expires_at   TEXT NOT NULL,         -- ISO — hard expiry
   revoked_at   TEXT,                  -- ISO — set to kill the pass before it expires (null = live)
-  last_seen_at TEXT                   -- ISO — last time the pass was used (shown in the admin list)
+  last_seen_at TEXT,                  -- ISO — last time the pass was used (shown in the admin list)
+  truck_id     TEXT,                  -- driver pass: pre-assigned truck → link opens straight to its route
+  truck_name   TEXT                   -- display label for the assigned truck
 );
 `;
 
@@ -562,6 +564,8 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "quote_sent_at", type: "TEXT" }, // ISO — precise time the quote email was sent (from GS message thread)
   { table: "bookings", column: "quote_opened_at", type: "TEXT" }, // ISO — latest time the client opened the quote email
   { table: "bookings", column: "quote_open_alerted_at", type: "TEXT" }, // ISO — the opened_at we last Slack-alerted for (dedupe)
+  { table: "shift_passes", column: "truck_id", type: "TEXT" }, // driver pass: pre-assigned truck → link opens straight to its route
+  { table: "shift_passes", column: "truck_name", type: "TEXT" }, // display label for the assigned truck (admin list + callout)
 ];
 
 function migrate(db: DB): void {

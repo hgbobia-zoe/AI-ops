@@ -27,9 +27,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ token: stri
   const maxAge = Math.max(60, Math.floor((Date.parse(pass.expiresAt) - Date.now()) / 1000));
   touchShiftPass(pass.id);
 
-  // Drivers land in the kiosk flow (pick truck → route checklist → mark progress). A "board" pass
-  // instead opens the office dispatch board (view). Default is the driver/kiosk view.
-  const dest = pass.scope === "board" ? "/dispatch" : "/select";
+  // Drivers land in the kiosk flow. With a pre-assigned truck the link opens straight onto that truck's
+  // route (TruckSelect auto-binds from ?truck=); otherwise they pick their truck. A "board" pass opens
+  // the office dispatch board (view). Default is the driver/kiosk view.
+  const dest =
+    pass.scope === "board" ? "/dispatch" : pass.truckId ? `/select?truck=${encodeURIComponent(pass.truckId)}` : "/select";
   const res = NextResponse.redirect(`${origin}${dest}`);
   res.cookies.set(SESSION_COOKIE, cookie, { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge });
   return res;

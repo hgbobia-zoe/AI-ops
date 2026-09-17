@@ -15,6 +15,8 @@ interface Pass {
   name: string;
   phone: string | null;
   scope: string;
+  truckId: string | null;
+  truckName: string | null;
   createdBy: string | null;
   createdAt: string;
   expiresAt: string;
@@ -22,6 +24,11 @@ interface Pass {
   lastSeenAt: string | null;
   status: "active" | "expired" | "revoked";
   url: string;
+}
+
+interface VehicleLite {
+  truckId: string;
+  name: string;
 }
 
 // Default a new pass to end 8 hours from now, formatted for <input type="datetime-local"> in LOCAL time.
@@ -51,6 +58,8 @@ export function ShiftPassesAdmin(): React.JSX.Element {
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [scope, setScope] = useState<Scope>("driver");
+  const [truckId, setTruckId] = useState("");
+  const [vehicles, setVehicles] = useState<VehicleLite[]>([]);
   const [ends, setEnds] = useState(defaultEnd);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +82,10 @@ export function ShiftPassesAdmin(): React.JSX.Element {
       .then((r) => r.json())
       .then((j: { passes: Pass[] }) => setPasses(j.passes ?? []))
       .catch(() => setPasses([]));
+    fetch("/api/vehicles")
+      .then((r) => r.json())
+      .then((j: { vehicles: VehicleLite[] }) => setVehicles(j.vehicles ?? []))
+      .catch(() => setVehicles([]));
   }, []);
 
   async function create() {
@@ -91,7 +104,13 @@ export function ShiftPassesAdmin(): React.JSX.Element {
       const r = await fetch("/api/passes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), phone: phone.trim() || undefined, scope, expiresAt: new Date(ms).toISOString() }),
+        body: JSON.stringify({
+          name: name.trim(),
+          phone: phone.trim() || undefined,
+          scope,
+          truckId: scope === "driver" && truckId ? truckId : undefined,
+          expiresAt: new Date(ms).toISOString(),
+        }),
       });
       const j = (await r.json()) as { pass?: Pass; error?: string };
       if (!r.ok || !j.pass) {
@@ -101,6 +120,7 @@ export function ShiftPassesAdmin(): React.JSX.Element {
       setJustMade(j.pass);
       setName("");
       setPhone("");
+      setTruckId("");
       setEnds(defaultEnd());
       await load();
     } catch {
@@ -193,6 +213,25 @@ export function ShiftPassesAdmin(): React.JSX.Element {
               className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </label>
+          {scope === "driver" && (
+            <label className="space-y-1.5 sm:col-span-2">
+              <span className="text-sm font-medium">
+                Assign a truck <span className="font-normal text-muted-foreground">(optional — link opens straight to this truck&apos;s route)</span>
+              </span>
+              <select
+                value={truckId}
+                onChange={(e) => setTruckId(e.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="">Let them pick their truck</option>
+                {vehicles.map((v) => (
+                  <option key={v.truckId} value={v.truckId}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
         {error && <p className="text-sm text-red-400">{error}</p>}
         <button
@@ -207,7 +246,8 @@ export function ShiftPassesAdmin(): React.JSX.Element {
         {justMade && (
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
             <div className="mb-2 text-sm font-medium text-emerald-200">
-              {SCOPE_LABEL[justMade.scope] ?? "Pass"} ready for {justMade.name} — ends {fmtWhen(justMade.expiresAt)}
+              {SCOPE_LABEL[justMade.scope] ?? "Pass"} ready for {justMade.name}
+              {justMade.truckName ? ` · ${justMade.truckName}` : ""} — ends {fmtWhen(justMade.expiresAt)}
             </div>
             <PassLinkRow pass={justMade} onSent={load} />
           </div>
@@ -248,6 +288,11 @@ export function ShiftPassesAdmin(): React.JSX.Element {
                 <span className="inline-flex items-center gap-1">
                   <Clock className="size-3" /> {p.status === "revoked" ? `revoked ${fmtWhen(p.revokedAt)}` : `ends ${fmtWhen(p.expiresAt)}`}
                 </span>
+                {p.truckName && (
+                  <span className="inline-flex items-center gap-1">
+                    <Truck className="size-3" /> {p.truckName}
+                  </span>
+                )}
                 {p.phone && <span>{p.phone}</span>}
                 <span>last used {p.lastSeenAt ? fmtWhen(p.lastSeenAt) : "never"}</span>
                 {p.createdBy && <span>by {p.createdBy}</span>}

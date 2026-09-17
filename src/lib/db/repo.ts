@@ -2425,7 +2425,9 @@ export interface ShiftPass {
   id: string; // opaque token (URL segment)
   name: string; // contractor name
   phone: string | null;
-  scope: string; // "drive"
+  scope: string; // "driver" | "board" (legacy "drive" = driver)
+  truckId: string | null; // driver pass: pre-assigned truck (link opens straight to its route)
+  truckName: string | null;
   createdBy: string | null;
   createdAt: string;
   expiresAt: string;
@@ -2438,6 +2440,8 @@ interface ShiftPassRow {
   name: string;
   phone: string | null;
   scope: string;
+  truck_id: string | null;
+  truck_name: string | null;
   created_by: string | null;
   created_at: string;
   expires_at: string;
@@ -2450,6 +2454,8 @@ const passOf = (r: ShiftPassRow): ShiftPass => ({
   name: r.name,
   phone: r.phone,
   scope: r.scope,
+  truckId: r.truck_id,
+  truckName: r.truck_name,
   createdBy: r.created_by,
   createdAt: r.created_at,
   expiresAt: r.expires_at,
@@ -2462,6 +2468,8 @@ export interface NewShiftPass {
   name: string;
   phone?: string | null;
   scope?: string;
+  truckId?: string | null;
+  truckName?: string | null;
   createdBy?: string | null;
   expiresAt: string; // ISO
 }
@@ -2471,10 +2479,10 @@ export function createShiftPass(p: NewShiftPass): ShiftPass {
   const now = new Date().toISOString();
   getDb()
     .prepare(
-      `INSERT INTO shift_passes (id, name, phone, scope, created_by, created_at, expires_at)
-       VALUES (?,?,?,?,?,?,?)`,
+      `INSERT INTO shift_passes (id, name, phone, scope, truck_id, truck_name, created_by, created_at, expires_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
     )
-    .run(p.id, p.name.trim(), p.phone?.trim() || null, p.scope ?? "drive", p.createdBy ?? null, now, p.expiresAt);
+    .run(p.id, p.name.trim(), p.phone?.trim() || null, p.scope ?? "driver", p.truckId ?? null, p.truckName ?? null, p.createdBy ?? null, now, p.expiresAt);
   return getShiftPass(p.id)!;
 }
 
