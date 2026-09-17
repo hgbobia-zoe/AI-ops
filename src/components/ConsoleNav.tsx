@@ -1,75 +1,101 @@
 "use client";
 
-// The platform's navigation (Nocturne redesign). Two presentations from one source of truth:
-//   • Desktop (lg+): a persistent left sidebar of text-only blades.
-//   • Mobile / tablet (< lg): a compact top bar with a hamburger that opens a slide-out drawer — the
-//     familiar Goodshuffle Pro pattern, so the whole nav doesn't eat the top of a phone screen.
-// Blades are grouped Operations / Sales / Company; hierarchy is size + colour + a 3px active bar (no
-// fill, no icons). Add a feature → add a blade to the right group. "New Project" is the primary action.
+// The platform's navigation (Nocturne redesign, Goodshuffle-familiar). Two presentations from one source:
+//   • Desktop (lg+): a persistent left sidebar.
+//   • Mobile / tablet (< lg): a compact top bar with a hamburger that opens a slide-out drawer.
+// Blades live under expandable section parents (Operations / Sales / Company / Admin) — each with an icon
+// and a chevron, like Goodshuffle's sub-menus. Every blade carries an icon; the active blade is a solid
+// filled row. "New Project" is the primary action, pinned at the bottom above the viewer.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { Menu, X } from "lucide-react";
+import { useState } from "react";
+import {
+  Menu, X, ChevronRight,
+  LayoutGrid, Tag, Building2, Wrench,
+  Gauge, ListChecks, Truck, AlertTriangle, Users, DollarSign,
+  TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
+  RefreshCw, Plug, UsersRound, Settings,
+  type LucideIcon,
+} from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
 
 interface Blade {
   href: string;
   label: string;
+  icon: LucideIcon;
   financial?: boolean; // only where role can see $
   coaching?: boolean; // only where role can see call transcripts
 }
+interface Group {
+  label: string;
+  icon: LucideIcon;
+  blades: Blade[];
+}
 
-const GROUPS: { label: string; blades: Blade[] }[] = [
+const GROUPS: Group[] = [
   {
     label: "Operations",
+    icon: LayoutGrid,
     blades: [
-      { href: "/dashboard", label: "Command Center" },
-      { href: "/ops", label: "Ops Manager" },
-      { href: "/dispatch", label: "Dispatch" },
-      { href: "/risk", label: "Event Risk" },
-      { href: "/staffing", label: "Staffing" },
-      { href: "/finance", label: "Financial", financial: true },
+      { href: "/dashboard", label: "Command Center", icon: Gauge },
+      { href: "/ops", label: "Ops Manager", icon: ListChecks },
+      { href: "/dispatch", label: "Dispatch", icon: Truck },
+      { href: "/risk", label: "Event Risk", icon: AlertTriangle },
+      { href: "/staffing", label: "Staffing", icon: Users },
+      { href: "/finance", label: "Financial", icon: DollarSign, financial: true },
     ],
   },
   {
     label: "Sales",
+    icon: Tag,
     blades: [
-      { href: "/sales", label: "Sales" },
-      { href: "/salesos", label: "Sales OS" },
-      { href: "/coaching", label: "Coaching", coaching: true },
-      { href: "/customers", label: "Customers" },
+      { href: "/sales", label: "Sales", icon: TrendingUp },
+      { href: "/salesos", label: "Sales OS", icon: Target },
+      { href: "/coaching", label: "Coaching", icon: GraduationCap, coaching: true },
+      { href: "/customers", label: "Customers", icon: Contact },
     ],
   },
   {
     label: "Company",
+    icon: Building2,
     blades: [
-      { href: "/history", label: "History" },
-      { href: "/automation", label: "Automation" },
+      { href: "/history", label: "History", icon: Clock },
+      { href: "/automation", label: "Automation", icon: Zap },
     ],
   },
 ];
 
 export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: string }): React.JSX.Element {
   const pathname = usePathname();
-  const [open, setOpen] = useState(false);
-  const close = () => setOpen(false); // drawer closes on any nav tap (see the links below)
-
-  // Lock background scroll while the drawer is open.
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    document.body.style.overflow = open ? "hidden" : "";
-    return () => { document.body.style.overflow = ""; };
-  }, [open]);
+  const [open, setOpen] = useState(false); // drawer (mobile)
+  const close = () => setOpen(false); // drawer closes on any nav tap
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
   const canSee = (b: Blade) => (!b.financial || canSeeFinancials(role)) && (!b.coaching || canSeeCoaching(role));
 
-  const admin: Blade[] = [];
-  if (canManageSettings(role)) admin.push({ href: "/admin/pull", label: "Pull Routes" });
-  if (canManageSettings(role)) admin.push({ href: "/admin/health", label: "Connections" });
-  if (canManageUsers(role)) admin.push({ href: "/admin/users", label: "Team" });
-  if (canManageSettings(role)) admin.push({ href: "/admin", label: "Settings" });
+  // Admin is another expandable parent, built from what the role can manage.
+  const adminBlades: Blade[] = [];
+  if (canManageSettings(role)) adminBlades.push({ href: "/admin/pull", label: "Pull Routes", icon: RefreshCw });
+  if (canManageSettings(role)) adminBlades.push({ href: "/admin/health", label: "Connections", icon: Plug });
+  if (canManageUsers(role)) adminBlades.push({ href: "/admin/users", label: "Team", icon: UsersRound });
+  if (canManageSettings(role)) adminBlades.push({ href: "/admin", label: "Settings", icon: Settings });
+
+  const parents: Group[] = [
+    ...GROUPS.map((g) => ({ ...g, blades: g.blades.filter(canSee) })).filter((g) => g.blades.length > 0),
+    ...(adminBlades.length ? [{ label: "Admin", icon: Wrench, blades: adminBlades }] : []),
+  ];
+
+  // The section holding the current page starts expanded; the user can toggle any parent from there.
+  const activeGroup = parents.find((g) => g.blades.some((b) => isActive(b.href)))?.label;
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set(activeGroup ? [activeGroup] : []));
+  const toggleGroup = (label: string) =>
+    setOpenGroups((prev) => {
+      const n = new Set(prev);
+      if (n.has(label)) n.delete(label);
+      else n.add(label);
+      return n;
+    });
 
   const logout = async () => {
     await fetch("/api/auth/login", { method: "DELETE" });
@@ -81,9 +107,7 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
 
   // The label of the current screen, for the mobile top bar (mirrors Goodshuffle showing the page title).
   const isNewProject = pathname === "/intake" || pathname.startsWith("/intake/");
-  const activeLabel = isNewProject
-    ? "New Project"
-    : [...GROUPS.flatMap((g) => g.blades), ...admin].find((b) => isActive(b.href))?.label ?? "Zoe Operations";
+  const activeLabel = isNewProject ? "New Project" : parents.flatMap((g) => g.blades).find((b) => isActive(b.href))?.label ?? "Zoe Operations";
 
   // The nav body — shared by the desktop sidebar and the mobile drawer. `withClose` adds the drawer's ✕.
   const panel = (withClose: boolean): React.JSX.Element => (
@@ -93,46 +117,55 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
         <span className="flex size-7 items-center justify-center rounded border border-border text-[13px] font-medium text-foreground">Z</span>
         <span className="text-[13.5px] font-medium text-foreground">Zoe Operations</span>
         {withClose && (
-          <button onClick={() => setOpen(false)} aria-label="Close navigation" className="ml-auto flex size-8 items-center justify-center rounded border border-border text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
+          <button onClick={close} aria-label="Close navigation" className="ml-auto flex size-8 items-center justify-center rounded border border-border text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
             <X className="size-4" />
           </button>
         )}
       </div>
 
-      {/* Blade groups */}
-      <nav className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-2">
-        {GROUPS.map((g) => {
-          const items = g.blades.filter(canSee);
-          if (items.length === 0) return null;
+      {/* Expandable section parents → sub-blades */}
+      <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1">
+        {parents.map((g) => {
+          const isOpen = openGroups.has(g.label);
+          const GIcon = g.icon;
+          const hasActive = g.blades.some((b) => isActive(b.href));
           return (
-            <div key={g.label} className="mt-2">
-              <div className="px-[18px] pt-3 pb-1 text-[10.5px] font-medium uppercase tracking-[0.1em] text-meta">{g.label}</div>
-              {items.map((b) => (
-                <NavItem key={b.href} blade={b} active={isActive(b.href)} onNavigate={close} />
-              ))}
+            <div key={g.label}>
+              <button
+                onClick={() => toggleGroup(g.label)}
+                aria-expanded={isOpen}
+                className={`flex w-full items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--row-hover)] ${hasActive ? "text-foreground" : "text-tertiary-text hover:text-foreground"}`}
+              >
+                <GIcon className="size-[17px] shrink-0 text-meta" />
+                <span className="flex-1 text-left">{g.label}</span>
+                <ChevronRight className={`size-4 shrink-0 text-meta transition-transform ${isOpen ? "rotate-90" : ""}`} />
+              </button>
+              {isOpen && (
+                <div className="mt-0.5 mb-1 flex flex-col gap-0.5">
+                  {g.blades.map((b) => {
+                    const BIcon = b.icon;
+                    const active = isActive(b.href);
+                    return (
+                      <Link
+                        key={b.href}
+                        href={b.href}
+                        onClick={close}
+                        aria-current={active ? "page" : undefined}
+                        className={`flex items-center gap-2.5 rounded py-[7px] pl-[34px] pr-2.5 text-[13px] transition-colors ${
+                          active ? "bg-foreground/[0.08] font-medium text-foreground" : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"
+                        }`}
+                      >
+                        <BIcon className={`size-[15px] shrink-0 ${active ? "text-foreground" : "text-meta"}`} />
+                        {b.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })}
       </nav>
-
-      {/* Admin links */}
-      {admin.length > 0 && (
-        <div className="flex flex-col border-t border-border py-2">
-          {admin.map((b) => (
-            <Link
-              key={b.href}
-              href={b.href}
-              onClick={close}
-              aria-current={isActive(b.href) ? "page" : undefined}
-              className={`whitespace-nowrap border-l-[3px] px-[18px] py-[6px] text-[12.5px] transition-colors ${
-                isActive(b.href) ? "border-foreground text-foreground" : "border-transparent text-meta hover:text-tertiary-text hover:bg-[var(--row-hover)]"
-              }`}
-            >
-              {b.label}
-            </Link>
-          ))}
-        </div>
-      )}
 
       {/* Primary action — start a new customer project (the guided intake). Sits at the bottom, just
           above the viewer, mirroring Goodshuffle's "Create New Project" placement. */}
@@ -176,7 +209,7 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
       {/* Drawer backdrop */}
       <div
         aria-hidden
-        onClick={() => setOpen(false)}
+        onClick={close}
         className={`fixed inset-0 z-40 bg-black/60 transition-opacity duration-200 lg:hidden ${open ? "opacity-100" : "pointer-events-none opacity-0"}`}
       />
 
@@ -195,20 +228,5 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
         {panel(false)}
       </aside>
     </>
-  );
-}
-
-function NavItem({ blade, active, onNavigate }: { blade: Blade; active: boolean; onNavigate?: () => void }): React.JSX.Element {
-  return (
-    <Link
-      href={blade.href}
-      onClick={onNavigate}
-      aria-current={active ? "page" : undefined}
-      className={`block whitespace-nowrap border-l-[3px] px-[18px] py-[7px] text-[13.5px] transition-colors ${
-        active ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground hover:bg-[var(--row-hover)]"
-      }`}
-    >
-      {blade.label}
-    </Link>
   );
 }
