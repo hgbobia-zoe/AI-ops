@@ -2083,7 +2083,7 @@ export function getCallEventByProviderId(providerId: string): CallEventView | nu
 /** Fill in call content that arrives on a later event (transcript/summary/duration), non-null only. */
 export function updateCallContent(
   id: string,
-  c: { transcript?: string | null; summary?: string | null; durationSec?: number | null; contactName?: string | null; eventType?: string | null },
+  c: { transcript?: string | null; summary?: string | null; durationSec?: number | null; contactName?: string | null; eventType?: string | null; fromPhone?: string | null; toPhone?: string | null },
 ): void {
   getDb()
     .prepare(
@@ -2092,7 +2092,9 @@ export function updateCallContent(
          summary      = COALESCE(@summary, summary),
          duration_sec = COALESCE(@durationSec, duration_sec),
          contact_name = COALESCE(@contactName, contact_name),
-         event_type   = COALESCE(@eventType, event_type)
+         event_type   = COALESCE(@eventType, event_type),
+         from_phone   = COALESCE(from_phone, @fromPhone),
+         to_phone     = COALESCE(to_phone, @toPhone)
        WHERE id = @id`,
     )
     .run({
@@ -2102,6 +2104,8 @@ export function updateCallContent(
       durationSec: c.durationSec ?? null,
       contactName: c.contactName ?? null,
       eventType: c.eventType ?? null,
+      fromPhone: c.fromPhone ?? null,
+      toPhone: c.toPhone ?? null,
     });
 }
 

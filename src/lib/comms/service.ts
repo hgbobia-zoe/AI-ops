@@ -84,10 +84,18 @@ export interface IngestResult {
   skippedReason?: string;
 }
 
+// Format a US number as (301) 555-1234 so it's easy to read and search; leave anything else as-is.
+function prettyPhone(phone: string | null | undefined): string | null {
+  const d = (phone ?? "").replace(/\D/g, "");
+  const ten = d.length === 11 && d.startsWith("1") ? d.slice(1) : d.length === 10 ? d : null;
+  if (!ten) return (phone ?? "").trim() || null;
+  return `(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}`;
+}
+
 function fmtPhoneName(name: string | null | undefined, phone: string | null | undefined): string {
   const n = (name ?? "").trim();
   const p = (phone ?? "").trim();
-  if (n && p) return `${n} (${p})`;
+  if (n && p) return `${n} · ${p}`;
   return n || p || "unknown caller";
 }
 
@@ -114,14 +122,18 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   if (!transcript && !summary) summary = await getCallSummary(callId);
 
   // Match the customer's project once — shared by the note, the timeline row, and the state debrief.
-  const custPhone = input.direction === "outgoing" ? input.toPhone : input.fromPhone;
+  // A call's fields arrive spread across several webhook events (the summary event often omits the phone),
+  // so fall back to whatever this call row already captured from an earlier event.
+  const dir = input.direction ?? existing?.direction ?? "incoming";
+  const custPhone = (dir === "outgoing" ? (input.toPhone ?? existing?.toPhone) : (input.fromPhone ?? existing?.fromPhone)) ?? null;
   const digits = last10(custPhone);
   const booking = digits ? getBookingByPhoneDigits(digits) : null;
   const initials = (await openphoneUserInitials(input.agentUserId)) ?? initialsOf(input.agentName ?? null);
 
-  // Caller name: Quo's contact name if any, else the matched customer (so calls aren't "Unknown").
-  const resolvedName = (input.contactName ?? "").trim() || booking?.clientName?.trim() || null;
-  updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: resolvedName, eventType: input.eventType });
+  // Caller name: Quo's contact name if any, else the matched customer, else whatever we already stored —
+  // so the alert can name them instead of "unknown caller".
+  const resolvedName = (input.contactName ?? "").trim() || booking?.clientName?.trim() || existing?.contactName?.trim() || null;
+  updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: resolvedName, eventType: input.eventType, fromPhone: input.fromPhone ?? null, toPhone: input.toPhone ?? null });
 
   // Log the call to Goodshuffle notes (conversation summary or voicemail) — regardless of sentiment.
   await maybeLogCallNote(id, input, !!existing?.noteLoggedAt, summary, booking, initials);
@@ -162,15 +174,17 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   setCallSentiment(id, { sentiment: s.label, score: s.score, method: s.method, reasons: s.reasons, llmModel: s.llmModel });
   if (!s.isNegative) return { recorded: true, analyzed: true, alerted: false, sentiment: s.label };
 
-  // Frustrated customer → alert the dedicated channel, once.
-  const who = fmtPhoneName(input.contactName, input.direction === "outgoing" ? input.toPhone : input.fromPhone);
+  // Frustrated customer → alert the dedicated channel, once. Lead with who to call back: the resolved name
+  // and a readable, searchable phone number, plus a link straight to the matched project when we have one.
+  const who = fmtPhoneName(resolvedName, prettyPhone(custPhone));
   const confidence = Math.round(s.score * 100);
   const conf = s.method === "llm" ? `${confidence}% (LLM${s.llmModel ? ` · ${s.llmModel}` : ""})` : `${confidence}% (keyword heuristic — no transcript LLM read)`;
   const reasons = s.reasons.length ? `\n> ${s.reasons.join(" · ")}` : "";
   const src = transcript ? "transcript" : "AI summary";
+  const project = booking ? `\n<https://pro.goodshuffle.com/app/project/detail?id=${booking.bookingId}|${(booking.eventName ?? "").trim() || "Open the project in Goodshuffle"}>` : "";
   const msg =
     `:rotating_light: *Frustrated caller* — ${who}\n` +
-    `Negative tone on a ${input.direction === "outgoing" ? "call we made" : "call in"} (from the ${src}). Confidence ${conf}.${reasons}\n` +
+    `Negative tone on a ${dir === "outgoing" ? "call we made" : "call in"} (from the ${src}). Confidence ${conf}.${reasons}${project}\n` +
     `_Review the call in OpenPhone and consider a follow-up._`;
 
   const res = await slackNotifyAlert(msg);
