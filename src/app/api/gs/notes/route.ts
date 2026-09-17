@@ -7,6 +7,7 @@
 
 import { NextResponse } from "next/server";
 import { saveLeadNotes, type LeadNotesRecord } from "@/lib/db/repo";
+import { runQuoteOpenAlerts } from "@/lib/salesos/quoteOpenAlert";
 import { logImport } from "@/lib/pull/state";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +29,11 @@ interface InNote {
   clientNotes?: string;
   lastSentDate?: string | null;
   lineItems?: unknown;
+  quoteSentAt?: string | null; // ISO — precise quote-email send time
+  quoteOpenedAt?: string | null; // ISO — latest client open of the quote email
 }
+
+const iso = (s: string | null | undefined): string | null => (s && !Number.isNaN(Date.parse(s)) ? s : null);
 
 /** Line-item titles arrive as a string[]; keep only non-empty strings, cap the count, dedupe. */
 function cleanLineItems(raw: unknown): string[] | undefined {
@@ -68,9 +73,13 @@ export async function POST(req: Request): Promise<NextResponse> {
       clientNotes: (n.clientNotes ?? "").trim() || null,
       lastSentDate: ymd(n.lastSentDate),
       lineItems: cleanLineItems(n.lineItems), // undefined ⇒ leave stored line_items untouched
+      quoteSentAt: iso(n.quoteSentAt),
+      quoteOpenedAt: iso(n.quoteOpenedAt),
     });
   }
   const updated = records.length > 0 ? saveLeadNotes(records) : 0;
+  // Fire quote-opened Slack alerts for any newly-opened quotes (>1h after send), deduped. Best-effort.
+  void runQuoteOpenAlerts().catch(() => {});
   logImport("lead_notes", true, { rowsIn: notes.length, rowsWritten: updated });
   return NextResponse.json({ ok: true, updated }, { headers: CORS });
 }

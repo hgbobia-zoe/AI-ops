@@ -543,6 +543,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "wd_member_added", type: "TEXT" }, // ISO ts once Warehouse Desktop was queued onto a signed project's GSPRO team (add-once)
   { table: "sales_intake", column: "delivery_tier", type: "TEXT" }, // delivery time-window tier (standard/premium/exact)
   { table: "sales_intake", column: "delivery_flexible", type: "TEXT" }, // can deliver day before / pick up day after (free)
+  { table: "bookings", column: "quote_sent_at", type: "TEXT" }, // ISO — precise time the quote email was sent (from GS message thread)
+  { table: "bookings", column: "quote_opened_at", type: "TEXT" }, // ISO — latest time the client opened the quote email
+  { table: "bookings", column: "quote_open_alerted_at", type: "TEXT" }, // ISO — the opened_at we last Slack-alerted for (dedupe)
 ];
 
 function migrate(db: DB): void {

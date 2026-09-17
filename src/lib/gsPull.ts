@@ -51,13 +51,24 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
           var notes=[];
           // Collect line-item titles from a project's loaded line-item groups (event-type signal).
           function titlesFrom(lists){ var t=[]; function w(o,d){ if(!o||typeof o!=="object"||d>7)return; if(Object.prototype.toString.call(o)==="[object Array]"){for(var k=0;k<o.length;k++)w(o[k],d+1);return;} if(o.itemTitle)t.push(o.itemTitle); for(var kk in o)w(o[kk],d+1);} (lists||[]).forEach(function(gj){w(gj,0);}); return t; }
+          // Quote sent/opened from the client email thread (getMessagesForTransaction). sent = earliest
+          // outbound quote email; opened = latest client open. Prefer emails whose subject mentions "quote";
+          // fall back to any outbound email with client recipients.
+          function quoteTimes(mv){ var msgs=(mv&&mv.client&&mv.client.messages)||[]; var qs=null, qo=null;
+            function consider(m){ if(m.medium!=="EMAIL") return; var recips=m.clientRecipients||[]; if(!recips.length) return; if(m.date && (!qs || m.date<qs)) qs=m.date; recips.forEach(function(rp){ if(rp.messageOpenedDate && (!qo || rp.messageOpenedDate>qo)) qo=rp.messageOpenedDate; }); }
+            var quoteMsgs=msgs.filter(function(m){ return m.medium==="EMAIL" && (m.clientRecipients||[]).length && /quote/i.test(m.subject||""); });
+            (quoteMsgs.length?quoteMsgs:msgs).forEach(consider);
+            return { sent:qs, opened:qo }; }
           function one(i){ if(i>=openIds.length) return Promise.resolve(); var id=openIds[i];
-            return fetch("/app/vendorTransaction/initContractView?transactionID="+id,H).then(function(r){ if(!r.ok) return; return r.json().then(function(j){
-              var g=(j&&j.lineItemGroupsToLoad)||[];
+            var pCV=fetch("/app/vendorTransaction/initContractView?transactionID="+id,H).then(function(r){ return r.ok?r.json():null; }).catch(function(){return null;});
+            var pMsg=fetch("/app/conversation/getMessagesForTransaction?transactionID="+id,H).then(function(r){ return r.ok?r.json():null; }).catch(function(){return null;});
+            return Promise.all([pCV,pMsg]).then(function(res){ var j=res[0], qt=quoteTimes(res[1]);
+              if(!j) return; // no contract view → skip (don't blank stored notes with a partial record)
+              var g=(j.lineItemGroupsToLoad)||[];
               return Promise.all(g.map(function(x){ return fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID="+x.id+"&transactionID="+id,H).then(function(r){return r.json();}).catch(function(){return null;}); })).then(function(lists){
-                notes.push({ bookingId:String(id), internalNotes:(j.internalNotes||"").trim(), clientNotes:(j.clientVisibleNotes||"").trim(), lastSentDate:null, lineItems:titlesFrom(lists) });
+                notes.push({ bookingId:String(id), internalNotes:(j.internalNotes||"").trim(), clientNotes:(j.clientVisibleNotes||"").trim(), lastSentDate:null, lineItems:titlesFrom(lists), quoteSentAt:qt.sent, quoteOpenedAt:qt.opened });
               });
-            }); }).catch(function(){}).then(function(){ return one(i+1); }); }
+            }).catch(function(){}).then(function(){ return one(i+1); }); }
           return one(0).then(function(){ if(!notes.length) return {updated:0}; return fetch(API+"/api/gs/notes",{method:"POST",headers:POSTH(),body:JSON.stringify({notes:notes})}).then(function(r){return r.json();}).catch(function(){return {updated:0};}); });
         }
         return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr})}).then(function(r){return r.json();}).then(function(j){ return pullNotes().then(function(nj){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:(nj&&nj.updated)||0 }; }); }).catch(function(){ return { saved:0, partial:true }; });

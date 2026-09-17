@@ -607,6 +607,8 @@ export interface LeadNotesRecord {
   clientNotes?: string | null;
   lastSentDate?: string | null; // YYYY-MM-DD
   lineItems?: string[] | null; // captured line-item titles (event-type signal)
+  quoteSentAt?: string | null; // ISO — precise quote-email send time
+  quoteOpenedAt?: string | null; // ISO — latest client open of the quote email
 }
 
 /** Attach captured Goodshuffle notes (comms history) to existing bookings, keyed by project id. Only
@@ -618,6 +620,8 @@ export function saveLeadNotes(items: LeadNotesRecord[]): number {
     `UPDATE bookings SET internal_notes=@internalNotes, client_notes=@clientNotes,
        last_sent_date=@lastSentDate,
        line_items=CASE WHEN @lineItemsProvided=1 THEN @lineItems ELSE line_items END,
+       quote_sent_at=COALESCE(@quoteSentAt, quote_sent_at),
+       quote_opened_at=COALESCE(@quoteOpenedAt, quote_opened_at),
        notes_updated_at=@now WHERE booking_id=@bookingId`,
   );
   let n = 0;
@@ -631,6 +635,8 @@ export function saveLeadNotes(items: LeadNotesRecord[]): number {
         lastSentDate: i.lastSentDate ?? null,
         lineItemsProvided: provided ? 1 : 0,
         lineItems: provided ? JSON.stringify(i.lineItems ?? []) : null,
+        quoteSentAt: i.quoteSentAt ?? null,
+        quoteOpenedAt: i.quoteOpenedAt ?? null,
         now,
       });
       n += r.changes;
@@ -638,6 +644,46 @@ export function saveLeadNotes(items: LeadNotesRecord[]): number {
   });
   tx();
   return n;
+}
+
+/** A quote a client has opened that we may want to Slack about. Filters to opens that landed at least an
+ *  hour after the quote was sent (so we don't ping while they're glancing at the just-sent confirmation),
+ *  and that we haven't already alerted for (opened_at newer than the last alerted open). */
+export interface QuoteOpenCandidate {
+  bookingId: string;
+  clientName: string | null;
+  eventName: string | null;
+  eventDate: string | null;
+  location: string | null;
+  quoteSentAt: string;
+  quoteOpenedAt: string;
+}
+export function pendingQuoteOpenAlerts(): QuoteOpenCandidate[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT booking_id, client_name, event_name, event_date, location, quote_sent_at, quote_opened_at
+         FROM bookings
+        WHERE quote_opened_at IS NOT NULL AND quote_sent_at IS NOT NULL
+          AND (quote_open_alerted_at IS NULL OR quote_opened_at > quote_open_alerted_at)
+          AND (julianday(quote_opened_at) - julianday(quote_sent_at)) * 86400 >= 3600`,
+    )
+    .all() as Record<string, unknown>[];
+  return rows.map((r) => ({
+    bookingId: String(r.booking_id),
+    clientName: (r.client_name as string) ?? null,
+    eventName: (r.event_name as string) ?? null,
+    eventDate: (r.event_date as string) ?? null,
+    location: (r.location as string) ?? null,
+    quoteSentAt: r.quote_sent_at as string,
+    quoteOpenedAt: r.quote_opened_at as string,
+  }));
+}
+
+/** Record that we've handled a quote-open at `openedAt` (whether we alerted or intentionally suppressed a
+ *  stale one), so we never re-alert for the same open. */
+export function markQuoteOpenAlerted(bookingId: string, openedAt: string): void {
+  getDb().prepare(`UPDATE bookings SET quote_open_alerted_at=@openedAt WHERE booking_id=@bookingId`).run({ bookingId, openedAt });
 }
 
 /** Upsert bookings (from a searchProjects pull), keyed by Goodshuffle project id. Logs a
