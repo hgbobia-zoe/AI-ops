@@ -4,6 +4,41 @@
 // UNKNOWN and UNANSWERED are rendered as themselves, never as No.
 
 import type { Intake, TriState } from "./types";
+import type { GeoResult } from "./geocode";
+
+// The delivery-location payload carried in the create_project op. The drainer uses it two ways: to set the
+// project venue (saveDefaultEventLocation) and to embed the address+coords in each logistics leg's add
+// payload (Goodshuffle requires that, or it rejects delivery items with "Delivery Location Missing").
+export interface GsLocation {
+  venueName: string;
+  address: string;
+  line2: string;
+  city: string;
+  county: string;
+  state: string;
+  zip: string;
+  country: string;
+  latitude: string;
+  longitude: string;
+}
+
+/** Build the delivery-location payload from the intake plus a successful geocode. Returns null when there's
+ *  no usable street address or the geocode failed — the caller then skips the location-dependent auto-adds. */
+export function gsIntakeLocation(i: Intake, geo: GeoResult | null): GsLocation | null {
+  if (!geo || !i.streetAddress.trim()) return null;
+  return {
+    venueName: i.venueName.trim() || i.streetAddress.trim(),
+    address: i.streetAddress.trim(),
+    line2: "",
+    city: i.city.trim(),
+    county: geo.county,
+    state: i.state.trim(),
+    zip: i.zip.trim(),
+    country: "US",
+    latitude: geo.latitude,
+    longitude: geo.longitude,
+  };
+}
 
 // ── Goodshuffle saveEventDetails formats (captured live on a TEST project) ──────────────────────────
 // POST /app/vendorTransaction/saveEventDetails (form-encoded): transactionID, eventName, fromDateStr,

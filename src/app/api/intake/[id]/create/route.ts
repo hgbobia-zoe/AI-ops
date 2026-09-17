@@ -7,8 +7,9 @@
 import { NextResponse } from "next/server";
 import { getIntake, updateIntake } from "@/lib/intake/store";
 import { missingRequired } from "@/lib/intake/types";
-import { formatIntakeNotes, suggestEventName, gsEventDetails } from "@/lib/intake/format";
-import { autoAddItems } from "@/lib/intake/gsItems";
+import { formatIntakeNotes, suggestEventName, gsEventDetails, gsIntakeLocation } from "@/lib/intake/format";
+import { autoAddSimpleItems, autoAddLogisticsLegs } from "@/lib/intake/gsItems";
+import { geocodeAddress } from "@/lib/intake/geocode";
 import { logIntakeEvent } from "@/lib/intake/audit";
 import { enqueueGsOp } from "@/lib/db/repo";
 
@@ -27,9 +28,16 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ ok: true, status: "created", gsProjectId: intake.gsProjectId, gsProjectUrl: intake.gsProjectUrl });
   }
 
+  // Geocode the captured delivery address so the office session can set the delivery location and auto-add
+  // the location-dependent logistics items (base delivery + Event Readiness). Best-effort: if this returns
+  // null, we simply omit the location and those legs — the shell is still created and they're added by hand.
+  const geo = await geocodeAddress(intake.streetAddress, intake.city, intake.state, intake.zip);
+  const location = gsIntakeLocation(intake, geo);
+  const logisticsLegs = location ? autoAddLogisticsLegs(intake) : [];
+
   // Queue the create for the logged-in office session. eventName is stashed in the notes header until the
   // Goodshuffle rename endpoint is wired.
-  enqueueGsOp({ op: "create_project", label: `guided intake ${suggestEventName(intake)}`, payload: { intakeId: intake.id, eventName: suggestEventName(intake), notes: formatIntakeNotes(intake), details: gsEventDetails(intake), addItems: autoAddItems(intake) } });
+  enqueueGsOp({ op: "create_project", label: `guided intake ${suggestEventName(intake)}`, payload: { intakeId: intake.id, eventName: suggestEventName(intake), notes: formatIntakeNotes(intake), details: gsEventDetails(intake), addItems: autoAddSimpleItems(intake), location, logisticsLegs } });
   updateIntake(id, { status: "creating", gsStatus: "queued" });
   await logIntakeEvent("GS_SHELL_QUEUED", id, { name: suggestEventName(intake) });
 

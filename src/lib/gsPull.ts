@@ -203,20 +203,37 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
               var nb=new URLSearchParams({ transactionID:String(pid), clientVisibleNotes:"", internalNotes:String(o.payload.notes||""), fulfillmentNotes:"" });
               return fetch("/app/vendorTransaction/saveEventNotes",{method:"POST",headers:GH,credentials:"include",body:nb}).catch(function(){});
             }).then(function(){
-              // Auto-add standard line items (e.g. the damage waiver on every quote). Adding an item needs
-              // the project's default line-item group id, from initContractView. Best-effort per item.
+              // Set the delivery location (venue) from the geocoded intake address, if we have one. Besides
+              // showing the venue, this is what lets the logistics legs below add (Goodshuffle rejects
+              // delivery items on a shell with no delivery location). Best-effort.
+              var loc=o.payload.location;
+              if(!loc) return;
+              var lb=new URLSearchParams({ transactionID:String(pid), venueName:String(loc.venueName||""), venuePhoneNumber:"", venueAddress:String(loc.address||""), venueAddress_line2:String(loc.line2||""), venueCity:String(loc.city||""), venueCounty:String(loc.county||""), venueState:String(loc.state||""), venueZipCode:String(loc.zip||""), venueCountry:String(loc.country||"US"), venueLatitude:String(loc.latitude||""), venueLongitude:String(loc.longitude||""), venueNotes:"" });
+              return fetch("/app/vendorTransaction/saveDefaultEventLocation",{method:"POST",headers:GH,credentials:"include",body:lb}).catch(function(){});
+            }).then(function(){
+              // Auto-add line items: SIMPLE services (damage waiver, delivery time-window upgrade) go in the
+              // Rental group; LOGISTICS legs (base delivery, Event Readiness) go in the Logistics group with
+              // the delivery address embedded (or Goodshuffle rejects them). One contract-view fetch gives us
+              // both group ids. All best-effort per item.
               var items=(o.payload.addItems||[]);
-              if(!items.length) return;
+              var legs=(o.payload.logisticsLegs||[]);
+              var loc=o.payload.location;
+              if(!items.length && !(legs.length && loc)) return;
+              var JH={"content-type":"application/json","x-requested-with":"XMLHttpRequest",accept:"application/json"};
               return fetch("/app/vendorTransaction/initContractView?transactionID="+encodeURIComponent(pid),{headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}).then(function(r){ return r.json(); }).then(function(cv){
                 var groups=(cv&&cv.lineItemGroupsToLoad)||[];
-                var grp=null; for(var i=0;i<groups.length;i++){ if(!groups[i].logisticsContainer){ grp=groups[i].id; break; } }
-                if(grp==null && groups.length) grp=groups[0].id;
-                if(grp==null) return;
+                var rentalGrp=null, logiGrp=null;
+                for(var i=0;i<groups.length;i++){ if(groups[i].logisticsContainer){ if(logiGrp==null) logiGrp=groups[i].id; } else if(rentalGrp==null){ rentalGrp=groups[i].id; } }
+                if(rentalGrp==null && groups.length) rentalGrp=groups[0].id;
                 var addChain=Promise.resolve();
-                items.forEach(function(it){ addChain=addChain.then(function(){
-                  var body=JSON.stringify({ transactionID:Number(pid), lineItemGroupID:grp, parentRelationID:null, relationType:null, fulfillment:false, inventoryTypeStr:it.inventoryTypeStr, rateType:it.rateType, itemID:it.itemID, unitPrice:(it.unitPrice||0), quantity:(it.quantity||1) });
-                  return fetch("/app/transactionItemRelation/addInventoryItemToContract",{method:"POST",headers:{"content-type":"application/json","x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include",body:body}).catch(function(){});
-                }); });
+                if(rentalGrp!=null){ items.forEach(function(it){ addChain=addChain.then(function(){
+                  var body=JSON.stringify({ transactionID:Number(pid), lineItemGroupID:rentalGrp, parentRelationID:null, relationType:null, fulfillment:false, inventoryTypeStr:it.inventoryTypeStr, rateType:it.rateType, itemID:it.itemID, unitPrice:(it.unitPrice||0), quantity:(it.quantity||1) });
+                  return fetch("/app/transactionItemRelation/addInventoryItemToContract",{method:"POST",headers:JH,credentials:"include",body:body}).catch(function(){});
+                }); }); }
+                if(logiGrp!=null && loc){ var evDate=(o.payload.details&&o.payload.details.fromDateStr)||""; legs.forEach(function(lg){ addChain=addChain.then(function(){
+                  var body=JSON.stringify({ inventoryInjection:true, itemID:lg.itemID, fulfillment:false, transactionID:Number(pid), lineItemGroupID:logiGrp, relationID:null, relationType:null, parentRelationID:null, inventoryTypeStr:"SERVICE", rateType:lg.rateType, title:lg.title, description:null, isSubrental:false, internalNotes:"", showItemDescription:true, showItemAttributes:true, quantity:1, unitPriceOverridden:false, unitPrice:0, mileageFee:0, discountDollarAmount:0, discountPercentage:0, itemStartDate:evDate, itemStartTime:null, itemEndDate:evDate, itemEndTime:null, itemHoursRented:null, eventTimeLineMarker:lg.eventTimeLineMarker, selectedTaxTypes:[], serviceStoreLocationID:null, venueName:loc.venueName, venueAddress:loc.address, venueAddress_line2:loc.line2, venueAddress_city:loc.city, venueAddress_state:loc.state, venueAddress_zipCode:loc.zip, venueAddress_county:loc.county, venueAddress_country:loc.country, venueAddress_latitude:loc.latitude, venueAddress_longitude:loc.longitude });
+                  return fetch("/app/transactionItemRelation/addInventoryItemToContract",{method:"POST",headers:JH,credentials:"include",body:body}).catch(function(){});
+                }); }); }
                 return addChain;
               }).catch(function(){});
             }).then(function(){
