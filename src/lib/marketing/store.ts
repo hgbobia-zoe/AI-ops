@@ -8,7 +8,8 @@ import {
   type Campaign, type CampaignInput, type CampaignStatus,
   type ContentItem, type ContentInput, type ContentStatus,
   type Review, type ReviewInput, type ReviewSource,
-  type LeadChannel, type Channel, type Audience,
+  type Prospect, type ProspectInput, type ProspectStatus, type OutreachSource,
+  type Channel, type Audience,
   type ChannelLinks, emptyChannelLinks,
 } from "./types";
 
@@ -166,21 +167,55 @@ export function deleteReview(id: string): boolean {
   return getDb().prepare("DELETE FROM marketing_reviews WHERE id = ?").run(id).changes > 0;
 }
 
-// ── Lead-source tags (manual attribution on a booking) ────────────────────────────────────────────
-export interface LeadTag { bookingId: string; channel: LeadChannel | null; note: string; taggedBy: string | null; updatedAt: string }
-function toTag(r: any): LeadTag {
-  return { bookingId: r.booking_id, channel: (r.channel as LeadChannel) ?? null, note: r.note ?? "", taggedBy: r.tagged_by ?? null, updatedAt: r.updated_at };
+// ── Outreach prospects (top of funnel; win = quote agreed) ────────────────────────────────────────
+function toProspect(r: any): Prospect {
+  return {
+    id: r.id, name: r.name, contact: r.contact ?? "", audience: (r.audience as Audience) ?? "both", source: (r.source as OutreachSource) ?? null,
+    status: r.status as ProspectStatus, campaignId: r.campaign_id ?? null, owner: r.owner ?? "", nextAction: r.next_action ?? null,
+    notes: r.notes ?? "", wonAt: r.won_at ?? null, createdBy: r.created_by ?? null, createdAt: r.created_at, updatedAt: r.updated_at,
+  };
 }
-export function getLeadTags(): Map<string, LeadTag> {
-  const rows = (getDb().prepare("SELECT * FROM marketing_lead_tags").all() as any[]).map(toTag);
-  return new Map(rows.map((t) => [t.bookingId, t]));
+export function listProspects(): Prospect[] {
+  return (getDb().prepare("SELECT * FROM marketing_prospects ORDER BY (next_action IS NULL), next_action ASC, created_at DESC").all() as any[]).map(toProspect);
 }
-export function setLeadTag(bookingId: string, channel: LeadChannel | null, note: string, taggedBy: string | null): void {
+export function getProspect(id: string): Prospect | null {
+  const r = getDb().prepare("SELECT * FROM marketing_prospects WHERE id = ?").get(id);
+  return r ? toProspect(r) : null;
+}
+export function createProspect(input: ProspectInput, createdBy: string | null = null): Prospect {
+  const id = `MP-${randomUUID()}`;
   const ts = new Date().toISOString();
+  const status = input.status ?? "to_contact";
   getDb().prepare(
-    `INSERT INTO marketing_lead_tags (booking_id, channel, note, tagged_by, updated_at) VALUES (?,?,?,?,?)
-     ON CONFLICT(booking_id) DO UPDATE SET channel=excluded.channel, note=excluded.note, tagged_by=excluded.tagged_by, updated_at=excluded.updated_at`,
-  ).run(bookingId, channel, str(note), taggedBy, ts);
+    `INSERT INTO marketing_prospects (id, name, contact, audience, source, status, campaign_id, owner, next_action, notes, won_at, created_by, created_at, updated_at)
+     VALUES (@id,@name,@contact,@audience,@source,@status,@campaign_id,@owner,@next_action,@notes,@won_at,@created_by,@ts,@ts)`,
+  ).run({
+    id, name: str(input.name) || "Untitled prospect", contact: str(input.contact), audience: input.audience ?? "both", source: input.source ?? null,
+    status, campaign_id: input.campaignId ?? null, owner: str(input.owner), next_action: input.nextAction || null, notes: str(input.notes),
+    won_at: status === "quote_agreed" ? ts : null, created_by: createdBy, ts,
+  });
+  return getProspect(id)!;
+}
+export function updateProspect(id: string, input: ProspectInput): Prospect | null {
+  const prev = getProspect(id);
+  if (!prev) return null;
+  const ts = new Date().toISOString();
+  const merge = <T>(v: T | undefined, fallback: T): T => (v === undefined ? fallback : v);
+  const status = merge(input.status, prev.status);
+  // Stamp the win time the first time it becomes quote_agreed; clear if it moves back out of the win.
+  const wonAt = status === "quote_agreed" ? (prev.wonAt ?? ts) : null;
+  getDb().prepare(
+    `UPDATE marketing_prospects SET name=@name, contact=@contact, audience=@audience, source=@source, status=@status,
+       campaign_id=@campaign_id, owner=@owner, next_action=@next_action, notes=@notes, won_at=@won_at, updated_at=@ts WHERE id=@id`,
+  ).run({
+    id, name: str(merge(input.name, prev.name)) || prev.name, contact: str(merge(input.contact, prev.contact)), audience: merge(input.audience, prev.audience),
+    source: merge(input.source, prev.source), status, campaign_id: merge(input.campaignId, prev.campaignId) || null, owner: str(merge(input.owner, prev.owner)),
+    next_action: merge(input.nextAction, prev.nextAction) || null, notes: str(merge(input.notes, prev.notes)), won_at: wonAt, ts,
+  });
+  return getProspect(id);
+}
+export function deleteProspect(id: string): boolean {
+  return getDb().prepare("DELETE FROM marketing_prospects WHERE id = ?").run(id).changes > 0;
 }
 
 // ── Channel hub links (settings KV) ───────────────────────────────────────────────────────────────

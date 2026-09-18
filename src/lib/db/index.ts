@@ -948,12 +948,23 @@ CREATE TABLE IF NOT EXISTS marketing_reviews (
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
--- Manual channel attribution for a booking (Goodshuffle does not hand us "how did you hear about us").
-CREATE TABLE IF NOT EXISTS marketing_lead_tags (
-  booking_id    TEXT PRIMARY KEY,     -- Goodshuffle project id (bookings.booking_id)
-  channel       TEXT,                 -- referral | instagram | facebook | google | the_knot | wedding_wire | website | repeat | other
-  note          TEXT,
-  tagged_by     TEXT,
+-- Outreach prospects — the people/orgs the team is reaching out to BEFORE Goodshuffle. Marketing owns
+-- this top-of-funnel; the win is "quote agreed" (they cross into Goodshuffle, then Sales OS takes over).
+-- Goodshuffle leads are deliberately NOT tracked here — once in Goodshuffle they are already engaged.
+CREATE TABLE IF NOT EXISTS marketing_prospects (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  contact       TEXT,                 -- email / phone / handle
+  audience      TEXT,                 -- b2c | b2b | both
+  source        TEXT,                 -- referral | instagram | facebook | google | the_knot | wedding_wire | website | venue_partner | cold | other
+  status        TEXT NOT NULL,        -- to_contact | contacted | responded | quote_agreed (WIN) | not_interested (lost)
+  campaign_id   TEXT,                 -- optional link to a marketing_campaigns row
+  owner         TEXT,
+  next_action   TEXT,                 -- YYYY-MM-DD
+  notes         TEXT,
+  won_at        TEXT,                 -- ISO — set when status became quote_agreed
+  created_by    TEXT,
+  created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
 `;

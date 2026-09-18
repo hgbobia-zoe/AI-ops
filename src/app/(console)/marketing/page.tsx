@@ -4,10 +4,10 @@
 // the sub-blades. Two-track by design (weddings/social + corporate/gov).
 
 import Link from "next/link";
-import { Megaphone, CalendarDays, Star, ArrowUpRight, AlertTriangle } from "lucide-react";
+import { Megaphone, CalendarDays, Star, ArrowUpRight, AlertTriangle, Trophy, Send } from "lucide-react";
 import { marketingDashboard } from "@/lib/marketing/dashboard";
 import { ChannelHub } from "@/components/marketing/ChannelHub";
-import { REVIEW_SOURCE_LABEL, CHANNEL_LABEL, AUDIENCE_LABEL } from "@/lib/marketing/types";
+import { REVIEW_SOURCE_LABEL, CHANNEL_LABEL, AUDIENCE_LABEL, PROSPECT_STATUS_LABEL, PROSPECT_OPEN_STAGES } from "@/lib/marketing/types";
 import { formatYmdLong } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
@@ -46,7 +46,7 @@ export default function MarketingHome(): React.JSX.Element {
     <main className="max-w-[1100px] p-6">
       <header className="mb-5">
         <h1 className="flex items-center gap-2 text-[22px] font-medium tracking-tight"><Megaphone className="size-5 text-meta" /> Marketing</h1>
-        <p className="mt-1 text-[13px] text-meta">Zoe&apos;s demand-generation command center — campaigns, content, reputation, and lead sources across weddings/social and corporate/gov.</p>
+        <p className="mt-1 text-[13px] text-meta">Zoe&apos;s outreach command center — prospects, campaigns, content, and reputation across weddings/social and corporate/gov. The win is a quote agreed; from there it&apos;s Goodshuffle and Sales OS.</p>
       </header>
 
       {/* Metrics */}
@@ -54,7 +54,7 @@ export default function MarketingHome(): React.JSX.Element {
         <Metric label="Campaigns" value={String(d.campaigns.total)} sub={`${d.campaigns.byStatus.live} live · ${d.campaigns.byStatus.planned} planned`} href="/marketing/campaigns" />
         <Metric label="Content queued" value={String(d.content.upcoming.length)} sub={d.content.overdue.length ? `${d.content.overdue.length} overdue` : `${d.content.ideas} ideas`} href="/marketing/content" />
         <Metric label="Reviews" value={stars} sub={`${d.reviews.count} logged · ${d.reviews.unresponded} to answer`} href="/marketing/reviews" />
-        <Metric label="Leads tagged" value={String(d.leads.taggedCount)} sub={`of ${d.leads.consideredBookings} recent`} href="/marketing/sources" />
+        <Metric label="Quotes won" value={String(d.outreach.winsRecent)} sub={`30 days · ${d.outreach.open} in outreach`} href="/marketing/outreach" />
       </div>
 
       {/* Channel hub */}
@@ -137,28 +137,48 @@ export default function MarketingHome(): React.JSX.Element {
             </div>
           </Section>
 
-          {/* Lead sources */}
-          <Section title="Where leads come from" href="/marketing/sources" linkLabel="Tag leads">
+          {/* Outreach funnel — the marketing win is a quote agreed */}
+          <Section title="Outreach funnel" href="/marketing/outreach" linkLabel="Work outreach">
             <div className="rounded border border-border p-3">
-              {d.leads.byChannel.length === 0 ? (
-                <p className="text-[12.5px] text-meta">No leads tagged yet. Goodshuffle doesn&apos;t record how a lead heard about Zoe, so tag recent bookings to see which channels actually book.</p>
-              ) : (
-                <ul className="space-y-1.5">
-                  {d.leads.byChannel.map((c) => {
-                    const max = d.leads.byChannel[0].count || 1;
-                    return (
-                      <li key={c.channel} className="text-[12.5px]">
-                        <div className="flex items-center justify-between">
-                          <span className="text-foreground">{c.label}</span>
-                          <span className="tabular-nums text-meta">{c.count}{c.revenue > 0 ? ` · ${money(c.revenue)}` : ""}</span>
-                        </div>
-                        <div className="mt-0.5 h-1 w-full overflow-hidden rounded bg-[var(--bar)]"><div className="h-full bg-positive" style={{ width: `${Math.round((c.count / max) * 100)}%` }} /></div>
-                      </li>
-                    );
-                  })}
-                </ul>
+              <div className="flex items-center justify-between text-[13px]">
+                <span className="flex items-center gap-1.5 text-foreground"><Send className="size-3.5 text-meta" /> {d.outreach.open} in outreach</span>
+                <span className="flex items-center gap-1.5 text-positive"><Trophy className="size-3.5" /> {d.outreach.winsRecent} won · 30d</span>
+              </div>
+              {/* open-stage breakdown */}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {PROSPECT_OPEN_STAGES.map((s) => (
+                  <span key={s} className="rounded border border-border px-2 py-0.5 text-[11.5px] text-tertiary-text">{PROSPECT_STATUS_LABEL[s]} <span className="tabular-nums text-meta">{d.outreach.byStage[s]}</span></span>
+                ))}
+              </div>
+              {d.outreach.winsBySource.length > 0 && (
+                <div className="mt-3 border-t border-[var(--row-rule)] pt-2">
+                  <div className="mb-1 text-[11px] uppercase tracking-[0.06em] text-meta">Quotes won by channel</div>
+                  <ul className="space-y-1.5">
+                    {d.outreach.winsBySource.map((c) => {
+                      const max = d.outreach.winsBySource[0].wins || 1;
+                      return (
+                        <li key={c.source} className="text-[12.5px]">
+                          <div className="flex items-center justify-between"><span className="text-foreground">{c.label}</span><span className="tabular-nums text-meta">{c.wins}</span></div>
+                          <div className="mt-0.5 h-1 w-full overflow-hidden rounded bg-[var(--bar)]"><div className="h-full bg-positive" style={{ width: `${Math.round((c.wins / max) * 100)}%` }} /></div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
               )}
-              <p className="mt-2 border-t border-[var(--row-rule)] pt-2 text-[11px] text-meta">Tagged {d.leads.taggedCount} of {d.leads.consideredBookings} recent bookings. Attribution is manual until a lead-source field is captured from Goodshuffle.</p>
+              {d.outreach.dueThisWeek.length > 0 && (
+                <div className="mt-3 border-t border-[var(--row-rule)] pt-2">
+                  <div className="mb-1 text-[11px] uppercase tracking-[0.06em] text-meta">Follow up this week</div>
+                  <ul className="space-y-1">
+                    {d.outreach.dueThisWeek.map((p) => (
+                      <li key={p.id} className="flex items-center justify-between text-[12.5px]"><span className="min-w-0 truncate text-foreground">{p.name}</span><span className={`shrink-0 tabular-nums ${p.nextAction && p.nextAction < d.today ? "text-attention" : "text-meta"}`}>{p.nextAction}</span></li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {d.outreach.open === 0 && d.outreach.winsRecent === 0 && (
+                <p className="mt-2 border-t border-[var(--row-rule)] pt-2 text-[11.5px] text-meta">No prospects yet. Add who you&apos;re reaching out to — the win is when they agree to a quote and cross into Goodshuffle.</p>
+              )}
             </div>
           </Section>
         </div>

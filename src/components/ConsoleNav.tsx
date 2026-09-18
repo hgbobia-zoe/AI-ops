@@ -16,7 +16,7 @@ import {
   Gauge, ListChecks, Truck, AlertTriangle, Users, DollarSign,
   TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
   RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator, Radar, IdCard,
-  Megaphone, Send, Upload, CalendarDays, Star, GitBranch,
+  Megaphone, Send, Upload, CalendarDays, Star,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -87,10 +87,10 @@ const GROUPS: Group[] = [
     icon: Megaphone,
     blades: [
       { href: "/marketing", label: "Marketing", icon: Gauge, exact: true },
+      { href: "/marketing/outreach", label: "Outreach", icon: Send },
       { href: "/marketing/campaigns", label: "Campaigns", icon: Megaphone },
       { href: "/marketing/content", label: "Content", icon: CalendarDays },
       { href: "/marketing/reviews", label: "Reviews", icon: Star },
-      { href: "/marketing/sources", label: "Lead Sources", icon: GitBranch },
     ],
   },
   {

@@ -135,13 +135,53 @@ export interface ReviewInput {
   link?: string;
 }
 
-// ── Lead-source attribution (manual) ──────────────────────────────────────────────────────────────
-export type LeadChannel = "referral" | "instagram" | "facebook" | "google" | "the_knot" | "wedding_wire" | "website" | "repeat" | "other";
-export const LEAD_CHANNEL_LABEL: Record<LeadChannel, string> = {
+// ── Outreach prospects (top of funnel, BEFORE Goodshuffle) ────────────────────────────────────────
+// The win is "quote agreed" — the moment they cross into Goodshuffle. Goodshuffle leads are handled
+// separately (Sales OS); once someone is in Goodshuffle they are already engaged, not an outreach target.
+export type OutreachSource = "referral" | "instagram" | "facebook" | "google" | "the_knot" | "wedding_wire" | "website" | "venue_partner" | "cold" | "other";
+export const OUTREACH_SOURCE_LABEL: Record<OutreachSource, string> = {
   referral: "Referral / word of mouth", instagram: "Instagram", facebook: "Facebook", google: "Google search",
-  the_knot: "The Knot", wedding_wire: "WeddingWire", website: "Website", repeat: "Repeat customer", other: "Other",
+  the_knot: "The Knot", wedding_wire: "WeddingWire", website: "Website", venue_partner: "Venue / planner partner", cold: "Cold outreach", other: "Other",
 };
-export const LEAD_CHANNELS: LeadChannel[] = ["referral", "instagram", "facebook", "google", "the_knot", "wedding_wire", "website", "repeat", "other"];
+export const OUTREACH_SOURCES: OutreachSource[] = ["referral", "instagram", "facebook", "google", "the_knot", "wedding_wire", "website", "venue_partner", "cold", "other"];
+
+export type ProspectStatus = "to_contact" | "contacted" | "responded" | "quote_agreed" | "not_interested";
+export const PROSPECT_STATUS_LABEL: Record<ProspectStatus, string> = {
+  to_contact: "To contact", contacted: "Contacted", responded: "Responded", quote_agreed: "Quote agreed", not_interested: "Not interested",
+};
+// Funnel order (open stages then the terminal states). quote_agreed = WIN, not_interested = lost.
+export const PROSPECT_STATUS_ORDER: ProspectStatus[] = ["to_contact", "contacted", "responded", "quote_agreed", "not_interested"];
+export const PROSPECT_OPEN_STAGES: ProspectStatus[] = ["to_contact", "contacted", "responded"];
+export function isProspectWon(s: ProspectStatus): boolean { return s === "quote_agreed"; }
+
+export interface Prospect {
+  id: string;
+  name: string;
+  contact: string;
+  audience: Audience;
+  source: OutreachSource | null;
+  status: ProspectStatus;
+  campaignId: string | null;
+  owner: string;
+  nextAction: string | null;
+  notes: string;
+  wonAt: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProspectInput {
+  name?: string;
+  contact?: string;
+  audience?: Audience;
+  source?: OutreachSource | null;
+  status?: ProspectStatus;
+  campaignId?: string | null;
+  owner?: string;
+  nextAction?: string | null;
+  notes?: string;
+}
 
 // ── Channel hub — links to the external tools the team runs ────────────────────────────────────────
 export interface ChannelLinks {

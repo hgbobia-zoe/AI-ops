@@ -1,15 +1,17 @@
-// Marketing Command Center — deterministic aggregation over what the team has entered (campaigns,
-// content plan, reviews) plus the booking data the app already holds (for lead-source attribution).
-// Honest about gaps: Goodshuffle does not tell us how a lead heard about Zoe, so attribution only counts
-// bookings a person has tagged. No fabrication.
+// Marketing Command Center — deterministic aggregation over what the team runs OUTREACH on (prospects,
+// campaigns, content, reviews). This is the top of funnel, BEFORE Goodshuffle: the win is "quote agreed"
+// (they cross into Goodshuffle, then Sales OS owns the pipeline). Goodshuffle leads are intentionally not
+// counted here. No fabrication.
 
 import { todayInOpsTz } from "@/lib/dates";
-import { getRecentBookings } from "@/lib/db/repo";
-import { listCampaigns, listContent, listReviews, getLeadTags, getChannelLinks } from "./store";
-import { LEAD_CHANNEL_LABEL, type Campaign, type ContentItem, type Review, type ChannelLinks, type LeadChannel, type CampaignStatus } from "./types";
+import { listCampaigns, listContent, listReviews, listProspects, getChannelLinks } from "./store";
+import {
+  OUTREACH_SOURCE_LABEL, PROSPECT_OPEN_STAGES,
+  type Campaign, type ContentItem, type Review, type Prospect, type ChannelLinks, type CampaignStatus, type ProspectStatus, type OutreachSource,
+} from "./types";
 
-const ATTRIBUTION_WINDOW = 90; // recent bookings we consider for the lead-source snapshot
 const UPCOMING_DAYS = 21;
+const WIN_WINDOW = 30; // "wins this month" lookback for quote-agreed prospects
 
 function addDays(ymd: string, n: number): string {
   const d = new Date(`${ymd}T00:00:00Z`);
@@ -27,8 +29,8 @@ export interface MarketingDashboard {
     activeSpend: number;
   };
   content: {
-    upcoming: ContentItem[]; // planned within the next window, not yet posted
-    overdue: ContentItem[]; // planned in the past, not yet posted
+    upcoming: ContentItem[];
+    overdue: ContentItem[];
     ideas: number;
   };
   reviews: {
@@ -37,10 +39,12 @@ export interface MarketingDashboard {
     unresponded: number;
     recent: Review[];
   };
-  leads: {
-    consideredBookings: number; // recent bookings in the window
-    taggedCount: number;
-    byChannel: { channel: LeadChannel; label: string; count: number; revenue: number }[];
+  outreach: {
+    open: number; // prospects still in an open stage
+    byStage: Record<ProspectStatus, number>;
+    winsRecent: number; // quote_agreed in the last WIN_WINDOW days
+    dueThisWeek: Prospect[]; // open prospects with next_action within 7 days (or overdue)
+    winsBySource: { source: OutreachSource; label: string; wins: number }[]; // which channels turn into agreed quotes
   };
   links: ChannelLinks;
 }
@@ -66,31 +70,29 @@ export function marketingDashboard(today: string = todayInOpsTz()): MarketingDas
   const avgRating = rated.length ? Math.round((rated.reduce((s, r) => s + r.rating, 0) / rated.length) * 10) / 10 : null;
   const unresponded = reviews.filter((r) => !r.responded).length;
 
-  // Lead-source attribution — recent bookings joined with manual channel tags.
-  const windowStart = addDays(today, -ATTRIBUTION_WINDOW);
-  const recent = getRecentBookings(200).filter((b) => (b.dateCreated ?? b.eventDate ?? "") >= windowStart);
-  const tags = getLeadTags();
-  const bucket = new Map<LeadChannel, { count: number; revenue: number }>();
-  let taggedCount = 0;
-  for (const b of recent) {
-    const tag = tags.get(b.bookingId);
-    if (!tag?.channel) continue;
-    taggedCount++;
-    const cur = bucket.get(tag.channel) ?? { count: 0, revenue: 0 };
-    cur.count++;
-    if (b.signed && b.grandTotal) cur.revenue += b.grandTotal;
-    bucket.set(tag.channel, cur);
+  // Outreach funnel — the marketing win is "quote agreed".
+  const prospects = listProspects();
+  const byStage: Record<ProspectStatus, number> = { to_contact: 0, contacted: 0, responded: 0, quote_agreed: 0, not_interested: 0 };
+  for (const p of prospects) byStage[p.status]++;
+  const openStages = new Set<ProspectStatus>(PROSPECT_OPEN_STAGES);
+  const open = prospects.filter((p) => openStages.has(p.status)).length;
+  const winSince = addDays(today, -WIN_WINDOW);
+  const winsRecent = prospects.filter((p) => p.status === "quote_agreed" && (p.wonAt ?? "").slice(0, 10) >= winSince).length;
+  const weekEnd = addDays(today, 7);
+  const dueThisWeek = prospects.filter((p) => openStages.has(p.status) && p.nextAction && p.nextAction <= weekEnd).slice(0, 8);
+  const wonBucket = new Map<OutreachSource, number>();
+  for (const p of prospects) {
+    if (p.status !== "quote_agreed" || !p.source) continue;
+    wonBucket.set(p.source, (wonBucket.get(p.source) ?? 0) + 1);
   }
-  const byChannel = [...bucket.entries()]
-    .map(([channel, v]) => ({ channel, label: LEAD_CHANNEL_LABEL[channel], count: v.count, revenue: v.revenue }))
-    .sort((a, b) => b.count - a.count);
+  const winsBySource = [...wonBucket.entries()].map(([source, wins]) => ({ source, label: OUTREACH_SOURCE_LABEL[source], wins })).sort((a, b) => b.wins - a.wins);
 
   return {
     today,
     campaigns: { total: campaigns.length, byStatus, live, activeBudget, activeSpend },
     content: { upcoming, overdue, ideas },
     reviews: { count: reviews.length, avgRating, unresponded, recent: reviews.slice(0, 5) },
-    leads: { consideredBookings: recent.length, taggedCount, byChannel },
+    outreach: { open, byStage, winsRecent, dueThisWeek, winsBySource },
     links: getChannelLinks(),
   };
 }
