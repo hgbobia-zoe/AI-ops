@@ -7,10 +7,11 @@
 > **Design law: RULES CALCULATE. AI INTERPRETS.** All scoring, timing, jurisdiction, dedup and
 > lifecycle are deterministic; AI is reserved for interpretation and never fabricates or scores.
 
-This is **Phase 1 (the shell)**: the unified intelligence layer, the connector architecture, the
-scoring/timing/lifecycle engines, the relationship graph, relationship memory, and the reframed UI —
-all working, validated with SEED data. Live feeds are wired but **dormant** until configured (no keys
-required to run).
+The unified intelligence layer, the connector architecture, the scoring/timing/lifecycle engines, the
+relationship graph, relationship memory, **signal fusion, AI interpretation, meaningful-only alerts,
+outreach drafting, campaigns and analytics** are all built and working, validated with SEED data. Live
+feeds (SAM.gov, the browser agent, Slack alerts, the LLM) are wired but **dormant** until configured —
+no keys required to run.
 
 ---
 
@@ -100,15 +101,46 @@ A re-pull that changes a watched field (deadline, status) or adds an **awardee**
 `history_changes` row (shown on the detail page). Alert wiring reuses `slackNotifyAlert` + the
 `alertOps` throttle-map so only meaningful signals fire (kept minimal in Phase 1).
 
+## Intelligence layers (Phases 2–6, built)
+
+- **Signal fusion (§9, `fusion.ts`)** — deterministic detection of RELATED opportunities (same
+  jurisdiction + shared contact / similar name / same organizer within a date window) so an event, a
+  procurement and a web signal about one real opportunity surface together. Shown on the detail page.
+- **AI interpretation (§3, `interpret.ts`)** — a plain-language summary, why it's relevant, and concrete
+  research actions. Deterministic template floor always; the LLM only refines it, cached in
+  `opportunity_ai`, labelled `method: llm | template`. Dormant (template-only) without `ANTHROPIC_API_KEY`.
+- **Meaningful-only alerts (§18, `alerts.ts`)** — new high-value opportunity, new contractor/awardee,
+  opportunity change, and existing-relationship signals. Idempotent per (opportunity, kind) via
+  `opportunity_alerts`; posts to the alerts Slack channel when configured, records the dedup key either
+  way so a later webhook never blasts the backlog.
+- **Outreach (§10, `outreach.ts` + `opportunity_outreach`)** — DETECT → DRAFT → APPROVE → SEND → TRACK.
+  Deterministic email + call script + follow-up cadence in the house voice, optional LLM refine; a human
+  edits/approves; recording a send advances the opportunity to CONTACTED. Nothing sends automatically.
+- **Entity/relationship intelligence (§8, `/radar/companies`, `/radar/entities/[id]`)** — every company
+  across opportunities, its role on each, and its existing Zoe relationship (matched at ingest).
+- **Campaigns (§11, `campaigns.ts`)** — named groupings with deterministic target criteria (auto-match),
+  and derived metrics (opportunities, companies, contacted, conversion, indicative value).
+- **Analytics (§19, `analytics.ts`, `/radar/analytics`)** — the signal→revenue funnel + breakdowns by
+  source, jurisdiction and type. Pipeline figure is an indicative range sum, never booked revenue.
+
+## Lead intelligence on the detail page
+
+Each opportunity leads with a **Lead intelligence** block: the source (with an **Open original** link),
+the **awarding office / buyer**, whether it is **Open or Awarded** (with awardee, award amount and date),
+and the procurement facts (solicitation number, notice type, posted date, response deadline, NAICS/PSC,
+set-aside). When awarded, it flags the awardee as the likely partner to approach.
+
 ## UI
 
-- **`/radar`** — dashboard with the four lanes (§13): Outreach Ready / New Signals / Early Signals /
-  Active, metrics, and filters (type, jurisdiction, score, search). Each row shows WHY, WHO, and the
-  next action.
-- **`/radar/[id]`** — opportunity intelligence: Why-it-matters score breakdown, Who-to-contact (graph +
-  primary target + relationship memory), Timing, Lifecycle progress, Change history, Sales OS handoff.
-- **`/radar/events/[id]`** — the full event detail (recurrence, planners) for EVENT-kind opportunities.
-- **`/radar/sources`** — the source registry + browser-agent workflow definitions.
+- **`/radar`** — dashboard with the four lanes (§13) + metrics + filters, and the in-page tab bar.
+- **`/radar/[id]`** — opportunity intelligence: Lead intelligence (source/award/procurement), AI
+  interpretation, Why-it-matters, Who-to-contact (graph + primary target + relationship memory), Timing,
+  Lifecycle, Change history, Outreach, Related signals, Sales OS handoff.
+- **`/radar/companies`** + **`/radar/entities/[id]`** — the relationship graph.
+- **`/radar/campaigns`** + **`/radar/campaigns/[id]`** — campaigns + metrics.
+- **`/radar/analytics`** — the funnel + breakdowns.
+- **`/radar/events/[id]`** — full event detail (recurrence, planners) for EVENT-kind opportunities.
+- **`/radar/sources`** — source registry + browser-agent workflow definitions.
 
 ## Real vs seeded
 
@@ -126,9 +158,13 @@ A re-pull that changes a watched field (deadline, status) or adds an **awardee**
 | `SAM_API_KEY` | Activates the live SAM.gov federal feed (dormant without it). |
 | `RADAR_INGEST_TOKEN` | Locks the browser-agent ingest endpoint (fail-open until set). |
 | `SLACK_ALERT_WEBHOOK_URL` / `alerts.slackWebhook` | Opportunity alerts (reuses the existing alerts channel). |
+| `ANTHROPIC_API_KEY` (or `LLM_BASE_URL`) | Turns on AI interpretation + outreach refinement; template-only fallback otherwise. |
 
-## Roadmap (§20)
-**P1 Foundation (this).** P2 more procurement browser connectors + richer change alerts. P3 deeper
-signal fusion (event + procurement + web → one high-confidence opportunity) + AI interpretation. P4
-richer entity/relationship intelligence. P5 outreach drafting + campaigns wired to Sales OS sending.
-P6 analytics (opportunity → revenue).
+## Roadmap (§20) — status
+**P1 Foundation ✅. P2 connectors + alerts ✅** (Montgomery + eMMA/Rockville/Gaithersburg/DC browser
+workflows; meaningful-only Slack alerts). **P3 fusion + AI interpretation ✅. P4 entity/relationship
+intelligence ✅. P5 outreach + campaigns ✅** (drafting + approval; actual email transport to a
+discovered contact — vs. an existing Goodshuffle booking — remains a deliberate manual/record step).
+**P6 analytics ✅** (funnel + breakdowns). Next: real per-portal browser parsers, live SAM.gov/LLM
+enablement, and closing the loop from a sent outreach to a booked Goodshuffle project for true
+opportunity→revenue attribution.

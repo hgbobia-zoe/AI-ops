@@ -3,6 +3,7 @@
 // procurement portal is a registry entry + an adapter — not a rewrite. Read-only in Phase 1.
 
 import Link from "next/link";
+import { RadarTabs } from "@/components/RadarTabs";
 import { getSourceRegistry } from "@/lib/opportunity/store";
 import { seedOpportunitiesIfEmpty } from "@/lib/opportunity/seed";
 import { tableCls, theadCls, thCls } from "@/components/console-primitives";
@@ -26,6 +27,7 @@ export default async function SourcesPage(): Promise<React.JSX.Element> {
         <h1 className="text-[22px] font-medium tracking-tight">Sources</h1>
         <p className="text-[12.5px] text-meta">Where Opportunity Radar pulls from. API sources call an official API; browser sources are fed by the local browser agent through a defined workflow; manual sources accept uploads. Each has its own adapter — add a portal without rewriting the engine.</p>
       </header>
+      <RadarTabs />
 
       <div className="overflow-x-auto border border-border">
         <table className={tableCls}>

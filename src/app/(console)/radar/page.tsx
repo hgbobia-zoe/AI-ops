@@ -6,6 +6,7 @@
 
 import Link from "next/link";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { RadarTabs } from "@/components/RadarTabs";
 import { OpportunitySeedButton } from "@/components/OpportunitySeedButton";
 import { FigureStrip, type Figure } from "@/components/console-primitives";
 import { SeedTag, ScorePill, TierBadge } from "@/components/radar-badges";
@@ -121,6 +122,8 @@ export default async function OpportunityRadarPage({ searchParams }: { searchPar
         </div>
         <FigureStrip figures={figures} />
       </header>
+
+      <RadarTabs />
 
       {board.hasSeedData && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded border border-border bg-foreground/[0.03] px-3 py-2 text-[12px] text-meta">
