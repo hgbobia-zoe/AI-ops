@@ -13,6 +13,7 @@ const TABS: { href: string; label: string }[] = [
   { href: "/radar/campaigns", label: "Campaigns" },
   { href: "/radar/analytics", label: "Analytics" },
   { href: "/radar/sources", label: "Sources" },
+  { href: "/radar/import", label: "Import" },
 ];
 
 export function RadarTabs(): React.JSX.Element {

@@ -14,7 +14,7 @@ import { normalizeJurisdiction } from "./jurisdiction";
 import { upsertOpportunity, upsertEntity, linkEntity, setPrimaryTarget, getOpportunityByDedupe, type OpportunityInput } from "./store";
 import { enrichEntityMatches } from "./relationship";
 import { emitOpportunityAlerts, type AlertItem } from "./alerts";
-import type { EntityKind, OpportunityKind, RelationshipRole, Verification, ZoeCategory } from "./types";
+import type { Confidence, EntityKind, OpportunityKind, RelationshipRole, Verification, ZoeCategory } from "./types";
 
 // A raw record as an adapter emits it (loose — sources vary).
 export interface RawOpportunity {
@@ -26,6 +26,8 @@ export interface RawOpportunity {
   agency?: string;
   city?: string;
   state?: string;
+  expectedAttendance?: number | null;
+  attendanceConfidence?: Confidence;
   estimatedDate?: string | null; // YYYY-MM-DD
   deadline?: string | null; // YYYY-MM-DD
   status?: string;
@@ -155,6 +157,8 @@ function normalizeAndStore(source: OpportunitySource, raw: RawOpportunity, now: 
     city: raw.city ?? null,
     state: raw.state ?? null,
     organization: raw.agency ?? null,
+    expectedAttendance: raw.expectedAttendance ?? null,
+    attendanceConfidence: raw.attendanceConfidence ?? (raw.expectedAttendance != null ? "INFERRED" : "UNKNOWN"),
     estimatedDate: raw.estimatedDate ?? null,
     deadline: raw.deadline ?? raw.procurement?.responseDeadline ?? null,
     status: raw.status ?? null,
