@@ -1,101 +1,123 @@
-// Event Radar — dashboard. On load it seeds the DEMO dataset if empty, then renders the operational
-// figures + a ranked table of detected events with their derived intelligence (fit, planner, timing,
-// next action). Filters are plain GET params so the page stays a server component. "Event Radar detects
-// future demand; Sales OS converts it." Everything shown is derived deterministically from stored facts.
+// Opportunity Radar — dashboard. On load it seeds the demo dataset if empty, bridges Event Radar events
+// into the unified layer, and pulls any configured live connector (SAM.gov). Then it renders the
+// operational figures + the four signal lanes (§13): New Signals / Early Signals / Outreach Ready /
+// Active. Each opportunity shows WHY it matters, WHO to contact, and the next action — deterministically
+// derived. Filters are plain GET params so the page stays a server component.
 
 import Link from "next/link";
 import { AutoRefresh } from "@/components/AutoRefresh";
-import { RadarSeedButton } from "@/components/RadarSeedButton";
-import { FigureStrip, tableCls, theadCls, thCls, type Figure } from "@/components/console-primitives";
+import { OpportunitySeedButton } from "@/components/OpportunitySeedButton";
+import { FigureStrip, type Figure } from "@/components/console-primitives";
 import { SeedTag, ScorePill, TierBadge } from "@/components/radar-badges";
-import { radarBoard, type RadarEventView } from "@/lib/radar/service";
+import { opportunityBoard, type OpportunityView, type Lane } from "@/lib/opportunity/service";
+import { seedOpportunitiesIfEmpty, refreshOpportunities } from "@/lib/opportunity/seed";
 import { seedRadarIfEmpty } from "@/lib/radar/seed";
-import { CATEGORY_LABEL, type EventCategory, type OpportunityTier } from "@/lib/radar/types";
-import { REGION_LABEL, type Region } from "@/lib/radar/geo";
+import { KIND_LABEL, JURISDICTION_LABEL, MATURITY_LABEL, type Jurisdiction, type OpportunityKind } from "@/lib/opportunity/types";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 import { todayInOpsTz, formatYmdLong } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
 
-const PHASE_LABEL: Record<string, string> = {
-  TOO_EARLY: "Too early", PLANNING_WINDOW: "Planning window", OUTREACH_WINDOW: "Outreach window",
-  ACTIVELY_SHOPPING: "Shopping vendors", IMMINENT: "Imminent", PAST: "Past", DATE_UNKNOWN: "Date TBD",
-};
-const PHASE_TONE: Record<string, string> = {
-  OUTREACH_WINDOW: "text-positive", ACTIVELY_SHOPPING: "text-attention", IMMINENT: "text-critical",
-  PLANNING_WINDOW: "text-tertiary-text", TOO_EARLY: "text-meta", PAST: "text-meta", DATE_UNKNOWN: "text-meta",
-};
-const PLANNER_TONE: Record<string, string> = { VERIFIED: "text-positive", INFERRED: "text-attention", UNKNOWN: "text-meta" };
+const LANES: { key: Lane; label: string; sub: string }[] = [
+  { key: "OUTREACH_READY", label: "Outreach ready", sub: "a target is identified and the timing is right — act now" },
+  { key: "NEW_SIGNALS", label: "New signals", sub: "freshly detected — triage and qualify" },
+  { key: "EARLY_SIGNALS", label: "Early signals", sub: "long lead time — build the relationship early" },
+  { key: "ACTIVE", label: "Active opportunities", sub: "in the sales process" },
+];
 
-function daysUntilLabel(date: string | null, today: string): string {
-  if (!date) return "";
-  const d = Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
-  if (Number.isNaN(d)) return "";
-  if (d < 0) return `${-d}d ago`;
-  if (d === 0) return "today";
-  return `in ${d}d`;
+const MATURITY_TONE: Record<string, string> = {
+  IMMEDIATE: "text-critical", OPERATIONALLY_ACTIVE: "text-attention", PROCUREMENT_WINDOW: "text-attention",
+  PLANNING: "text-tertiary-text", EARLY_SIGNAL: "text-meta", PAST: "text-meta", DATE_UNKNOWN: "text-meta",
+};
+
+function fmtRange(v: { low: number; high: number } | null): string {
+  if (!v) return "—";
+  const f = (n: number) => (n >= 1000 ? `$${Math.round(n / 1000)}k` : `$${n}`);
+  return v.low === v.high ? f(v.high) : `${f(v.low)}–${f(v.high)}`;
 }
 
-interface SP { tier?: string; category?: string; region?: string; verification?: string; q?: string }
+interface SP { lane?: string; kind?: string; jurisdiction?: string; q?: string; min?: string }
 
-function matches(r: RadarEventView, sp: SP): boolean {
-  if (sp.tier && r.qualification.tier !== sp.tier) return false;
-  if (sp.category && r.event.category !== sp.category) return false;
-  if (sp.region && r.event.region !== sp.region) return false;
-  if (sp.verification && r.event.verificationStatus !== sp.verification) return false;
+function matches(v: OpportunityView, sp: SP): boolean {
+  if (sp.kind && v.opp.kind !== sp.kind) return false;
+  if (sp.jurisdiction && v.opp.jurisdiction !== sp.jurisdiction) return false;
+  if (sp.min && v.score.opportunityScore < Number(sp.min)) return false;
   if (sp.q) {
-    const hay = `${r.event.name} ${r.event.venue ?? ""} ${r.event.city ?? ""}`.toLowerCase();
+    const hay = `${v.opp.name} ${v.opp.organization ?? ""} ${v.opp.city ?? ""} ${v.primaryTarget?.edge.entity.name ?? ""}`.toLowerCase();
     if (!hay.includes(sp.q.toLowerCase())) return false;
   }
   return true;
 }
 
-const TIER_CHIPS: (OpportunityTier | "ALL")[] = ["ALL", "HIGH", "MEDIUM", "LOW", "UNQUALIFIED"];
+function OppRow({ v }: { v: OpportunityView }): React.JSX.Element {
+  const e = v.opp;
+  return (
+    <Link href={`/radar/${e.id}`} className="flex items-start gap-3 border-t border-[var(--row-rule)] px-3 py-2.5 transition-colors first:border-t-0 hover:bg-[var(--row-hover)]">
+      <div className="w-10 shrink-0 text-center">
+        <ScorePill score={v.score.opportunityScore} tier={v.score.tier} />
+        <div className="text-[9.5px] uppercase tracking-[0.06em]"><TierBadge tier={v.score.tier} /></div>
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate font-medium text-foreground">{e.name}</span>
+          {e.isSeed && <SeedTag />}
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[12px] text-meta">
+          <span className="rounded border border-border px-1.5 py-px text-[10.5px] uppercase tracking-[0.04em] text-tertiary-text">{KIND_LABEL[e.kind]}</span>
+          <span>{JURISDICTION_LABEL[e.jurisdiction]}</span>
+          <span className={MATURITY_TONE[v.maturity.maturity] ?? "text-meta"}>{MATURITY_LABEL[v.maturity.maturity]}</span>
+          {e.estimatedDate && <span>{formatYmdLong(e.estimatedDate)}</span>}
+          {e.deadline && <span className="text-attention">due {formatYmdLong(e.deadline)}</span>}
+        </div>
+        <div className="mt-1 text-[12.5px] text-tertiary-text">→ {v.recommendedAction}</div>
+      </div>
+      <div className="hidden w-40 shrink-0 text-right sm:block">
+        <div className="text-[13px] tabular-nums text-foreground">{fmtRange(v.value)}{v.value?.indicative ? <span className="text-[10px] text-meta"> ind.</span> : ""}</div>
+        <div className="truncate text-[12px] text-meta" title={v.primaryTarget?.edge.entity.name}>{v.primaryTarget ? v.primaryTarget.edge.entity.name : "no target yet"}</div>
+      </div>
+    </Link>
+  );
+}
 
-export default async function EventRadarPage({ searchParams }: { searchParams: Promise<SP> }): Promise<React.JSX.Element> {
-  try {
-    await seedRadarIfEmpty();
-  } catch (e) {
-    console.error("[radar] seed failed:", e);
-  }
+export default async function OpportunityRadarPage({ searchParams }: { searchParams: Promise<SP> }): Promise<React.JSX.Element> {
+  try { await seedRadarIfEmpty(); } catch (e) { console.error("[radar] event seed:", e); }
+  try { await seedOpportunitiesIfEmpty(); } catch (e) { console.error("[opportunity] seed:", e); }
+  try { await refreshOpportunities(); } catch (e) { console.error("[opportunity] refresh:", e); }
+
   const sp = await searchParams;
   const today = todayInOpsTz();
-  const board = radarBoard(today);
-  const rows = board.rows.filter((r) => matches(r, sp));
+  const board = opportunityBoard(today);
   const canManage = canManageSettings(await viewerRole());
 
   const m = board.metrics;
   const figures: Figure[] = [
-    { label: "New (7d)", value: m.newlyDetected },
-    { label: "High-fit", value: m.highFit, tone: m.highFit ? "positive" : "default" },
-    { label: "Planners ID'd", value: m.plannersIdentified },
-    { label: "Entering outreach", value: m.enteringOutreach, tone: m.enteringOutreach ? "attention" : "default", sep: true },
-    { label: "Recurring", value: m.recurring },
-    { label: "Opportunities", value: m.potentialOpportunities },
+    { label: "Discovered", value: m.discovered },
+    { label: "Qualified", value: m.qualified, tone: m.qualified ? "positive" : "default" },
+    { label: "Companies", value: m.companiesIdentified },
+    { label: "Contacts", value: m.contactsIdentified, sep: true },
+    { label: "Entering outreach", value: m.enteringOutreach, tone: m.enteringOutreach ? "attention" : "default" },
+    { label: "$25k+", value: m.highValue },
   ];
 
-  // Build a query-string preserving the other active filters, for the tier chips.
-  const chipHref = (tier: string) => {
+  const laneRows = (lane: Lane) => board.lanes[lane].filter((v) => matches(v, sp));
+  const activeLaneFilter = sp.lane;
+
+  const chipHref = (patch: Partial<SP>) => {
     const p = new URLSearchParams();
-    if (tier !== "ALL") p.set("tier", tier);
-    if (sp.category) p.set("category", sp.category);
-    if (sp.region) p.set("region", sp.region);
-    if (sp.verification) p.set("verification", sp.verification);
-    if (sp.q) p.set("q", sp.q);
+    const merged = { ...sp, ...patch };
+    for (const [k, val] of Object.entries(merged)) if (val) p.set(k, String(val));
     const s = p.toString();
     return s ? `/radar?${s}` : "/radar";
   };
 
   return (
     <main className="p-6">
-      <AutoRefresh seconds={120} />
+      <AutoRefresh seconds={180} />
       <header className="mb-4 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-[22px] font-medium tracking-tight">Event Radar</h1>
-          <p className="text-[12.5px] text-meta">
-            Early-demand intelligence for the DMV — detects future events, who&apos;s behind them, and which ones sales should act on now. Detects demand; Sales OS converts it.
-          </p>
+          <h1 className="text-[22px] font-medium tracking-tight">Opportunity Radar</h1>
+          <p className="text-[12.5px] text-meta">Events, procurement and facility signals across the DMV — who&apos;s behind them, and which ones sales should act on now. Detects demand; Sales OS converts it.</p>
         </div>
         <FigureStrip figures={figures} />
       </header>
@@ -103,125 +125,62 @@ export default async function EventRadarPage({ searchParams }: { searchParams: P
       {board.hasSeedData && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded border border-border bg-foreground/[0.03] px-3 py-2 text-[12px] text-meta">
           <SeedTag />
-          <span>Showing demo / seed data so the workflow can be evaluated — no live source is connected yet. Scores, tiers and timing are computed deterministically from these facts.</span>
-          {canManage && <span className="ml-auto"><RadarSeedButton /></span>}
+          <span>Includes demo / seed data so the workflow is evaluable — SAM.gov is dormant until a key is set, and the browser-agent connectors feed in via the local extension. Scores, tiers, timing and targets are computed deterministically.</span>
+          {canManage && <span className="ml-auto"><OpportunitySeedButton /></span>}
         </div>
       )}
 
       {/* Filters */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        {TIER_CHIPS.map((t) => {
-          const active = (t === "ALL" && !sp.tier) || sp.tier === t;
+        {LANES.map((l) => {
+          const active = sp.lane === l.key;
           return (
-            <Link
-              key={t}
-              href={chipHref(t)}
-              className={`rounded border px-2.5 py-1 text-[11.5px] font-medium uppercase tracking-[0.05em] transition-colors ${
-                active ? "border-foreground bg-foreground/[0.08] text-foreground" : "border-border text-meta hover:bg-[var(--row-hover)] hover:text-foreground"
-              }`}
-            >
-              {t === "ALL" ? "All tiers" : t}
+            <Link key={l.key} href={chipHref({ lane: active ? undefined : l.key })} className={`rounded border px-2.5 py-1 text-[11.5px] font-medium uppercase tracking-[0.05em] transition-colors ${active ? "border-foreground bg-foreground/[0.08] text-foreground" : "border-border text-meta hover:bg-[var(--row-hover)] hover:text-foreground"}`}>
+              {l.label} · {board.lanes[l.key].length}
             </Link>
           );
         })}
         <form method="GET" className="ml-auto flex flex-wrap items-center gap-2">
-          {sp.tier && <input type="hidden" name="tier" value={sp.tier} />}
-          <input
-            name="q"
-            defaultValue={sp.q ?? ""}
-            placeholder="Search event / venue / city"
-            className="w-52 rounded border border-border bg-transparent px-2.5 py-1 text-[12.5px] text-foreground placeholder:text-meta focus:border-foreground/40 focus:outline-none"
-          />
-          <select name="category" defaultValue={sp.category ?? ""} className="rounded border border-border bg-transparent px-2 py-1 text-[12.5px] text-foreground">
+          {sp.lane && <input type="hidden" name="lane" value={sp.lane} />}
+          <input name="q" defaultValue={sp.q ?? ""} placeholder="Search name / org / target" className="w-52 rounded border border-border bg-transparent px-2.5 py-1 text-[12.5px] text-foreground placeholder:text-meta focus:border-foreground/40 focus:outline-none" />
+          <select name="kind" defaultValue={sp.kind ?? ""} className="rounded border border-border bg-transparent px-2 py-1 text-[12.5px] text-foreground">
             <option value="">All types</option>
-            {(Object.keys(CATEGORY_LABEL) as EventCategory[]).map((c) => (
-              <option key={c} value={c} className="bg-background">{CATEGORY_LABEL[c]}</option>
-            ))}
+            {(Object.keys(KIND_LABEL) as OpportunityKind[]).map((k) => <option key={k} value={k} className="bg-background">{KIND_LABEL[k]}</option>)}
           </select>
-          <select name="region" defaultValue={sp.region ?? ""} className="rounded border border-border bg-transparent px-2 py-1 text-[12.5px] text-foreground">
-            <option value="">All areas</option>
-            {(Object.keys(REGION_LABEL) as Region[]).map((rg) => (
-              <option key={rg} value={rg} className="bg-background">{REGION_LABEL[rg]}</option>
-            ))}
-          </select>
-          <select name="verification" defaultValue={sp.verification ?? ""} className="rounded border border-border bg-transparent px-2 py-1 text-[12.5px] text-foreground">
-            <option value="">Any status</option>
-            <option value="VERIFIED" className="bg-background">Verified</option>
-            <option value="INFERRED" className="bg-background">Inferred</option>
-            <option value="NOT_YET_VERIFIED" className="bg-background">Not yet verified</option>
-            <option value="UNKNOWN" className="bg-background">Unknown</option>
+          <select name="jurisdiction" defaultValue={sp.jurisdiction ?? ""} className="rounded border border-border bg-transparent px-2 py-1 text-[12.5px] text-foreground">
+            <option value="">All jurisdictions</option>
+            {(Object.keys(JURISDICTION_LABEL) as Jurisdiction[]).map((j) => <option key={j} value={j} className="bg-background">{JURISDICTION_LABEL[j]}</option>)}
           </select>
           <button type="submit" className="rounded border border-border px-2.5 py-1 text-[12px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">Apply</button>
           <Link href="/radar" className="text-[12px] text-meta hover:text-foreground">Clear</Link>
         </form>
       </div>
 
-      {/* Events table */}
-      {rows.length === 0 ? (
-        <p className="text-[13px] text-meta">No events match these filters.</p>
-      ) : (
-        <div className="overflow-x-auto border border-border">
-          <table className={tableCls}>
-            <colgroup>
-              <col /><col style={{ width: "128px" }} /><col style={{ width: "150px" }} /><col style={{ width: "72px" }} />
-              <col style={{ width: "96px" }} /><col style={{ width: "150px" }} /><col style={{ width: "170px" }} />
-            </colgroup>
-            <thead className={theadCls}>
-              <tr>
-                <th className={thCls}>Event</th>
-                <th className={thCls}>Date</th>
-                <th className={thCls}>Venue</th>
-                <th className={`${thCls} text-right`}>Fit</th>
-                <th className={thCls}>Planner</th>
-                <th className={thCls}>Timing</th>
-                <th className={thCls}>Next action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const e = r.event;
-                return (
-                  <tr key={e.id} className="border-t border-[var(--row-rule)] transition-colors hover:bg-[var(--row-hover)]">
-                    <td className="px-2.5 py-2.5">
-                      <Link href={`/radar/${e.id}`} className="block">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-foreground hover:underline">{e.name}</span>
-                          {e.isSeed && <SeedTag />}
-                        </div>
-                        <div className="truncate text-[12px] text-meta">{CATEGORY_LABEL[e.category]} · {e.sourceName ?? "—"}</div>
-                      </Link>
-                    </td>
-                    <td className="px-2.5 py-2.5 text-[13px] tabular-nums text-tertiary-text">
-                      {e.startDate ? <>{formatYmdLong(e.startDate)}<div className="text-[12px] text-meta">{daysUntilLabel(e.startDate, today)}</div></> : <span className="text-meta">TBD</span>}
-                    </td>
-                    <td className="px-2.5 py-2.5 text-[13px]">
-                      <div className="truncate" title={e.venue ?? ""}>{e.venue ?? "—"}</div>
-                      <div className="text-[12px] text-meta">{REGION_LABEL[e.region]}</div>
-                    </td>
-                    <td className="px-2.5 py-2.5 text-right">
-                      <ScorePill score={r.qualification.rentalFitScore} tier={r.qualification.tier} />
-                      <div className="text-[10.5px] uppercase"><TierBadge tier={r.qualification.tier} /></div>
-                    </td>
-                    <td className="px-2.5 py-2.5 text-[12.5px]">
-                      <span className={PLANNER_TONE[e.plannerStatus]}>{e.plannerStatus === "UNKNOWN" ? "Unknown" : e.plannerStatus === "VERIFIED" ? "Verified" : "Inferred"}</span>
-                    </td>
-                    <td className="px-2.5 py-2.5 text-[12.5px]">
-                      <span className={PHASE_TONE[r.timing.phase] ?? "text-meta"}>{PHASE_LABEL[r.timing.phase] ?? r.timing.phase}</span>
-                    </td>
-                    <td className="px-2.5 py-2.5 text-[12.5px] text-tertiary-text">
-                      {e.salesStatus !== "NONE" ? <span className="text-positive">In Sales OS</span> : e.plannerStatus === "UNKNOWN" ? "Research organizer" : r.timing.recommendedAction}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* Lanes */}
+      {LANES.filter((l) => !activeLaneFilter || activeLaneFilter === l.key).map((l) => {
+        const rows = laneRows(l.key);
+        return (
+          <section key={l.key} className="mb-6">
+            <h2 className="mb-1.5 flex items-baseline gap-2">
+              <span className="text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">{l.label}</span>
+              <span className="text-[11.5px] text-meta">· {l.sub}</span>
+              <span className="ml-auto text-[12px] tabular-nums text-meta">{rows.length}</span>
+            </h2>
+            {rows.length === 0 ? (
+              <p className="border border-border px-3 py-3 text-[12.5px] text-meta">Nothing here right now.</p>
+            ) : (
+              <div className="border border-border">
+                {rows.map((v) => <OppRow key={v.opp.id} v={v} />)}
+              </div>
+            )}
+          </section>
+        );
+      })}
 
-      <p className="mt-4 text-[11.5px] text-meta">
-        {rows.length} of {board.rows.length} detected events. Fit &amp; tier are deterministic (rules calculate); provenance is shown on every fact. Planners, attendance and dates are never fabricated — unknown is shown as unknown.
-      </p>
+      <div className="mt-2 flex items-center justify-between text-[11.5px] text-meta">
+        <span>Scores &amp; timing are deterministic (rules calculate); provenance is on every fact. Nothing is fabricated — unknown is shown as unknown.</span>
+        <Link href="/radar/sources" className="text-tertiary-text hover:text-foreground">Manage sources →</Link>
+      </div>
     </main>
   );
 }

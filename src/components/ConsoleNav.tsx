@@ -37,10 +37,10 @@ interface Group {
 // (and above) the expandable sections — not nested inside Operations.
 const HUB: Blade = { href: "/dashboard", label: "Command Center", icon: Gauge };
 
-// Event Radar — early-demand intelligence. A first-class module in its own right (Event Radar detects
-// future demand; Sales OS converts it), so it sits standalone at the top alongside Command Center
-// rather than nested under Sales or Operations.
-const RADAR: Blade = { href: "/radar", label: "Event Radar", icon: Radar };
+// Opportunity Radar — the opportunity intelligence engine (events + procurement + facility/web signals
+// feeding one layer). A first-class module in its own right (it detects future demand; Sales OS
+// converts it), so it sits standalone at the top alongside Command Center.
+const RADAR: Blade = { href: "/radar", label: "Opportunity Radar", icon: Radar };
 
 const GROUPS: Group[] = [
   {
