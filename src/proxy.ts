@@ -52,7 +52,8 @@ const isSettings = (p: string): boolean =>
   p.startsWith("/api/settings") ||
   p.startsWith("/api/integrations") ||
   p.startsWith("/api/auth/users") ||
-  p.startsWith("/api/passes"); // generating / listing / revoking / texting Shift Passes — owner/admin only
+  p.startsWith("/api/passes") || // generating / listing / revoking / texting Shift Passes — owner/admin only
+  p.startsWith("/api/pursuit"); // capability profile + bid pre-staging — owner/admin only
 
 // A Shift Pass (guest) is scoped HARD to the dispatch board + the (already public) driver surface. It
 // is deny-by-default: only these prefixes are reachable, so no money, settings, coaching, sales, or the
