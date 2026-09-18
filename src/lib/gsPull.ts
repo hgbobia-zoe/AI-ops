@@ -96,7 +96,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
           // Best-effort item photo: Goodshuffle line items carry an image URL under one of several keys
           // (imageUrl/thumbnailUrl/... possibly nested on the item/images[]) — grab the first URL-looking
           // one so the driver sees a picture of the gear. Normalized to an absolute URL. Missing → no image.
-          function absUrl(u){ if(!u||typeof u!=="string")return null; if(/^https?:\/\//i.test(u))return u; if(u.slice(0,2)==="//")return "https:"+u; if(u.charAt(0)==="/")return "https://pro.goodshuffle.com"+u; return null; }
+          function absUrl(u){ if(!u||typeof u!=="string")return null; var s=u.toLowerCase(); if(s.indexOf("http://")===0||s.indexOf("https://")===0)return u; if(u.slice(0,2)==="//")return "https:"+u; if(u.charAt(0)==="/")return "https://pro.goodshuffle.com"+u; return null; }
           function imgFrom(o){ if(!o||typeof o!=="object")return null; for(var k in o){ if(/image|photo|thumb|picture/i.test(k)){ var v=o[k]; var a=absUrl(v); if(a)return a; if(v&&typeof v==="object"){ var au=absUrl(v.url)||absUrl(v.path)||absUrl(v.src)||absUrl(v.thumbUrl)||absUrl(v.thumbnailUrl); if(au)return au; } } } return null; }
           function imageOf(o){ var d0=imgFrom(o); if(d0)return d0; var nests=["item","inventoryItem","itemData","primaryImage"]; for(var ni=0;ni<nests.length;ni++){ var n=o[nests[ni]]; if(n&&typeof n==="object"){ var u=imgFrom(n); if(u)return u; } } var arrs=["images","photos","itemImages","attachments"]; for(var aj=0;aj<arrs.length;aj++){ var arr=o[arrs[aj]]; if(arr&&arr.length){ var f=arr[0]; var af=absUrl(f); if(af)return af; if(f&&typeof f==="object"){ var af2=absUrl(f.url)||absUrl(f.path)||absUrl(f.src)||absUrl(f.thumbUrl)||absUrl(f.thumbnailUrl); if(af2)return af2; } } } return null; }
           function w(o,d){ if(!o||typeof o!=="object"||d>7)return; if(Object.prototype.toString.call(o)==="[object Array]"){for(var i=0;i<o.length;i++)w(o[i],d+1);return;} if(o.itemTitle){var it={name:o.itemTitle,quantity:o.quantityBooked};var im=imageOf(o);if(im)it.image=im;items.push(it);} for(var k in o)w(o[k],d+1);}
@@ -151,6 +151,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var noteOps=all.filter(function(o){ return o.op==="note_append" && o.transactionId && o.payload && o.payload.line; });
         var teamOps=all.filter(function(o){ return o.op==="add_team_member" && o.transactionId && o.payload && o.payload.userID; });
         var emailOps=all.filter(function(o){ return o.op==="email_send" && o.transactionId && o.payload && o.payload.content; });
+        var feeOps=all.filter(function(o){ return o.op==="set_delivery_fee" && o.transactionId && o.payload && o.payload.amount!=null; });
         var createOps=all.filter(function(o){ return o.op==="create_project" && o.payload && o.payload.intakeId; });
         // Goodshuffle only CREATES a project on a real navigation (a fetch just returns the SPA shell), so we
         // open createNewProject in a POPUP. Do it HERE, synchronously right after the outbox fetch, so we're
@@ -161,8 +162,8 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         // we skip creating this cycle and leave the op pending to retry.
         var createPopup=null;
         if(createOps.length){ try{ createPopup=window.open("/app/project/createNewProject","gscreate","width=520,height=640,left=40,top=40"); }catch(e){ createPopup=null; } }
-        function popNewId(w){ return new Promise(function(resolve){ if(!w){ resolve(null); return; } var n=0; var iv=setInterval(function(){ n++; var got=null; try{ var h=w.location.href; if(h && h.indexOf("about:blank")<0){ var m=h.match(/[?&]id=(\d+)/); if(m) got=m[1]; } }catch(e){} if(got){ clearInterval(iv); resolve(got); } else if(n>80){ clearInterval(iv); resolve(null); } }, 250); }); }
-        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, chain=Promise.resolve();
+        function popNewId(w){ return new Promise(function(resolve){ if(!w){ resolve(null); return; } var n=0; var iv=setInterval(function(){ n++; var got=null; try{ var h=w.location.href; if(h && h.indexOf("about:blank")<0){ var m=h.match(/[?&]id=(\\d+)/); if(m) got=m[1]; } }catch(e){} if(got){ clearInterval(iv); resolve(got); } else if(n>80){ clearInterval(iv); resolve(null); } }, 250); }); }
+        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, chain=Promise.resolve();
         // add_team_member: add a GSPRO user (Warehouse Desktop) to the project team on a signed project.
         teamOps.forEach(function(o){ chain=chain.then(function(){
           var body=new URLSearchParams({ transactionID:String(o.transactionId), userID:String(o.payload.userID), linkType:String(o.payload.linkType||"OTHER") });
@@ -187,7 +188,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
           chain=chain.then(function(){
             return fetch("/app/vendorTransaction/initContractView?transactionID="+encodeURIComponent(o.transactionId),{headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(cv){
               var cur=(cv.internalNotes||"");
-              var newInt=(cur ? cur+"\n\n" : "")+o.payload.line;
+              var newInt=(cur ? cur+"\\n\\n" : "")+o.payload.line;
               var body=new URLSearchParams({ transactionID:String(o.transactionId), clientVisibleNotes:(cv.clientVisibleNotes||""), internalNotes:newInt, fulfillmentNotes:(cv.fulfillmentNotes||"") });
               return fetch("/app/vendorTransaction/saveEventNotes",{method:"POST",headers:{"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"},credentials:"include",body:body}).then(function(r){ return r.ok; });
             }).then(function(ok){ if(ok)notes++; else failed++; return ackOp(o.id,ok,"note_append_failed"); }).catch(function(){ failed++; return ackOp(o.id,false,"note_append_error"); });
@@ -211,6 +212,30 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             }).then(function(ok){ if(ok)emails++; else failed++; return ackOp(o.id,ok,"email_send_failed"); }).catch(function(e){ failed++; return ackOp(o.id,false,"email_send_"+(typeof e==="string"?e:"error")); });
           });
         });
+        // set_delivery_fee: override the project's Standard Delivery line(s) with our computed fee. Load the
+        // contract's line item groups, find every base Standard Delivery line (inventory item 392868144),
+        // and re-save each via saveInventoryTrackedLineItemEdit with unitPriceOverridden=true + our unitPrice
+        // and mileageFee 0 (our formula already includes mileage). Every OTHER field is echoed from the line
+        // as loaded (venue, dates, marker) so nothing else changes. Both legs (DROP_OFF + PICK_UP) get the
+        // per-leg fee. Skips (acks failure) when the project has no Standard Delivery line yet.
+        feeOps.forEach(function(o){ chain=chain.then(function(){
+          var tx=o.transactionId; var amount=o.payload.amount; var DELIV_ITEM_ID=392868144;
+          function ymd(raw){ if(!raw) return null; var s=String(raw); return (s.length>=10 && s.charAt(4)==="-" && s.charAt(7)==="-") ? s.slice(0,10) : null; }
+          function findDeliv(li){ var out=[]; (function w(n){ if(!n||typeof n!=="object")return; if(Object.prototype.toString.call(n)==="[object Array]"){ for(var i=0;i<n.length;i++)w(n[i]); return;} if(n.itemTitle && n.item && String(n.item.id)===String(DELIV_ITEM_ID)) out.push(n); for(var k in n)w(n[k]); })(li); return out; }
+          function saveLeg(gid,n){ var it=n.item||{}; var tl=n.targetLocation||{}; var body={ inventoryInjection:true, itemID:it.id, fulfillment:false, transactionID:Number(tx)||tx, lineItemGroupID:gid, parentRelationID:null, relationID:n.id, relationType:null, inventoryTypeStr:it.inventoryType||"SERVICE", rateType:n.rateType||"FLAT_FEE_WITH_MILEAGE", title:n.itemTitle||"Standard Delivery", description:null, isSubrental:false, internalNotes:n.internalNotes||"", showItemDescription:true, showItemAttributes:true, quantity:n.quantityBooked||1, unitPriceOverridden:true, unitPrice:String(amount), mileageFee:0, discountDollarAmount:0, discountPercentage:0, itemStartDate:ymd(n.rawStartDate), itemStartTime:null, itemEndDate:ymd(n.rawEndDate), itemEndTime:null, itemHoursRented:null, eventTimeLineMarker:n.eventTimeLineMarker||null, selectedTaxTypes:[], serviceStoreLocationID:null, venueName:tl.venueName||null, venueAddress:tl.streetAddressLine1||null, venueAddress_line2:tl.streetAddressLine2||null, venueAddress_city:tl.city||null, venueAddress_state:tl.state||null, venueAddress_zipCode:tl.zipCode||null, venueAddress_county:tl.county||null, venueAddress_country:tl.country||null, venueAddress_latitude:tl.latitude||null, venueAddress_longitude:tl.longitude||null, images:[] };
+            return fetch("/app/transactionItemRelation/saveInventoryTrackedLineItemEdit",{method:"POST",headers:{"content-type":"application/json","x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include",body:JSON.stringify(body)}).then(function(r){ return r.ok; }); }
+          return fetch("/app/vendorTransaction/initContractView?transactionID="+encodeURIComponent(tx),{headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(cv){
+            var groups=(cv&&cv.lineItemGroupsToLoad)||[]; var legs=[];
+            var gchain=Promise.resolve();
+            groups.forEach(function(g){ gchain=gchain.then(function(){ return fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID="+g.id+"&transactionID="+encodeURIComponent(tx),{headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}).then(function(r){return r.json();}).then(function(li){ findDeliv(li).forEach(function(n){ legs.push({gid:g.id,n:n}); }); }).catch(function(){}); }); });
+            return gchain.then(function(){
+              if(!legs.length) throw "no_delivery_line";
+              var s=Promise.resolve(true);
+              legs.forEach(function(L){ s=s.then(function(ok){ return ok ? saveLeg(L.gid,L.n) : false; }); });
+              return s;
+            });
+          }).then(function(ok){ if(ok)fees++; else failed++; return ackOp(o.id,ok,"set_delivery_fee_failed"); }).catch(function(e){ failed++; return ackOp(o.id,false,"set_delivery_fee_"+(typeof e==="string"?e:"error")); });
+        }); });
         // create_project: create a NEW Goodshuffle project shell for a guided-intake record. createNewProject
         // makes a blank draft and redirects to /app/project/detail?id=<newId>; stash the structured intake in
         // the project's internal notes (saveEventNotes), then post the new id back so our app + the success
@@ -281,8 +306,8 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             });
           });
         });
-        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, created:created}; });
-      }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0, created:0}; });
+        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, created:created, fees:fees}; });
+      }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0, created:0, fees:0}; });
     }
 
     // Finish a cycle: one-shot fades the banner; auto keeps a persistent status with the last-run time.
@@ -295,8 +320,8 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         Promise.all([pullRoutes(), pullProjects(), drainOutbox()]).then(function(res){
           var r=res[0]||{stops:0,failed:0}, bk=res[1]||{saved:0,partial:false}, ph=res[2]||{pushed:0,failed:0};
           var unm=(r.unmatched&&r.unmatched.length)?" · ⚠ unrecognized truck(s): "+r.unmatched.join(", "):"";
-          var photoNote=ph.pushed?" · "+ph.pushed+" photo"+(ph.pushed===1?"":"s")+"→GS":"";
-          var photoErr=ph.failed?" · ⚠ "+ph.failed+" photo push(es) failed":"";
+          var photoNote=(ph.pushed?" · "+ph.pushed+" photo"+(ph.pushed===1?"":"s")+"→GS":"")+(ph.fees?" · "+ph.fees+" delivery fee"+(ph.fees===1?"":"s")+"→GS":"");
+          var photoErr=ph.failed?" · ⚠ "+ph.failed+" GS push(es) failed":"";
           if(r.failed) fin("⚠️ Bookings synced ("+bk.saved+"), but routes failed to save."+unm,"#b91c1c");
           else if(bk.partial) fin("⚠️ Routes synced ("+r.stops+"), but bookings INCOMPLETE ("+bk.saved+" saved) — will retry."+unm,"#b45309");
           else if(unm||photoErr) fin("✅ Synced "+r.stops+" stops"+(r.days?" ("+r.days+" day"+(r.days===1?"":"s")+")":"")+" + "+bk.saved+" bookings"+photoNote+unm+photoErr,"#b45309");

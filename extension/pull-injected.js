@@ -123,7 +123,8 @@ export function zoePull(apiBase) {
       const photoOps = all.filter((o) => o.op === "photo_upload" && o.transactionId && o.payload && o.payload.photoIds && o.payload.photoIds.length);
       const noteOps = all.filter((o) => o.op === "note_append" && o.transactionId && o.payload && o.payload.line);
       const teamOps = all.filter((o) => o.op === "add_team_member" && o.transactionId && o.payload && o.payload.userID);
-      let pushed = 0, failed = 0, notes = 0, team = 0, chain = Promise.resolve();
+      const feeOps = all.filter((o) => o.op === "set_delivery_fee" && o.transactionId && o.payload && o.payload.amount != null);
+      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, chain = Promise.resolve();
       // add_team_member: add a GSPRO user (e.g. Warehouse Desktop) to the project's team.
       teamOps.forEach((o) => { chain = chain.then(() => {
         const body = new URLSearchParams({ transactionID: String(o.transactionId), userID: String(o.payload.userID), linkType: String(o.payload.linkType || "OTHER") });
@@ -143,8 +144,24 @@ export function zoePull(apiBase) {
           return fetch("/app/vendorTransaction/saveEventNotes", { method: "POST", headers: { "x-requested-with": "XMLHttpRequest", "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, credentials: "include", body }).then((r) => r.ok);
         }).then((ok) => { if (ok) notes++; else failed++; return ackOp(o.id, ok, "note_append_failed"); }).catch(() => { failed++; return ackOp(o.id, false, "note_append_error"); });
       }); });
-      return chain.then(() => ({ pushed, failed, notes, team }));
-    }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0 }));
+      // set_delivery_fee: override the project's Standard Delivery line(s) with our computed per-leg fee.
+      // Load the contract's line item groups, find every base Standard Delivery line (inventory item
+      // 392868144), and re-save each via saveInventoryTrackedLineItemEdit with unitPriceOverridden=true +
+      // our unitPrice, mileageFee 0. Every other field is echoed from the line as loaded (venue, dates,
+      // marker) so nothing else changes. Skips (acks failure) when the project has no Standard Delivery line.
+      feeOps.forEach((o) => { chain = chain.then(() => {
+        const tx = o.transactionId, amount = o.payload.amount, DELIV = 392868144;
+        const ymd = (raw) => { if (!raw) return null; const s = String(raw); return (s.length >= 10 && s[4] === "-" && s[7] === "-") ? s.slice(0, 10) : null; };
+        const findDeliv = (li) => { const out = []; (function w(n) { if (!n || typeof n !== "object") return; if (Array.isArray(n)) { n.forEach(w); return; } if (n.itemTitle && n.item && String(n.item.id) === String(DELIV)) out.push(n); for (const k in n) w(n[k]); })(li); return out; };
+        const saveLeg = (gid, n) => { const it = n.item || {}, tl = n.targetLocation || {}; const body = { inventoryInjection: true, itemID: it.id, fulfillment: false, transactionID: Number(tx) || tx, lineItemGroupID: gid, parentRelationID: null, relationID: n.id, relationType: null, inventoryTypeStr: it.inventoryType || "SERVICE", rateType: n.rateType || "FLAT_FEE_WITH_MILEAGE", title: n.itemTitle || "Standard Delivery", description: null, isSubrental: false, internalNotes: n.internalNotes || "", showItemDescription: true, showItemAttributes: true, quantity: n.quantityBooked || 1, unitPriceOverridden: true, unitPrice: String(amount), mileageFee: 0, discountDollarAmount: 0, discountPercentage: 0, itemStartDate: ymd(n.rawStartDate), itemStartTime: null, itemEndDate: ymd(n.rawEndDate), itemEndTime: null, itemHoursRented: null, eventTimeLineMarker: n.eventTimeLineMarker || null, selectedTaxTypes: [], serviceStoreLocationID: null, venueName: tl.venueName || null, venueAddress: tl.streetAddressLine1 || null, venueAddress_line2: tl.streetAddressLine2 || null, venueAddress_city: tl.city || null, venueAddress_state: tl.state || null, venueAddress_zipCode: tl.zipCode || null, venueAddress_county: tl.county || null, venueAddress_country: tl.country || null, venueAddress_latitude: tl.latitude || null, venueAddress_longitude: tl.longitude || null, images: [] }; return fetch("/app/transactionItemRelation/saveInventoryTrackedLineItemEdit", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include", body: JSON.stringify(body) }).then((r) => r.ok); };
+        return fetch("/app/vendorTransaction/initContractView?transactionID=" + encodeURIComponent(tx), { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" }).then((r) => { if (!r.ok) throw 0; return r.json(); }).then((cv) => {
+          const groups = (cv && cv.lineItemGroupsToLoad) || []; const legs = []; let gchain = Promise.resolve();
+          groups.forEach((g) => { gchain = gchain.then(() => fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID=" + g.id + "&transactionID=" + encodeURIComponent(tx), { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" }).then((r) => r.json()).then((li) => { findDeliv(li).forEach((n) => legs.push({ gid: g.id, n })); }).catch(() => {})); });
+          return gchain.then(() => { if (!legs.length) throw "no_delivery_line"; let s = Promise.resolve(true); legs.forEach((L) => { s = s.then((ok) => ok ? saveLeg(L.gid, L.n) : false); }); return s; });
+        }).then((ok) => { if (ok) fees++; else failed++; return ackOp(o.id, ok, "set_delivery_fee_failed"); }).catch((e) => { failed++; return ackOp(o.id, false, "set_delivery_fee_" + (typeof e === "string" ? e : "error")); });
+      }); });
+      return chain.then(() => ({ pushed, failed, notes, team, fees }));
+    }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0, fees: 0 }));
   }
 
   return loggedInProbe().then((ok) => {

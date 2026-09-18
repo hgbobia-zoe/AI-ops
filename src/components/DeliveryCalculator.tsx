@@ -5,7 +5,7 @@
 // BASE + miles×$2.99 + subtotal×5%. Round trip charges both legs. Read-only math — nothing is saved.
 
 import { useEffect, useMemo, useState } from "react";
-import { Calculator, FolderOpen, Loader2, MapPin, Truck, Wrench } from "lucide-react";
+import { Calculator, Check, FolderOpen, Loader2, MapPin, Send, Truck, Wrench } from "lucide-react";
 import { deliveryQuote, PER_MILE, SUBTOTAL_PCT, BASE, type LegMode, type LegBreakdown } from "@/lib/pricing/delivery";
 import { readinessTier } from "@/lib/pricing/eventReadiness";
 
@@ -34,6 +34,9 @@ export function DeliveryCalculator(): React.JSX.Element {
   const [loading, setLoading] = useState(false);
   const [distNote, setDistNote] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectOpt[]>([]);
+  const [projectId, setProjectId] = useState<string>("");
+  const [pushing, setPushing] = useState(false);
+  const [pushMsg, setPushMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     fetch("/api/pricing/projects")
@@ -43,11 +46,39 @@ export function DeliveryCalculator(): React.JSX.Element {
   }, []);
 
   function pickProject(id: string) {
+    setProjectId(id);
+    setPushMsg(null);
     const p = projects.find((x) => x.id === id);
     if (!p) return;
     if (p.location) setAddress(p.location);
     setSubtotal(p.subtotal != null ? String(p.subtotal) : "");
     if (p.location) void getMiles(p.location);
+  }
+
+  // The PER-LEG delivery fee (drop-off and pickup legs are equal on a round trip). This is what we push
+  // onto each Standard Delivery line in Goodshuffle.
+  const perLeg = () => {
+    const q0 = deliveryQuote(Number(miles) || 0, Number(subtotal) || 0, mode);
+    return (q0.dropOff ?? q0.pickup)?.total ?? 0;
+  };
+
+  async function pushToGoodshuffle() {
+    if (!projectId) return;
+    setPushing(true);
+    setPushMsg(null);
+    try {
+      const r = await fetch("/api/pricing/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, amount: perLeg() }),
+      });
+      const j = (await r.json()) as { ok?: boolean; error?: string };
+      setPushMsg(j.ok ? { ok: true, text: "Queued — it applies on the next Auto-Pull." } : { ok: false, text: j.error ?? "Could not queue." });
+    } catch {
+      setPushMsg({ ok: false, text: "Could not queue — network error." });
+    } finally {
+      setPushing(false);
+    }
   }
 
   async function getMiles(addr?: string) {
@@ -221,6 +252,23 @@ export function DeliveryCalculator(): React.JSX.Element {
                   </span>
                 </div>
               </>
+            )}
+
+            {projectId && (
+              <div className="space-y-2 border-t border-white/10 pt-4">
+                <button
+                  onClick={pushToGoodshuffle}
+                  disabled={pushing}
+                  className="btn-hero inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium disabled:opacity-50"
+                >
+                  {pushing ? <Loader2 className="size-4 animate-spin" /> : pushMsg?.ok ? <Check className="size-4" /> : <Send className="size-4" />}
+                  Push delivery fee to Goodshuffle
+                </button>
+                <p className="text-xs text-muted-foreground">
+                  Overrides the Standard Delivery price on the selected project with {money(perLeg())} per leg (drop-off + pickup). Applies on the next Auto-Pull.
+                </p>
+                {pushMsg && <p className={`text-xs ${pushMsg.ok ? "text-emerald-400" : "text-red-400"}`}>{pushMsg.text}</p>}
+              </div>
             )}
           </div>
         ) : (
