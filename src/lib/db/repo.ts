@@ -3,6 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "./index";
+import { todayInOpsTz } from "@/lib/dates";
 import { logChange } from "@/lib/history/store";
 import type { Route, RouteStatus, Stop, StopState } from "@/lib/types";
 import type { CallRecap } from "@/lib/coach/recap";
@@ -99,12 +100,30 @@ function buildRoute(row: RouteRow): Route {
   };
 }
 
-/** The current route for a truck (latest), with its stops in order. */
+/** The current route for a truck (latest by write time), with its stops in order. NOTE: "latest" is by
+ *  updated_at, so with the multi-week pull seeding future days this can be a FUTURE route — the tablet
+ *  must use getActiveRouteForTruck instead. Kept for tests + callers that want the most-recent write. */
 export function getRoute(truckId: string): Route | null {
   const row = getDb()
     .prepare("SELECT * FROM routes WHERE truck_id = ? ORDER BY updated_at DESC LIMIT 1")
     .get(truckId) as RouteRow | undefined;
   return row ? buildRoute(row) : null;
+}
+
+/** The route a TABLET/kiosk should show for its truck: TODAY's route (ops timezone), else the most
+ *  recent still-unfinished route from on/before today (an overnight or carried-over job). Never a
+ *  FUTURE route — the multi-week pull seeds days ahead, and the driver screen must stay on today, not
+ *  jump to whatever was imported last. Returns null when the truck has nothing active → "no route yet". */
+export function getActiveRouteForTruck(truckId: string, today: string = todayInOpsTz()): Route | null {
+  const db = getDb();
+  const todays = db
+    .prepare("SELECT * FROM routes WHERE truck_id = ? AND date = ? ORDER BY updated_at DESC LIMIT 1")
+    .get(truckId, today) as RouteRow | undefined;
+  if (todays) return buildRoute(todays);
+  const carry = db
+    .prepare("SELECT * FROM routes WHERE truck_id = ? AND date <= ? AND status != 'done' ORDER BY date DESC LIMIT 1")
+    .get(truckId, today) as RouteRow | undefined;
+  return carry ? buildRoute(carry) : null;
 }
 
 /** A route by its id, with stops. */
@@ -2417,4 +2436,98 @@ export function setLeadStatus(bookingId: string, status: LeadBoardStatus, actor?
        ON CONFLICT(booking_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
     )
     .run(bookingId, status, new Date().toISOString(), actor ?? null);
+}
+
+// ---- Shift Passes — time-limited, revocable contractor access links --------------------------------
+
+export interface ShiftPass {
+  id: string; // opaque token (URL segment)
+  name: string; // contractor name
+  phone: string | null;
+  scope: string; // "driver" | "board" (legacy "drive" = driver)
+  truckId: string | null; // driver pass: pre-assigned truck (link opens straight to its route)
+  truckName: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  lastSeenAt: string | null;
+}
+
+interface ShiftPassRow {
+  id: string;
+  name: string;
+  phone: string | null;
+  scope: string;
+  truck_id: string | null;
+  truck_name: string | null;
+  created_by: string | null;
+  created_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+  last_seen_at: string | null;
+}
+
+const passOf = (r: ShiftPassRow): ShiftPass => ({
+  id: r.id,
+  name: r.name,
+  phone: r.phone,
+  scope: r.scope,
+  truckId: r.truck_id,
+  truckName: r.truck_name,
+  createdBy: r.created_by,
+  createdAt: r.created_at,
+  expiresAt: r.expires_at,
+  revokedAt: r.revoked_at,
+  lastSeenAt: r.last_seen_at,
+});
+
+export interface NewShiftPass {
+  id: string;
+  name: string;
+  phone?: string | null;
+  scope?: string;
+  truckId?: string | null;
+  truckName?: string | null;
+  createdBy?: string | null;
+  expiresAt: string; // ISO
+}
+
+/** Insert a new pass. Caller supplies the (unguessable) token as `id`. */
+export function createShiftPass(p: NewShiftPass): ShiftPass {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO shift_passes (id, name, phone, scope, truck_id, truck_name, created_by, created_at, expires_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+    )
+    .run(p.id, p.name.trim(), p.phone?.trim() || null, p.scope ?? "driver", p.truckId ?? null, p.truckName ?? null, p.createdBy ?? null, now, p.expiresAt);
+  return getShiftPass(p.id)!;
+}
+
+export function getShiftPass(id: string): ShiftPass | null {
+  if (!id) return null;
+  const row = getDb().prepare("SELECT * FROM shift_passes WHERE id = ?").get(id) as ShiftPassRow | undefined;
+  return row ? passOf(row) : null;
+}
+
+/** Newest first. */
+export function listShiftPasses(): ShiftPass[] {
+  const rows = getDb().prepare("SELECT * FROM shift_passes ORDER BY created_at DESC").all() as ShiftPassRow[];
+  return rows.map(passOf);
+}
+
+/** Kill a pass immediately (sets revoked_at if not already revoked). Returns the updated pass. */
+export function revokeShiftPass(id: string): ShiftPass | null {
+  getDb().prepare("UPDATE shift_passes SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").run(new Date().toISOString(), id);
+  return getShiftPass(id);
+}
+
+/** Record that a pass was just used (for the admin list). Best-effort, cheap. */
+export function touchShiftPass(id: string): void {
+  try {
+    getDb().prepare("UPDATE shift_passes SET last_seen_at = ? WHERE id = ?").run(new Date().toISOString(), id);
+  } catch {
+    /* non-critical */
+  }
 }

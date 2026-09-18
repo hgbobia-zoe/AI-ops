@@ -23,18 +23,38 @@ export function TruckSelect() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [picked, setPicked] = useState<Vehicle | null>(null);
+  // Shift Pass drivers (?pass=1) go to the plain route checklist, never the office kiosk (which launches
+  // Goodshuffle Pro side-by-side — a temp driver has no Goodshuffle login). Captured once on mount.
+  const [routeOnly, setRouteOnly] = useState(false);
 
   useEffect(() => {
+    const sp = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+    const isPass = sp.get("pass") === "1";
+    // A Shift Pass link can pre-assign a truck (?truck=<id>) — bind it and go straight to the route,
+    // skipping the picker. An unknown id just falls back to the normal picker.
+    const want = sp.get("truck");
     fetchVehicles()
-      .then(setVehicles)
-      .catch(() => setError("Could not load trucks."))
-      .finally(() => setLoading(false));
-  }, []);
+      .then((vs) => {
+        const match = want ? vs.find((v) => v.truckId === want) : null;
+        if (match) {
+          bindTruck(match.truckId, match.name);
+          router.replace(isPass ? "/route" : "/kiosk");
+          return; // keep the loader up while we redirect — don't flash the picker
+        }
+        setRouteOnly(isPass);
+        setVehicles(vs);
+        setLoading(false);
+      })
+      .catch(() => {
+        setError("Could not load trucks.");
+        setLoading(false);
+      });
+  }, [router]);
 
   function confirmBind() {
     if (!picked) return;
     bindTruck(picked.truckId, picked.name);
-    router.push("/kiosk");
+    router.push(routeOnly ? "/route" : "/kiosk");
   }
 
   return (

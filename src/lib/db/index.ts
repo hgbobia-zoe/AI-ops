@@ -503,6 +503,24 @@ CREATE TABLE IF NOT EXISTS sales_intake (
   completed_at        TEXT
 );
 
+-- Shift Passes — time-limited, revocable, link-based access for contractors / temp workers. A pass is
+-- minted by an owner/admin, handed over as a /pass/<token> link (optionally texted via Quo), and grants
+-- a scoped "guest" session (dispatch board view + the driver surface; NO money, settings, or supervisor
+-- writes). The token IS the id (opaque, unguessable). expires_at is the hard cutoff; revoked_at kills it early.
+CREATE TABLE IF NOT EXISTS shift_passes (
+  id           TEXT PRIMARY KEY,      -- opaque token, also the URL segment
+  name         TEXT NOT NULL,         -- contractor name (attribution + how it reads in the list)
+  phone        TEXT,                  -- optional, so we can text them the link via Quo
+  scope        TEXT NOT NULL DEFAULT 'drive',  -- 'drive' = view board + drive (only scope for now)
+  created_by   TEXT,                  -- actor label who generated it
+  created_at   TEXT NOT NULL,
+  expires_at   TEXT NOT NULL,         -- ISO — hard expiry
+  revoked_at   TEXT,                  -- ISO — set to kill the pass before it expires (null = live)
+  last_seen_at TEXT,                  -- ISO — last time the pass was used (shown in the admin list)
+  truck_id     TEXT,                  -- driver pass: pre-assigned truck → link opens straight to its route
+  truck_name   TEXT                   -- display label for the assigned truck
+);
+
 -- ── Event Radar (early-demand intelligence) ──────────────────────────────────────────────────────
 -- Event Radar detects FUTURE events in the DMV that could create rental demand, well before the
 -- planner is shopping vendors, and hands qualified opportunities to Sales OS. Design law:
@@ -816,6 +834,8 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "quote_sent_at", type: "TEXT" }, // ISO — precise time the quote email was sent (from GS message thread)
   { table: "bookings", column: "quote_opened_at", type: "TEXT" }, // ISO — latest time the client opened the quote email
   { table: "bookings", column: "quote_open_alerted_at", type: "TEXT" }, // ISO — the opened_at we last Slack-alerted for (dedupe)
+  { table: "shift_passes", column: "truck_id", type: "TEXT" }, // driver pass: pre-assigned truck → link opens straight to its route
+  { table: "shift_passes", column: "truck_name", type: "TEXT" }, // display label for the assigned truck (admin list + callout)
   // Opportunity Radar — source registry (§14) additive columns on the existing radar_sources table.
   { table: "radar_sources", column: "acquisition_method", type: "TEXT" }, // API | BROWSER | MANUAL — how records are pulled
   { table: "radar_sources", column: "auth_status", type: "TEXT" }, // NONE | REQUIRED_OK | REQUIRED_MISSING (e.g. API key present?)
