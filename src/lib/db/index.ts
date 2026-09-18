@@ -949,6 +949,8 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "radar_sources", column: "parser_version", type: "TEXT" }, // bump when an adapter's parsing changes
   { table: "radar_sources", column: "records_discovered", type: "INTEGER" }, // count from the last successful run
   { table: "radar_sources", column: "last_failure_at", type: "TEXT" }, // ISO of the last failed run
+  { table: "opportunities", column: "expected_attendance", type: "INTEGER" }, // known/estimated size (drives the size score) — from a source or manual import
+  { table: "opportunities", column: "attendance_confidence", type: "TEXT" }, // VERIFIED | INFERRED | UNKNOWN
 ];
 
 function migrate(db: DB): void {

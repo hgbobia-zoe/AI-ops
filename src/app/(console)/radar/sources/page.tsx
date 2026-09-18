@@ -4,6 +4,7 @@
 
 import Link from "next/link";
 import { RadarTabs } from "@/components/RadarTabs";
+import { SourceRunButton } from "@/components/SourceRunButton";
 import { getSourceRegistry } from "@/lib/opportunity/store";
 import { seedOpportunitiesIfEmpty } from "@/lib/opportunity/seed";
 import { tableCls, theadCls, thCls } from "@/components/console-primitives";
@@ -46,7 +47,10 @@ export default async function SourcesPage(): Promise<React.JSX.Element> {
                   </div>
                   <div className="text-[12px] text-meta">{s.kind}{s.url ? <> · <a href={s.url} target="_blank" rel="noopener noreferrer" className="hover:text-foreground">{s.url.replace(/^https?:\/\//, "")}</a></> : ""}{s.adapter ? "" : " · adapter not yet wired"}</div>
                 </td>
-                <td className="px-2.5 py-2.5"><span className={`text-[12px] font-medium uppercase tracking-[0.05em] ${METHOD_TONE[s.acquisitionMethod ?? ""] ?? "text-meta"}`}>{s.acquisitionMethod ?? "—"}</span></td>
+                <td className="px-2.5 py-2.5">
+                  <span className={`text-[12px] font-medium uppercase tracking-[0.05em] ${METHOD_TONE[s.acquisitionMethod ?? ""] ?? "text-meta"}`}>{s.acquisitionMethod ?? "—"}</span>
+                  {s.acquisitionMethod === "API" && <div className="mt-1"><SourceRunButton sourceId={s.id} /></div>}
+                </td>
                 <td className="px-2.5 py-2.5"><span className={`text-[12.5px] ${AUTH_TONE[s.authStatus ?? "NONE"]}`}>{AUTH_LABEL[s.authStatus ?? "NONE"] ?? s.authStatus}</span></td>
                 <td className="px-2.5 py-2.5 text-[12.5px] tabular-nums text-tertiary-text">{s.lastRunAt ? s.lastRunAt.slice(0, 10) : <span className="text-meta">never</span>}</td>
                 <td className="px-2.5 py-2.5 text-[12.5px]"><span className={s.lastStatus === "OK" ? "text-positive" : s.lastStatus === "ERROR" ? "text-critical" : "text-meta"}>{s.lastStatus ?? "—"}</span></td>

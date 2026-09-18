@@ -59,10 +59,10 @@ function pickPrimary(edges: EdgeWithEntity[]): PrimaryTarget | null {
 export function viewFor(opp: StoredOpportunity, ctx: ViewContext): OpportunityView {
   const edges = getEntitiesForOpportunity(opp.id);
 
-  // Attendance (size) comes from the linked event when this opportunity is an EVENT.
-  let expectedAttendance: number | null = null;
-  let attendanceConfidence: Confidence = "UNKNOWN";
-  if (opp.eventId) {
+  // Attendance (size): the opportunity's own figure (source/manual import) first, else the linked event.
+  let expectedAttendance: number | null = opp.expectedAttendance;
+  let attendanceConfidence: Confidence = opp.attendanceConfidence;
+  if (expectedAttendance == null && opp.eventId) {
     const ev = getEvent(opp.eventId);
     if (ev) { expectedAttendance = ev.expectedAttendance; attendanceConfidence = ev.attendanceConfidence; }
   }

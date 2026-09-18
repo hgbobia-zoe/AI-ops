@@ -89,6 +89,16 @@ portal = a registry row + an adapter; nothing downstream changes.
   Rockville / Gaithersburg / DC are registered as disabled stubs for Phase 2.
 - **MANUAL** — human upload to the same endpoint.
 
+### Feeding REAL data (start here)
+Three ways, in order of setup cost:
+1. **Manual import** (`/radar/import`) — paste a CSV (from a spreadsheet, an Apify export, or your own
+   research) and it lands as REAL opportunities (`is_seed=0`), scored and ready. Only `name` is
+   required; add `contact_name`/`contact_email` to prospect immediately, and `attendance` to raise the
+   size score. No key or scraper. A ready-made DMV starter CSV ships with the go-live runbook.
+2. **SAM.gov** — set `SAM_API_KEY`, then **Run now** on `/radar/sources` (or it pulls on refresh).
+   Real federal solicitations, server-side.
+3. **Browser-agent portals** — the local extension runs a workflow and POSTs to `/api/radar/ingest`.
+
 ### Adding a source later
 1. Implement an `OpportunitySource` (API client, or a browser workflow in `BROWSER_WORKFLOWS`).
 2. Register it in `radar_sources` (see `seed.ts:registerSources`).

@@ -5,7 +5,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
-import type { EntityKind, Jurisdiction, LifecycleStage, OpportunityKind, RelationshipRole, SalesStatus, Verification, ZoeCategory } from "./types";
+import type { Confidence, EntityKind, Jurisdiction, LifecycleStage, OpportunityKind, RelationshipRole, SalesStatus, Verification, ZoeCategory } from "./types";
 import type { Region } from "@/lib/radar/geo";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -25,6 +25,8 @@ export interface StoredOpportunity {
   city: string | null;
   state: string | null;
   organization: string | null;
+  expectedAttendance: number | null;
+  attendanceConfidence: Confidence;
   estimatedDate: string | null;
   deadline: string | null;
   discoveredAt: string;
@@ -88,6 +90,7 @@ function toOpportunity(r: any): StoredOpportunity {
     sourceId: r.source_id ?? null, sourceName: r.source_name ?? null, sourceUrl: r.source_url ?? null,
     jurisdiction: (r.jurisdiction as Jurisdiction) ?? "UNKNOWN", region: (r.region as Region) ?? "UNKNOWN",
     city: r.city ?? null, state: r.state ?? null, organization: r.organization ?? null,
+    expectedAttendance: r.expected_attendance ?? null, attendanceConfidence: (r.attendance_confidence as Confidence) ?? "UNKNOWN",
     estimatedDate: r.estimated_date ?? null, deadline: r.deadline ?? null, discoveredAt: r.discovered_at,
     lastReviewedAt: r.last_reviewed_at ?? null, nextActionDate: r.next_action_date ?? null,
     stage: r.stage as LifecycleStage, stageSource: (r.stage_source as "auto" | "manual") ?? "auto", status: r.status ?? null,
@@ -123,6 +126,8 @@ export interface OpportunityInput {
   city?: string | null;
   state?: string | null;
   organization?: string | null;
+  expectedAttendance?: number | null;
+  attendanceConfidence?: Confidence;
   estimatedDate?: string | null;
   deadline?: string | null;
   status?: string | null;
@@ -147,7 +152,8 @@ export function upsertOpportunity(input: OpportunityInput, now: Date = new Date(
     kind: input.kind, name: input.name, description: input.description ?? null,
     source_id: input.sourceId ?? null, source_name: input.sourceName ?? null, source_url: input.sourceUrl ?? null,
     jurisdiction: input.jurisdiction, region: input.region, city: input.city ?? null, state: input.state ?? null,
-    organization: input.organization ?? null, estimated_date: input.estimatedDate ?? null, deadline: input.deadline ?? null,
+    organization: input.organization ?? null, expected_attendance: input.expectedAttendance ?? null, attendance_confidence: input.attendanceConfidence ?? "UNKNOWN",
+    estimated_date: input.estimatedDate ?? null, deadline: input.deadline ?? null,
     status: input.status ?? null, est_value_low: input.estValueLow ?? null, est_value_high: input.estValueHigh ?? null,
     zoe_categories: input.zoeCategories ? JSON.stringify(input.zoeCategories) : null,
     verification_status: input.verificationStatus ?? "NOT_YET_VERIFIED", confidence: input.confidence ?? null,
@@ -158,7 +164,8 @@ export function upsertOpportunity(input: OpportunityInput, now: Date = new Date(
     db.prepare(
       `UPDATE opportunities SET kind=@kind, name=@name, description=@description, source_id=@source_id,
          source_name=@source_name, source_url=@source_url, jurisdiction=@jurisdiction, region=@region, city=@city,
-         state=@state, organization=@organization, estimated_date=@estimated_date, deadline=@deadline, status=@status,
+         state=@state, organization=@organization, expected_attendance=@expected_attendance, attendance_confidence=@attendance_confidence,
+         estimated_date=@estimated_date, deadline=@deadline, status=@status,
          est_value_low=@est_value_low, est_value_high=@est_value_high, zoe_categories=@zoe_categories,
          verification_status=@verification_status, confidence=@confidence, event_id=@event_id, procurement_id=@procurement_id,
          recommended_action=@recommended_action, is_seed=@is_seed, updated_at=@ts WHERE dedupe_key=@dedupe_key`,
@@ -168,11 +175,11 @@ export function upsertOpportunity(input: OpportunityInput, now: Date = new Date(
   const id = `OPP-${randomUUID()}`;
   db.prepare(
     `INSERT INTO opportunities (id, dedupe_key, kind, name, description, source_id, source_name, source_url, jurisdiction,
-       region, city, state, organization, estimated_date, deadline, discovered_at, stage, stage_source, status,
+       region, city, state, organization, expected_attendance, attendance_confidence, estimated_date, deadline, discovered_at, stage, stage_source, status,
        est_value_low, est_value_high, zoe_categories, verification_status, confidence, event_id, procurement_id,
        sales_status, recommended_action, is_seed, created_at, updated_at)
      VALUES (@id,@dedupe_key,@kind,@name,@description,@source_id,@source_name,@source_url,@jurisdiction,@region,@city,
-       @state,@organization,@estimated_date,@deadline,@ts,'DISCOVERED','auto',@status,@est_value_low,@est_value_high,
+       @state,@organization,@expected_attendance,@attendance_confidence,@estimated_date,@deadline,@ts,'DISCOVERED','auto',@status,@est_value_low,@est_value_high,
        @zoe_categories,@verification_status,@confidence,@event_id,@procurement_id,'NONE',@recommended_action,@is_seed,@ts,@ts)`,
   ).run({ ...facts, id, dedupe_key: input.dedupeKey, ts });
   return toOpportunity(db.prepare("SELECT * FROM opportunities WHERE id = ?").get(id));
