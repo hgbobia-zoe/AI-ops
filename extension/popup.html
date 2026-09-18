@@ -2,28 +2,52 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Zoe Auto-Pull</title>
+  <title>Zoe Auto-Pull + Radar</title>
   <style>
-    body { font: 13px/1.45 system-ui, sans-serif; margin: 0; width: 260px; background: #0b0b0c; color: #e7e7e9; }
+    body { font: 13px/1.45 system-ui, sans-serif; margin: 0; width: 300px; background: #0b0b0c; color: #e7e7e9; }
     .wrap { padding: 14px; }
     h1 { font-size: 14px; margin: 0 0 8px; }
+    h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #9a9aa2; margin: 16px 0 8px; }
     .status { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; background: #141416; border: 1px solid #2a2a30; }
     .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; }
     .meta { color: #9a9aa2; font-size: 11.5px; margin-top: 8px; }
     .btns { display: flex; gap: 8px; margin-top: 12px; }
     button { flex: 1; padding: 8px 10px; border: 0; border-radius: 6px; background: #4f46e5; color: #fff; font-weight: 600; cursor: pointer; }
     button.secondary { background: #26262c; color: #e7e7e9; }
+    button:disabled { opacity: .5; cursor: default; }
+    hr { border: 0; border-top: 1px solid #2a2a30; margin: 16px 0 0; }
+    select { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid #2a2a30; border-radius: 6px; background: #141416; color: #e7e7e9; margin-bottom: 8px; }
+    .radar-meta { color: #9a9aa2; font-size: 11.5px; margin-top: 8px; min-height: 14px; }
+    .warn { color: #f59e0b; }
+    .ok { color: #22c55e; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Zoe Auto-Pull</h1>
+    <h1>Zoe Auto-Pull + Radar</h1>
+
+    <h2>Goodshuffle auto-pull</h2>
     <div class="status"><span id="dot" class="dot" style="background:#6b7280"></span><span id="label">Checking…</span></div>
     <div id="meta" class="meta"></div>
     <div class="btns">
       <button id="pull">Pull now</button>
       <button id="opts" class="secondary">Settings</button>
     </div>
+
+    <hr />
+    <h2>Capture to Opportunity Radar</h2>
+    <select id="source">
+      <option value="moco-procurement">Montgomery County procurement</option>
+      <option value="emma-md">Maryland eMMA (state)</option>
+      <option value="rockville-procurement">City of Rockville</option>
+      <option value="gaithersburg-procurement">City of Gaithersburg</option>
+      <option value="dc-ocp">DC Office of Contracting & Procurement</option>
+    </select>
+    <div class="btns">
+      <button id="capture">Capture this page</button>
+      <button id="send" class="secondary" disabled>Send 0 to Radar</button>
+    </div>
+    <div id="radarMeta" class="radar-meta">Open a portal's solicitation list, pick the source, then Capture.</div>
   </div>
   <script src="popup.js"></script>
 </body>
