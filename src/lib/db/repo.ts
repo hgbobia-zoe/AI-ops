@@ -569,6 +569,7 @@ export interface BookingView {
   statusLabel: string;
   signed: boolean;
   grandTotal: number | null;
+  contractTotal: number | null; // Goodshuffle contract_subtotal (pre-discount subtotal — delivery pricing input)
   amountPaid: number | null;
   amountDue: number | null;
   clientName: string;
@@ -603,6 +604,7 @@ function toBookingView(r: Record<string, unknown>): BookingView {
     statusLabel: String(r.status_label ?? ""),
     signed: Number(r.signed ?? 0) === 1,
     grandTotal: r.grand_total == null ? null : Number(r.grand_total),
+    contractTotal: r.contract_total == null ? null : Number(r.contract_total),
     amountPaid: r.amount_paid == null ? null : Number(r.amount_paid),
     amountDue: r.amount_due == null ? null : Number(r.amount_due),
     clientName: String(r.client_name ?? ""),
@@ -959,6 +961,16 @@ export function getBookingRevenueByIds(ids: string[]): Map<string, number | null
 /** All bookings (for Customer Intelligence aggregation). */
 export function getAllBookings(): BookingView[] {
   return (getDb().prepare("SELECT * FROM bookings ORDER BY event_date").all() as Record<string, unknown>[]).map(toBookingView);
+}
+
+/** Most-recently-created projects first (for the delivery calculator's "prefill from a project" picker —
+ *  so a quote you just built shows up at the top). Undated-created rows sort last. */
+export function getRecentBookings(limit = 40): BookingView[] {
+  return (
+    getDb()
+      .prepare("SELECT * FROM bookings ORDER BY COALESCE(date_created,'0000-00-00') DESC, updated_at DESC LIMIT ?")
+      .all(limit) as Record<string, unknown>[]
+  ).map(toBookingView);
 }
 
 /** Open leads for the Sales OS — UNSIGNED, non-cancelled/lost bookings whose event is still ahead
