@@ -31,6 +31,10 @@
 
     <div class="row"><input id="enabled" type="checkbox" /> <label for="enabled" style="margin:0;">Auto-pull enabled</label></div>
 
+    <label for="radarToken">Opportunity Radar ingest token</label>
+    <input id="radarToken" type="text" placeholder="(only if RADAR_INGEST_TOKEN is set on the server)" />
+    <div class="hint">For the "Capture to Opportunity Radar" button. Leave blank unless RADAR_INGEST_TOKEN is configured on Zoe Ops.</div>
+
     <div><button id="save">Save</button><span id="saved" hidden>Saved ✓</span></div>
   </div>
   <script src="options.js"></script>
