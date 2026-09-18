@@ -37,6 +37,8 @@ const PUBLIC: string[] = [
   "/api/pull/heartbeat", // Auto-Pull extension status ping; own token (fail-open), CORS-open
   "/api/openphone/webhook", // OpenPhone → us; authenticates by HMAC signature, not a session
   "/api/coach", // Custodian live-coach bridge; authenticates by COACH_API_TOKEN bearer, not a session
+  "/api/radar/ingest", // Opportunity Radar browser-agent POST; RADAR_INGEST_TOKEN + CORS-locked, not a session
+  "/api/radar/cron", // Opportunity Radar scheduled source pull; RADAR_INGEST_TOKEN, hit by an external scheduler
 ];
 
 function isPublicPath(pathname: string): boolean {
