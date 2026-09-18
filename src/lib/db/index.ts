@@ -640,6 +640,138 @@ CREATE TABLE IF NOT EXISTS radar_opportunities (
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );
+
+-- ── Opportunity Radar (opportunity intelligence engine) ──────────────────────────────────────────
+-- Event Radar reframed + broadened. Event Radar and Procurement Radar (and web/facility signals) all
+-- feed ONE unified Opportunity Intelligence layer: the opportunities spine below. Domain-specific
+-- raw facts live in satellite tables (radar_events already exists for events; radar_procurements is
+-- new). Same design law as everything else: FACTS ONLY here; relevance/opportunity SCORES, signal
+-- maturity and timing are DERIVED deterministically at read time by src/lib/opportunity/* — never
+-- persisted, never stale, always explainable. AI only interprets; it never fabricates or scores.
+
+-- The unified Opportunity Intelligence Record. Every discovery (an event, a procurement notice, a
+-- facility/web signal) normalizes into one row. kind says which; event_id/procurement_id link to the
+-- satellite with the raw facts. dedupe_key is the stable identity (a re-pull updates in place).
+CREATE TABLE IF NOT EXISTS opportunities (
+  id                  TEXT PRIMARY KEY,
+  dedupe_key          TEXT UNIQUE NOT NULL,
+  kind                TEXT NOT NULL,        -- EVENT | PROCUREMENT | FACILITY_SIGNAL | WEB_SIGNAL
+  name                TEXT NOT NULL,
+  description         TEXT,
+  source_id           TEXT,
+  source_name         TEXT,
+  source_url          TEXT,                 -- ALWAYS preserved (provenance)
+  jurisdiction        TEXT,                 -- FEDERAL | STATE_MD | DC | MONTGOMERY_CO | ROCKVILLE | GAITHERSBURG | PRINCE_GEORGES_CO | HOWARD_CO | BALTIMORE | NOVA | OTHER | UNKNOWN
+  region              TEXT,                 -- normalized DMV sub-area (radar geo Region)
+  city                TEXT,
+  state               TEXT,
+  organization        TEXT,                 -- buyer/organizer name (denormalized convenience)
+  estimated_date      TEXT,                 -- YYYY-MM-DD event/project date (nullable)
+  deadline            TEXT,                 -- YYYY-MM-DD procurement response deadline (nullable)
+  discovered_at       TEXT NOT NULL,
+  last_reviewed_at    TEXT,
+  next_action_date    TEXT,
+  stage               TEXT NOT NULL,        -- lifecycle: DISCOVERED | VALIDATED | RELEVANT | RESEARCHING | TARGET_IDENTIFIED | OUTREACH_READY | CONTACTED | ENGAGED | OPPORTUNITY | QUOTED | WON | LOST | ARCHIVED
+  stage_source        TEXT,                 -- auto | manual (manual override wins, like lead_status)
+  status              TEXT,                 -- raw source status (open | awarded | closed)
+  est_value_low       REAL,
+  est_value_high      REAL,
+  zoe_categories      TEXT,                 -- JSON string[] (tent, tables, chairs, flooring, linens, ...)
+  verification_status TEXT,                 -- VERIFIED | INFERRED | UNKNOWN | NOT_YET_VERIFIED
+  confidence          REAL,
+  event_id            TEXT,                 -- radar_events.id when kind=EVENT
+  procurement_id      TEXT,                 -- radar_procurements.id when kind=PROCUREMENT
+  campaign_id         TEXT,
+  booking_id          TEXT,                 -- Goodshuffle booking once linked (Sales OS handoff)
+  sales_status        TEXT NOT NULL,        -- NONE | OPPORTUNITY_CREATED | LINKED
+  recommended_action  TEXT,
+  is_seed             INTEGER DEFAULT 0,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_opportunities_stage ON opportunities(stage);
+CREATE INDEX IF NOT EXISTS idx_opportunities_kind ON opportunities(kind);
+CREATE INDEX IF NOT EXISTS idx_opportunities_date ON opportunities(estimated_date);
+CREATE INDEX IF NOT EXISTS idx_opportunities_deadline ON opportunities(deadline);
+CREATE INDEX IF NOT EXISTS idx_opportunities_event ON opportunities(event_id);
+
+-- Procurement facts (solicitations/awards) — the satellite for kind=PROCUREMENT, analogous to
+-- radar_events for kind=EVENT. Preserves the solicitation number + source URL.
+CREATE TABLE IF NOT EXISTS radar_procurements (
+  id                  TEXT PRIMARY KEY,
+  dedupe_key          TEXT UNIQUE NOT NULL,
+  solicitation_number TEXT,
+  notice_type         TEXT,                 -- SOURCES_SOUGHT | RFI | PRESOLICITATION | IFB | RFP | RFQ | AWARD | OTHER
+  title               TEXT,
+  description         TEXT,
+  agency              TEXT,
+  sub_agency          TEXT,
+  jurisdiction        TEXT,
+  naics               TEXT,
+  psc                 TEXT,
+  set_aside           TEXT,
+  posted_date         TEXT,
+  response_deadline   TEXT,
+  archive_date        TEXT,
+  award_amount        REAL,
+  awardee             TEXT,
+  award_date          TEXT,
+  city                TEXT,
+  state               TEXT,
+  source_id           TEXT,
+  source_url          TEXT,
+  is_seed             INTEGER DEFAULT 0,
+  discovered_at       TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
+
+-- The relationship-graph NODES: companies/agencies/contacts connected to opportunities (§7/§8). Only
+-- publicly-available business information. matched_customer_key links an entity to Zoe's existing
+-- Sales OS customer history (§17) — the key is the same identity key aggregateCustomers uses.
+CREATE TABLE IF NOT EXISTS radar_entities (
+  id                   TEXT PRIMARY KEY,
+  name                 TEXT NOT NULL,
+  kind                 TEXT NOT NULL,       -- AGENCY | PRIME | EVENT_PLANNER | FACILITIES | PRODUCTION | CATERING | VENDOR | PARTNER | CONTACT | UNKNOWN
+  website              TEXT,
+  email                TEXT,
+  phone                TEXT,
+  jurisdiction         TEXT,
+  verification_status  TEXT NOT NULL,       -- VERIFIED | INFERRED | UNKNOWN
+  matched_customer_key TEXT,                -- identity key into Sales OS customer history if matched
+  notes                TEXT,
+  is_seed              INTEGER DEFAULT 0,
+  created_at           TEXT NOT NULL,
+  updated_at           TEXT NOT NULL
+);
+
+-- The relationship-graph EDGES: which entity plays which role on which opportunity, and whether it's
+-- the recommended primary target (§7 "who is the most useful person/company for Zoe to approach?").
+CREATE TABLE IF NOT EXISTS opportunity_entities (
+  id                TEXT PRIMARY KEY,
+  opportunity_id    TEXT NOT NULL,
+  entity_id         TEXT NOT NULL,
+  relationship      TEXT NOT NULL,          -- DIRECT_BUYER | PRIME_CONTRACTOR | EVENT_PLANNER | FACILITIES_CONTRACTOR | EVENT_MGMT | PRODUCTION | VENDOR | PARTNER | PROCUREMENT_CONTACT | UNKNOWN
+  is_primary_target INTEGER DEFAULT 0,
+  confidence        REAL,
+  evidence          TEXT,
+  created_at        TEXT NOT NULL,
+  UNIQUE(opportunity_id, entity_id, relationship)
+);
+CREATE INDEX IF NOT EXISTS idx_opp_entities_opp ON opportunity_entities(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_opp_entities_entity ON opportunity_entities(entity_id);
+
+-- Outreach campaigns (§11): a named grouping of opportunities with target criteria. Membership is via
+-- opportunities.campaign_id. Metrics (emails/calls/responses/revenue) are DERIVED, not stored here.
+CREATE TABLE IF NOT EXISTS radar_campaigns (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  description  TEXT,
+  criteria     TEXT,                        -- JSON target criteria
+  created_by   TEXT,
+  is_seed      INTEGER DEFAULT 0,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
 `;
 
 type DB = InstanceType<typeof Database>;
@@ -684,6 +816,13 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "quote_sent_at", type: "TEXT" }, // ISO — precise time the quote email was sent (from GS message thread)
   { table: "bookings", column: "quote_opened_at", type: "TEXT" }, // ISO — latest time the client opened the quote email
   { table: "bookings", column: "quote_open_alerted_at", type: "TEXT" }, // ISO — the opened_at we last Slack-alerted for (dedupe)
+  // Opportunity Radar — source registry (§14) additive columns on the existing radar_sources table.
+  { table: "radar_sources", column: "acquisition_method", type: "TEXT" }, // API | BROWSER | MANUAL — how records are pulled
+  { table: "radar_sources", column: "auth_status", type: "TEXT" }, // NONE | REQUIRED_OK | REQUIRED_MISSING (e.g. API key present?)
+  { table: "radar_sources", column: "frequency", type: "TEXT" }, // human cadence, e.g. "daily", "weekly"
+  { table: "radar_sources", column: "parser_version", type: "TEXT" }, // bump when an adapter's parsing changes
+  { table: "radar_sources", column: "records_discovered", type: "INTEGER" }, // count from the last successful run
+  { table: "radar_sources", column: "last_failure_at", type: "TEXT" }, // ISO of the last failed run
 ];
 
 function migrate(db: DB): void {
