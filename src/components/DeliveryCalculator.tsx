@@ -4,8 +4,8 @@
 // pull driving miles from the warehouse) and the quote subtotal (pre-discount); we price each leg as
 // BASE + miles×$2.99 + subtotal×5%. Round trip charges both legs. Read-only math — nothing is saved.
 
-import { useMemo, useState } from "react";
-import { Calculator, Loader2, MapPin, Truck, Wrench } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Calculator, FolderOpen, Loader2, MapPin, Truck, Wrench } from "lucide-react";
 import { deliveryQuote, PER_MILE, SUBTOTAL_PCT, BASE, type LegMode, type LegBreakdown } from "@/lib/pricing/delivery";
 import { readinessTier } from "@/lib/pricing/eventReadiness";
 
@@ -17,6 +17,14 @@ const MODES: { value: LegMode; label: string }[] = [
   { value: "pickup", label: "Pickup only" },
 ];
 
+interface ProjectOpt {
+  id: string;
+  name: string;
+  subtotal: number | null;
+  location: string | null;
+  dateCreated: string | null;
+}
+
 export function DeliveryCalculator(): React.JSX.Element {
   const [address, setAddress] = useState("");
   const [miles, setMiles] = useState("");
@@ -25,9 +33,25 @@ export function DeliveryCalculator(): React.JSX.Element {
   const [readiness, setReadiness] = useState(false);
   const [loading, setLoading] = useState(false);
   const [distNote, setDistNote] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectOpt[]>([]);
 
-  async function getMiles() {
-    const a = address.trim();
+  useEffect(() => {
+    fetch("/api/pricing/projects")
+      .then((r) => r.json())
+      .then((j: { projects: ProjectOpt[] }) => setProjects(j.projects ?? []))
+      .catch(() => setProjects([]));
+  }, []);
+
+  function pickProject(id: string) {
+    const p = projects.find((x) => x.id === id);
+    if (!p) return;
+    if (p.location) setAddress(p.location);
+    setSubtotal(p.subtotal != null ? String(p.subtotal) : "");
+    if (p.location) void getMiles(p.location);
+  }
+
+  async function getMiles(addr?: string) {
+    const a = (addr ?? address).trim();
     if (!a) return;
     setLoading(true);
     setDistNote(null);
@@ -66,6 +90,28 @@ export function DeliveryCalculator(): React.JSX.Element {
       </header>
 
       <section className="surface space-y-4 rounded-2xl border border-white/5 p-5">
+        {projects.length > 0 && (
+          <div className="space-y-1.5">
+            <label className="flex items-center gap-1.5 text-sm font-medium">
+              <FolderOpen className="size-4 text-primary" /> Prefill from a recent project
+            </label>
+            <select
+              defaultValue=""
+              onChange={(e) => pickProject(e.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="">Choose a project (newest first)…</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                  {p.subtotal != null ? ` — ${money(p.subtotal)}` : ""}
+                  {p.dateCreated ? ` · ${p.dateCreated}` : ""}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">Pulls the project&apos;s subtotal and location. Location is city-level — refine the street address for exact miles.</p>
+          </div>
+        )}
         <div className="space-y-1.5">
           <label className="text-sm font-medium">Event address</label>
           <div className="flex gap-2">
@@ -77,7 +123,7 @@ export function DeliveryCalculator(): React.JSX.Element {
               className="min-w-0 flex-1 rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
             <button
-              onClick={getMiles}
+              onClick={() => getMiles()}
               disabled={loading || !address.trim()}
               className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-white/15 px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
             >
