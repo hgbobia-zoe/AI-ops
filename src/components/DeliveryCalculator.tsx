@@ -5,8 +5,9 @@
 // BASE + miles×$2.99 + subtotal×5%. Round trip charges both legs. Read-only math — nothing is saved.
 
 import { useMemo, useState } from "react";
-import { Calculator, Loader2, MapPin, Truck } from "lucide-react";
+import { Calculator, Loader2, MapPin, Truck, Wrench } from "lucide-react";
 import { deliveryQuote, PER_MILE, SUBTOTAL_PCT, BASE, type LegMode, type LegBreakdown } from "@/lib/pricing/delivery";
+import { readinessTier } from "@/lib/pricing/eventReadiness";
 
 const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -21,6 +22,7 @@ export function DeliveryCalculator(): React.JSX.Element {
   const [miles, setMiles] = useState("");
   const [subtotal, setSubtotal] = useState("");
   const [mode, setMode] = useState<LegMode>("round_trip");
+  const [readiness, setReadiness] = useState(false);
   const [loading, setLoading] = useState(false);
   const [distNote, setDistNote] = useState<string | null>(null);
 
@@ -45,7 +47,10 @@ export function DeliveryCalculator(): React.JSX.Element {
     }
   }
 
-  const q = useMemo(() => deliveryQuote(Number(miles) || 0, Number(subtotal) || 0, mode), [miles, subtotal, mode]);
+  const subtotalNum = Number(subtotal) || 0;
+  const q = useMemo(() => deliveryQuote(Number(miles) || 0, subtotalNum, mode), [miles, subtotalNum, mode]);
+  const rTier = useMemo(() => readinessTier(subtotalNum), [subtotalNum]);
+  const grandTotal = Math.round((q.total + (readiness ? rTier.fee : 0)) * 100) / 100;
   const ready = (Number(miles) || 0) >= 0 && (miles !== "" || subtotal !== "");
 
   return (
@@ -119,6 +124,16 @@ export function DeliveryCalculator(): React.JSX.Element {
             </button>
           ))}
         </div>
+
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+          <input type="checkbox" checked={readiness} onChange={(e) => setReadiness(e.target.checked)} className="mt-0.5 size-4 accent-primary" />
+          <span>
+            <span className="flex items-center gap-1.5 text-sm font-medium">
+              <Wrench className="size-4 text-primary" /> Add Event Readiness (setup / breakdown help)
+            </span>
+            <span className="text-xs text-muted-foreground">Tiered by order value: under $500 $75 · $500–1,500 $150 · $1,500–3,000 $250 · $3,000+ $350+</span>
+          </span>
+        </label>
       </section>
 
       {/* Result */}
@@ -128,11 +143,39 @@ export function DeliveryCalculator(): React.JSX.Element {
             {q.dropOff && <LegRow title="Drop-off" leg={q.dropOff} />}
             {q.pickup && <LegRow title="Pickup" leg={q.pickup} />}
             <div className="flex items-center justify-between border-t border-white/10 pt-4">
-              <span className="flex items-center gap-2 text-lg font-semibold">
-                <Truck className="size-5 text-primary" /> Delivery total
+              <span className="flex items-center gap-2 font-semibold">
+                <Truck className="size-5 text-primary" /> Delivery {readiness ? "subtotal" : "total"}
               </span>
-              <span className="text-2xl font-bold tabular-nums">{money(q.total)}</span>
+              <span className="text-xl font-bold tabular-nums">{money(q.total)}</span>
             </div>
+
+            {readiness && (
+              <>
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-2 font-semibold">
+                      <Wrench className="size-5 text-primary" /> Event Readiness
+                    </span>
+                    <span className="font-semibold tabular-nums">
+                      {money(rTier.fee)}
+                      {rTier.floor && <span className="text-muted-foreground">+</span>}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {rTier.max
+                      ? `order ${money(rTier.min)}–${money(rTier.max)} tier`
+                      : `orders ${money(rTier.min)}+ (starting price — large orders may run higher)`}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between border-t border-white/10 pt-4">
+                  <span className="text-lg font-semibold">Grand total</span>
+                  <span className="text-2xl font-bold tabular-nums">
+                    {money(grandTotal)}
+                    {rTier.floor && <span className="text-base text-muted-foreground">+</span>}
+                  </span>
+                </div>
+              </>
+            )}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">Enter the miles and subtotal to see the price.</p>
