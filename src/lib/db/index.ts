@@ -896,6 +896,66 @@ CREATE TABLE IF NOT EXISTS prospect_suppression (
   created_at  TEXT NOT NULL,
   UNIQUE(kind, value)
 );
+
+-- Marketing module — Zoe's demand-generation OS. The app is the operating dashboard over the tools the
+-- team already runs (Confluence for content planning, a social poster, ManyChat, Google Business); these
+-- tables hold what the team plans and tracks in-app. FACTS the team enters; no fabrication.
+CREATE TABLE IF NOT EXISTS marketing_campaigns (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  objective     TEXT,                 -- what this campaign is for (awareness, leads, bookings)
+  channels      TEXT,                 -- JSON string[] from the team's channel set
+  audience      TEXT,                 -- b2c | b2b | both
+  status        TEXT NOT NULL,        -- idea | planned | live | paused | done
+  budget        REAL,                 -- planned spend, dollars
+  spend         REAL,                 -- actual spend, dollars
+  start_date    TEXT,                 -- YYYY-MM-DD
+  end_date      TEXT,                 -- YYYY-MM-DD
+  goal_metric   TEXT,                 -- free text goal (e.g. "20 wedding leads")
+  result_leads     INTEGER,           -- team-entered outcomes
+  result_bookings  INTEGER,
+  result_revenue   REAL,
+  link          TEXT,
+  notes         TEXT,
+  created_by    TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS marketing_content (
+  id            TEXT PRIMARY KEY,
+  title         TEXT NOT NULL,
+  channel       TEXT,                 -- social | email | blog | reviews | other
+  format        TEXT,                 -- e.g. reel, carousel, newsletter, blog post
+  plan_date     TEXT,                 -- YYYY-MM-DD the piece is planned/scheduled for
+  status        TEXT NOT NULL,        -- idea | drafting | scheduled | posted
+  audience      TEXT,                 -- b2c | b2b | both
+  owner         TEXT,
+  link          TEXT,                 -- Confluence page, draft, or the live post
+  notes         TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS marketing_reviews (
+  id            TEXT PRIMARY KEY,
+  source        TEXT,                 -- google | the_knot | wedding_wire | yelp | facebook | other
+  reviewer      TEXT,
+  rating        INTEGER,              -- 1..5
+  review_date   TEXT,                 -- YYYY-MM-DD
+  text          TEXT,
+  responded     INTEGER NOT NULL DEFAULT 0,
+  response_note TEXT,
+  link          TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+-- Manual channel attribution for a booking (Goodshuffle does not hand us "how did you hear about us").
+CREATE TABLE IF NOT EXISTS marketing_lead_tags (
+  booking_id    TEXT PRIMARY KEY,     -- Goodshuffle project id (bookings.booking_id)
+  channel       TEXT,                 -- referral | instagram | facebook | google | the_knot | wedding_wire | website | repeat | other
+  note          TEXT,
+  tagged_by     TEXT,
+  updated_at    TEXT NOT NULL
+);
 `;
 
 type DB = InstanceType<typeof Database>;

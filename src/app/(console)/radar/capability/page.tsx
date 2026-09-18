@@ -1,6 +1,6 @@
-// Capability Profile admin (Owner/Admin). The proxy already gates /admin/* + /api/pursuit to owner/admin;
-// this re-checks so the page is safe even if the route ever moves. The reusable company record behind bid
-// pursuit — fill once, drawn from by every capability statement / solicitation response.
+// Capability Profile — the reusable company record behind bid pursuit, living under Opportunity Radar
+// (the pursuit/BD house) rather than Settings. Owner/Admin only: /api/pursuit is settings-gated and this
+// page re-checks. Fill once; every capability statement / solicitation response draws from it.
 
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";

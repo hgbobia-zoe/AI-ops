@@ -16,6 +16,7 @@ import {
   Gauge, ListChecks, Truck, AlertTriangle, Users, DollarSign,
   TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
   RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator, Radar, IdCard,
+  Megaphone, Send, Upload, CalendarDays, Star, GitBranch,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -26,6 +27,8 @@ interface Blade {
   icon: LucideIcon;
   financial?: boolean; // only where role can see $
   coaching?: boolean; // only where role can see call transcripts
+  manage?: boolean; // owner/admin only (e.g. Capability Profile)
+  exact?: boolean; // highlight only on an exact path match (section landing pages)
 }
 interface Group {
   label: string;
@@ -37,12 +40,24 @@ interface Group {
 // (and above) the expandable sections — not nested inside Operations.
 const HUB: Blade = { href: "/dashboard", label: "Command Center", icon: Gauge };
 
-// Opportunity Radar — the opportunity intelligence engine (events + procurement + facility/web signals
-// feeding one layer). A first-class module in its own right (it detects future demand; Sales OS
-// converts it), so it sits standalone at the top alongside Command Center.
-const RADAR: Blade = { href: "/radar", label: "Opportunity Radar", icon: Radar };
-
 const GROUPS: Group[] = [
+  {
+    // Opportunity Radar — the opportunity intelligence + bid-pursuit house. A big blade in its own right
+    // (it detects future demand; Sales OS converts it), with its working views as sub-blades. The
+    // reusable Capability Profile lives here too (owner/admin), not buried in Settings.
+    label: "Opportunity Radar",
+    icon: Radar,
+    blades: [
+      { href: "/radar", label: "Radar", icon: Gauge, exact: true },
+      { href: "/radar/outreach", label: "Outreach", icon: Send },
+      { href: "/radar/campaigns", label: "Campaigns", icon: Target },
+      { href: "/radar/companies", label: "Companies", icon: Building2 },
+      { href: "/radar/analytics", label: "Analytics", icon: TrendingUp },
+      { href: "/radar/sources", label: "Sources", icon: Plug },
+      { href: "/radar/capability", label: "Capability Profile", icon: IdCard, manage: true },
+      { href: "/radar/import", label: "Import", icon: Upload },
+    ],
+  },
   {
     label: "Operations",
     icon: LayoutGrid,
@@ -66,6 +81,19 @@ const GROUPS: Group[] = [
     ],
   },
   {
+    // Marketing — Zoe's demand-generation OS. A big blade over the tools the team runs (Confluence,
+    // social poster, ManyChat, Google Business). Two-track: weddings/social + corporate/gov.
+    label: "Marketing",
+    icon: Megaphone,
+    blades: [
+      { href: "/marketing", label: "Marketing", icon: Gauge, exact: true },
+      { href: "/marketing/campaigns", label: "Campaigns", icon: Megaphone },
+      { href: "/marketing/content", label: "Content", icon: CalendarDays },
+      { href: "/marketing/reviews", label: "Reviews", icon: Star },
+      { href: "/marketing/sources", label: "Lead Sources", icon: GitBranch },
+    ],
+  },
+  {
     label: "Company",
     icon: Building2,
     blades: [
@@ -81,7 +109,8 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
   const close = () => setOpen(false); // drawer closes on any nav tap
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
-  const canSee = (b: Blade) => (!b.financial || canSeeFinancials(role)) && (!b.coaching || canSeeCoaching(role));
+  const bladeActive = (b: Blade) => (b.exact ? pathname === b.href : isActive(b.href));
+  const canSee = (b: Blade) => (!b.financial || canSeeFinancials(role)) && (!b.coaching || canSeeCoaching(role)) && (!b.manage || canManageSettings(role));
 
   // Admin is another expandable parent, built from what the role can manage.
   const adminBlades: Blade[] = [];
@@ -89,7 +118,6 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
   if (canManageSettings(role)) adminBlades.push({ href: "/admin/health", label: "Connections", icon: Plug });
   if (canManageUsers(role)) adminBlades.push({ href: "/admin/users", label: "Team", icon: UsersRound });
   if (canManageSettings(role)) adminBlades.push({ href: "/admin/passes", label: "Shift Passes", icon: KeyRound });
-  if (canManageSettings(role)) adminBlades.push({ href: "/admin/capability", label: "Capability Profile", icon: IdCard });
   if (canManageSettings(role)) adminBlades.push({ href: "/admin", label: "Settings", icon: Settings });
 
   const parents: Group[] = [
@@ -122,12 +150,9 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
     ? "New Project"
     : isActive(HUB.href)
       ? HUB.label
-      : isActive(RADAR.href)
-        ? RADAR.label
-        : parents.flatMap((g) => g.blades).find((b) => isActive(b.href))?.label ?? "Zoe Operations";
+      : [...parents].flatMap((g) => g.blades).filter((b) => bladeActive(b)).sort((a, b) => b.href.length - a.href.length)[0]?.label ?? "Zoe Operations";
 
   const HubIcon = HUB.icon;
-  const RadarIcon = RADAR.icon;
 
   // The nav body — shared by the desktop sidebar and the mobile drawer. `withClose` adds the drawer's ✕.
   const panel = (withClose: boolean): React.JSX.Element => (
@@ -157,19 +182,6 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
           {HUB.label}
         </Link>
 
-        {/* Event Radar — standalone first-class module, pinned at the top beside Command Center */}
-        <Link
-          href={RADAR.href}
-          onClick={close}
-          aria-current={isActive(RADAR.href) ? "page" : undefined}
-          className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
-            isActive(RADAR.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
-          }`}
-        >
-          <RadarIcon className={`size-[17px] shrink-0 ${isActive(RADAR.href) ? "text-foreground" : "text-meta"}`} />
-          {RADAR.label}
-        </Link>
-
         {/* Expandable section parents → sub-blades */}
         {parents.map((g) => {
           const isOpen = openGroups.has(g.label);
@@ -190,7 +202,7 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
                 <div className="mt-0.5 mb-1 flex flex-col gap-0.5">
                   {g.blades.map((b) => {
                     const BIcon = b.icon;
-                    const active = isActive(b.href);
+                    const active = bladeActive(b);
                     return (
                       <Link
                         key={b.href}
