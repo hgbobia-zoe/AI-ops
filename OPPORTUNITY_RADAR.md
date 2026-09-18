@@ -123,6 +123,31 @@ A re-pull that changes a watched field (deadline, status) or adds an **awardee**
 - **Analytics (§19, `analytics.ts`, `/radar/analytics`)** — the signal→revenue funnel + breakdowns by
   source, jurisdiction and type. Pipeline figure is an indicative range sum, never booked revenue.
 
+## Prospecting — cold outreach BEFORE Goodshuffle
+
+Goodshuffle is reserved for **conversion**. A qualified, enriched opportunity is routed into a
+**prospecting motion** (the SDR/BDR cadence model), and only reaches Goodshuffle once a prospect
+responds. Everything is deterministic except the email/call copy (which the AI drafts).
+
+- **Tiering** (`prospecting/tiering.ts`, config-driven) by the opportunity score already computed:
+  **Tier A = call-first** (high score / already-awarded / existing Zoe relationship — a human beats a
+  blast on big-ticket local B2B); **Tier B = email sequence** (qualified volume, from a separate warmed
+  domain); **Tier C = monitor** (below the bar).
+- **Cadences** (`prospecting/cadences.ts`) — multi-touch, multi-channel, ~2 weeks, ending in a breakup.
+  Tier A is a 7-touch call/email/LinkedIn cadence; Tier B is email-led with one call. Enrolling
+  materializes dated **tasks** into the rep worklist.
+- **Enrichment** (`prospecting/enrich.ts`) — when the target company has no contact email, **Apify**
+  finds one (dormant until `APIFY_TOKEN`; never fabricates an email). We target the **prime / event-
+  management company, not the government buyer**.
+- **Worklist** (`/radar/outreach`) — "what to do today": call tasks with a script, email tasks with the
+  copy, one-click outcome logging. A **reply/meeting pauses the sequence** and moves the opportunity to
+  ENGAGED for a human to convert in Goodshuffle.
+- **Cold-email sequencer** (`prospecting/sequencer.ts`) — Tier B email steps **export to CSV** (imports
+  into Instantly / Smartlead / Apollo / lemlist) and **push via API** when configured. We never send
+  from here — the sequencer owns sending, warmup, throttling and unsubscribe.
+- **Hygiene** — a do-not-contact **suppression list** (email/domain/company) and a CAN-SPAM footer
+  (physical identity + opt-out) on cold emails.
+
 ## Lead intelligence on the detail page
 
 Each opportunity leads with a **Lead intelligence** block: the source (with an **Open original** link),
@@ -159,6 +184,9 @@ set-aside). When awarded, it flags the awardee as the likely partner to approach
 | `RADAR_INGEST_TOKEN` | Locks the browser-agent ingest endpoint (fail-open until set). |
 | `SLACK_ALERT_WEBHOOK_URL` / `alerts.slackWebhook` | Opportunity alerts (reuses the existing alerts channel). |
 | `ANTHROPIC_API_KEY` (or `LLM_BASE_URL`) | Turns on AI interpretation + outreach refinement; template-only fallback otherwise. |
+| `APIFY_TOKEN` (+ `APIFY_CONTACT_ACTOR`) | Contact enrichment for prospecting (find a missing email). Dormant otherwise. |
+| `SEQUENCER_API_KEY` (+ `SEQUENCER_PROVIDER` = instantly\|smartlead, `SEQUENCER_CAMPAIGN_ID`) | Push Tier-B email steps to the cold-email tool. CSV export works without it. |
+| `ZOE_MAILING_ADDRESS` | Physical address for the CAN-SPAM footer on cold emails. |
 
 ## Roadmap (§20) — status
 **P1 Foundation ✅. P2 connectors + alerts ✅** (Montgomery + eMMA/Rockville/Gaithersburg/DC browser

@@ -4,7 +4,7 @@
 
 import { todayInOpsTz } from "@/lib/dates";
 import { opportunityBoard, type OpportunityView } from "./service";
-import { getOutreachForOpportunity } from "./outreachStore";
+import { enrolledOpportunityIds, contactedOpportunityIds } from "@/lib/prospecting/store";
 import { JURISDICTION_LABEL, KIND_LABEL } from "./types";
 
 export interface FunnelStage { key: string; label: string; count: number }
@@ -61,12 +61,13 @@ export function opportunityAnalytics(today: string = todayInOpsTz()): AnalyticsV
   const byJurisdiction = accumulate(rows, (v) => v.opp.jurisdiction, (k) => JURISDICTION_LABEL[k as keyof typeof JURISDICTION_LABEL] ?? k);
   const byKind = accumulate(rows, (v) => v.opp.kind, (k) => KIND_LABEL[k as keyof typeof KIND_LABEL] ?? k);
 
+  const enrolled = enrolledOpportunityIds();
+  const contactedSet = contactedOpportunityIds();
   let outreachDrafted = 0;
   let contacted = 0;
   for (const v of rows) {
-    const drafts = getOutreachForOpportunity(v.opp.id);
-    if (drafts.length) outreachDrafted++;
-    if (drafts.some((d) => d.status === "sent") || ["CONTACTED", "ENGAGED", "OPPORTUNITY", "QUOTED", "WON"].includes(v.stage)) contacted++;
+    if (enrolled.has(v.opp.id)) outreachDrafted++;
+    if (contactedSet.has(v.opp.id) || ["CONTACTED", "ENGAGED", "OPPORTUNITY", "QUOTED", "WON"].includes(v.stage)) contacted++;
   }
 
   const totals = {

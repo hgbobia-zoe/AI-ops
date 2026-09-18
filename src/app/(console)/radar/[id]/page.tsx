@@ -8,13 +8,16 @@ import { notFound } from "next/navigation";
 import { ArrowUpRight, ExternalLink } from "lucide-react";
 import { OpportunityActions } from "@/components/OpportunityActions";
 import { OpportunityInterpret } from "@/components/OpportunityInterpret";
-import { OpportunityOutreach } from "@/components/OpportunityOutreach";
+import { RouteToProspecting } from "@/components/RouteToProspecting";
+import { ProspectTaskActions } from "@/components/ProspectTaskActions";
 import { VerificationBadge, TierBadge, ScorePill, SeedTag } from "@/components/radar-badges";
 import { opportunityDetail } from "@/lib/opportunity/service";
 import { getOpportunityChanges } from "@/lib/opportunity/store";
 import { getCachedInterpretation } from "@/lib/opportunity/interpret";
-import { getOutreachForOpportunity } from "@/lib/opportunity/outreachStore";
 import { findRelated } from "@/lib/opportunity/fusion";
+import { tierFor } from "@/lib/prospecting/tiering";
+import { enrollmentFor } from "@/lib/prospecting/service";
+import { TIER_LABEL, OUTCOME_LABEL } from "@/lib/prospecting/types";
 import { KIND_LABEL, JURISDICTION_LABEL, MATURITY_LABEL, STAGE_LABEL, STAGE_ORDER, RELATIONSHIP_LABEL, ENTITY_KIND_LABEL, ZOE_CATEGORY_LABEL } from "@/lib/opportunity/types";
 import { stageProgress } from "@/lib/opportunity/lifecycle";
 import { todayInOpsTz, formatYmdLong } from "@/lib/dates";
@@ -47,7 +50,8 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
   const changes = getOpportunityChanges(e.dedupeKey);
   const progress = stageProgress(stage);
   const interpretation = getCachedInterpretation(id);
-  const outreach = getOutreachForOpportunity(id);
+  const enrollment = enrollmentFor(id);
+  const tierDecision = tierFor(d, { awarded });
   const related = findRelated(id);
   const buyer = entityMemos.find((m) => m.edge.relationship === "DIRECT_BUYER" || m.edge.relationship === "PROCUREMENT_CONTACT")?.edge.entity.name ?? e.organization ?? null;
   const fmtMoney = (n: number | null) => (n == null ? null : `$${n.toLocaleString()}`);
@@ -221,9 +225,33 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
         </div>
       </div>
 
-      {/* Outreach */}
-      <Section title="Outreach" note="detect → draft → approve → send → track — nothing sends automatically">
-        <OpportunityOutreach id={id} drafts={outreach} hasTarget={!!d.primaryTarget} />
+      {/* Prospecting — cold outreach BEFORE Goodshuffle */}
+      <Section title="Prospecting" note="cold outreach before Goodshuffle — tiered by score; a reply hands off to conversion">
+        {enrollment ? (
+          <div className="rounded border border-border p-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px]">
+              <span className="font-medium">{TIER_LABEL[enrollment.enrollment.tier]}</span>
+              <span className={`rounded border px-1.5 py-0.5 text-[10.5px] uppercase tracking-[0.05em] ${enrollment.enrollment.status === "replied" ? "border-positive/40 text-positive" : enrollment.enrollment.status === "active" ? "border-attention/40 text-attention" : "border-border text-meta"}`}>{enrollment.enrollment.status}</span>
+              {enrollment.enrollment.status === "replied" && <span className="text-[12px] text-positive">Responded — convert in Goodshuffle when qualified.</span>}
+            </div>
+            <ol className="space-y-2">
+              {enrollment.tasks.map((t) => (
+                <li key={t.id} className="border-t border-[var(--row-rule)] pt-2 text-[12.5px] first:border-t-0 first:pt-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`size-1.5 rounded-full ${t.status === "done" ? "bg-positive" : t.status === "skipped" ? "bg-[var(--bar)]" : "bg-attention/60"}`} />
+                    <span className="uppercase tracking-[0.05em] text-meta">{t.channel}</span>
+                    <span className="text-tertiary-text">{t.subject ?? (t.channel === "call" ? "Call" : t.channel === "linkedin" ? "LinkedIn touch" : "Task")}</span>
+                    <span className="ml-auto tabular-nums text-meta">{t.dueAt}{t.status !== "pending" ? ` · ${t.status}${t.outcome ? ` (${OUTCOME_LABEL[t.outcome]})` : ""}` : ""}</span>
+                  </div>
+                  {t.status === "pending" && <div className="mt-1"><ProspectTaskActions taskId={t.id} channel={t.channel as "call" | "email" | "linkedin" | "task"} /></div>}
+                </li>
+              ))}
+            </ol>
+            <p className="mt-2 border-t border-[var(--row-rule)] pt-2 text-[11.5px] text-meta">Work these from the <Link href="/radar/outreach" className="text-tertiary-text hover:text-foreground">outreach worklist</Link>. Email steps export to your sequencer; calls are logged here.</p>
+          </div>
+        ) : (
+          <RouteToProspecting opportunityId={id} tierPreview={tierDecision.tier} reasons={tierDecision.reasons} />
+        )}
       </Section>
 
       {/* Related opportunities (signal fusion) */}
