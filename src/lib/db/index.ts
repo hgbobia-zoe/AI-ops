@@ -520,6 +520,144 @@ CREATE TABLE IF NOT EXISTS shift_passes (
   truck_id     TEXT,                  -- driver pass: pre-assigned truck → link opens straight to its route
   truck_name   TEXT                   -- display label for the assigned truck
 );
+
+-- ── Event Radar (early-demand intelligence) ──────────────────────────────────────────────────────
+-- Event Radar detects FUTURE events in the DMV that could create rental demand, well before the
+-- planner is shopping vendors, and hands qualified opportunities to Sales OS. Design law:
+-- "RULES CALCULATE. AI INTERPRETS." These tables store only FACTS (what a source told us, tagged
+-- with provenance). Scores, tiers, timing and opportunity value are DERIVED deterministically at
+-- read time by the pure engine in src/lib/radar/* — never persisted here, so they can never go stale
+-- and are always explainable. We never fabricate a planner, attendance, date or contact: absent =
+-- UNKNOWN, never a guess.
+
+-- A source the discovery pipeline can pull from (venue calendars, convention centers, universities,
+-- associations, government, nonprofits, directories, public web, search). The MVP seeds events
+-- directly; this registry is the plug-in point so a real scraper/fetcher can be added per source
+-- without touching the rest of the pipeline.
+CREATE TABLE IF NOT EXISTS radar_sources (
+  id           TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  kind         TEXT NOT NULL,        -- VENUE_CALENDAR | CONVENTION_CENTER | HOTEL | UNIVERSITY | ASSOCIATION | GOVERNMENT | NONPROFIT | DIRECTORY | PUBLIC_WEB | SEARCH
+  url          TEXT,
+  region       TEXT,                 -- DMV sub-area this source covers
+  enabled      INTEGER DEFAULT 1,
+  adapter      TEXT,                 -- key of the ingestion adapter (e.g. "seed") — null = not yet wired
+  last_run_at  TEXT,
+  last_status  TEXT,                 -- OK | ERROR | NEVER_RUN
+  is_seed      INTEGER DEFAULT 0,
+  created_at   TEXT NOT NULL
+);
+
+-- The organization behind an event (the association / company / university / agency). Verification
+-- status distinguishes a confirmed org from an inferred one.
+CREATE TABLE IF NOT EXISTS radar_organizations (
+  id                  TEXT PRIMARY KEY,
+  name                TEXT NOT NULL,
+  website             TEXT,
+  org_type            TEXT,          -- ASSOCIATION | CORPORATE | UNIVERSITY | GOVERNMENT | NONPROFIT | AGENCY | VENUE | OTHER
+  verification_status TEXT NOT NULL, -- VERIFIED | INFERRED | UNKNOWN
+  notes               TEXT,
+  is_seed             INTEGER DEFAULT 0,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
+
+-- A recurring event SERIES (e.g. "CHD Conference"). Individual radar_events point to their series via
+-- parent_series_id. Recurrence confidence and cadence are derived from the historical instances but
+-- cached here as the series' summary; a future instance is NEVER fabricated — it is only ever labelled
+-- PREDICTED/UNANNOUNCED in the derived view with its supporting evidence.
+CREATE TABLE IF NOT EXISTS radar_series (
+  id                    TEXT PRIMARY KEY,
+  name                  TEXT NOT NULL,
+  organization_id       TEXT,
+  category              TEXT,
+  cadence               TEXT,        -- ANNUAL | BIENNIAL | QUARTERLY | MONTHLY | IRREGULAR | UNKNOWN
+  recurrence_confidence TEXT,        -- HIGH | MEDIUM | LOW
+  notes                 TEXT,
+  is_seed               INTEGER DEFAULT 0,
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT NOT NULL
+);
+
+-- A detected event. FACTS ONLY. dedupe_key is the stable identity (same event across re-pulls updates
+-- in place, never duplicates). attributes_json holds the rental-relevant signal facts as a map of
+-- signal→status (PRESENT | ABSENT | UNKNOWN) exactly as the source reported them; the qualification
+-- engine turns those + the structural facts (dates, geography, attendance, recurrence) into a score.
+CREATE TABLE IF NOT EXISTS radar_events (
+  id                    TEXT PRIMARY KEY,
+  dedupe_key            TEXT UNIQUE NOT NULL,
+  name                  TEXT NOT NULL,
+  description           TEXT,
+  category              TEXT NOT NULL,       -- CONFERENCE | ASSOCIATION_MEETING | CORPORATE | TRADE_SHOW | EXPO | GALA | FUNDRAISER | GOVERNMENT | UNIVERSITY | NONPROFIT | MEDICAL | NETWORKING | AWARDS | OUTDOOR_RECEPTION | HOSPITALITY | OTHER
+  start_date            TEXT,                -- YYYY-MM-DD (null if unannounced/unknown)
+  end_date              TEXT,                -- YYYY-MM-DD (null → single day or unknown)
+  venue                 TEXT,
+  address               TEXT,
+  city                  TEXT,
+  state                 TEXT,
+  region                TEXT,                -- normalized DMV sub-area (see radar/geo)
+  source_id             TEXT,
+  source_name           TEXT,
+  source_url            TEXT,
+  discovered_at         TEXT NOT NULL,
+  last_verified_at      TEXT,
+  verification_status   TEXT NOT NULL,       -- VERIFIED | INFERRED | UNKNOWN | NOT_YET_VERIFIED
+  expected_attendance   INTEGER,             -- null = unknown (never guessed)
+  attendance_confidence TEXT,                -- VERIFIED | INFERRED | UNKNOWN
+  recurring             INTEGER DEFAULT 0,   -- 1 = part of a known series
+  recurrence_confidence TEXT,                -- HIGH | MEDIUM | LOW | NONE
+  parent_series_id      TEXT,
+  event_status          TEXT NOT NULL,       -- DETECTED | QUALIFYING | QUALIFIED | HANDED_OFF | ARCHIVED
+  organization_id       TEXT,
+  planner_status        TEXT NOT NULL,       -- VERIFIED | INFERRED | UNKNOWN
+  sales_status          TEXT NOT NULL,       -- NONE | OPPORTUNITY_CREATED | LINKED
+  attributes_json       TEXT,                -- {signalKey: "PRESENT"|"ABSENT"|"UNKNOWN"}
+  is_seed               INTEGER DEFAULT 0,   -- 1 = DEMO/SEED data (never mistaken for verified prod data)
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_radar_events_date ON radar_events(start_date);
+CREATE INDEX IF NOT EXISTS idx_radar_events_series ON radar_events(parent_series_id);
+CREATE INDEX IF NOT EXISTS idx_radar_events_org ON radar_events(organization_id);
+
+-- A planner / event contact, at the org or event grain. NEVER invented: a row exists only when a
+-- source gives us a real name. contact_status separates a verified contact from an inferred one; when
+-- no planner is known there is simply NO row (the event's planner_status stays UNKNOWN and the UI shows
+-- "RESEARCH ORGANIZER").
+CREATE TABLE IF NOT EXISTS radar_planners (
+  id              TEXT PRIMARY KEY,
+  organization_id TEXT,
+  event_id        TEXT,
+  name            TEXT NOT NULL,
+  role            TEXT,
+  email           TEXT,
+  phone           TEXT,
+  agency          TEXT,               -- production company / planning agency, if via one
+  contact_status  TEXT NOT NULL,      -- VERIFIED | INFERRED | UNKNOWN
+  confidence      REAL,               -- 0..1
+  evidence        TEXT,               -- the fact this planner rests on (source/quote)
+  is_seed         INTEGER DEFAULT 0,
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_radar_planners_event ON radar_planners(event_id);
+CREATE INDEX IF NOT EXISTS idx_radar_planners_org ON radar_planners(organization_id);
+
+-- The handoff to Sales OS. Creating an opportunity does NOT duplicate the event — the radar_event
+-- stays the source record; this row is the bridge. booking_id links to a real Goodshuffle booking once
+-- one materializes (client actually enters the pipeline); until then it stands alone as an EARLY
+-- opportunity awaiting a real quote. One row per event.
+CREATE TABLE IF NOT EXISTS radar_opportunities (
+  id           TEXT PRIMARY KEY,
+  event_id     TEXT UNIQUE NOT NULL,
+  status       TEXT NOT NULL,         -- CREATED | LINKED | ARCHIVED
+  booking_id   TEXT,                  -- Goodshuffle booking id once linked (null = early, pre-pipeline)
+  next_action  TEXT,
+  note         TEXT,
+  created_by   TEXT,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL
+);
 `;
 
 type DB = InstanceType<typeof Database>;
