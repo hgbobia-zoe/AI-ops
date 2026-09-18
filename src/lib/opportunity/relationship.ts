@@ -3,6 +3,7 @@
 // "re-engages an existing relationship" instead of cold-contacting. REUSES the Sales OS aggregation
 // (aggregateCustomers identity key + outcomeOf) — no new customer store, no fabricated history.
 
+import { getDb } from "@/lib/db";
 import { getAllBookings } from "@/lib/db/repo";
 import { outcomeOf } from "@/lib/salesos/lost";
 import { aggregateCustomers, normalizeName, type CustomerAgg } from "@/lib/customer/calc";
@@ -54,4 +55,22 @@ export function matchEntity(entity: { name: string; email?: string | null }, ind
   else if (hit.status === "active") action = "Warm relationship — lead with the existing partnership";
 
   return { matched: true, customer: hit, recommendedAction: action };
+}
+
+/** Stamp radar_entities with the Zoe customer identity key they match (so the board/alerts can flag an
+ *  existing relationship without a live re-match). Idempotent; cheap (few entities). Returns count matched. */
+export function enrichEntityMatches(today: string = todayInOpsTz()): number {
+  const index = buildCustomerIndex(today);
+  const db = getDb();
+  const ents = db.prepare("SELECT id, name, email FROM radar_entities").all() as { id: string; name: string; email: string | null }[];
+  const upd = db.prepare("UPDATE radar_entities SET matched_customer_key=? WHERE id=?");
+  let n = 0;
+  const tx = db.transaction(() => {
+    for (const e of ents) {
+      const m = matchEntity({ name: e.name, email: e.email }, index);
+      if (m.matched && m.customer) { upd.run(m.customer.key, e.id); n++; }
+    }
+  });
+  tx();
+  return n;
 }

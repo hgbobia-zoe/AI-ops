@@ -7,8 +7,9 @@ import { getDb } from "@/lib/db";
 import { runOpportunitySource, type OpportunitySource, type RawOpportunity } from "./ingest";
 import { getOpportunityCount } from "./store";
 import { syncEventOpportunities } from "./eventBridge";
+import { enrichEntityMatches } from "./relationship";
 import { samGovSource, samGovConfigured } from "./sources/samgov";
-import { MONTGOMERY_COUNTY_WORKFLOW } from "./sources/browser";
+import { BROWSER_WORKFLOWS } from "./sources/browser";
 
 // ── Source registry ───────────────────────────────────────────────────────────────────────────────
 interface SourceRow {
@@ -22,12 +23,10 @@ function registerSources(now: Date): void {
   const rows: SourceRow[] = [
     { id: "seed-opportunity-demo", name: "Opportunity demo dataset", kind: "DIRECTORY", url: null, region: "DMV", enabled: 1, acquisition_method: "MANUAL", auth_status: "NONE", frequency: "manual", adapter: "seed", is_seed: 1 },
     { id: "samgov-federal", name: "SAM.gov — federal solicitations", kind: "FEDERAL_API", url: "https://sam.gov", region: "FEDERAL", enabled: 1, acquisition_method: "API", auth_status: samGovConfigured() ? "REQUIRED_OK" : "REQUIRED_MISSING", frequency: "daily", adapter: "samgov", is_seed: 0 },
-    { id: MONTGOMERY_COUNTY_WORKFLOW.sourceId, name: MONTGOMERY_COUNTY_WORKFLOW.name, kind: "COUNTY_PORTAL", url: MONTGOMERY_COUNTY_WORKFLOW.portalUrl, region: "MONTGOMERY_MD", enabled: 1, acquisition_method: "BROWSER", auth_status: "NONE", frequency: "weekly", adapter: `browser:${MONTGOMERY_COUNTY_WORKFLOW.sourceId}`, is_seed: 0 },
-    { id: "emma-md", name: "Maryland eMMA (state procurement)", kind: "STATE_PORTAL", url: "https://emma.maryland.gov", region: "STATE_MD", enabled: 0, acquisition_method: "BROWSER", auth_status: "NONE", frequency: "weekly", adapter: null, is_seed: 0 },
-    { id: "dc-ocp", name: "DC Office of Contracting & Procurement", kind: "CITY_PORTAL", url: "https://ocp.dc.gov", region: "DC", enabled: 0, acquisition_method: "BROWSER", auth_status: "NONE", frequency: "weekly", adapter: null, is_seed: 0 },
-    { id: "rockville-procurement", name: "City of Rockville procurement", kind: "CITY_PORTAL", url: "https://www.rockvillemd.gov", region: "MONTGOMERY_MD", enabled: 0, acquisition_method: "BROWSER", auth_status: "NONE", frequency: "weekly", adapter: null, is_seed: 0 },
-    { id: "gaithersburg-procurement", name: "City of Gaithersburg procurement", kind: "CITY_PORTAL", url: "https://www.gaithersburgmd.gov", region: "MONTGOMERY_MD", enabled: 0, acquisition_method: "BROWSER", auth_status: "NONE", frequency: "weekly", adapter: null, is_seed: 0 },
   ];
+  for (const w of BROWSER_WORKFLOWS) {
+    rows.push({ id: w.sourceId, name: w.name, kind: "GOV_PORTAL", url: w.portalUrl, region: w.jurisdiction, enabled: 1, acquisition_method: "BROWSER", auth_status: "NONE", frequency: "weekly", adapter: `browser:${w.sourceId}`, is_seed: 0 });
+  }
   const stmt = db.prepare(
     `INSERT INTO radar_sources (id, name, kind, url, region, enabled, adapter, acquisition_method, auth_status, frequency, last_status, is_seed, created_at)
      VALUES (@id,@name,@kind,@url,@region,@enabled,@adapter,@acquisition_method,@auth_status,@frequency,'NEVER_RUN',@is_seed,@ts)
@@ -139,11 +138,13 @@ function onlyEventOpportunities(): boolean {
   return n === 0;
 }
 
-/** Refresh on load: bridge new events + pull any live connectors that are configured (SAM.gov). */
+/** Refresh on load: bridge new events + pull any live connectors that are configured (SAM.gov), then
+ *  re-match discovered entities to Zoe customer history. */
 export async function refreshOpportunities(now: Date = new Date()): Promise<void> {
   registerSources(now);
   syncEventOpportunities(now);
   if (samGovConfigured()) await runOpportunitySource(samGovSource(), now);
+  try { enrichEntityMatches(); } catch { /* non-fatal */ }
 }
 
 /** Force a (re-)seed of the demo dataset. */

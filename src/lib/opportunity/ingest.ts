@@ -12,6 +12,8 @@ import { normalizeRegion } from "@/lib/radar/geo";
 import { classifyZoeCategories, roleForEntityKind, pickPrimaryTargetRole } from "./classify";
 import { normalizeJurisdiction } from "./jurisdiction";
 import { upsertOpportunity, upsertEntity, linkEntity, setPrimaryTarget, getOpportunityByDedupe, type OpportunityInput } from "./store";
+import { enrichEntityMatches } from "./relationship";
+import { emitOpportunityAlerts, type AlertItem } from "./alerts";
 import type { EntityKind, OpportunityKind, RelationshipRole, Verification, ZoeCategory } from "./types";
 
 // A raw record as an adapter emits it (loose — sources vary).
@@ -65,6 +67,7 @@ export interface IngestResult {
   stored: number;
   duplicatesCollapsed: number;
   changes: number;
+  alertsPosted: number;
   errors: string[];
 }
 
@@ -126,7 +129,9 @@ function storeProcurement(r: RawOpportunity, dedupeKey: string, sourceId: string
   return id;
 }
 
-function normalizeAndStore(source: OpportunitySource, raw: RawOpportunity, now: Date): { changes: string[] } {
+interface StoreOutcome { changes: string[]; opportunityId: string; isNew: boolean; awardee: string | null }
+
+function normalizeAndStore(source: OpportunitySource, raw: RawOpportunity, now: Date): StoreOutcome {
   const dedupeKey = dedupeKeyFor(source.id, raw);
   const region = normalizeRegion({ city: raw.city, state: raw.state, address: raw.name });
   const jurisdiction = normalizeJurisdiction({ agency: raw.agency, text: `${raw.name} ${raw.description ?? ""}`, region });
@@ -178,12 +183,12 @@ function normalizeAndStore(source: OpportunitySource, raw: RawOpportunity, now: 
     }
   }
 
-  return { changes };
+  return { changes, opportunityId: opp.id, isNew: !existing, awardee: raw.procurement?.awardee ?? null };
 }
 
 /** Run one source through the full pipeline. Per-record errors are isolated. */
 export async function runOpportunitySource(source: OpportunitySource, now: Date = new Date()): Promise<IngestResult> {
-  const result: IngestResult = { sourceId: source.id, acquired: 0, stored: 0, duplicatesCollapsed: 0, changes: 0, errors: [] };
+  const result: IngestResult = { sourceId: source.id, acquired: 0, stored: 0, duplicatesCollapsed: 0, changes: 0, alertsPosted: 0, errors: [] };
   const db = getDb();
   try {
     const raw = await source.acquire();
@@ -194,17 +199,23 @@ export async function runOpportunitySource(source: OpportunitySource, now: Date 
       if (byKey.has(key)) result.duplicatesCollapsed++;
       byKey.set(key, r);
     }
+    const alertItems: AlertItem[] = [];
     for (const r of byKey.values()) {
       try {
-        const { changes } = normalizeAndStore(source, r, now);
+        const out = normalizeAndStore(source, r, now);
         result.stored++;
-        result.changes += changes.length;
+        result.changes += out.changes.length;
+        alertItems.push({ opportunityId: out.opportunityId, isNew: out.isNew, changeLabels: out.changes, awardee: out.awardee });
       } catch (e) {
         result.errors.push(`${r.name}: ${(e as Error).message}`);
       }
     }
     db.prepare("UPDATE radar_sources SET last_run_at=?, last_status=?, records_discovered=?, last_failure_at=CASE WHEN ?='ERROR' THEN ? ELSE last_failure_at END WHERE id=?")
       .run(now.toISOString(), result.errors.length ? "ERROR" : "OK", result.stored, result.errors.length ? "ERROR" : "OK", now.toISOString(), source.id);
+
+    // Enrich entity → Zoe-customer matches, then emit meaningful-only alerts for what we just stored.
+    try { enrichEntityMatches(); } catch { /* non-fatal */ }
+    try { result.alertsPosted = await emitOpportunityAlerts(alertItems, now); } catch { /* non-fatal */ }
   } catch (e) {
     result.errors.push(`acquire failed: ${(e as Error).message}`);
     db.prepare("UPDATE radar_sources SET last_run_at=?, last_status='ERROR', last_failure_at=? WHERE id=?").run(now.toISOString(), now.toISOString(), source.id);

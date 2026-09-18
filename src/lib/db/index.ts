@@ -790,6 +790,53 @@ CREATE TABLE IF NOT EXISTS radar_campaigns (
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );
+
+-- AI INTERPRETATION cache (Phase 3). The deterministic engines always run for free; the LLM only
+-- INTERPRETS (what is this about, what to research, draft outreach) and its output is cached here so we
+-- do not re-bill on every view. Keyed by opportunity + interpretation kind. method records llm vs the
+-- deterministic fallback (honesty). Absent row = not generated yet.
+CREATE TABLE IF NOT EXISTS opportunity_ai (
+  id            TEXT PRIMARY KEY,            -- <opportunityId>:<kind>
+  opportunity_id TEXT NOT NULL,
+  kind          TEXT NOT NULL,               -- summary | research | outreach
+  content       TEXT NOT NULL,               -- JSON payload for the kind
+  method        TEXT NOT NULL,               -- llm | template (deterministic fallback)
+  model         TEXT,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_ai_opp ON opportunity_ai(opportunity_id);
+
+-- Outreach drafts (Phase 5). DETECT → DRAFT → HUMAN APPROVAL → SEND → TRACK. A draft is generated
+-- (deterministic template floor + optional AI refine), a human approves/edits, and only then is it
+-- marked sent (recorded — no automated blast). One row per opportunity+target+channel draft.
+CREATE TABLE IF NOT EXISTS opportunity_outreach (
+  id            TEXT PRIMARY KEY,
+  opportunity_id TEXT NOT NULL,
+  entity_id     TEXT,                        -- the target entity (null = generic)
+  channel       TEXT NOT NULL,               -- email | call | sms | linkedin
+  subject       TEXT,
+  body          TEXT,
+  call_script   TEXT,
+  follow_ups    TEXT,                        -- JSON string[] cadence
+  reason        TEXT,                        -- why we're reaching out
+  status        TEXT NOT NULL,               -- draft | approved | sent | skipped
+  source        TEXT NOT NULL,               -- template | ai
+  created_by    TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  sent_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_outreach_opp ON opportunity_outreach(opportunity_id, created_at DESC);
+
+-- Alert idempotency (§18). One row per (opportunity, alert kind) so a meaningful signal is Slack-posted
+-- at most once, ever — no notification spam on re-pulls.
+CREATE TABLE IF NOT EXISTS opportunity_alerts (
+  alert_key      TEXT PRIMARY KEY,           -- <opportunityId>:<kind>[:<detail>]
+  opportunity_id TEXT,
+  kind           TEXT NOT NULL,
+  detail         TEXT,
+  ts             TEXT NOT NULL
+);
 `;
 
 type DB = InstanceType<typeof Database>;
