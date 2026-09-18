@@ -790,6 +790,112 @@ CREATE TABLE IF NOT EXISTS radar_campaigns (
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );
+
+-- AI INTERPRETATION cache (Phase 3). The deterministic engines always run for free; the LLM only
+-- INTERPRETS (what is this about, what to research, draft outreach) and its output is cached here so we
+-- do not re-bill on every view. Keyed by opportunity + interpretation kind. method records llm vs the
+-- deterministic fallback (honesty). Absent row = not generated yet.
+CREATE TABLE IF NOT EXISTS opportunity_ai (
+  id            TEXT PRIMARY KEY,            -- <opportunityId>:<kind>
+  opportunity_id TEXT NOT NULL,
+  kind          TEXT NOT NULL,               -- summary | research | outreach
+  content       TEXT NOT NULL,               -- JSON payload for the kind
+  method        TEXT NOT NULL,               -- llm | template (deterministic fallback)
+  model         TEXT,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_ai_opp ON opportunity_ai(opportunity_id);
+
+-- Outreach drafts (Phase 5). DETECT → DRAFT → HUMAN APPROVAL → SEND → TRACK. A draft is generated
+-- (deterministic template floor + optional AI refine), a human approves/edits, and only then is it
+-- marked sent (recorded — no automated blast). One row per opportunity+target+channel draft.
+CREATE TABLE IF NOT EXISTS opportunity_outreach (
+  id            TEXT PRIMARY KEY,
+  opportunity_id TEXT NOT NULL,
+  entity_id     TEXT,                        -- the target entity (null = generic)
+  channel       TEXT NOT NULL,               -- email | call | sms | linkedin
+  subject       TEXT,
+  body          TEXT,
+  call_script   TEXT,
+  follow_ups    TEXT,                        -- JSON string[] cadence
+  reason        TEXT,                        -- why we're reaching out
+  status        TEXT NOT NULL,               -- draft | approved | sent | skipped
+  source        TEXT NOT NULL,               -- template | ai
+  created_by    TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  sent_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_outreach_opp ON opportunity_outreach(opportunity_id, created_at DESC);
+
+-- Alert idempotency (§18). One row per (opportunity, alert kind) so a meaningful signal is Slack-posted
+-- at most once, ever — no notification spam on re-pulls.
+CREATE TABLE IF NOT EXISTS opportunity_alerts (
+  alert_key      TEXT PRIMARY KEY,           -- <opportunityId>:<kind>[:<detail>]
+  opportunity_id TEXT,
+  kind           TEXT NOT NULL,
+  detail         TEXT,
+  ts             TEXT NOT NULL
+);
+
+-- ── Prospecting (cold outreach BEFORE Goodshuffle) ───────────────────────────────────────────────
+-- Enriched, qualified opportunities are routed into a PROSPECTING motion (the SDR/BDR cadence model),
+-- NOT Goodshuffle. Goodshuffle is reserved for CONVERSION — only once a prospect responds. Routing is
+-- tiered by the deterministic opportunity score: Tier A = call-first (a rep task queue), Tier B =
+-- cold-email sequence (exported to a dedicated sequencer / warmed domain), Tier C = monitor. Cadence
+-- templates live in code; enrollments + the materialized tasks live here.
+
+-- One enrollment = one opportunity being worked through one cadence toward one target company/contact.
+CREATE TABLE IF NOT EXISTS prospect_enrollments (
+  id             TEXT PRIMARY KEY,
+  opportunity_id TEXT NOT NULL,
+  entity_id      TEXT,                        -- the target company/contact
+  tier           TEXT NOT NULL,               -- A | B | C
+  cadence_key    TEXT NOT NULL,               -- which cadence template
+  channel        TEXT NOT NULL,               -- call | email | monitor (primary channel)
+  status         TEXT NOT NULL,               -- active | paused | replied | completed | stopped
+  owner          TEXT,
+  next_action_at TEXT,                        -- when the next task is due
+  started_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  UNIQUE(opportunity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_prospect_enroll_status ON prospect_enrollments(status, next_action_at);
+
+-- The rep worklist: dated touches materialized from a cadence. A call task carries a script; an email
+-- task carries subject/body (and can be exported to the sequencer). Outcome is logged by a human.
+CREATE TABLE IF NOT EXISTS prospect_tasks (
+  id             TEXT PRIMARY KEY,
+  enrollment_id  TEXT NOT NULL,
+  opportunity_id TEXT NOT NULL,
+  entity_id      TEXT,
+  channel        TEXT NOT NULL,               -- call | email | linkedin | task
+  step_index     INTEGER NOT NULL,
+  due_at         TEXT NOT NULL,               -- YYYY-MM-DD
+  status         TEXT NOT NULL,               -- pending | done | skipped
+  subject        TEXT,
+  body           TEXT,
+  script         TEXT,
+  outcome        TEXT,                        -- connected | voicemail | no_answer | sent | bounced | replied | not_interested | meeting
+  completed_by   TEXT,
+  completed_at   TEXT,
+  exported_at    TEXT,                        -- when an email step was pushed to the sequencer / CSV
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prospect_tasks_due ON prospect_tasks(status, due_at);
+CREATE INDEX IF NOT EXISTS idx_prospect_tasks_enroll ON prospect_tasks(enrollment_id, step_index);
+
+-- Do-not-contact / suppression (compliance + hygiene). An email, domain or company here is never
+-- enrolled or exported.
+CREATE TABLE IF NOT EXISTS prospect_suppression (
+  id          TEXT PRIMARY KEY,
+  kind        TEXT NOT NULL,                  -- email | domain | company
+  value       TEXT NOT NULL,                  -- lowercased match value
+  reason      TEXT,
+  created_by  TEXT,
+  created_at  TEXT NOT NULL,
+  UNIQUE(kind, value)
+);
 `;
 
 type DB = InstanceType<typeof Database>;

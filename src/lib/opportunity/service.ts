@@ -11,7 +11,7 @@ import { autoStage, effectiveStage, type LifecycleFacts } from "./lifecycle";
 import { targetRank } from "./classify";
 import { buildCustomerIndex, matchEntity, type RelationshipMemo } from "./relationship";
 import {
-  getOpportunities, getOpportunity, getEntitiesForOpportunity, type StoredOpportunity, type EdgeWithEntity,
+  getOpportunities, getOpportunity, getEntitiesForOpportunity, getProcurement, type StoredOpportunity, type EdgeWithEntity, type StoredProcurement,
 } from "./store";
 import { RELATIONSHIP_LABEL, type LifecycleStage, type MaturityView, type OpportunityScore, type Confidence } from "./types";
 
@@ -190,6 +190,16 @@ export function opportunityBoard(today: string = todayInOpsTz()): OpportunityBoa
 // ── Detail ──────────────────────────────────────────────────────────────────────────────────────
 export interface OpportunityDetail extends OpportunityView {
   entityMemos: { edge: EdgeWithEntity; memo: RelationshipMemo }[];
+  procurement: StoredProcurement | null;
+  awarded: boolean;
+  awardee: string | null;
+}
+
+/** A single opportunity's derived view (builds its own context). For alerts and one-off reads. */
+export function singleView(id: string, today: string = todayInOpsTz()): OpportunityView | null {
+  const opp = getOpportunity(id);
+  if (!opp) return null;
+  return viewFor(opp, makeContext(today));
 }
 
 export function opportunityDetail(id: string, today: string = todayInOpsTz()): OpportunityDetail | null {
@@ -198,7 +208,10 @@ export function opportunityDetail(id: string, today: string = todayInOpsTz()): O
   const ctx = makeContext(today);
   const base = viewFor(opp, ctx);
   const entityMemos = base.entities.map((edge) => ({ edge, memo: matchEntity({ name: edge.entity.name, email: edge.entity.email }, ctx.customerIndex) }));
-  return { ...base, entityMemos };
+  const procurement = getProcurement(opp.procurementId);
+  const awardee = procurement?.awardee ?? null;
+  const awarded = !!awardee || /award/i.test(opp.status ?? "");
+  return { ...base, entityMemos, procurement, awarded, awardee };
 }
 
 export { getOpportunity };

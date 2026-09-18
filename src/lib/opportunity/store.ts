@@ -274,6 +274,26 @@ export function getEntitiesForOpportunity(opportunityId: string): EdgeWithEntity
     .map((e) => { const ent = getEntity(e.entityId); return ent ? { ...e, entity: ent } : null; })
     .filter((x): x is EdgeWithEntity => x !== null);
 }
+export function getEntities(): StoredEntity[] {
+  return (getDb().prepare("SELECT * FROM radar_entities ORDER BY name ASC").all() as any[]).map(toEntity);
+}
+/** Opportunities an entity is linked to (with the entity's role on each). */
+export function getOpportunitiesForEntity(entityId: string): { opportunity: StoredOpportunity; relationship: RelationshipRole; isPrimaryTarget: boolean }[] {
+  const db = getDb();
+  const edges = db.prepare("SELECT opportunity_id, relationship, is_primary_target FROM opportunity_entities WHERE entity_id = ?").all(entityId) as any[];
+  const out: { opportunity: StoredOpportunity; relationship: RelationshipRole; isPrimaryTarget: boolean }[] = [];
+  for (const e of edges) {
+    const opp = getOpportunity(e.opportunity_id);
+    if (opp) out.push({ opportunity: opp, relationship: e.relationship as RelationshipRole, isPrimaryTarget: !!e.is_primary_target });
+  }
+  return out;
+}
+/** How many distinct opportunities each entity touches (for the companies list). */
+export function getEntityOpportunityCounts(): Map<string, number> {
+  const rows = getDb().prepare("SELECT entity_id, COUNT(DISTINCT opportunity_id) AS n FROM opportunity_entities GROUP BY entity_id").all() as { entity_id: string; n: number }[];
+  return new Map(rows.map((r) => [r.entity_id, r.n]));
+}
+
 export function getCampaigns(): StoredCampaign[] {
   return (getDb().prepare("SELECT * FROM radar_campaigns ORDER BY created_at DESC").all() as any[]).map(toCampaign);
 }
@@ -281,6 +301,25 @@ export function getCampaign(id: string): StoredCampaign | null {
   const r = getDb().prepare("SELECT * FROM radar_campaigns WHERE id = ?").get(id);
   return r ? toCampaign(r) : null;
 }
+export interface StoredProcurement {
+  id: string; solicitationNumber: string | null; noticeType: string | null; agency: string | null; subAgency: string | null;
+  jurisdiction: string | null; naics: string | null; psc: string | null; setAside: string | null; postedDate: string | null;
+  responseDeadline: string | null; archiveDate: string | null; awardAmount: number | null; awardee: string | null; awardDate: string | null;
+  city: string | null; state: string | null; sourceUrl: string | null;
+}
+/** Procurement satellite facts for an opportunity (solicitation #, notice type, award, deadlines). */
+export function getProcurement(id: string | null): StoredProcurement | null {
+  if (!id) return null;
+  const r = getDb().prepare("SELECT * FROM radar_procurements WHERE id = ?").get(id) as any;
+  if (!r) return null;
+  return {
+    id: r.id, solicitationNumber: r.solicitation_number ?? null, noticeType: r.notice_type ?? null, agency: r.agency ?? null, subAgency: r.sub_agency ?? null,
+    jurisdiction: r.jurisdiction ?? null, naics: r.naics ?? null, psc: r.psc ?? null, setAside: r.set_aside ?? null, postedDate: r.posted_date ?? null,
+    responseDeadline: r.response_deadline ?? null, archiveDate: r.archive_date ?? null, awardAmount: r.award_amount ?? null, awardee: r.awardee ?? null, awardDate: r.award_date ?? null,
+    city: r.city ?? null, state: r.state ?? null, sourceUrl: r.source_url ?? null,
+  };
+}
+
 export interface SourceRegistryRow {
   id: string; name: string; kind: string; url: string | null; region: string | null; enabled: boolean;
   acquisitionMethod: string | null; authStatus: string | null; frequency: string | null; adapter: string | null;
