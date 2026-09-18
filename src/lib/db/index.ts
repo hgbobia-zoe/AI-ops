@@ -837,6 +837,65 @@ CREATE TABLE IF NOT EXISTS opportunity_alerts (
   detail         TEXT,
   ts             TEXT NOT NULL
 );
+
+-- ── Prospecting (cold outreach BEFORE Goodshuffle) ───────────────────────────────────────────────
+-- Enriched, qualified opportunities are routed into a PROSPECTING motion (the SDR/BDR cadence model),
+-- NOT Goodshuffle. Goodshuffle is reserved for CONVERSION — only once a prospect responds. Routing is
+-- tiered by the deterministic opportunity score: Tier A = call-first (a rep task queue), Tier B =
+-- cold-email sequence (exported to a dedicated sequencer / warmed domain), Tier C = monitor. Cadence
+-- templates live in code; enrollments + the materialized tasks live here.
+
+-- One enrollment = one opportunity being worked through one cadence toward one target company/contact.
+CREATE TABLE IF NOT EXISTS prospect_enrollments (
+  id             TEXT PRIMARY KEY,
+  opportunity_id TEXT NOT NULL,
+  entity_id      TEXT,                        -- the target company/contact
+  tier           TEXT NOT NULL,               -- A | B | C
+  cadence_key    TEXT NOT NULL,               -- which cadence template
+  channel        TEXT NOT NULL,               -- call | email | monitor (primary channel)
+  status         TEXT NOT NULL,               -- active | paused | replied | completed | stopped
+  owner          TEXT,
+  next_action_at TEXT,                        -- when the next task is due
+  started_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  UNIQUE(opportunity_id)
+);
+CREATE INDEX IF NOT EXISTS idx_prospect_enroll_status ON prospect_enrollments(status, next_action_at);
+
+-- The rep worklist: dated touches materialized from a cadence. A call task carries a script; an email
+-- task carries subject/body (and can be exported to the sequencer). Outcome is logged by a human.
+CREATE TABLE IF NOT EXISTS prospect_tasks (
+  id             TEXT PRIMARY KEY,
+  enrollment_id  TEXT NOT NULL,
+  opportunity_id TEXT NOT NULL,
+  entity_id      TEXT,
+  channel        TEXT NOT NULL,               -- call | email | linkedin | task
+  step_index     INTEGER NOT NULL,
+  due_at         TEXT NOT NULL,               -- YYYY-MM-DD
+  status         TEXT NOT NULL,               -- pending | done | skipped
+  subject        TEXT,
+  body           TEXT,
+  script         TEXT,
+  outcome        TEXT,                        -- connected | voicemail | no_answer | sent | bounced | replied | not_interested | meeting
+  completed_by   TEXT,
+  completed_at   TEXT,
+  exported_at    TEXT,                        -- when an email step was pushed to the sequencer / CSV
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prospect_tasks_due ON prospect_tasks(status, due_at);
+CREATE INDEX IF NOT EXISTS idx_prospect_tasks_enroll ON prospect_tasks(enrollment_id, step_index);
+
+-- Do-not-contact / suppression (compliance + hygiene). An email, domain or company here is never
+-- enrolled or exported.
+CREATE TABLE IF NOT EXISTS prospect_suppression (
+  id          TEXT PRIMARY KEY,
+  kind        TEXT NOT NULL,                  -- email | domain | company
+  value       TEXT NOT NULL,                  -- lowercased match value
+  reason      TEXT,
+  created_by  TEXT,
+  created_at  TEXT NOT NULL,
+  UNIQUE(kind, value)
+);
 `;
 
 type DB = InstanceType<typeof Database>;

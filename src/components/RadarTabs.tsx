@@ -8,6 +8,7 @@ import { usePathname } from "next/navigation";
 
 const TABS: { href: string; label: string }[] = [
   { href: "/radar", label: "Dashboard" },
+  { href: "/radar/outreach", label: "Outreach" },
   { href: "/radar/companies", label: "Companies" },
   { href: "/radar/campaigns", label: "Campaigns" },
   { href: "/radar/analytics", label: "Analytics" },

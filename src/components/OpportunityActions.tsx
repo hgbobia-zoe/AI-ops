@@ -73,8 +73,8 @@ export function OpportunityActions({
           {salesStatus === "LINKED" ? "Linked to Sales OS" : "In Sales OS"} <ArrowUpRight className="size-3.5" />
         </a>
       ) : (
-        <button onClick={handoff} disabled={busy} className="inline-flex items-center gap-2 rounded border border-foreground/25 bg-foreground/[0.06] px-3 py-1.5 text-[12.5px] font-medium text-foreground transition-colors hover:bg-foreground/[0.12] disabled:opacity-50">
-          <Send className="size-3.5" /> {busy ? "Working…" : "Create sales opportunity"}
+        <button onClick={handoff} disabled={busy} title="For after a prospect responds — creates the Sales OS / Goodshuffle quote" className="inline-flex items-center gap-2 rounded border border-foreground/25 bg-foreground/[0.06] px-3 py-1.5 text-[12.5px] font-medium text-foreground transition-colors hover:bg-foreground/[0.12] disabled:opacity-50">
+          <Send className="size-3.5" /> {busy ? "Working…" : "Convert to Goodshuffle"}
         </button>
       )}
     </div>

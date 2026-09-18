@@ -6,7 +6,7 @@
 import { todayInOpsTz } from "@/lib/dates";
 import { opportunityBoard, type OpportunityView } from "./service";
 import { getCampaigns, getCampaign, setCampaign, getOpportunities, type StoredCampaign } from "./store";
-import { getOutreachForOpportunity } from "./outreachStore";
+import { enrolledOpportunityIds, contactedOpportunityIds } from "@/lib/prospecting/store";
 import type { Jurisdiction, OpportunityKind, ZoeCategory } from "./types";
 
 export interface CampaignCriteria {
@@ -40,6 +40,8 @@ export interface CampaignMetrics {
 }
 
 function metricsFor(campaign: StoredCampaign, members: OpportunityView[]): CampaignMetrics {
+  const enrolled = enrolledOpportunityIds();
+  const contactedSet = contactedOpportunityIds();
   const companies = new Set<string>();
   let contacts = 0;
   let outreachDrafted = 0;
@@ -47,10 +49,9 @@ function metricsFor(campaign: StoredCampaign, members: OpportunityView[]): Campa
   let contacted = 0;
   for (const v of members) {
     for (const e of v.entities) { companies.add(e.entity.id); if (e.entity.kind === "CONTACT" || e.entity.email) contacts++; }
-    const drafts = getOutreachForOpportunity(v.opp.id);
-    if (drafts.length) outreachDrafted++;
-    if (drafts.some((d) => d.status === "sent")) outreachSent++;
-    if (drafts.some((d) => d.status === "sent") || ["CONTACTED", "ENGAGED", "OPPORTUNITY", "QUOTED", "WON"].includes(v.stage)) contacted++;
+    if (enrolled.has(v.opp.id)) outreachDrafted++;
+    if (contactedSet.has(v.opp.id)) outreachSent++;
+    if (contactedSet.has(v.opp.id) || ["CONTACTED", "ENGAGED", "OPPORTUNITY", "QUOTED", "WON"].includes(v.stage)) contacted++;
   }
   return {
     campaign,
