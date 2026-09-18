@@ -5,7 +5,9 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowUpRight, ExternalLink } from "lucide-react";
+import { ArrowUpRight, ExternalLink, FileText } from "lucide-react";
+import { viewerRole } from "@/lib/auth/getSession";
+import { canManageSettings } from "@/lib/auth/roles";
 import { OpportunityActions } from "@/components/OpportunityActions";
 import { OpportunityInterpret } from "@/components/OpportunityInterpret";
 import { RouteToProspecting } from "@/components/RouteToProspecting";
@@ -46,6 +48,7 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
   const today = todayInOpsTz();
   const d = opportunityDetail(id, today);
   if (!d) notFound();
+  const canPursue = canManageSettings(await viewerRole());
   const { opp: e, score: q, maturity, stage, entityMemos, value, procurement, awarded, awardee } = d;
   const changes = getOpportunityChanges(e.dedupeKey);
   const progress = stageProgress(stage);
@@ -74,7 +77,14 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
             <div className="text-right"><div className="text-[15px] font-medium tabular-nums text-foreground">{q.relevanceScore}</div><div className="text-[10.5px] uppercase tracking-[0.08em] text-meta">Relevance</div></div>
             <div className="text-right"><TierBadge tier={q.tier} /><div className="text-[10.5px] uppercase tracking-[0.08em] text-meta">Tier</div></div>
           </div>
-          <OpportunityActions id={e.id} stage={stage} salesStatus={e.salesStatus} bookingId={e.bookingId} />
+          <div className="flex items-center gap-2">
+            {canPursue && (
+              <Link href={`/radar/${e.id}/pursue`} className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
+                <FileText className="size-3.5" /> Pursue bid
+              </Link>
+            )}
+            <OpportunityActions id={e.id} stage={stage} salesStatus={e.salesStatus} bookingId={e.bookingId} />
+          </div>
         </div>
       </header>
 
