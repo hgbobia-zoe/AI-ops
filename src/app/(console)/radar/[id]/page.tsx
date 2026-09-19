@@ -5,7 +5,7 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowUpRight, ExternalLink, FileText } from "lucide-react";
+import { ArrowUpRight, ExternalLink, FileText, Compass } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 import { OpportunityActions } from "@/components/OpportunityActions";
@@ -78,6 +78,9 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
             <div className="text-right"><TierBadge tier={q.tier} /><div className="text-[10.5px] uppercase tracking-[0.08em] text-meta">Tier</div></div>
           </div>
           <div className="flex items-center gap-2">
+            <Link href={`/radar/${e.id}/outreach-plan`} className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
+              <Compass className="size-3.5" /> Outreach plan
+            </Link>
             {canPursue && (
               <Link href={`/radar/${e.id}/pursue`} className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
                 <FileText className="size-3.5" /> Pursue bid
