@@ -967,6 +967,104 @@ CREATE TABLE IF NOT EXISTS marketing_prospects (
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
+
+-- ── Post-Event Customer Experience (service recovery + review workflow) ───────────────────────────
+-- Human-first post-event follow-up. This is NOT a review harvester: a review is the OUTCOME of a
+-- confirmed good experience, never the objective. Same platform law as the rest: RULES CALCULATE, AI
+-- INTERPRETS. The deterministic engine computes eligibility, funnel state and metrics; AI may only ever
+-- SUGGEST a disposition from a REAL transcript. We never fabricate a contact, a review, sentiment or a
+-- metric. The Goodshuffle project stays the commercial source of truth — these tables REFERENCE it by id
+-- (postevent_projects.booking_id === bookings.booking_id === the event tx_id) and never copy it.
+
+-- One workflow row per eligible completed event, keyed by the Goodshuffle booking id. Every project
+-- always has a KNOWN state. stage_entered_at powers aging/SLA; closure_reason is required on close.
+CREATE TABLE IF NOT EXISTS postevent_projects (
+  booking_id        TEXT PRIMARY KEY,   -- Goodshuffle project id (= event tx_id); commercial row lives in bookings
+  state             TEXT NOT NULL,      -- needs_follow_up | follow_up_in_progress | customer_responded | experience_confirmed | review_requested | review_completed | closed
+  disposition       TEXT,               -- positive | positive_minor | issue | serious_issue | mixed_neutral | unable | null(unset)
+  next_action       TEXT,               -- derived cache: call | sms | await_response | review_feedback | escalate | follow_resolution | send_review_request | close | none
+  assigned_employee TEXT,               -- who owns the follow-up (actor label); nullable
+  event_date        TEXT,               -- denormalized for board/aging (YYYY-MM-DD)
+  pickup_at         TEXT,               -- when pickup/route completed (eligibility anchor); ISO
+  eligible_at       TEXT NOT NULL,      -- when it entered the workflow (Needs Follow-Up)
+  stage_entered_at  TEXT NOT NULL,      -- when it entered its CURRENT state (aging/SLA)
+  closure_reason    TEXT,               -- structured reason — required on close
+  closure_note      TEXT,               -- required when closure_reason = 'other'
+  closed_at         TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_postevent_state ON postevent_projects(state, event_date);
+
+-- Structured state-transition audit — one row per move (drag or programmatic). Actor + timestamp always;
+-- a visual move is never just visual. actor='system' for the auto-eligibility/auto-advance writes.
+CREATE TABLE IF NOT EXISTS postevent_transitions (
+  id          TEXT PRIMARY KEY,
+  booking_id  TEXT NOT NULL,
+  from_state  TEXT,
+  to_state    TEXT NOT NULL,
+  actor       TEXT,
+  note        TEXT,
+  ts          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_postevent_transitions_bk ON postevent_transitions(booking_id, ts);
+
+-- Contact attempts. AUTO-populated from comms_events (source='comms', idempotent via dedupe_key) AND
+-- manually logged (source='manual'). Attempted vs Successful vs Responded are DIFFERENT metrics, kept
+-- distinct via outcome + direction — never collapsed.
+CREATE TABLE IF NOT EXISTS postevent_contacts (
+  id          TEXT PRIMARY KEY,
+  booking_id  TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,       -- date/time of the attempt (ISO)
+  channel     TEXT NOT NULL,       -- phone | voicemail | sms | email | other
+  employee    TEXT,                -- who made the attempt (actor label / rep)
+  outcome     TEXT NOT NULL,       -- no_answer | left_voicemail | customer_responded | requested_callback | unavailable | positive | issue_reported | other
+  direction   TEXT,                -- outbound | inbound
+  notes       TEXT,
+  source      TEXT NOT NULL,       -- manual | comms
+  dedupe_key  TEXT UNIQUE,         -- auto rows (e.g. 'comms:<provider_id>'); null for manual
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_postevent_contacts_bk ON postevent_contacts(booking_id, occurred_at);
+
+-- Review request + receipt records. A request is a HUMAN action (recorded, optionally sent). A received
+-- review is logged when we learn of it (manual today; a directory pull can set it later). Kept separate
+-- from marketing_reviews (that is public-reputation tracking; this is the per-project funnel outcome).
+CREATE TABLE IF NOT EXISTS postevent_reviews (
+  id           TEXT PRIMARY KEY,
+  booking_id   TEXT NOT NULL,
+  kind         TEXT NOT NULL,      -- requested | received
+  occurred_at  TEXT NOT NULL,      -- ISO
+  employee     TEXT,               -- who requested (attribution)
+  channel      TEXT,               -- sms | email | in_person | other
+  destination  TEXT,               -- review destination label/url used (from settings)
+  message      TEXT,               -- the message/template sent
+  rating       INTEGER,            -- received: 1..5 if known
+  link         TEXT,               -- received: link to the posted review if known
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_postevent_reviews_bk ON postevent_reviews(booking_id, occurred_at);
+
+-- Service-recovery issues. One (or more) per project when an issue is identified. Its own lifecycle:
+-- identified -> escalated -> resolution_in_progress -> resolution_completed -> customer_follow_up -> closed.
+CREATE TABLE IF NOT EXISTS postevent_issues (
+  id                TEXT PRIMARY KEY,
+  booking_id        TEXT NOT NULL,
+  issue_type        TEXT,           -- damage | late | missing | staff | billing | quality | other
+  description       TEXT,
+  state             TEXT NOT NULL,  -- identified | escalated | resolution_in_progress | resolution_completed | customer_follow_up | closed
+  escalation_level  TEXT,           -- none | supervisor | management | owner
+  assigned_employee TEXT,
+  resolution        TEXT,
+  refund_credit     REAL,           -- dollars, nullable
+  resolution_at     TEXT,
+  final_response    TEXT,           -- final customer response
+  closure_reason    TEXT,
+  created_by        TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_postevent_issues_bk ON postevent_issues(booking_id, state);
 `;
 
 type DB = InstanceType<typeof Database>;

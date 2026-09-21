@@ -17,6 +17,7 @@ import {
   TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
   RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator, Radar, IdCard,
   Megaphone, Send, Upload, CalendarDays, Star,
+  HeartHandshake, Columns3, LifeBuoy, ClipboardCheck,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -91,6 +92,20 @@ const GROUPS: Group[] = [
       { href: "/marketing/campaigns", label: "Campaigns", icon: Megaphone },
       { href: "/marketing/content", label: "Content", icon: CalendarDays },
       { href: "/marketing/reviews", label: "Reviews", icon: Star },
+    ],
+  },
+  {
+    // Post-Event — the human-first customer experience + service-recovery + review workflow. A review is
+    // the OUTCOME of a confirmed good experience, never the objective. The real product is the structured
+    // funnel data behind it (Overview). Working views are the sub-blades.
+    label: "Post-Event",
+    icon: HeartHandshake,
+    blades: [
+      { href: "/postevent", label: "Overview", icon: Gauge, exact: true },
+      { href: "/postevent/kanban", label: "Kanban", icon: Columns3 },
+      { href: "/postevent/issues", label: "Issues / Recovery", icon: LifeBuoy },
+      { href: "/postevent/analytics", label: "Analytics", icon: TrendingUp },
+      { href: "/postevent/closures", label: "Closure Reasons", icon: ClipboardCheck },
     ],
   },
   {
