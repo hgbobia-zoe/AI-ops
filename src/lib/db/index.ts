@@ -1065,6 +1065,102 @@ CREATE TABLE IF NOT EXISTS postevent_issues (
   updated_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_postevent_issues_bk ON postevent_issues(booking_id, state);
+
+-- ── Creative Engine (AI-directed creative production) ─────────────────────────────────────────────
+-- A professional creative-production pipeline. Platform law: AI CREATES, RULES CONSTRAIN, AI EVALUATES,
+-- HUMANS APPROVE. The user defines WHAT; the Art Director (src/lib/creative/*) deterministically composes
+-- the Image Brief from the centralized Zoe Visual DNA (settings KV) + the job so every image reads like
+-- the same in-house team. Model-agnostic: the image provider is swappable; a mock provider makes the whole
+-- lifecycle testable with no external key. We NEVER fabricate a QA score or pass a placeholder off as a
+-- real Zoe photo (generations carry a placeholder flag).
+
+-- One creative job = one asset moving through the lifecycle. image_brief stores WHY an image was generated
+-- (the structured brief). preserve/transform are the reference-first constraint arrays (JSON string[]).
+CREATE TABLE IF NOT EXISTS creative_jobs (
+  id                   TEXT PRIMARY KEY,
+  title                TEXT NOT NULL,
+  campaign             TEXT,
+  page                 TEXT,
+  section              TEXT,
+  asset_type           TEXT NOT NULL,      -- hero | product | lifestyle | detail | editorial | social | email | advertising
+  product              TEXT,
+  product_category     TEXT,
+  source_mode          TEXT NOT NULL,      -- upload | existing | scratch
+  source_image_id      TEXT,               -- creative_images.id (reference-first source of truth)
+  reference_image_ids  TEXT,               -- JSON string[] of creative_images.id
+  aspect_ratio         TEXT NOT NULL,      -- 16:9 | 4:3 | 3:2 | 1:1 | 4:5 | 9:16
+  target_audience      TEXT,
+  objective            TEXT,
+  season               TEXT,
+  location_context     TEXT,
+  visual_direction     TEXT,
+  preserve             TEXT,               -- JSON string[] — kept from the source (never invented away)
+  transform            TEXT,               -- JSON string[] — the AI may change these
+  status               TEXT NOT NULL,      -- draft | queued | generating | qa | needs_revision | awaiting_approval | approved | rejected | published
+  selected_model       TEXT,
+  generation_count     INTEGER NOT NULL DEFAULT 0,
+  qa_score             INTEGER,            -- latest generation's QA score (0..100), null until QC runs
+  image_brief          TEXT,               -- JSON ImageBrief (the WHY)
+  approved_generation_id TEXT,
+  approved_asset_path  TEXT,               -- served path of the saved, approved asset
+  created_by           TEXT,               -- currentActor label (attribution)
+  created_at           TEXT NOT NULL,
+  updated_at           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_creative_jobs_status ON creative_jobs(status, updated_at DESC);
+
+-- Each generation attempt against a job. brief_snapshot freezes the brief used; qa_report is the
+-- structured deterministic QC (a real vision model can populate the same shape later). placeholder=1 means
+-- the mock provider produced it (clearly NOT a real Zoe photo).
+CREATE TABLE IF NOT EXISTS creative_generations (
+  id             TEXT PRIMARY KEY,
+  job_id         TEXT NOT NULL,
+  attempt        INTEGER NOT NULL,
+  provider       TEXT NOT NULL,
+  model          TEXT,
+  brief_snapshot TEXT,                     -- JSON ImageBrief at generation time
+  image_id       TEXT,                     -- creative_images.id of the produced image
+  result_path    TEXT,                     -- served path of the produced image
+  placeholder    INTEGER NOT NULL DEFAULT 0,
+  result_meta    TEXT,                     -- JSON provider metadata
+  qa_score       INTEGER,
+  qa_report      TEXT,                     -- JSON QaReport
+  status         TEXT NOT NULL,            -- generating | pass | fail | error | approved | rejected
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_creative_generations_job ON creative_generations(job_id, attempt DESC);
+
+-- Image records: uploaded photos, existing library images, and generated results. path is the served URL
+-- (/api/creative/image/<id>). placeholder=1 = a generated placeholder, never a real Zoe photo.
+CREATE TABLE IF NOT EXISTS creative_images (
+  id         TEXT PRIMARY KEY,
+  kind       TEXT NOT NULL,               -- upload | existing | generated
+  name       TEXT,
+  path       TEXT NOT NULL,               -- served URL
+  file_path  TEXT,                        -- on-disk path (server only; not exposed)
+  mime       TEXT,
+  width      INTEGER,
+  height     INTEGER,
+  placeholder INTEGER NOT NULL DEFAULT 0,
+  job_id     TEXT,
+  created_by TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_creative_images_kind ON creative_images(kind, created_at DESC);
+
+-- Attributed lifecycle audit — one row per state change / action (created, brief_built, generated, qa,
+-- approved, rejected, revision, published). Every change names who did it (currentActor) or 'system'.
+CREATE TABLE IF NOT EXISTS creative_events (
+  id          TEXT PRIMARY KEY,
+  job_id      TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  from_status TEXT,
+  to_status   TEXT,
+  actor       TEXT,
+  note        TEXT,
+  ts          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_creative_events_job ON creative_events(job_id, ts);
 `;
 
 type DB = InstanceType<typeof Database>;

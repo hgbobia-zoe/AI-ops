@@ -18,6 +18,7 @@ import {
   RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator, Radar, IdCard,
   Megaphone, Send, Upload, CalendarDays, Star,
   HeartHandshake, Columns3, LifeBuoy, ClipboardCheck,
+  Aperture, Images, Plus, Dna,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -71,19 +72,9 @@ const GROUPS: Group[] = [
     ],
   },
   {
-    label: "Sales",
-    icon: Tag,
-    blades: [
-      { href: "/sales", label: "Sales", icon: TrendingUp },
-      { href: "/salesos", label: "Sales OS", icon: Target },
-      { href: "/coaching", label: "Coaching", icon: GraduationCap, coaching: true },
-      { href: "/customers", label: "Customers", icon: Contact },
-      { href: "/pricing", label: "Delivery Pricing", icon: Calculator },
-    ],
-  },
-  {
     // Marketing — Zoe's demand-generation OS. A big blade over the tools the team runs (Confluence,
-    // social poster, ManyChat, Google Business). Two-track: weddings/social + corporate/gov.
+    // social poster, ManyChat, Google Business). Two-track: weddings/social + corporate/gov. Sits above
+    // Sales: it fills the top of the funnel that Sales then converts.
     label: "Marketing",
     icon: Megaphone,
     blades: [
@@ -95,9 +86,21 @@ const GROUPS: Group[] = [
     ],
   },
   {
+    label: "Sales",
+    icon: Tag,
+    blades: [
+      { href: "/sales", label: "Sales", icon: TrendingUp },
+      { href: "/salesos", label: "Sales OS", icon: Target },
+      { href: "/coaching", label: "Coaching", icon: GraduationCap, coaching: true },
+      { href: "/customers", label: "Customers", icon: Contact },
+      { href: "/pricing", label: "Delivery Pricing", icon: Calculator },
+    ],
+  },
+  {
     // Post-Event — the human-first customer experience + service-recovery + review workflow. A review is
     // the OUTCOME of a confirmed good experience, never the objective. The real product is the structured
-    // funnel data behind it (Overview). Working views are the sub-blades.
+    // funnel data behind it (Overview). Sits directly under Sales — the far end of the same customer
+    // lifecycle. Working views are the sub-blades.
     label: "Post-Event",
     icon: HeartHandshake,
     blades: [
@@ -106,6 +109,18 @@ const GROUPS: Group[] = [
       { href: "/postevent/issues", label: "Issues / Recovery", icon: LifeBuoy },
       { href: "/postevent/analytics", label: "Analytics", icon: TrendingUp },
       { href: "/postevent/closures", label: "Closure Reasons", icon: ClipboardCheck },
+    ],
+  },
+  {
+    // Creative Engine — AI-directed creative production. AI CREATES, RULES CONSTRAIN, AI EVALUATES, HUMANS
+    // APPROVE. The user defines WHAT; the centralized Zoe Visual DNA + the Art Director determine HOW, so
+    // every image reads like the same in-house photography team. Model-agnostic image provider.
+    label: "Creative Engine",
+    icon: Aperture,
+    blades: [
+      { href: "/creative", label: "Jobs", icon: Images, exact: true },
+      { href: "/creative/new", label: "New Job", icon: Plus },
+      { href: "/creative/dna", label: "Visual DNA", icon: Dna, manage: true },
     ],
   },
   {

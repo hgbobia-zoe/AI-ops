@@ -8,7 +8,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { Loader2, ArrowLeft, Phone, Star, LifeBuoy, CheckCircle2, MessageSquare, Send } from "lucide-react";
+import { Loader2, ArrowLeft, Phone, Star, LifeBuoy, CheckCircle2, MessageSquare, Send, X } from "lucide-react";
 import {
   POSTEVENT_STATE_LABEL,
   NEXT_ACTION_LABEL,
@@ -87,7 +87,17 @@ function Section({ title, icon, children }: { title: string; icon: React.ReactNo
   );
 }
 
-export function PostEventDetail({ id }: { id: string }): React.JSX.Element {
+export function PostEventDetail({
+  id,
+  variant = "page",
+  onClose,
+  onChanged,
+}: {
+  id: string;
+  variant?: "page" | "panel";
+  onClose?: () => void;
+  onChanged?: () => void;
+}): React.JSX.Element {
   const [b, setB] = useState<Bundle | null>(null);
   const [err, setErr] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -113,6 +123,7 @@ export function PostEventDetail({ id }: { id: string }): React.JSX.Element {
     try {
       await fetch(`/api/postevent/project/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       await load();
+      onChanged?.();
     } finally {
       setBusy(false);
     }
@@ -125,41 +136,55 @@ export function PostEventDetail({ id }: { id: string }): React.JSX.Element {
       const j = (await r.json().catch(() => ({}))) as Record<string, unknown>;
       if (!r.ok) setMsg(String(j.message ?? j.error ?? "Action failed"));
       await load();
+      onChanged?.();
       return j;
     } finally {
       setBusy(false);
     }
   }
 
-  if (err) return <main className="p-6 text-[13px] text-meta">Project not found.</main>;
+  // In panel mode we render inside the shared side-panel overlay (matching the Sales board): an aside
+  // shell with a header + close button and a scrollable body. In page mode it's the standalone detail.
+  const panelShell = (inner: React.ReactNode, header: React.ReactNode): React.JSX.Element => (
+    <aside className="flex h-full w-full flex-col border-l border-border bg-panel">
+      <div className="flex items-start justify-between gap-2 border-b border-border p-4">
+        <div className="min-w-0">{header}</div>
+        <button onClick={onClose} aria-label="Close" className="shrink-0 rounded p-1 text-meta transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
+          <X className="size-5" />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">{inner}</div>
+    </aside>
+  );
+
+  if (err)
+    return variant === "panel"
+      ? panelShell(<p className="text-[13px] text-meta">Project not found.</p>, <div className="text-[15px] font-medium text-foreground">Not found</div>)
+      : <main className="p-6 text-[13px] text-meta">Project not found.</main>;
   if (!b)
-    return (
-      <main className="flex items-center gap-2 p-6 text-[13px] text-meta">
-        <Loader2 className="size-4 animate-spin" /> Loading…
-      </main>
-    );
+    return variant === "panel"
+      ? panelShell(
+          <div className="flex items-center gap-2 text-[13px] text-meta"><Loader2 className="size-4 animate-spin" /> Loading…</div>,
+          <div className="text-[15px] font-medium text-foreground">Loading…</div>,
+        )
+      : (
+        <main className="flex items-center gap-2 p-6 text-[13px] text-meta">
+          <Loader2 className="size-4 animate-spin" /> Loading…
+        </main>
+      );
 
   const p = b.project;
 
-  return (
-    <main className="max-w-[900px] p-6">
-      <Link href="/postevent/kanban" className="mb-3 inline-flex items-center gap-1 text-[12px] text-meta transition-colors hover:text-foreground">
-        <ArrowLeft className="size-3.5" /> Board
-      </Link>
-      <header className="mb-4">
-        <h1 className="text-[20px] font-medium tracking-tight text-foreground">{b.facts.customer}</h1>
-        <p className="text-[13px] text-meta">
-          {b.facts.eventName}
-          {b.facts.eventDate ? ` · ${b.facts.eventDate}` : ""}
-          {b.facts.venue ? ` · ${b.facts.venue}` : ""}
-        </p>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
-          <span className="rounded border border-border px-2 py-0.5 text-foreground">{POSTEVENT_STATE_LABEL[p.state]}</span>
-          <span className="rounded border border-border px-2 py-0.5 text-tertiary-text">Next: {NEXT_ACTION_LABEL[p.nextAction]}</span>
-          {p.closureReason && <span className="rounded border border-border px-2 py-0.5 text-meta">Closed: {CLOSURE_REASON_LABEL[p.closureReason as ClosureReason] ?? p.closureReason}</span>}
-        </div>
-      </header>
+  const badges = (
+    <div className="flex flex-wrap items-center gap-2 text-[12px]">
+      <span className="rounded border border-border px-2 py-0.5 text-foreground">{POSTEVENT_STATE_LABEL[p.state]}</span>
+      <span className="rounded border border-border px-2 py-0.5 text-tertiary-text">Next: {NEXT_ACTION_LABEL[p.nextAction]}</span>
+      {p.closureReason && <span className="rounded border border-border px-2 py-0.5 text-meta">Closed: {CLOSURE_REASON_LABEL[p.closureReason as ClosureReason] ?? p.closureReason}</span>}
+    </div>
+  );
 
+  const body = (
+    <>
       {msg && <div className="mb-3 rounded border border-attention/40 bg-attention/[0.05] px-3 py-2 text-[12.5px] text-attention">{msg}</div>}
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -247,6 +272,38 @@ export function PostEventDetail({ id }: { id: string }): React.JSX.Element {
           Reopen (customer responded after close)
         </button>
       )}
+    </>
+  );
+
+  if (variant === "panel")
+    return panelShell(
+      body,
+      <>
+        <div className="truncate text-[18px] font-medium tracking-tight text-foreground">{b.facts.customer}</div>
+        <div className="truncate text-[13px] text-tertiary-text">
+          {b.facts.eventName}
+          {b.facts.eventDate ? ` · ${b.facts.eventDate}` : ""}
+          {b.facts.venue ? ` · ${b.facts.venue}` : ""}
+        </div>
+        <div className="mt-2">{badges}</div>
+      </>,
+    );
+
+  return (
+    <main className="max-w-[900px] p-6">
+      <Link href="/postevent/kanban" className="mb-3 inline-flex items-center gap-1 text-[12px] text-meta transition-colors hover:text-foreground">
+        <ArrowLeft className="size-3.5" /> Board
+      </Link>
+      <header className="mb-4">
+        <h1 className="text-[20px] font-medium tracking-tight text-foreground">{b.facts.customer}</h1>
+        <p className="text-[13px] text-meta">
+          {b.facts.eventName}
+          {b.facts.eventDate ? ` · ${b.facts.eventDate}` : ""}
+          {b.facts.venue ? ` · ${b.facts.venue}` : ""}
+        </p>
+        <div className="mt-2">{badges}</div>
+      </header>
+      {body}
     </main>
   );
 }
@@ -368,6 +425,7 @@ function IssuePanel({ bundle, busy, onCreate, onUpdate }: { bundle: Bundle; busy
                 value={i.state}
                 disabled={busy}
                 onChange={(e) => onUpdate(i.id, { state: e.target.value as IssueState })}
+                title="Recovery lifecycle"
               >
                 {ISSUE_STATE_ORDER.map((s) => (
                   <option key={s} value={s}>
@@ -390,7 +448,62 @@ function IssuePanel({ bundle, busy, onCreate, onUpdate }: { bundle: Bundle; busy
                   </option>
                 ))}
               </select>
+              <input
+                className="min-w-0 flex-1 rounded border border-border bg-background px-1.5 py-0.5 text-[11.5px]"
+                placeholder="Assigned to"
+                defaultValue={i.assignedEmployee ?? ""}
+                disabled={busy}
+                onBlur={(e) => e.target.value !== (i.assignedEmployee ?? "") && onUpdate(i.id, { assignedEmployee: e.target.value.trim() || null })}
+              />
             </div>
+            {/* Recovery detail — filled in as the issue is worked; committed on blur. */}
+            <div className="mt-1.5 grid grid-cols-1 gap-1.5 sm:grid-cols-[1fr_auto]">
+              <input
+                className="rounded border border-border bg-background px-1.5 py-0.5 text-[11.5px]"
+                placeholder="Resolution (what was done)"
+                defaultValue={i.resolution ?? ""}
+                disabled={busy}
+                onBlur={(e) => e.target.value !== (i.resolution ?? "") && onUpdate(i.id, { resolution: e.target.value })}
+              />
+              <label className="flex items-center gap-1 rounded border border-border bg-background px-1.5 py-0.5 text-[11.5px] text-meta">
+                Refund/credit $
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  className="w-16 bg-transparent text-right tabular-nums text-tertiary-text outline-none"
+                  defaultValue={i.refundCredit ?? ""}
+                  disabled={busy}
+                  onBlur={(e) => {
+                    const v = e.target.value.trim() === "" ? null : Math.max(0, Number(e.target.value) || 0);
+                    if (v !== (i.refundCredit ?? null)) onUpdate(i.id, { refundCredit: v });
+                  }}
+                />
+              </label>
+            </div>
+            <input
+              className="mt-1.5 w-full rounded border border-border bg-background px-1.5 py-0.5 text-[11.5px]"
+              placeholder="Customer follow-up / final response"
+              defaultValue={i.finalResponse ?? ""}
+              disabled={busy}
+              onBlur={(e) => e.target.value !== (i.finalResponse ?? "") && onUpdate(i.id, { finalResponse: e.target.value })}
+            />
+            {i.state === "closed" && (
+              <select
+                className="mt-1.5 w-full rounded border border-border bg-background px-1.5 py-0.5 text-[11.5px] text-tertiary-text"
+                value={i.closureReason ?? ""}
+                disabled={busy}
+                onChange={(e) => onUpdate(i.id, { closureReason: e.target.value || null })}
+              >
+                <option value="">Closure reason…</option>
+                <option value="issue_resolved">Issue resolved</option>
+                <option value="service_recovery_completed">Service recovery completed</option>
+                <option value="refund_credit_issued">Refund or credit issued</option>
+                <option value="management_follow_up">Management follow-up required</option>
+                <option value="issue_escalated">Escalated</option>
+              </select>
+            )}
+            {i.resolutionAt && <p className="mt-1 text-[10.5px] text-meta">Resolved {fmtTs(i.resolutionAt)}</p>}
           </li>
         ))}
       </ul>

@@ -40,6 +40,8 @@ import {
   POSTEVENT_STATE_LABEL,
   CONTACT_CHANNEL_LABEL,
   CONTACT_OUTCOME_LABEL,
+  DISPOSITION_LABEL,
+  CLOSURE_REASON_LABEL,
   isPositiveDisposition,
   isIssueDisposition,
 } from "./types";
@@ -220,6 +222,7 @@ interface ContactStat {
   count: number;
   responded: number;
   lastAt: string | null;
+  lastOutcome: ContactOutcome | null;
 }
 function contactStats(): Map<string, ContactStat> {
   const rows = getDb()
@@ -232,7 +235,35 @@ function contactStats(): Map<string, ContactStat> {
     )
     .all() as any[];
   const m = new Map<string, ContactStat>();
-  for (const r of rows) m.set(String(r.booking_id), { count: Number(r.n ?? 0), responded: Number(r.responded ?? 0), lastAt: (r.last_at as string) ?? null });
+  for (const r of rows) m.set(String(r.booking_id), { count: Number(r.n ?? 0), responded: Number(r.responded ?? 0), lastAt: (r.last_at as string) ?? null, lastOutcome: null });
+  // The outcome of the most recent attempt per project (distinct fact from "how many attempts").
+  const lastRows = getDb()
+    .prepare(
+      `SELECT c.booking_id AS booking_id, c.outcome AS outcome
+         FROM postevent_contacts c
+         JOIN (SELECT booking_id, MAX(occurred_at) AS m FROM postevent_contacts GROUP BY booking_id) x
+           ON x.booking_id = c.booking_id AND x.m = c.occurred_at`,
+    )
+    .all() as any[];
+  for (const r of lastRows) {
+    const s = m.get(String(r.booking_id));
+    if (s) s.lastOutcome = (r.outcome as ContactOutcome) ?? null;
+  }
+  return m;
+}
+
+/** The latest transition note per project = the human/system reason it's in its current state. */
+function latestReasons(): Map<string, string> {
+  const rows = getDb()
+    .prepare(
+      `SELECT t.booking_id AS booking_id, t.note AS note
+         FROM postevent_transitions t
+         JOIN (SELECT booking_id, MAX(ts) AS m FROM postevent_transitions GROUP BY booking_id) x
+           ON x.booking_id = t.booking_id AND x.m = t.ts`,
+    )
+    .all() as any[];
+  const m = new Map<string, string>();
+  for (const r of rows) if (r.note) m.set(String(r.booking_id), String(r.note));
   return m;
 }
 
@@ -243,11 +274,49 @@ function daysSince(iso: string | null, today: string): number {
   return Math.max(0, Math.floor((nowMs - then) / 86400000));
 }
 
-function toCard(p: PostEventProject, facts: Map<string, BookingFacts>, stats: Map<string, ContactStat>, issues: Map<string, number>, slaDays: Record<PostEventState, number>, today: string): PostEventCard {
+function addDaysYmd(ymd: string, n: number): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** A deterministic, human-readable reason for the current state when there's no transition note. RULES
+ *  CALCULATE — this describes facts (attempts, disposition, closure), it never invents sentiment. */
+function fallbackReason(p: PostEventProject, st: ContactStat): string {
+  switch (p.state) {
+    case "needs_follow_up":
+      return st.count === 0 ? "Eligible; no follow-up started yet" : "Follow-up begun, no outcome logged";
+    case "follow_up_in_progress":
+      return st.count > 0 ? `${st.count} attempt${st.count === 1 ? "" : "s"}, awaiting a response` : "Follow-up in progress";
+    case "customer_responded":
+      return "Customer responded; confirm the experience";
+    case "experience_confirmed":
+      return p.disposition ? DISPOSITION_LABEL[p.disposition] : "Experience confirmed";
+    case "review_requested":
+      return "Review requested; awaiting the customer";
+    case "review_completed":
+      return "Review received";
+    case "closed":
+      return p.closureReason ? CLOSURE_REASON_LABEL[p.closureReason] : "Closed";
+  }
+}
+
+function toCard(
+  p: PostEventProject,
+  facts: Map<string, BookingFacts>,
+  stats: Map<string, ContactStat>,
+  issues: Map<string, number>,
+  reasons: Map<string, string>,
+  slaDays: Record<PostEventState, number>,
+  today: string,
+): PostEventCard {
   const f = facts.get(p.bookingId);
-  const st = stats.get(p.bookingId) ?? { count: 0, responded: 0, lastAt: null };
+  const st: ContactStat = stats.get(p.bookingId) ?? { count: 0, responded: 0, lastAt: null, lastOutcome: null };
   const daysInStage = daysSince(p.stageEnteredAt, today);
   const sla = slaDays[p.state] ?? 0;
+  const active = p.state !== "closed";
+  // Next action is "due" at stage-entry + the state's SLA days. No SLA (0) → no due date.
+  const dueAt = active && sla > 0 && p.stageEnteredAt ? addDaysYmd(p.stageEnteredAt.slice(0, 10), sla) : null;
   return {
     bookingId: p.bookingId,
     state: p.state,
@@ -260,11 +329,16 @@ function toCard(p: PostEventProject, facts: Map<string, BookingFacts>, stats: Ma
     venue: f?.venue ?? null,
     pickupAt: p.pickupAt,
     lastContactAt: st.lastAt,
+    lastContactOutcome: st.lastOutcome,
     contactCount: st.count,
     respondedCount: st.responded,
     openIssues: issues.get(p.bookingId) ?? 0,
     daysInStage,
-    stale: sla > 0 && daysInStage > sla && p.state !== "closed",
+    stateReason: reasons.get(p.bookingId) ?? fallbackReason(p, st),
+    dueAt,
+    dueToday: dueAt != null && dueAt === today,
+    overdue: dueAt != null && dueAt < today,
+    stale: sla > 0 && daysInStage > sla && active,
   };
 }
 
@@ -284,12 +358,13 @@ export function buildBoard(closedLimit = 40): BoardData {
   const facts = bookingFactsFor(projects.map((p) => p.bookingId));
   const stats = contactStats();
   const issues = openIssueCounts();
+  const reasons = latestReasons();
 
   const columns = Object.fromEntries(POSTEVENT_STATE_ORDER.map((s) => [s, [] as PostEventCard[]])) as BoardColumns;
   const totals = Object.fromEntries(POSTEVENT_STATE_ORDER.map((s) => [s, 0])) as Record<PostEventState, number>;
 
   for (const p of projects) {
-    columns[p.state].push(toCard(p, facts, stats, issues, cfg.slaDays, today));
+    columns[p.state].push(toCard(p, facts, stats, issues, reasons, cfg.slaDays, today));
     totals[p.state]++;
   }
   // Sort active columns by urgency (stale first, then oldest-in-stage). Closed by most-recently closed.

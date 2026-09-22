@@ -6,7 +6,19 @@
 
 import { getDb } from "@/lib/db/index";
 import { todayInOpsTz } from "@/lib/dates";
-import { type PostEventMetrics, type FunnelStep, type Bottleneck, type Disposition, rate } from "./types";
+import { getConfig } from "./store";
+import {
+  type PostEventMetrics,
+  type FunnelStep,
+  type Bottleneck,
+  type Disposition,
+  type PostEventState,
+  type IssueType,
+  POSTEVENT_ACTIVE_STATES,
+  POSTEVENT_STATE_LABEL,
+  ISSUE_TYPE_LABEL,
+  rate,
+} from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -189,11 +201,16 @@ export function biggestBottleneck(c: {
 // ── Employee activity (early cut; full accountability reporting is Phase 2) ──────────────────────────
 // The data model already supports the full report: transitions carry actor + timestamp, contacts carry
 // the employee, reviews carry the requester. This is a real, deterministic snapshot over those facts.
+// Operational accountability, not a leaderboard: are we completing the process? Real attributed actions
+// only (auto-imported contacts and system moves are excluded from employee credit).
 export interface EmployeeActivityRow {
   employee: string;
-  contactsLogged: number;
+  attempts: number; // manual contact attempts logged
+  reached: number; // of those, ones that reached the customer (a two-way/responded outcome)
   reviewRequests: number;
-  moves: number;
+  issuesOpened: number;
+  projectsClosed: number;
+  moves: number; // board state moves made
 }
 export function employeeActivity(): EmployeeActivityRow[] {
   const db = getDb();
@@ -201,18 +218,88 @@ export function employeeActivity(): EmployeeActivityRow[] {
   const get = (name: string): EmployeeActivityRow => {
     let r = agg.get(name);
     if (!r) {
-      r = { employee: name, contactsLogged: 0, reviewRequests: 0, moves: 0 };
+      r = { employee: name, attempts: 0, reached: 0, reviewRequests: 0, issuesOpened: 0, projectsClosed: 0, moves: 0 };
       agg.set(name, r);
     }
     return r;
   };
-  for (const r of db.prepare("SELECT employee, COUNT(*) AS n FROM postevent_contacts WHERE source='manual' AND employee IS NOT NULL AND employee != '' GROUP BY employee").all() as any[])
-    get(String(r.employee)).contactsLogged = Number(r.n ?? 0);
+  for (const r of db
+    .prepare(
+      `SELECT employee,
+              COUNT(*) AS n,
+              SUM(CASE WHEN outcome IN ('customer_responded','requested_callback','positive','issue_reported') OR direction='inbound' THEN 1 ELSE 0 END) AS reached
+         FROM postevent_contacts WHERE source='manual' AND employee IS NOT NULL AND employee != '' GROUP BY employee`,
+    )
+    .all() as any[]) {
+    const row = get(String(r.employee));
+    row.attempts = Number(r.n ?? 0);
+    row.reached = Number(r.reached ?? 0);
+  }
   for (const r of db.prepare("SELECT employee, COUNT(*) AS n FROM postevent_reviews WHERE kind='requested' AND employee IS NOT NULL AND employee != '' GROUP BY employee").all() as any[])
     get(String(r.employee)).reviewRequests = Number(r.n ?? 0);
+  for (const r of db.prepare("SELECT created_by, COUNT(*) AS n FROM postevent_issues WHERE created_by IS NOT NULL AND created_by != '' GROUP BY created_by").all() as any[])
+    get(String(r.created_by)).issuesOpened = Number(r.n ?? 0);
+  for (const r of db.prepare("SELECT actor, COUNT(*) AS n FROM postevent_transitions WHERE to_state='closed' AND actor IS NOT NULL AND actor != '' AND actor != 'system' GROUP BY actor").all() as any[])
+    get(String(r.actor)).projectsClosed = Number(r.n ?? 0);
   for (const r of db.prepare("SELECT actor, COUNT(*) AS n FROM postevent_transitions WHERE actor IS NOT NULL AND actor != '' AND actor != 'system' GROUP BY actor").all() as any[])
     get(String(r.actor)).moves = Number(r.n ?? 0);
-  return [...agg.values()].sort((a, b) => b.contactsLogged + b.reviewRequests + b.moves - (a.contactsLogged + a.reviewRequests + a.moves));
+  const score = (r: EmployeeActivityRow): number => r.attempts + r.reached + r.reviewRequests + r.issuesOpened + r.projectsClosed + r.moves;
+  return [...agg.values()].sort((a, b) => score(b) - score(a));
+}
+
+// ── Aging by stage (how long active work is sitting, per column) ──────────────────────────────────────
+export interface AgingRow {
+  state: PostEventState;
+  label: string;
+  count: number;
+  stale: number; // over the configured SLA for the stage
+  avgDays: number | null; // avg days-in-stage (null when the column is empty)
+}
+export function agingByStage(): AgingRow[] {
+  const today = todayInOpsTz();
+  const nowMs = new Date(`${today}T23:59:59Z`).getTime();
+  const sla = getConfig().slaDays;
+  const rows = getDb().prepare("SELECT state, stage_entered_at FROM postevent_projects WHERE state != 'closed'").all() as any[];
+  const byState = new Map<PostEventState, number[]>();
+  for (const r of rows) {
+    const s = String(r.state) as PostEventState;
+    const days = r.stage_entered_at ? Math.max(0, Math.floor((nowMs - new Date(String(r.stage_entered_at)).getTime()) / 86400000)) : 0;
+    (byState.get(s) ?? byState.set(s, []).get(s)!).push(days);
+  }
+  return POSTEVENT_ACTIVE_STATES.map((s) => {
+    const arr = byState.get(s) ?? [];
+    const limit = sla[s] ?? 0;
+    const stale = limit > 0 ? arr.filter((d) => d > limit).length : 0;
+    const avg = arr.length ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 : null;
+    return { state: s, label: POSTEVENT_STATE_LABEL[s], count: arr.length, stale, avgDays: avg };
+  });
+}
+
+// ── Issue categories (service-recovery breakdown) ─────────────────────────────────────────────────────
+export interface IssueBreakdownRow {
+  type: IssueType;
+  label: string;
+  count: number;
+  open: number;
+}
+export function issueBreakdown(): { total: number; open: number; rows: IssueBreakdownRow[] } {
+  const rows = getDb().prepare("SELECT issue_type, state, COUNT(*) AS n FROM postevent_issues GROUP BY issue_type, state").all() as any[];
+  const agg = new Map<IssueType, { count: number; open: number }>();
+  let total = 0;
+  let open = 0;
+  for (const r of rows) {
+    const t = (r.issue_type ?? "other") as IssueType;
+    const n = Number(r.n ?? 0);
+    const isOpen = String(r.state) !== "closed";
+    const cur = agg.get(t) ?? { count: 0, open: 0 };
+    cur.count += n;
+    if (isOpen) cur.open += n;
+    agg.set(t, cur);
+    total += n;
+    if (isOpen) open += n;
+  }
+  const out = [...agg.entries()].map(([t, v]) => ({ type: t, label: ISSUE_TYPE_LABEL[t], count: v.count, open: v.open })).sort((a, b) => b.count - a.count);
+  return { total, open, rows: out };
 }
 
 // ── Closure-reason breakdown (for the Closure Reasons blade) ─────────────────────────────────────────

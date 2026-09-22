@@ -84,7 +84,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     case "move": {
       const to = body.to;
       if (!to || !(POSTEVENT_STATE_ORDER as string[]).includes(to)) return NextResponse.json({ error: "bad_state" }, { status: 400 });
+      // A drag must never bypass the data a transition needs. These targets carry required structured data,
+      // so the bare move is refused and the caller is told which flow to use (the board opens the dialog).
       if (to === "closed") return NextResponse.json({ error: "use_close", message: "Closing requires a structured closure reason." }, { status: 400 });
+      if (to === "experience_confirmed" && !project.disposition)
+        return NextResponse.json({ error: "needs_experience", message: "Record how the customer experienced the event before confirming." }, { status: 400 });
+      if (to === "review_requested")
+        return NextResponse.json({ error: "use_review_request", message: "Requesting a review records the destination, channel, and who asked. Use the review request flow." }, { status: 400 });
+      if (to === "review_completed")
+        return NextResponse.json({ error: "use_review_received", message: "Recording a completed review needs the review details. Use the review received flow." }, { status: 400 });
       if (project.state === "closed") reopenProject(id, to, actor, body.note);
       else setState(id, to, actor, body.note);
       recomputeNext(id);

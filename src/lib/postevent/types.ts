@@ -378,12 +378,31 @@ export interface PostEventCard {
   // Derived, deterministic.
   pickupAt: string | null;
   lastContactAt: string | null;
+  lastContactOutcome: ContactOutcome | null; // outcome of the most recent attempt (null = no contact recorded)
   contactCount: number;
   respondedCount: number;
   openIssues: number;
   daysInStage: number;
+  stateReason: string | null; // WHY it's in this state (latest transition note, else a deterministic fallback)
+  dueAt: string | null; // ymd the current stage's next action is due (stageEnteredAt + SLA days), null if no SLA
+  dueToday: boolean;
+  overdue: boolean; // past due and still active
   stale: boolean; // days-in-stage over the configured SLA for this state
 }
+
+/** The customer-contact reality, kept as three DISTINCT facts (never collapsed to "0 contacts"):
+ *  no attempt recorded / attempted but not reached / customer actually responded. */
+export type ContactState = "none" | "attempted" | "responded";
+export function contactState(contactCount: number, respondedCount: number): ContactState {
+  if (respondedCount > 0) return "responded";
+  if (contactCount > 0) return "attempted";
+  return "none";
+}
+export const CONTACT_STATE_LABEL: Record<ContactState, string> = {
+  none: "No contact recorded",
+  attempted: "Contact attempted",
+  responded: "Customer responded",
+};
 
 export type BoardColumns = Record<PostEventState, PostEventCard[]>;
 
