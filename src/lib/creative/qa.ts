@@ -111,3 +111,53 @@ export function runQa(job: CreativeJob, generation: Generation, dna: ZoeVisualDN
 
   return { score, verdict, method: "rules", summary, checks };
 }
+
+// ── n8n path ────────────────────────────────────────────────────────────────────────────────────────
+// Per decision (B), n8n runs the generation-QA; we take ITS verdict as primary and layer only a LIGHT
+// reference-first constraint check (the one thing n8n can't know: did this job require a real source photo
+// as the truth, and was one attached?). The app still owns human approval regardless.
+export interface N8nQaInput {
+  score?: number;
+  verdict?: "pass" | "fail";
+  note?: string;
+  checks?: { label: string; pass: boolean; note?: string }[];
+}
+
+const N8N_PASS_THRESHOLD = 70;
+
+export function n8nQaReport(job: CreativeJob, n8n: N8nQaInput | null | undefined, succeeded: boolean): QaReport {
+  const checks: QaCheck[] = [];
+
+  // n8n's own checks (data, not authority) — surfaced verbatim, non-critical on our side.
+  for (const c of n8n?.checks ?? []) {
+    if (c && typeof c.label === "string") checks.push({ label: c.label, pass: !!c.pass, note: typeof c.note === "string" ? c.note : "", critical: false });
+  }
+
+  // n8n's verdict (its generation-QA result). Falls back to score threshold, then the callback status.
+  const n8nVerdict: "pass" | "fail" = n8n?.verdict ?? (typeof n8n?.score === "number" ? (n8n.score >= N8N_PASS_THRESHOLD ? "pass" : "fail") : succeeded ? "pass" : "fail");
+  checks.push({
+    label: "n8n generation QA",
+    pass: n8nVerdict === "pass",
+    note: n8n?.note || (typeof n8n?.score === "number" ? `n8n QA score ${n8n.score}.` : succeeded ? "n8n reported success." : "n8n reported failure."),
+    critical: false,
+  });
+
+  // Our LIGHT reference-first constraint check (the only thing we gate on).
+  const refOk = !isReferenceFirst(job.sourceMode) || !!job.sourceImageId;
+  checks.push({
+    label: "Reference source attached",
+    pass: refOk,
+    note: refOk ? (isReferenceFirst(job.sourceMode) ? "A source-of-truth photo anchors this reference-first job." : "Scratch job; no source required.") : "Reference-first job with no source photo attached.",
+    critical: true,
+  });
+
+  const verdict: "pass" | "fail" = refOk && n8nVerdict === "pass" ? "pass" : "fail";
+  const score = typeof n8n?.score === "number" ? Math.max(0, Math.min(100, Math.round(n8n.score))) : verdict === "pass" ? 100 : 0;
+  const summary =
+    !refOk
+      ? "Blocked: reference-first job is missing its source photo."
+      : verdict === "pass"
+        ? `n8n QA passed${typeof n8n?.score === "number" ? ` (${n8n.score})` : ""}; reference constraint OK. Ready for human review.`
+        : "n8n QA did not pass. Regenerate or revise.";
+  return { score, verdict, method: "n8n", summary, checks };
+}

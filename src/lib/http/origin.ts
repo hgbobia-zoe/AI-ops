@@ -6,15 +6,24 @@
 export function publicOrigin(req: Request): string {
   const env = process.env.PUBLIC_BASE_URL?.trim();
   if (env) return env.replace(/\/+$/, "");
-  const h = req.headers;
-  const host = h.get("x-forwarded-host") || h.get("host");
-  if (host) {
-    const proto = h.get("x-forwarded-proto") || "https";
-    return `${proto}://${host}`;
-  }
+  const fromHeaders = publicOriginFromHeaders(req.headers);
+  if (fromHeaders) return fromHeaders;
   try {
     return new URL(req.url).origin;
   } catch {
     return "";
   }
+}
+
+/** Same resolution from a bare Headers object (for server components that have `headers()`, not a Request).
+ *  Prefers PUBLIC_BASE_URL, then the forwarded host headers. Returns "" if nothing usable is present. */
+export function publicOriginFromHeaders(h: Headers): string {
+  const env = process.env.PUBLIC_BASE_URL?.trim();
+  if (env) return env.replace(/\/+$/, "");
+  const host = h.get("x-forwarded-host") || h.get("host");
+  if (host) {
+    const proto = h.get("x-forwarded-proto") || "https";
+    return `${proto}://${host}`;
+  }
+  return "";
 }

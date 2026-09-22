@@ -332,7 +332,9 @@ export interface QaCheck {
 export interface QaReport {
   score: number; // 0..100
   verdict: "pass" | "fail";
-  method: "rules"; // honesty: rules-based today (no pixels inspected); vision QA is future
+  // honesty about WHO judged: "rules" = our deterministic checks (no pixels inspected); "n8n" = the
+  // workflow's own generation-QA is primary and we layer only a light reference-first constraint check.
+  method: "rules" | "n8n";
   summary: string;
   checks: QaCheck[];
 }
@@ -422,6 +424,7 @@ export interface Generation {
   qaScore: number | null;
   qaReport: QaReport | null;
   status: GenerationStatus;
+  externalRef: string | null; // async providers: the provider's run id (n8n execution id), shown in the UI
   createdAt: string;
 }
 
@@ -446,6 +449,10 @@ export interface CreativeProviderStatus {
   active: boolean;
   keySet: boolean;
   requiresKey: boolean;
+  // n8n-style providers carry extra config: a webhook URL (KV, shown) + a write-only auth token.
+  kind?: "key" | "n8n";
+  webhookUrl?: string | null;
+  authTokenSet?: boolean;
 }
 
 // ── Validators ──────────────────────────────────────────────────────────────────────────────────────

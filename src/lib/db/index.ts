@@ -1126,6 +1126,8 @@ CREATE TABLE IF NOT EXISTS creative_generations (
   qa_score       INTEGER,
   qa_report      TEXT,                     -- JSON QaReport
   status         TEXT NOT NULL,            -- generating | pass | fail | error | approved | rejected
+  callback_token TEXT,                     -- async providers (n8n): per-generation callback credential
+  external_ref   TEXT,                     -- async providers: the provider's run id (n8n execution id)
   created_at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_creative_generations_job ON creative_generations(job_id, attempt DESC);
@@ -1216,6 +1218,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "radar_sources", column: "last_failure_at", type: "TEXT" }, // ISO of the last failed run
   { table: "opportunities", column: "expected_attendance", type: "INTEGER" }, // known/estimated size (drives the size score) — from a source or manual import
   { table: "opportunities", column: "attendance_confidence", type: "TEXT" }, // VERIFIED | INFERRED | UNKNOWN
+  // Creative Engine async providers (n8n): per-generation callback credential + the provider's run id.
+  { table: "creative_generations", column: "callback_token", type: "TEXT" },
+  { table: "creative_generations", column: "external_ref", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {

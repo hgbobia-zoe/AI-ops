@@ -3,12 +3,14 @@
 // provider status and renders the editor.
 
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import Link from "next/link";
 import { Dna } from "lucide-react";
 import { getVisualDNA } from "@/lib/creative/visualDna";
 import { providerStatuses } from "@/lib/creative/providers";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
+import { publicOriginFromHeaders } from "@/lib/http/origin";
 import { VisualDnaEditor } from "@/components/creative/VisualDnaEditor";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +19,8 @@ export default async function VisualDnaPage(): Promise<React.JSX.Element> {
   if (!canManageSettings(await viewerRole())) redirect("/creative");
   const dna = getVisualDNA();
   const providers = providerStatuses();
+  const origin = publicOriginFromHeaders(await headers());
+  const callbackUrl = origin ? `${origin}/api/creative/callback` : "/api/creative/callback";
 
   return (
     <main className="max-w-[960px] p-6">
@@ -31,7 +35,7 @@ export default async function VisualDnaPage(): Promise<React.JSX.Element> {
           The single, reusable definition of the Zoe look. The Art Director composes every brief from this, so all images feel like the same photography team. Never re-typed into individual prompts.
         </p>
       </header>
-      <VisualDnaEditor initialDna={dna} initialProviders={providers} />
+      <VisualDnaEditor initialDna={dna} initialProviders={providers} callbackUrl={callbackUrl} />
     </main>
   );
 }

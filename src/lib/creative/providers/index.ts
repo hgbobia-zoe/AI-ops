@@ -6,6 +6,7 @@ import { getJson, setJson } from "@/lib/kv";
 import { hasSecret } from "@/lib/secrets";
 import { mockProvider } from "./mock";
 import { falProvider, replicateProvider, openaiImageProvider } from "./stub";
+import { n8nProvider, getN8nWebhookUrl, hasN8nAuthToken } from "./n8n";
 import type { ImageGenerationProvider } from "./types";
 import type { CreativeProviderStatus } from "../types";
 
@@ -13,11 +14,13 @@ export type { ImageGenerationProvider, ImageGenerationInput, ImageGenerationResu
 
 const SELECTION_KEY = "creative_image_provider";
 
-const REGISTRY: ImageGenerationProvider[] = [mockProvider, falProvider, replicateProvider, openaiImageProvider];
+const REGISTRY: ImageGenerationProvider[] = [mockProvider, n8nProvider, falProvider, replicateProvider, openaiImageProvider];
 
-/** The secret key each provider's API key lives under (for the admin write-only form). */
+/** The secret key each provider's API key lives under (for the admin write-only form). n8n's key config is
+ *  richer (webhook URL + auth token) and handled specially, so it has no single "apiKey" here. */
 export const PROVIDER_SECRET_KEYS: Record<string, string | null> = {
   mock: null,
+  n8n: null,
   fal: "creative.fal.apiKey",
   replicate: "creative.replicate.apiKey",
   "openai-image": "creative.openaiImage.apiKey",
@@ -54,7 +57,7 @@ export function providerStatuses(): CreativeProviderStatus[] {
   const activeId = getActiveProvider().id;
   return REGISTRY.map((p) => {
     const secretKey = PROVIDER_SECRET_KEYS[p.id];
-    return {
+    const base: CreativeProviderStatus = {
       id: p.id,
       label: p.label,
       configured: p.configured(),
@@ -62,6 +65,12 @@ export function providerStatuses(): CreativeProviderStatus[] {
       active: p.id === activeId,
       keySet: secretKey ? hasSecret(secretKey) : false,
       requiresKey: !!secretKey,
+      kind: p.id === "n8n" ? "n8n" : "key",
     };
+    if (p.id === "n8n") {
+      base.webhookUrl = getN8nWebhookUrl();
+      base.authTokenSet = hasN8nAuthToken();
+    }
+    return base;
   });
 }

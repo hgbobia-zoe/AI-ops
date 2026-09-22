@@ -238,6 +238,7 @@ function toGeneration(r: any): Generation {
     qaScore: r.qa_score == null ? null : Number(r.qa_score),
     qaReport: parseJson<QaReport>(r.qa_report),
     status: r.status as GenerationStatus,
+    externalRef: r.external_ref ?? null,
     createdAt: r.created_at,
   };
 }
@@ -267,13 +268,15 @@ export function insertGeneration(g: {
   placeholder: boolean;
   resultMeta: Record<string, unknown> | null;
   status: GenerationStatus;
+  callbackToken?: string | null; // async providers only
+  externalRef?: string | null;
 }): Generation {
   const id = `CG-${randomUUID()}`;
   getDb()
     .prepare(
       `INSERT INTO creative_generations (id, job_id, attempt, provider, model, brief_snapshot, image_id, result_path,
-         placeholder, result_meta, qa_score, qa_report, status, created_at)
-       VALUES (@id,@jobId,@attempt,@provider,@model,@brief,@imageId,@resultPath,@placeholder,@resultMeta,NULL,NULL,@status,@ts)`,
+         placeholder, result_meta, qa_score, qa_report, status, callback_token, external_ref, created_at)
+       VALUES (@id,@jobId,@attempt,@provider,@model,@brief,@imageId,@resultPath,@placeholder,@resultMeta,NULL,NULL,@status,@callbackToken,@externalRef,@ts)`,
     )
     .run({
       id,
@@ -287,10 +290,33 @@ export function insertGeneration(g: {
       placeholder: g.placeholder ? 1 : 0,
       resultMeta: g.resultMeta ? JSON.stringify(g.resultMeta) : null,
       status: g.status,
+      callbackToken: g.callbackToken ?? null,
+      externalRef: g.externalRef ?? null,
       ts: now(),
     });
   getDb().prepare("UPDATE creative_jobs SET generation_count = generation_count + 1, updated_at=@ts WHERE id=@jobId").run({ ts: now(), jobId: g.jobId });
   return getGeneration(id)!;
+}
+
+/** Server-only: the async callback credential stored on a generation (never exposed to the client). */
+export function getGenerationCallbackToken(id: string): string | null {
+  const r = getDb().prepare("SELECT callback_token FROM creative_generations WHERE id = ?").get(id) as { callback_token: string | null } | undefined;
+  return r?.callback_token ?? null;
+}
+
+export function setGenerationExternalRef(id: string, externalRef: string | null): void {
+  getDb().prepare("UPDATE creative_generations SET external_ref=@externalRef WHERE id=@id").run({ externalRef, id });
+}
+
+export function setGenerationCallbackToken(id: string, token: string): void {
+  getDb().prepare("UPDATE creative_generations SET callback_token=@token WHERE id=@id").run({ token, id });
+}
+
+/** Apply an async result's image (from the callback) to a pending generation. QA is set separately. */
+export function setGenerationResult(id: string, r: { imageId: string | null; resultPath: string | null; model: string | null; placeholder: boolean; meta: Record<string, unknown> | null }): void {
+  getDb()
+    .prepare("UPDATE creative_generations SET image_id=@imageId, result_path=@resultPath, model=@model, placeholder=@placeholder, result_meta=@meta WHERE id=@id")
+    .run({ imageId: r.imageId, resultPath: r.resultPath, model: r.model, placeholder: r.placeholder ? 1 : 0, meta: r.meta ? JSON.stringify(r.meta) : null, id });
 }
 
 export function setGenerationQa(id: string, report: QaReport): Generation | null {

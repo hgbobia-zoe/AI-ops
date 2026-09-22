@@ -4,11 +4,11 @@
 // QA report, and the human-review controls. All mutations POST to /api/creative/*; each response returns the
 // fresh {job, generations, events} which we apply, so the view always reflects the real server state.
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import {
   Sparkles, RefreshCw, Loader2, Check, X, AlertTriangle, ThumbsUp, ThumbsDown,
-  RotateCcw, Save, Wand2, ExternalLink, ImageIcon,
+  RotateCcw, Save, Wand2, ExternalLink, ImageIcon, Workflow,
 } from "lucide-react";
 import { StatusPill } from "./StatusPill";
 import {
@@ -43,7 +43,7 @@ function QaReportView({ report }: { report: QaReport }): React.JSX.Element {
           {report.verdict === "pass" ? <Check className="size-3.5" /> : <AlertTriangle className="size-3.5" />}
           QC {report.verdict === "pass" ? "passed" : "failed"} · {report.score}
         </span>
-        <span className="text-[10.5px] uppercase tracking-[0.05em] text-meta">rules-based</span>
+        <span className="text-[10.5px] uppercase tracking-[0.05em] text-meta">{report.method === "n8n" ? "n8n QA + ref check" : "rules-based"}</span>
       </div>
       <p className="mb-1.5 text-[11.5px] text-meta">{report.summary}</p>
       <ul className="space-y-0.5">
@@ -80,12 +80,35 @@ export function JobDetail({
 
   const brief: ImageBrief | null = job.imageBrief;
 
-  function apply(data: { job?: CreativeJob | null; generations?: Generation[]; events?: CreativeEvent[]; error?: string }): void {
+  const apply = useCallback((data: { job?: CreativeJob | null; generations?: Generation[]; events?: CreativeEvent[]; error?: string }): void => {
     if (data.job) setJob(data.job);
     if (data.generations) setGenerations(data.generations);
     if (data.events) setEvents(data.events);
     if (data.error) setError(data.error);
-  }
+  }, []);
+
+  // While a generation is in flight (async n8n handoff), poll for the callback result so it appears without
+  // a manual reload. A pending generation may never get a callback — the poll just keeps showing "generating"
+  // and the user can regenerate; no heavy timeout machinery.
+  useEffect(() => {
+    if (job.status !== "generating") return;
+    let alive = true;
+    const tick = async (): Promise<void> => {
+      try {
+        const res = await fetch(`/api/creative/jobs/${job.id}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as Parameters<typeof apply>[0];
+        if (alive) apply(data);
+      } catch {
+        /* transient; keep polling */
+      }
+    };
+    const iv = setInterval(tick, 4000);
+    return () => {
+      alive = false;
+      clearInterval(iv);
+    };
+  }, [job.status, job.id, apply]);
 
   async function call(url: string, body: unknown, key: string): Promise<void> {
     setBusy(key);
@@ -115,9 +138,13 @@ export function JobDetail({
 
   const activeStepIdx = LIFECYCLE_STEPS.findIndex((s) => s.statuses.includes(job.status));
   const isTerminalRejected = job.status === "rejected";
-  const canGenerate = ["draft", "queued", "needs_revision"].includes(job.status);
+  const isGenerating = job.status === "generating";
+  // Regenerate is allowed even while generating: a pending async handoff may never get its callback, so the
+  // user must always be able to kick a fresh attempt.
+  const canGenerate = ["draft", "queued", "needs_revision", "generating"].includes(job.status);
   const canReview = job.status === "awaiting_approval";
   const canPublish = job.status === "approved";
+  const pendingGen = generations.find((g) => g.status === "generating");
 
   return (
     <div className="space-y-4">
@@ -182,6 +209,16 @@ export function JobDetail({
       {error && (
         <div className="flex items-center gap-2 rounded border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[12.5px] text-rose-200">
           <AlertTriangle className="size-4" /> {error}
+        </div>
+      )}
+
+      {isGenerating && (
+        <div className="flex items-center gap-2 rounded border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-[12.5px] text-sky-200">
+          <Workflow className="size-4 shrink-0" />
+          <Loader2 className="size-3.5 shrink-0 animate-spin" />
+          <span>
+            Handed to n8n — waiting for result{pendingGen?.externalRef ? ` (run ${pendingGen.externalRef})` : ""}. This view refreshes automatically when the workflow calls back.
+          </span>
         </div>
       )}
 

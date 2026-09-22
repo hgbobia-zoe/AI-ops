@@ -22,6 +22,15 @@ export interface ImageGenerationInput {
   aspectRatio: AspectRatio;
   sourceImage?: ProviderImageRef | null; // reference-first edit anchor
   referenceImages?: ProviderImageRef[]; // additional style/subject references
+  // ── Async plumbing (populated by the service for async providers only) ──
+  /** The Generation row id (async providers echo it back on the callback). */
+  generationId?: string;
+  /** The app's public origin (scheme + host) so a provider can build ABSOLUTE image + callback URLs. */
+  baseUrl?: string;
+  /** Absolute URL the provider (n8n) POSTs its result to when the workflow finishes. */
+  callbackUrl?: string;
+  /** Per-generation callback credential the provider must echo back for the callback to be accepted. */
+  callbackToken?: string;
 }
 
 export interface ImageGenerationResult {
@@ -34,13 +43,21 @@ export interface ImageGenerationResult {
   placeholder: boolean; // true = NOT a real photo (mock); orchestration + QA surface this honestly
   meta?: Record<string, unknown>;
   error?: string;
+  /** Async providers: true = the request was ACCEPTED and the image will arrive later via the callback.
+   *  The service leaves the generation in "generating" and returns; the callback finishes it. */
+  pending?: boolean;
+  /** Async providers: the provider's run id (e.g. an n8n execution id) to display + correlate. */
+  externalRef?: string | null;
 }
 
 /** The swappable image model. `generate` = from scratch; `edit` = reference-first (a source anchors it). */
 export interface ImageGenerationProvider {
   id: string;
   label: string;
-  /** Is this provider usable right now (mock: always; real: only when its API key secret is set)? */
+  /** true = the provider returns { pending: true } and finishes later via the callback route. Sync
+   *  providers (mock/stub) omit this and complete inline as before. */
+  async?: boolean;
+  /** Is this provider usable right now (mock: always; key providers: key set; n8n: webhook URL set)? */
   configured(): boolean;
   generate(input: ImageGenerationInput): Promise<ImageGenerationResult>;
   edit(input: ImageGenerationInput): Promise<ImageGenerationResult>;
