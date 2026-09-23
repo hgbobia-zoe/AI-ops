@@ -55,7 +55,14 @@ export const BASE_DELIVERY_LEG: GsLogisticsLeg = { itemID: 392868144, title: "St
 // for now, pricing logic to follow).
 export const EVENT_READINESS_LEG: GsLogisticsLeg = { itemID: 481935095, title: "Event Readiness Service", rateType: "FLAT_FEE_WITH_MILEAGE", eventTimeLineMarker: "DROP_OFF", label: "Event Readiness Service" };
 
-type IntakeSlice = { setupRequired: string; deliveryTier: string; deliveryRequired: string; pickupRequired?: string; dropoffTime?: string; pickupTime?: string };
+type IntakeSlice = { setupRequired: string; deliveryTier: string; deliveryRequired: string; pickupRequired?: string; dropoffTime?: string; pickupTime?: string; eventDate?: string };
+
+// YYYY-MM-DD → M/D/YYYY (no leading zeros) — the format Goodshuffle's saveLineItemGroupEdits expects for
+// the group's from/to dates (captured live 2026-09-23). Empty when the date is missing/malformed.
+function mdyFromYmd(ymd: string | undefined): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || "");
+  return m ? `${Number(m[2])}/${Number(m[3])}/${m[1]}` : "";
+}
 
 /** SIMPLE items for the Rental Items group: just the damage waiver (on every quote, no location needed).
  *  The delivery time-window upgrade is NO LONGER here — per the rep it goes in its own group (see
@@ -69,7 +76,8 @@ export function autoAddSimpleItems(): GsAddItem[] {
 const WINDOW_UPGRADE_GROUP = "Delivery Timing";
 
 export interface GsWindowUpgrade {
-  groupName: string; // the dedicated line-item group to create or reuse
+  groupName: string; // the dedicated line-item group to create (saveLineItemGroupEdits)
+  groupDate: string; // M/D/YYYY for the group's from/to dates (event date; drainer falls back to today)
   item: GsAddItem; // the premium/exact upgrade service
   dropoffTime: string; // HH:MM, for the line-item internal note
   pickupTime: string; // HH:MM
@@ -85,7 +93,7 @@ export function windowUpgradeGroup(intake: IntakeSlice): GsWindowUpgrade | null 
   const dropoffTime = intake.dropoffTime || "";
   const pickupTime = intake.pickupTime || "";
   if (!dropoffTime && !pickupTime) return null;
-  return { groupName: WINDOW_UPGRADE_GROUP, item, dropoffTime, pickupTime };
+  return { groupName: WINDOW_UPGRADE_GROUP, groupDate: mdyFromYmd(intake.eventDate), item, dropoffTime, pickupTime };
 }
 
 /** LOGISTICS legs for the Logistics group — added only when we have a geocoded delivery location (the drainer
