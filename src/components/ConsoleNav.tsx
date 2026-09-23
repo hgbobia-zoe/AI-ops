@@ -18,7 +18,7 @@ import {
   RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator, Radar, IdCard,
   Megaphone, Send, Upload, CalendarDays, Star,
   HeartHandshake, Columns3, LifeBuoy, ClipboardCheck,
-  Aperture, Images, Plus, Dna,
+  Aperture, Plus, Dna,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -83,6 +83,11 @@ const GROUPS: Group[] = [
       { href: "/marketing/campaigns", label: "Campaigns", icon: Megaphone },
       { href: "/marketing/content", label: "Content", icon: CalendarDays },
       { href: "/marketing/reviews", label: "Reviews", icon: Star },
+      // Creative Engine — AI-directed creative production (AI creates, rules constrain, AI evaluates,
+      // humans approve). It produces the marketing/web imagery, so it lives under Marketing.
+      { href: "/creative", label: "Creative Engine", icon: Aperture, exact: true },
+      { href: "/creative/new", label: "New Creative Job", icon: Plus },
+      { href: "/creative/dna", label: "Visual DNA", icon: Dna, manage: true },
     ],
   },
   {
@@ -109,18 +114,6 @@ const GROUPS: Group[] = [
       { href: "/postevent/issues", label: "Issues / Recovery", icon: LifeBuoy },
       { href: "/postevent/analytics", label: "Analytics", icon: TrendingUp },
       { href: "/postevent/closures", label: "Closure Reasons", icon: ClipboardCheck },
-    ],
-  },
-  {
-    // Creative Engine — AI-directed creative production. AI CREATES, RULES CONSTRAIN, AI EVALUATES, HUMANS
-    // APPROVE. The user defines WHAT; the centralized Zoe Visual DNA + the Art Director determine HOW, so
-    // every image reads like the same in-house photography team. Model-agnostic image provider.
-    label: "Creative Engine",
-    icon: Aperture,
-    blades: [
-      { href: "/creative", label: "Jobs", icon: Images, exact: true },
-      { href: "/creative/new", label: "New Job", icon: Plus },
-      { href: "/creative/dna", label: "Visual DNA", icon: Dna, manage: true },
     ],
   },
   {
