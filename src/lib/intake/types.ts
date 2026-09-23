@@ -51,8 +51,9 @@ export interface Intake {
   zip: string;
   locationClass: LocationClass;
   deliveryRequired: TriState;
-  deliveryFlexible: TriState; // can we deliver the day before AND pick up the day after (free, flexible)?
-  deliveryTier: DeliveryTier; // only gathered when delivery is NOT flexible (needs a same-day window)
+  deliveryFlexible: TriState; // derived from deliveryTier: 'standard' ⇒ yes (day before / pickup after), premium|exact ⇒ no
+  deliveryTier: DeliveryTier; // the chosen delivery type: standard (flexible day-before, 9AM–8PM, free) | premium | exact
+  deliveryTime: string; // HH:MM target delivery time — captured only for premium/exact (same-day) windows
   setupRequired: TriState; // wants setup help → Event Readiness
   pickupRequired: TriState; // repurposed: wants BREAKDOWN help (gather chairs, cushions…) → Event Readiness
   accessNotes: AccessNotes;

@@ -490,7 +490,8 @@ CREATE TABLE IF NOT EXISTS sales_intake (
   location_class      TEXT,                 -- residential | commercial | venue — the single delivery class (commercial = office, hours-restricted). Replaces customer_type + location_type.
   delivery_required   TEXT,                 -- yes | no | not_sure | ''
   delivery_flexible   TEXT,                 -- yes | no | not_sure | '' (can deliver day before / pick up day after, free)
-  delivery_tier       TEXT,                 -- standard | premium | exact | '' (only when NOT flexible)
+  delivery_tier       TEXT,                 -- chosen delivery type: standard (flexible day-before, 9AM–8PM) | premium | exact
+  delivery_time       TEXT,                 -- HH:MM target delivery time — captured only for premium/exact same-day windows
   setup_required      TEXT,
   pickup_required     TEXT,                 -- repurposed: wants breakdown help → Event Readiness
   access_notes        TEXT,                 -- JSON of the branched logistics answers
@@ -1224,6 +1225,8 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "creative_generations", column: "external_ref", type: "TEXT" },
   // Intake: single delivery class (residential | commercial | venue) replacing customer_type + location_type.
   { table: "sales_intake", column: "location_class", type: "TEXT" },
+  // Intake: target delivery time for a same-day (premium/exact) window.
+  { table: "sales_intake", column: "delivery_time", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {

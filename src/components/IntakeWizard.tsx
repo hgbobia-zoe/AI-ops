@@ -35,12 +35,15 @@ const LOCATION_CLASSES: { v: Exclude<Intake["locationClass"], "">; label: string
 // ── Step registry (branching via `when`) ───────────────────────────────────────
 type StepId =
   | "customer" | "eventType" | "locationClass" | "guests" | "date" | "times"
-  | "location" | "delivery" | "deliveryFlexible" | "deliveryTier" | "setup" | "pickup" | "access" | "notes";
+  | "location" | "delivery" | "deliveryType" | "deliveryTime" | "setup" | "pickup" | "access" | "notes";
 
-const DELIVERY_TIERS: { v: Intake["deliveryTier"]; label: string; window: string }[] = [
-  { v: "standard", label: "Standard window", window: "9am to 8pm · no upgrade" },
-  { v: "premium", label: "Premium Window", window: "2-hour window · +$100" },
-  { v: "exact", label: "Exact Time", window: "30-minute window · +$150" },
+// The three delivery types the rep walks the customer through. "standard" is the flexible day-before
+// option (our operational preference) and carries the free 9AM–8PM window; the other two are same-day
+// paid windows. Order = how we present them: recommended first.
+const DELIVERY_TYPES: { v: Exclude<Intake["deliveryTier"], "">; label: string; window: string; price: string; note: string; recommended?: boolean }[] = [
+  { v: "standard", label: "Flexible — day before, pick up day after", window: "9AM–8PM", price: "No charge", recommended: true, note: "Our recommendation. We deliver the day before and grab it the day after, so we can work around other jobs — and it keeps their cost down. Most homeowners are fine with this unless they don't own the home or the site has a restriction." },
+  { v: "premium", label: "Premium — 2-hour window", window: "Same day · 2-hour window", price: "+$100", note: "Same-day delivery inside a 2-hour window." },
+  { v: "exact", label: "Exact time — 30-minute window", window: "Same day · 30-minute window", price: "+$150", note: "For venues that require a precise load-in time." },
 ];
 
 // Section grouping for the progress rail — the familiar project mental model a Goodshuffle user already
@@ -51,7 +54,7 @@ const SECTIONS: { label: string; steps: StepId[] }[] = [
   { label: "Event", steps: ["eventType", "locationClass", "guests"] },
   { label: "Schedule", steps: ["date", "times"] },
   { label: "Location", steps: ["location"] },
-  { label: "Logistics", steps: ["delivery", "deliveryFlexible", "deliveryTier", "setup", "pickup", "access"] },
+  { label: "Logistics", steps: ["delivery", "deliveryType", "deliveryTime", "setup", "pickup", "access"] },
   { label: "Notes", steps: ["notes"] },
 ];
 const sectionIndexOf = (id: StepId | undefined): number => (id ? SECTIONS.findIndex((s) => s.steps.includes(id)) : 0);
@@ -75,8 +78,8 @@ const STEPS: StepDef[] = [
   { id: "times", title: "What time does it start and end?", canNext: (i) => !i.eventStartTime || !i.eventEndTime || i.eventEndTime > i.eventStartTime },
   { id: "location", title: "Where's the event?", canNext: () => true },
   { id: "delivery", title: "Will they need delivery?", canNext: () => true },
-  { id: "deliveryFlexible", title: "Can we deliver the day before and pick up the day after?", subtitle: "We allow it at no extra cost — the flexibility lets us work around other jobs. If not, we'll pin down a delivery window next.", when: wantsDelivery, canNext: () => true },
-  { id: "deliveryTier", title: "Which delivery window do they need?", subtitle: "They need same-day delivery, so lock in how tight the window has to be.", when: (i) => wantsDelivery(i) && i.deliveryFlexible === "no", canNext: () => true },
+  { id: "deliveryType", title: "Walk them through the 3 delivery options", subtitle: "Read all three to the customer so they choose with the full picture — including cost. We prefer the flexible day-before option: it gives us breathing room to work around other jobs, so we can reserve exact-time delivery for venues that truly require it.", when: wantsDelivery, canNext: (i) => !!i.deliveryTier },
+  { id: "deliveryTime", title: "What delivery time do they need?", subtitle: "They chose a same-day window, so capture the target time we'll build it around.", when: (i) => wantsDelivery(i) && (i.deliveryTier === "premium" || i.deliveryTier === "exact"), canNext: () => true },
   { id: "setup", title: "Do they want setup help?", subtitle: "Setting up rental equipment on site → Event Readiness Service.", canNext: () => true },
   { id: "pickup", title: "Do they want breakdown help?", subtitle: "Helping tear down after — gathering chairs, removing cushions, etc. → Event Readiness Service.", canNext: () => true },
   { id: "access", title: "A quick logistics check", subtitle: "Just the basics — the full survey happens later.", when: (i) => i.deliveryRequired !== "no" || i.setupRequired !== "no" || i.pickupRequired !== "no", canNext: () => true },
@@ -241,20 +244,8 @@ function StepBody({ step, intake, set }: { step: StepDef; intake: Intake; set: (
     case "times": return <TimesStep intake={intake} set={set} />;
     case "location": return <LocationStep intake={intake} set={set} />;
     case "delivery": return <TriChoice value={intake.deliveryRequired} onChange={(v) => set({ deliveryRequired: v })} />;
-    case "deliveryFlexible": return <TriChoice value={intake.deliveryFlexible} onChange={(v) => set({ deliveryFlexible: v, ...(v !== "no" ? { deliveryTier: "" } : {}) })} />;
-    case "deliveryTier": return (
-      <div className="space-y-2.5">
-        {DELIVERY_TIERS.map((t) => {
-          const on = intake.deliveryTier === t.v;
-          return (
-            <button key={t.v} onClick={() => set({ deliveryTier: on ? "" : t.v })} className={`flex w-full items-center justify-between rounded border px-4 py-4 text-left transition-colors ${on ? "border-foreground/70 bg-foreground/[0.08]" : "border-border hover:bg-[var(--row-hover)]"}`}>
-              <span className="flex items-center gap-2">{on && <Check className="size-4" />}<span className="text-[15px] font-medium">{t.label}</span></span>
-              <span className="text-[12.5px] text-meta">{t.window}</span>
-            </button>
-          );
-        })}
-      </div>
-    );
+    case "deliveryType": return <DeliveryTypeStep intake={intake} set={set} />;
+    case "deliveryTime": return <DeliveryTimeStep intake={intake} set={set} />;
     case "setup": return <TriChoice value={intake.setupRequired} onChange={(v) => set({ setupRequired: v })} />;
     case "pickup": return <TriChoice value={intake.pickupRequired} onChange={(v) => set({ pickupRequired: v })} />;
     case "access": return <AccessStep intake={intake} set={set} />;
@@ -321,6 +312,49 @@ function LocationClassStep({ intake, set }: { intake: Intake; set: (p: IntakePat
           <span>Office building — we&apos;ll schedule delivery within business hours (weekdays, ~9am–5pm). Set that expectation with the customer now.</span>
         </div>
       )}
+    </div>
+  );
+}
+
+// The forced walkthrough: all three delivery types on one screen, prices and our recommendation visible,
+// so the customer decides informed. Picking "standard" is the flexible/day-before answer → free 9AM–8PM
+// window, deliveryFlexible=yes, and no same-day time to capture. The paid tiers set deliveryFlexible=no.
+function DeliveryTypeStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) => void }): React.JSX.Element {
+  return (
+    <div className="space-y-2.5">
+      {DELIVERY_TYPES.map((t) => {
+        const on = intake.deliveryTier === t.v;
+        return (
+          <button
+            key={t.v}
+            onClick={() => set({ deliveryTier: t.v, deliveryFlexible: t.v === "standard" ? "yes" : "no", ...(t.v === "standard" ? { deliveryTime: "" } : {}) })}
+            className={`w-full rounded border px-4 py-3.5 text-left transition-colors ${on ? "border-foreground/70 bg-foreground/[0.08]" : "border-border hover:bg-[var(--row-hover)]"}`}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              {on && <Check className="size-4 shrink-0" />}
+              <span className="text-[15px] font-medium">{t.label}</span>
+              {t.recommended && <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-emerald-300">Recommended</span>}
+              <span className="ml-auto text-[12.5px] tabular-nums text-meta">{t.window} · {t.price}</span>
+            </div>
+            <div className="mt-1 text-[12.5px] text-meta">{t.note}</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Only for premium/exact: the target time we build the same-day window around.
+function DeliveryTimeStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) => void }): React.JSX.Element {
+  const width = intake.deliveryTier === "exact" ? "30-minute" : "2-hour";
+  return (
+    <div className="space-y-2">
+      <label className="block">
+        <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">Target delivery time</span>
+        <input type="time" value={intake.deliveryTime} onChange={(e) => set({ deliveryTime: e.target.value })} autoFocus
+          className="w-full rounded border border-border bg-[var(--row)] px-3 py-3 text-[16px] outline-none focus:border-foreground/40" />
+      </label>
+      <p className="text-[11px] text-meta">We&apos;ll build the {width} window around this time.</p>
     </div>
   );
 }
@@ -488,7 +522,7 @@ function ReviewScreen({ intake, onEdit, onBack, onCreate, error }: { intake: Int
         <ReviewSection title="Customer" onEdit={() => onEdit("customer")} rows={[["Name", [intake.firstName, intake.lastName].filter(Boolean).join(" ")], ["Phone", intake.phone], ["Email", intake.email]]} />
         <ReviewSection title="Event" onEdit={() => onEdit("eventType")} rows={[["Type", intake.eventType === "other" ? intake.eventTypeOther || "Other" : intake.eventType || "—"], ["Guests", intake.guestCount != null ? String(intake.guestCount) : intake.guestCountUnknown ? "Unknown" : "Not asked"], ["Date", intake.eventDate || "—"], ["Time", intake.eventStartTime ? `${intake.eventStartTime}${intake.eventEndTime ? ` – ${intake.eventEndTime}` : ""}` : "—"]]} />
         <ReviewSection title="Location" onEdit={() => onEdit("locationClass")} rows={[["Setting", LOCATION_CLASSES.find((c) => c.v === intake.locationClass)?.label ?? "—"], ["Venue", intake.venueName || "—"], ["Address", [intake.streetAddress, intake.city, intake.state, intake.zip].filter(Boolean).join(", ") || "—"]]} />
-        <ReviewSection title="Logistics" onEdit={() => onEdit("delivery")} rows={[["Delivery", triLabel(intake.deliveryRequired)], ...(intake.deliveryFlexible ? [["Flexible (day before/after)", triLabel(intake.deliveryFlexible)] as [string, string]] : []), ...(intake.deliveryTier ? [["Delivery window", DELIVERY_TIERS.find((t) => t.v === intake.deliveryTier)?.label ?? "—"] as [string, string]] : []), ["Setup help", triLabel(intake.setupRequired)], ["Breakdown help", triLabel(intake.pickupRequired)]]} />
+        <ReviewSection title="Logistics" onEdit={() => onEdit("delivery")} rows={[["Delivery", triLabel(intake.deliveryRequired)], ...(intake.deliveryTier ? [["Timing", deliveryTimingSummary(intake)] as [string, string]] : []), ["Setup help", triLabel(intake.setupRequired)], ["Breakdown help", triLabel(intake.pickupRequired)]]} />
         <ReviewSection title="Notes" onEdit={() => onEdit("notes")} rows={[["Sales notes", intake.salesNotes || "—"]]} />
       </div>
 
@@ -662,3 +696,11 @@ function MiniTri({ label, value, onChange }: { label: string; value: TriState; o
 }
 
 function triLabel(v: TriState): string { return v === "yes" ? "Yes" : v === "no" ? "No" : v === "not_sure" ? "Not sure" : "Not asked"; }
+
+// Review-row summary of the chosen delivery type (+ target time for same-day windows).
+function deliveryTimingSummary(i: Intake): string {
+  const t = DELIVERY_TYPES.find((x) => x.v === i.deliveryTier);
+  if (!t) return "—";
+  const time = i.deliveryTier !== "standard" && i.deliveryTime ? `, ${i.deliveryTime}` : "";
+  return `${t.label} (${t.window}, ${t.price}${time})`;
+}

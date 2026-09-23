@@ -80,8 +80,19 @@ export function gsEventDetails(i: Intake): Record<string, string> {
 
 const EVENT_TYPE_LABEL: Record<string, string> = { wedding: "Wedding", corporate: "Corporate", social: "Social / Private", other: "Other" };
 const LOCATION_CLASS_LABEL: Record<string, string> = { residential: "Residential", commercial: "Commercial (office building)", venue: "Venue" };
-// Delivery is base mileage + an optional time-window upgrade; standard = default window, no upgrade line.
-const DELIVERY_TIER_LABEL: Record<string, string> = { standard: "Standard (9am to 8pm, no upgrade)", premium: "Premium Window (2 hours, +$100)", exact: "Exact Time (+$150)" };
+// The three delivery types (standard = flexible day-before with the free 9AM–8PM window; premium/exact
+// are same-day paid windows). Built into a single "Delivery timing" note line with any captured target time.
+const DELIVERY_TYPE_META: Record<string, { label: string; window: string; price: string }> = {
+  standard: { label: "Flexible (day before / pickup day after)", window: "9AM–8PM", price: "no charge" },
+  premium: { label: "Premium window", window: "same-day 2-hour", price: "+$100" },
+  exact: { label: "Exact time", window: "same-day 30-minute", price: "+$150" },
+};
+function deliveryTimingLine(i: Intake): string {
+  const m = DELIVERY_TYPE_META[i.deliveryTier];
+  if (!m) return i.deliveryTier || "Not set";
+  const time = i.deliveryTier !== "standard" && i.deliveryTime ? ` · target ${gsTime(i.deliveryTime) || i.deliveryTime}` : "";
+  return `${m.label} · ${m.window} · ${m.price}${time}`;
+}
 
 export function eventTypeLabel(i: Intake): string {
   if (i.eventType === "other") return i.eventTypeOther.trim() || "Other";
@@ -146,8 +157,7 @@ export function formatIntakeNotes(i: Intake): string {
     "",
     "-- LOGISTICS --",
     `Delivery: ${tri(i.deliveryRequired)}`,
-    ...(i.deliveryFlexible ? [`Flexible delivery (day before / pickup day after): ${tri(i.deliveryFlexible)}`] : []),
-    ...(i.deliveryTier ? [`Delivery window: ${DELIVERY_TIER_LABEL[i.deliveryTier] ?? i.deliveryTier}`] : []),
+    ...(i.deliveryTier ? [`Delivery timing: ${deliveryTimingLine(i)}`] : []),
     `Setup help: ${tri(i.setupRequired)}`,
     `Breakdown help: ${tri(i.pickupRequired)}`,
     ...(access.length ? ["Access:", ...access.map((x) => `  • ${x}`)] : []),
