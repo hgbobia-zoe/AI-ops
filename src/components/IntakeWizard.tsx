@@ -23,19 +23,18 @@ const EVENT_TYPES: { v: Intake["eventType"]; label: string }[] = [
   { v: "social", label: "Birthday / Private party" },
   { v: "other", label: "Other" },
 ];
-const LOCATION_TYPES: { v: Intake["locationType"]; label: string }[] = [
-  { v: "residential", label: "Residential" },
-  { v: "venue", label: "Event venue" },
-  { v: "hotel", label: "Hotel" },
-  { v: "corporate", label: "Corporate / Office" },
-  { v: "school", label: "School" },
-  { v: "park", label: "Park / Public space" },
-  { v: "other", label: "Other" },
+// One question replaces the old "commercial vs residential?" + "what kind of location?" pair. These three
+// classes map straight onto the dispatch delivery-hours guardrail: commercial (an office) is the only one
+// that's business-hours restricted; venue is the default for anything that arranges its own access.
+const LOCATION_CLASSES: { v: Exclude<Intake["locationClass"], "">; label: string; desc: string }[] = [
+  { v: "residential", label: "Residential", desc: "A home or private residence." },
+  { v: "commercial", label: "Commercial", desc: "An office building. Delivery must land within business hours." },
+  { v: "venue", label: "Venue", desc: "Event space, hotel, school, park, or public space — they arrange their own access, including off-hours." },
 ];
 
 // ── Step registry (branching via `when`) ───────────────────────────────────────
 type StepId =
-  | "customer" | "eventType" | "customerType" | "locationType" | "guests" | "date" | "times"
+  | "customer" | "eventType" | "locationClass" | "guests" | "date" | "times"
   | "location" | "delivery" | "deliveryFlexible" | "deliveryTier" | "setup" | "pickup" | "access" | "notes";
 
 const DELIVERY_TIERS: { v: Intake["deliveryTier"]; label: string; window: string }[] = [
@@ -49,7 +48,7 @@ const DELIVERY_TIERS: { v: Intake["deliveryTier"]; label: string; window: string
 // array still drives the actual sequence and branching.
 const SECTIONS: { label: string; steps: StepId[] }[] = [
   { label: "Customer", steps: ["customer"] },
-  { label: "Event", steps: ["eventType", "customerType", "locationType", "guests"] },
+  { label: "Event", steps: ["eventType", "locationClass", "guests"] },
   { label: "Schedule", steps: ["date", "times"] },
   { label: "Location", steps: ["location"] },
   { label: "Logistics", steps: ["delivery", "deliveryFlexible", "deliveryTier", "setup", "pickup", "access"] },
@@ -70,8 +69,7 @@ const wantsDelivery = (i: Intake): boolean => i.deliveryRequired === "yes" || i.
 const STEPS: StepDef[] = [
   { id: "customer", title: "Who are we helping?", subtitle: "Capture this while you have them on the line.", canNext: (i) => !!i.firstName.trim() && !!i.lastName.trim() && phoneOk(i.phone) && EMAIL_RE.test(i.email) },
   { id: "eventType", title: "What type of event is this?", canNext: (i) => !!i.eventType && (i.eventType !== "other" || !!i.eventTypeOther.trim()) },
-  { id: "customerType", title: "Commercial or residential?", canNext: (i) => !!i.customerType },
-  { id: "locationType", title: "What kind of location?", canNext: () => true },
+  { id: "locationClass", title: "Where's the delivery?", subtitle: "This sets how we handle delivery timing — commercial offices are the ones we can't deliver to outside business hours.", canNext: (i) => !!i.locationClass },
   { id: "guests", title: "About how many guests?", subtitle: "A rough number is fine.", canNext: (i) => i.guestCount != null || i.guestCountUnknown },
   { id: "date", title: "What's the event date?", canNext: (i) => !!i.eventDate },
   { id: "times", title: "What time does it start and end?", canNext: (i) => !i.eventStartTime || !i.eventEndTime || i.eventEndTime > i.eventStartTime },
@@ -237,12 +235,11 @@ function StepBody({ step, intake, set }: { step: StepDef; intake: Intake; set: (
         {intake.eventType === "other" && <TextField label="Describe the event type" value={intake.eventTypeOther} onChange={(v) => set({ eventTypeOther: v })} autoFocus />}
       </div>
     );
-    case "customerType": return <ChoiceGrid options={[{ v: "commercial", label: "Commercial" }, { v: "residential", label: "Residential" }]} value={intake.customerType} onChange={(v) => set({ customerType: v })} cols={2} big />;
+    case "locationClass": return <LocationClassStep intake={intake} set={set} />;
     case "guests": return <GuestsStep intake={intake} set={set} />;
     case "date": return <DateStep intake={intake} set={set} />;
     case "times": return <TimesStep intake={intake} set={set} />;
     case "location": return <LocationStep intake={intake} set={set} />;
-    case "locationType": return <ChoiceGrid options={LOCATION_TYPES} value={intake.locationType} onChange={(v) => set({ locationType: v })} cols={2} />;
     case "delivery": return <TriChoice value={intake.deliveryRequired} onChange={(v) => set({ deliveryRequired: v })} />;
     case "deliveryFlexible": return <TriChoice value={intake.deliveryFlexible} onChange={(v) => set({ deliveryFlexible: v, ...(v !== "no" ? { deliveryTier: "" } : {}) })} />;
     case "deliveryTier": return (
@@ -298,6 +295,30 @@ function CustomerStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) =
             <a href={match.gsUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[12px] text-tertiary-text hover:bg-[var(--row-hover)]"><ExternalLink className="size-3" /> View in Goodshuffle</a>
           </div>
           <p className="mt-1.5 text-[11px] text-meta">Based on our records. Goodshuffle is checked again when the quote is created.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The single "where's the delivery?" question — descriptive cards, and a business-hours callout the moment
+// Commercial is picked so the salesperson sets that expectation on the call.
+function LocationClassStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) => void }): React.JSX.Element {
+  return (
+    <div className="space-y-2.5">
+      {LOCATION_CLASSES.map((o) => {
+        const on = intake.locationClass === o.v;
+        return (
+          <button key={o.v} onClick={() => set({ locationClass: o.v })} className={`w-full rounded border px-4 py-3.5 text-left transition-colors ${on ? "border-foreground/70 bg-foreground/[0.08]" : "border-border hover:bg-[var(--row-hover)]"}`}>
+            <div className="flex items-center gap-2 text-[15px] font-medium">{on && <Check className="size-4" />}{o.label}</div>
+            <div className="mt-0.5 text-[12.5px] text-meta">{o.desc}</div>
+          </button>
+        );
+      })}
+      {intake.locationClass === "commercial" && (
+        <div className="flex items-start gap-2 rounded border border-attention/40 bg-attention/[0.07] p-3 text-[12.5px] text-attention">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          <span>Office building — we&apos;ll schedule delivery within business hours (weekdays, ~9am–5pm). Set that expectation with the customer now.</span>
         </div>
       )}
     </div>
@@ -433,7 +454,7 @@ function AddressAutocomplete({ intake, set }: { intake: Intake; set: (p: IntakeP
 function AccessStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) => void }): React.JSX.Element {
   const a = intake.accessNotes;
   const setA = (patch: Partial<Intake["accessNotes"]>): void => set({ accessNotes: { ...a, ...patch } });
-  const residential = intake.locationType === "residential" || intake.customerType === "residential";
+  const residential = intake.locationClass === "residential";
   return (
     <div className="space-y-4">
       {residential ? (
@@ -465,8 +486,8 @@ function ReviewScreen({ intake, onEdit, onBack, onCreate, error }: { intake: Int
 
       <div className="mt-4 space-y-3">
         <ReviewSection title="Customer" onEdit={() => onEdit("customer")} rows={[["Name", [intake.firstName, intake.lastName].filter(Boolean).join(" ")], ["Phone", intake.phone], ["Email", intake.email]]} />
-        <ReviewSection title="Event" onEdit={() => onEdit("eventType")} rows={[["Type", intake.eventType === "other" ? intake.eventTypeOther || "Other" : intake.eventType || "—"], ["Setting", intake.customerType || "—"], ["Guests", intake.guestCount != null ? String(intake.guestCount) : intake.guestCountUnknown ? "Unknown" : "Not asked"], ["Date", intake.eventDate || "—"], ["Time", intake.eventStartTime ? `${intake.eventStartTime}${intake.eventEndTime ? ` – ${intake.eventEndTime}` : ""}` : "—"]]} />
-        <ReviewSection title="Location" onEdit={() => onEdit("location")} rows={[["Venue", intake.venueName || "—"], ["Address", [intake.streetAddress, intake.city, intake.state, intake.zip].filter(Boolean).join(", ") || "—"], ["Type", intake.locationType || "—"]]} />
+        <ReviewSection title="Event" onEdit={() => onEdit("eventType")} rows={[["Type", intake.eventType === "other" ? intake.eventTypeOther || "Other" : intake.eventType || "—"], ["Guests", intake.guestCount != null ? String(intake.guestCount) : intake.guestCountUnknown ? "Unknown" : "Not asked"], ["Date", intake.eventDate || "—"], ["Time", intake.eventStartTime ? `${intake.eventStartTime}${intake.eventEndTime ? ` – ${intake.eventEndTime}` : ""}` : "—"]]} />
+        <ReviewSection title="Location" onEdit={() => onEdit("locationClass")} rows={[["Setting", LOCATION_CLASSES.find((c) => c.v === intake.locationClass)?.label ?? "—"], ["Venue", intake.venueName || "—"], ["Address", [intake.streetAddress, intake.city, intake.state, intake.zip].filter(Boolean).join(", ") || "—"]]} />
         <ReviewSection title="Logistics" onEdit={() => onEdit("delivery")} rows={[["Delivery", triLabel(intake.deliveryRequired)], ...(intake.deliveryFlexible ? [["Flexible (day before/after)", triLabel(intake.deliveryFlexible)] as [string, string]] : []), ...(intake.deliveryTier ? [["Delivery window", DELIVERY_TIERS.find((t) => t.v === intake.deliveryTier)?.label ?? "—"] as [string, string]] : []), ["Setup help", triLabel(intake.setupRequired)], ["Breakdown help", triLabel(intake.pickupRequired)]]} />
         <ReviewSection title="Notes" onEdit={() => onEdit("notes")} rows={[["Sales notes", intake.salesNotes || "—"]]} />
       </div>

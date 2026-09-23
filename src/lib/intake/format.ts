@@ -79,7 +79,7 @@ export function gsEventDetails(i: Intake): Record<string, string> {
 }
 
 const EVENT_TYPE_LABEL: Record<string, string> = { wedding: "Wedding", corporate: "Corporate", social: "Social / Private", other: "Other" };
-const LOCATION_TYPE_LABEL: Record<string, string> = { residential: "Residential", venue: "Event venue", hotel: "Hotel", corporate: "Corporate / Office", school: "School", park: "Park / Public space", other: "Other" };
+const LOCATION_CLASS_LABEL: Record<string, string> = { residential: "Residential", commercial: "Commercial (office building)", venue: "Venue" };
 // Delivery is base mileage + an optional time-window upgrade; standard = default window, no upgrade line.
 const DELIVERY_TIER_LABEL: Record<string, string> = { standard: "Standard (9am to 8pm, no upgrade)", premium: "Premium Window (2 hours, +$100)", exact: "Exact Time (+$150)" };
 
@@ -134,7 +134,6 @@ export function formatIntakeNotes(i: Intake): string {
     "",
     "-- EVENT --",
     `Type: ${eventTypeLabel(i)}`,
-    `Setting: ${i.customerType === "commercial" ? "Commercial" : i.customerType === "residential" ? "Residential" : "Not set"}`,
     `Guests: ${guests(i)}`,
     `Date: ${i.eventDate || "Not set"}`,
     `Time: ${i.eventStartTime || "—"}${i.eventEndTime ? ` to ${i.eventEndTime}` : ""}`,
@@ -142,7 +141,8 @@ export function formatIntakeNotes(i: Intake): string {
     "-- LOCATION --",
     `Venue: ${i.venueName || "—"}`,
     `Address: ${addr || "—"}`,
-    `Location type: ${LOCATION_TYPE_LABEL[i.locationType] ?? "Not set"}`,
+    `Setting: ${LOCATION_CLASS_LABEL[i.locationClass] ?? "Not set"}`,
+    ...(i.locationClass === "commercial" ? ["⚠ COMMERCIAL / OFFICE — deliver within business hours only (weekdays ~9am–5pm). Confirm someone will be on site to receive."] : []),
     "",
     "-- LOGISTICS --",
     `Delivery: ${tri(i.deliveryRequired)}`,

@@ -486,7 +486,8 @@ CREATE TABLE IF NOT EXISTS sales_intake (
   city                TEXT,
   state               TEXT,
   zip                 TEXT,
-  location_type       TEXT,                 -- residential | venue | hotel | corporate | school | park | other
+  location_type       TEXT,                 -- LEGACY (pre-2026-09-23 intakes): residential | venue | hotel | corporate | school | park | other
+  location_class      TEXT,                 -- residential | commercial | venue — the single delivery class (commercial = office, hours-restricted). Replaces customer_type + location_type.
   delivery_required   TEXT,                 -- yes | no | not_sure | ''
   delivery_flexible   TEXT,                 -- yes | no | not_sure | '' (can deliver day before / pick up day after, free)
   delivery_tier       TEXT,                 -- standard | premium | exact | '' (only when NOT flexible)
@@ -1221,6 +1222,8 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Creative Engine async providers (n8n): per-generation callback credential + the provider's run id.
   { table: "creative_generations", column: "callback_token", type: "TEXT" },
   { table: "creative_generations", column: "external_ref", type: "TEXT" },
+  // Intake: single delivery class (residential | commercial | venue) replacing customer_type + location_type.
+  { table: "sales_intake", column: "location_class", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {

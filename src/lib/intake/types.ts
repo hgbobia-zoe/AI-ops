@@ -3,10 +3,13 @@
 // hasn't asked/answered yet; 'not_sure' means the customer genuinely doesn't know.
 
 export type TriState = "yes" | "no" | "not_sure" | ""; // '' = unanswered
-export type CustomerType = "commercial" | "residential" | "";
 export type DeliveryTier = "standard" | "premium" | "exact" | ""; // window upgrade over base delivery: standard 9a-8p (no upgrade), premium 2hr $100, exact $150
 export type IntakeEventType = "wedding" | "corporate" | "social" | "other" | ""; // reuse Sales OS EventType
-export type LocationType = "residential" | "venue" | "hotel" | "corporate" | "school" | "park" | "other" | "";
+// The single delivery class, replacing the old customerType + locationType pair. It maps 1:1 onto the
+// dispatch guardrail's AddressClass (commercial ≈ "business"): commercial is an office building, the ONLY
+// class with a business-hours delivery restriction; venue is the default for anything with its own access
+// arrangements (event spaces, hotels, schools, parks, public spaces); residential is a home.
+export type LocationClass = "residential" | "commercial" | "venue" | "";
 export type IntakeStatus = "draft" | "ready" | "creating" | "created" | "failed";
 export type GsStatus = "" | "queued" | "created" | "failed" | "unavailable";
 
@@ -34,7 +37,6 @@ export interface Intake {
   lastName: string;
   phone: string;
   email: string;
-  customerType: CustomerType;
   eventType: IntakeEventType;
   eventTypeOther: string;
   guestCount: number | null; // null = unknown or unanswered
@@ -47,7 +49,7 @@ export interface Intake {
   city: string;
   state: string;
   zip: string;
-  locationType: LocationType;
+  locationClass: LocationClass;
   deliveryRequired: TriState;
   deliveryFlexible: TriState; // can we deliver the day before AND pick up the day after (free, flexible)?
   deliveryTier: DeliveryTier; // only gathered when delivery is NOT flexible (needs a same-day window)

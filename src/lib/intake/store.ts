@@ -3,7 +3,21 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
-import type { Intake, IntakePatch, AccessNotes } from "./types";
+import type { Intake, IntakePatch, AccessNotes, LocationClass } from "./types";
+
+// Legacy rows stored customer_type ('commercial'|'residential') + location_type (7-way). Collapse them
+// into the single delivery class on read: office/corporate → commercial; every other venue-ish type →
+// venue; home → residential. New rows write location_class directly and skip this.
+function legacyLocationClass(locationType: string | null, customerType: string | null): LocationClass {
+  const lt = (locationType ?? "").toLowerCase();
+  if (lt === "residential") return "residential";
+  if (lt === "corporate") return "commercial";
+  if (lt === "venue" || lt === "hotel" || lt === "school" || lt === "park") return "venue";
+  const ct = (customerType ?? "").toLowerCase();
+  if (ct === "commercial") return "commercial";
+  if (ct === "residential") return "residential";
+  return "";
+}
 
 interface Row {
   id: string;
@@ -17,7 +31,7 @@ interface Row {
   last_name: string | null;
   phone: string | null;
   email: string | null;
-  customer_type: string | null;
+  customer_type: string | null; // LEGACY — derived into location_class on read
   event_type: string | null;
   event_type_other: string | null;
   guest_count: number | null;
@@ -30,7 +44,8 @@ interface Row {
   city: string | null;
   state: string | null;
   zip: string | null;
-  location_type: string | null;
+  location_type: string | null; // LEGACY — derived into location_class on read
+  location_class: string | null;
   delivery_required: string | null;
   delivery_flexible: string | null;
   delivery_tier: string | null;
@@ -69,7 +84,6 @@ function toIntake(r: Row): Intake {
     lastName: r.last_name ?? "",
     phone: r.phone ?? "",
     email: r.email ?? "",
-    customerType: (r.customer_type as Intake["customerType"]) ?? "",
     eventType: (r.event_type as Intake["eventType"]) ?? "",
     eventTypeOther: r.event_type_other ?? "",
     guestCount: r.guest_count ?? null,
@@ -82,7 +96,7 @@ function toIntake(r: Row): Intake {
     city: r.city ?? "",
     state: r.state ?? "",
     zip: r.zip ?? "",
-    locationType: (r.location_type as Intake["locationType"]) ?? "",
+    locationClass: (r.location_class as LocationClass) || legacyLocationClass(r.location_type, r.customer_type),
     deliveryRequired: (r.delivery_required as Intake["deliveryRequired"]) ?? "",
     deliveryFlexible: (r.delivery_flexible as Intake["deliveryFlexible"]) ?? "",
     deliveryTier: (r.delivery_tier as Intake["deliveryTier"]) ?? "",
@@ -110,7 +124,6 @@ const COLS: { [K in keyof IntakePatch]-?: { col: string; enc?: (v: NonNullable<I
   lastName: { col: "last_name" },
   phone: { col: "phone" },
   email: { col: "email" },
-  customerType: { col: "customer_type" },
   eventType: { col: "event_type" },
   eventTypeOther: { col: "event_type_other" },
   guestCount: { col: "guest_count" },
@@ -123,7 +136,7 @@ const COLS: { [K in keyof IntakePatch]-?: { col: string; enc?: (v: NonNullable<I
   city: { col: "city" },
   state: { col: "state" },
   zip: { col: "zip" },
-  locationType: { col: "location_type" },
+  locationClass: { col: "location_class" },
   deliveryRequired: { col: "delivery_required" },
   deliveryFlexible: { col: "delivery_flexible" },
   deliveryTier: { col: "delivery_tier" },
