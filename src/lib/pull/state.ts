@@ -25,6 +25,8 @@ export interface PullState {
   sources?: Record<string, SourceFreshness>;
   lastStaleAlertAt?: string;
   agent?: AgentHeartbeat; // last heartbeat from the Auto-Pull extension (drives the "not signed in" banner)
+  agentFailingSince?: string; // ISO the agent first started failing (cleared on a healthy heartbeat)
+  agentAlertedAt?: string; // ISO we last Slack-alerted about a failing agent (cool-off dedup)
   routeHealthAlerted?: Record<string, string>; // routeId → ISO we last Slack-alerted it (overdue routes)
   // Legacy single-value fields (kept so the existing freshness banner keeps working).
   lastPullAt?: string;
@@ -80,10 +82,42 @@ export function setRouteHealthAlerted(map: Record<string, string>): void {
 /** Record the Auto-Pull extension's latest heartbeat (status + detail). Independent of pull success —
  *  a successful pull updates source freshness via recordPull; this captures WHY a pull didn't happen
  *  (no GSPRO tab, signed out) so the UI can say so precisely instead of only "stale". */
-export function recordAgentHeartbeat(agent: string, status: AgentStatus, detail: string | null, now: Date = new Date()): void {
+// `alert` (when non-null) is a message the caller should Slack. We alert on a SUSTAINED failure (a
+// second consecutive failing heartbeat — one blip doesn't page), deduped by a 2h cool-off, and once on
+// recovery. This is the loud signal so a broken puller is caught in ~10 minutes instead of rotting.
+const ALERT_COOLOFF_MS = 2 * 60 * 60 * 1000;
+export function recordAgentHeartbeat(agent: string, status: AgentStatus, detail: string | null, now: Date = new Date()): { alert: string | null } {
   const s = getPullState();
+  const prev = s.agent;
+  const prevFailing = !!prev && prev.status !== "ok";
+  const failing = status !== "ok";
+  let alert: string | null = null;
+
+  if (failing) {
+    if (!s.agentFailingSince) s.agentFailingSince = now.toISOString();
+    const sustained = prevFailing; // 2nd+ consecutive failure
+    const alertedAgo = s.agentAlertedAt ? now.getTime() - Date.parse(s.agentAlertedAt) : Infinity;
+    if (sustained && alertedAgo > ALERT_COOLOFF_MS) {
+      const since = s.agentFailingSince;
+      const reason =
+        status === "not_logged_in"
+          ? "Goodshuffle is signed out on the office machine. Open pro.goodshuffle.com and sign in."
+          : status === "no_tab"
+            ? "No Goodshuffle tab is open in the office browser. Open pro.goodshuffle.com (signed in)."
+            : `Auto-Pull errored: ${detail || "inject/pull failed"}. Check the extension's site access on pro.goodshuffle.com.`;
+      alert = `Zoe Auto-Pull is down (${status}). ${reason} Goodshuffle data will go stale until this is fixed. Failing since ${since}.`;
+      s.agentAlertedAt = now.toISOString();
+    }
+  } else {
+    // Healthy heartbeat: if we had alerted, say it recovered; clear the failing/alert bookkeeping.
+    if (s.agentAlertedAt) alert = `Zoe Auto-Pull recovered (${detail || "ok"}).`;
+    s.agentFailingSince = undefined;
+    s.agentAlertedAt = undefined;
+  }
+
   s.agent = { agent, status, detail: detail ?? null, at: now.toISOString() };
   save(s);
+  return { alert };
 }
 
 // ── Banner verdict (drives PullHealthBanner) ──────────────────────────────────

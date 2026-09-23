@@ -1,14 +1,15 @@
-// The pull, injected into a logged-in pro.goodshuffle.com tab by the service worker
-// (chrome.scripting.executeScript). It runs in the page's origin, so /app/* fetches carry the
-// operator's Goodshuffle cookies (same-origin) and the POSTs to Zoe carry Origin
-// pro.goodshuffle.com — exactly what the ingest endpoints' CORS allows. This mirrors the proven
-// office bookmarklet (src/lib/gsPull.ts buildOfficePullScript); keep the two in sync.
+// The pull. Loaded as a DECLARED content script on pro.goodshuffle.com (see manifest content_scripts),
+// so it runs in the page's origin with host access granted at install — NOT injected from the
+// background worker (that programmatic injection is what Chrome's per-site permission model kept
+// revoking). /app/* fetches carry the operator's Goodshuffle cookies (same-origin) and the POSTs to
+// Zoe carry Origin pro.goodshuffle.com, exactly what the ingest endpoints' CORS allows. This mirrors
+// the office bookmarklet (src/lib/gsPull.ts buildOfficePullScript); keep the two in sync.
 //
-// MUST be fully self-contained: executeScript serializes the function body and injects it, so it
-// loses its lexical scope — every helper is nested inside, and it takes only serializable args.
+// Defines a global `zoePull(apiBase)` in the content-script world; content.js calls it on a timer.
+// Stays fully self-contained (every helper nested) so it also works if ever injected directly.
 
 /** @param {string} apiBase Zoe origin, e.g. https://zoe-dispatch.fly.dev */
-export function zoePull(apiBase) {
+function zoePull(apiBase) {
   const API = String(apiBase || "").replace(/\/+$/, "");
   const H = { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" };
   const POSTH = { "content-type": "application/json" };

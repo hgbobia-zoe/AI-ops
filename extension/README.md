@@ -16,6 +16,24 @@ Two jobs, one extension (install on the **office machine** that stays logged int
    - **Zoe Ops URL** — your deployment (default `https://zoe-dispatch.fly.dev`).
    - **Opportunity Radar ingest token** — only if `RADAR_INGEST_TOKEN` is set on the server (leave blank otherwise).
 
+## Auto-pull: how it works + staying healthy
+
+As of **v1.2.0** the auto-pull runs as a **declared content script** on `pro.goodshuffle.com`
+(`content.js` + `pull-injected.js`), not as a background injection. Declared content scripts get their
+site access at install, so the pull keeps working across Chrome updates instead of silently breaking
+when Chrome resets an extension's per-site permission (the old `chrome.scripting.executeScript` path was
+what kept getting revoked). The background worker now only drives the toolbar badge and the popup.
+
+To stay healthy:
+- Keep **one signed-in `pro.goodshuffle.com` tab open** in this browser (the pull runs in that tab).
+- The toolbar badge shows **`ok`** (green) after each cycle; `!` means signed out / no tab / error.
+- The app also alerts to Slack if the pull reports a failure for more than one cycle, so a broken
+  puller is caught within minutes instead of going stale unnoticed.
+
+**After updating this folder, click ↻ Reload on `chrome://extensions`** so Chrome picks up the new
+version (unpacked extensions do not auto-update). If Chrome asks for site access, allow it on
+`pro.goodshuffle.com`.
+
 ## Using "Capture to Opportunity Radar"
 
 1. Open the portal and navigate to its **solicitation list** (the table of open bids/RFPs), e.g.:

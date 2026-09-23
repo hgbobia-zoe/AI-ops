@@ -6,6 +6,7 @@
 
 import { NextResponse } from "next/server";
 import { recordAgentHeartbeat, type AgentStatus } from "@/lib/pull/state";
+import { slackNotify } from "@/lib/notify/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
   const status = VALID.includes(body.status as AgentStatus) ? (body.status as AgentStatus) : null;
   if (!status) return NextResponse.json({ error: "bad status" }, { status: 400, headers: CORS });
-  recordAgentHeartbeat((body.agent ?? "extension").slice(0, 40), status, (body.detail ?? null)?.toString().slice(0, 200) ?? null);
+  const { alert } = recordAgentHeartbeat((body.agent ?? "extension").slice(0, 40), status, (body.detail ?? null)?.toString().slice(0, 200) ?? null);
+  if (alert) void slackNotify(alert); // loud, deduped signal so a broken puller is caught fast
   return NextResponse.json({ ok: true }, { headers: CORS });
 }

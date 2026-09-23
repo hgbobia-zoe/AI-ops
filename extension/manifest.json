@@ -1,11 +1,18 @@
 {
   "manifest_version": 3,
   "name": "Zoe Auto-Pull + Opportunity Radar",
-  "version": "1.1.0",
-  "description": "Keeps Zoe Ops fresh: auto-pulls Goodshuffle routes/bookings from a logged-in GSPRO tab, AND captures procurement/event opportunities from portal pages into Opportunity Radar. Office machine only.",
-  "permissions": ["alarms", "scripting", "tabs", "storage", "activeTab"],
+  "version": "1.2.0",
+  "description": "Keeps Zoe Ops fresh: auto-pulls Goodshuffle routes/bookings from a logged-in GSPRO tab via a declared content script (survives Chrome permission resets), AND captures procurement/event opportunities from portal pages into Opportunity Radar. Office machine only.",
+  "permissions": ["scripting", "tabs", "storage", "activeTab"],
   "host_permissions": ["https://pro.goodshuffle.com/*", "https://zoe-dispatch.fly.dev/*"],
-  "background": { "service_worker": "background.js", "type": "module" },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://pro.goodshuffle.com/*"],
+      "js": ["pull-injected.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
   "options_page": "options.html",
   "action": { "default_title": "Zoe Auto-Pull + Radar", "default_popup": "popup.html" }
 }
