@@ -55,17 +55,37 @@ export const BASE_DELIVERY_LEG: GsLogisticsLeg = { itemID: 392868144, title: "St
 // for now, pricing logic to follow).
 export const EVENT_READINESS_LEG: GsLogisticsLeg = { itemID: 481935095, title: "Event Readiness Service", rateType: "FLAT_FEE_WITH_MILEAGE", eventTimeLineMarker: "DROP_OFF", label: "Event Readiness Service" };
 
-type IntakeSlice = { setupRequired: string; deliveryTier: string; deliveryRequired: string; pickupRequired?: string };
+type IntakeSlice = { setupRequired: string; deliveryTier: string; deliveryRequired: string; pickupRequired?: string; dropoffTime?: string; pickupTime?: string };
 
-/** SIMPLE items for the Rental Items group. Damage waiver on every quote; the delivery time-window upgrade
- *  whenever delivery is wanted (standard tier adds no upgrade line). These never need a location. */
-export function autoAddSimpleItems(intake: IntakeSlice): GsAddItem[] {
-  const items: GsAddItem[] = [DAMAGE_WAIVER];
-  if (intake.deliveryRequired !== "no") {
-    const upgrade = DELIVERY_WINDOW_ITEMS[intake.deliveryTier];
-    if (upgrade) items.push(upgrade);
-  }
-  return items;
+/** SIMPLE items for the Rental Items group: just the damage waiver (on every quote, no location needed).
+ *  The delivery time-window upgrade is NO LONGER here — per the rep it goes in its own group (see
+ *  windowUpgradeGroup). */
+export function autoAddSimpleItems(): GsAddItem[] {
+  return [DAMAGE_WAIVER];
+}
+
+// The delivery-timing upgrade broken out into its OWN Goodshuffle line-item group (not lumped with rentals),
+// so the customer sees the premium/exact charge as a distinct line. The group is created/reused on the shell.
+const WINDOW_UPGRADE_GROUP = "Delivery Timing";
+
+export interface GsWindowUpgrade {
+  groupName: string; // the dedicated line-item group to create or reuse
+  item: GsAddItem; // the premium/exact upgrade service
+  dropoffTime: string; // HH:MM, for the line-item internal note
+  pickupTime: string; // HH:MM
+}
+
+/** The premium/exact delivery-window upgrade, placed in its own line-item group — returned only when delivery
+ *  is wanted, the tier carries an upgrade (premium/exact, not the free standard window), AND a same-day
+ *  drop-off OR pick-up time was captured ("if either of the two are present"). Null otherwise. */
+export function windowUpgradeGroup(intake: IntakeSlice): GsWindowUpgrade | null {
+  if (intake.deliveryRequired === "no") return null;
+  const item = DELIVERY_WINDOW_ITEMS[intake.deliveryTier];
+  if (!item) return null; // standard / flexible → no upgrade, no separate group
+  const dropoffTime = intake.dropoffTime || "";
+  const pickupTime = intake.pickupTime || "";
+  if (!dropoffTime && !pickupTime) return null;
+  return { groupName: WINDOW_UPGRADE_GROUP, item, dropoffTime, pickupTime };
 }
 
 /** LOGISTICS legs for the Logistics group — added only when we have a geocoded delivery location (the drainer

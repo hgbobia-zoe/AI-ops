@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoAddSimpleItems, autoAddLogisticsLegs, DAMAGE_WAIVER, DELIVERY_WINDOW_ITEMS, BASE_DELIVERY_LEG, EVENT_READINESS_LEG } from "./gsItems";
+import { autoAddSimpleItems, autoAddLogisticsLegs, windowUpgradeGroup, DAMAGE_WAIVER, DELIVERY_WINDOW_ITEMS, BASE_DELIVERY_LEG, EVENT_READINESS_LEG } from "./gsItems";
 import { gsIntakeLocation } from "./format";
 import type { Intake } from "./types";
 import type { GeoResult } from "./geocode";
@@ -7,24 +7,33 @@ import type { GeoResult } from "./geocode";
 const base = { setupRequired: "", deliveryTier: "", deliveryRequired: "" };
 
 describe("autoAddSimpleItems", () => {
-  it("puts the damage waiver on every quote", () => {
-    expect(autoAddSimpleItems(base).map((i) => i.itemID)).toEqual([DAMAGE_WAIVER.itemID]);
+  it("is just the damage waiver — the window upgrade moved to its own group", () => {
+    expect(autoAddSimpleItems().map((i) => i.itemID)).toEqual([DAMAGE_WAIVER.itemID]);
+  });
+});
+
+describe("windowUpgradeGroup", () => {
+  it("puts the premium/exact upgrade in its own group when a same-day time is present", () => {
+    const wu = windowUpgradeGroup({ ...base, deliveryRequired: "yes", deliveryTier: "exact", dropoffTime: "14:00" });
+    expect(wu?.item).toEqual(DELIVERY_WINDOW_ITEMS.exact);
+    expect(wu?.groupName).toBeTruthy();
   });
 
-  it("adds the time-window upgrade when delivery is wanted", () => {
-    const items = autoAddSimpleItems({ ...base, deliveryRequired: "yes", deliveryTier: "exact" });
-    expect(items).toContainEqual(DELIVERY_WINDOW_ITEMS.exact);
+  it("fires when only a pick-up time is present (either of the two)", () => {
+    const wu = windowUpgradeGroup({ ...base, deliveryRequired: "yes", deliveryTier: "premium", pickupTime: "22:00" });
+    expect(wu?.item).toEqual(DELIVERY_WINDOW_ITEMS.premium);
   });
 
-  it("standard tier adds no upgrade line (just the waiver)", () => {
-    const items = autoAddSimpleItems({ ...base, deliveryRequired: "yes", deliveryTier: "standard" });
-    expect(items).toHaveLength(1);
-    expect(items[0].itemID).toBe(DAMAGE_WAIVER.itemID);
+  it("is null with no drop-off or pick-up time", () => {
+    expect(windowUpgradeGroup({ ...base, deliveryRequired: "yes", deliveryTier: "exact" })).toBeNull();
   });
 
-  it("adds no upgrade when delivery is declined even if a tier lingers", () => {
-    const items = autoAddSimpleItems({ ...base, deliveryRequired: "no", deliveryTier: "premium" });
-    expect(items).toHaveLength(1);
+  it("is null for the standard/flexible window (no upgrade)", () => {
+    expect(windowUpgradeGroup({ ...base, deliveryRequired: "yes", deliveryTier: "standard", dropoffTime: "14:00" })).toBeNull();
+  });
+
+  it("is null when delivery is declined", () => {
+    expect(windowUpgradeGroup({ ...base, deliveryRequired: "no", deliveryTier: "premium", dropoffTime: "14:00" })).toBeNull();
   });
 });
 

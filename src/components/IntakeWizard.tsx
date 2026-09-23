@@ -79,7 +79,7 @@ const STEPS: StepDef[] = [
   { id: "location", title: "Where's the event?", canNext: () => true },
   { id: "delivery", title: "Will they need delivery?", canNext: () => true },
   { id: "deliveryType", title: "Walk them through the 3 delivery options", subtitle: "Read all three to the customer so they choose with the full picture — including cost. We prefer the flexible day-before option: it gives us breathing room to work around other jobs, so we can reserve exact-time delivery for venues that truly require it.", when: wantsDelivery, canNext: (i) => !!i.deliveryTier },
-  { id: "deliveryTime", title: "What delivery time do they need?", subtitle: "They chose a same-day window, so capture the target time we'll build it around.", when: (i) => wantsDelivery(i) && (i.deliveryTier === "premium" || i.deliveryTier === "exact"), canNext: () => true },
+  { id: "deliveryTime", title: "What times do they need?", subtitle: "They chose a same-day window, so lock in both the drop-off and the pick-up time we'll build it around. Both are required.", when: (i) => wantsDelivery(i) && (i.deliveryTier === "premium" || i.deliveryTier === "exact"), canNext: (i) => !!i.dropoffTime && !!i.pickupTime },
   { id: "setup", title: "Do they want setup help?", subtitle: "Setting up rental equipment on site → Event Readiness Service.", canNext: () => true },
   { id: "pickup", title: "Do they want breakdown help?", subtitle: "Helping tear down after — gathering chairs, removing cushions, etc. → Event Readiness Service.", canNext: () => true },
   { id: "access", title: "A quick logistics check", subtitle: "Just the basics — the full survey happens later.", when: (i) => i.deliveryRequired !== "no" || i.setupRequired !== "no" || i.pickupRequired !== "no", canNext: () => true },
@@ -327,7 +327,7 @@ function DeliveryTypeStep({ intake, set }: { intake: Intake; set: (p: IntakePatc
         return (
           <button
             key={t.v}
-            onClick={() => set({ deliveryTier: t.v, deliveryFlexible: t.v === "standard" ? "yes" : "no", ...(t.v === "standard" ? { deliveryTime: "" } : {}) })}
+            onClick={() => set({ deliveryTier: t.v, deliveryFlexible: t.v === "standard" ? "yes" : "no", ...(t.v === "standard" ? { dropoffTime: "", pickupTime: "" } : {}) })}
             className={`w-full rounded border px-4 py-3.5 text-left transition-colors ${on ? "border-foreground/70 bg-foreground/[0.08]" : "border-border hover:bg-[var(--row-hover)]"}`}
           >
             <div className="flex flex-wrap items-center gap-2">
@@ -344,17 +344,24 @@ function DeliveryTypeStep({ intake, set }: { intake: Intake; set: (p: IntakePatc
   );
 }
 
-// Only for premium/exact: the target time we build the same-day window around.
+// Only for premium/exact: the same-day drop-off AND pick-up times we build the window around. Both required.
 function DeliveryTimeStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) => void }): React.JSX.Element {
   const width = intake.deliveryTier === "exact" ? "30-minute" : "2-hour";
   return (
     <div className="space-y-2">
-      <label className="block">
-        <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">Target delivery time</span>
-        <input type="time" value={intake.deliveryTime} onChange={(e) => set({ deliveryTime: e.target.value })} autoFocus
-          className="w-full rounded border border-border bg-[var(--row)] px-3 py-3 text-[16px] outline-none focus:border-foreground/40" />
-      </label>
-      <p className="text-[11px] text-meta">We&apos;ll build the {width} window around this time.</p>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block">
+          <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">Drop-off time</span>
+          <input type="time" value={intake.dropoffTime} onChange={(e) => set({ dropoffTime: e.target.value })} autoFocus
+            className="w-full rounded border border-border bg-[var(--row)] px-3 py-3 text-[16px] outline-none focus:border-foreground/40" />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">Pick-up time</span>
+          <input type="time" value={intake.pickupTime} onChange={(e) => set({ pickupTime: e.target.value })}
+            className="w-full rounded border border-border bg-[var(--row)] px-3 py-3 text-[16px] outline-none focus:border-foreground/40" />
+        </label>
+      </div>
+      <p className="text-[11px] text-meta">We&apos;ll build the {width} window around each time. Both add the exact/premium timing as its own line item in Goodshuffle.</p>
     </div>
   );
 }
@@ -701,6 +708,8 @@ function triLabel(v: TriState): string { return v === "yes" ? "Yes" : v === "no"
 function deliveryTimingSummary(i: Intake): string {
   const t = DELIVERY_TYPES.find((x) => x.v === i.deliveryTier);
   if (!t) return "—";
-  const time = i.deliveryTier !== "standard" && i.deliveryTime ? `, ${i.deliveryTime}` : "";
-  return `${t.label} (${t.window}, ${t.price}${time})`;
+  const times = i.deliveryTier !== "standard" && (i.dropoffTime || i.pickupTime)
+    ? `, drop-off ${i.dropoffTime || "?"} / pick-up ${i.pickupTime || "?"}`
+    : "";
+  return `${t.label} (${t.window}, ${t.price}${times})`;
 }

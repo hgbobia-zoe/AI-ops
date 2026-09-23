@@ -90,8 +90,12 @@ const DELIVERY_TYPE_META: Record<string, { label: string; window: string; price:
 function deliveryTimingLine(i: Intake): string {
   const m = DELIVERY_TYPE_META[i.deliveryTier];
   if (!m) return i.deliveryTier || "Not set";
-  const time = i.deliveryTier !== "standard" && i.deliveryTime ? ` · target ${gsTime(i.deliveryTime) || i.deliveryTime}` : "";
-  return `${m.label} · ${m.window} · ${m.price}${time}`;
+  if (i.deliveryTier === "standard") return `${m.label} · ${m.window} · ${m.price}`;
+  const times: string[] = [];
+  if (i.dropoffTime) times.push(`drop-off ${gsTime(i.dropoffTime) || i.dropoffTime}`);
+  if (i.pickupTime) times.push(`pick-up ${gsTime(i.pickupTime) || i.pickupTime}`);
+  const t = times.length ? ` · ${times.join(", ")} (own line-item group)` : "";
+  return `${m.label} · ${m.window} · ${m.price}${t}`;
 }
 
 export function eventTypeLabel(i: Intake): string {

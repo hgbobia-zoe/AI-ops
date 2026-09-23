@@ -491,7 +491,9 @@ CREATE TABLE IF NOT EXISTS sales_intake (
   delivery_required   TEXT,                 -- yes | no | not_sure | ''
   delivery_flexible   TEXT,                 -- yes | no | not_sure | '' (can deliver day before / pick up day after, free)
   delivery_tier       TEXT,                 -- chosen delivery type: standard (flexible day-before, 9AM–8PM) | premium | exact
-  delivery_time       TEXT,                 -- HH:MM target delivery time — captured only for premium/exact same-day windows
+  delivery_time       TEXT,                 -- LEGACY (superseded by dropoff_time/pickup_time); left in place, no longer written
+  dropoff_time        TEXT,                 -- HH:MM same-day drop-off time (premium/exact)
+  pickup_time         TEXT,                 -- HH:MM same-day pick-up time (premium/exact)
   setup_required      TEXT,
   pickup_required     TEXT,                 -- repurposed: wants breakdown help → Event Readiness
   access_notes        TEXT,                 -- JSON of the branched logistics answers
@@ -1227,6 +1229,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "sales_intake", column: "location_class", type: "TEXT" },
   // Intake: target delivery time for a same-day (premium/exact) window.
   { table: "sales_intake", column: "delivery_time", type: "TEXT" },
+  // Intake: split same-day window into explicit drop-off + pick-up times.
+  { table: "sales_intake", column: "dropoff_time", type: "TEXT" },
+  { table: "sales_intake", column: "pickup_time", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {

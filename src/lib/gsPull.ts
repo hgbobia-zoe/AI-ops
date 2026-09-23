@@ -292,6 +292,19 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
                   var body=JSON.stringify({ inventoryInjection:true, itemID:lg.itemID, fulfillment:false, transactionID:Number(pid), lineItemGroupID:logiGrp, relationID:null, relationType:null, parentRelationID:null, inventoryTypeStr:"SERVICE", rateType:lg.rateType, title:lg.title, description:null, isSubrental:false, internalNotes:"", showItemDescription:true, showItemAttributes:true, quantity:1, unitPriceOverridden:false, unitPrice:0, mileageFee:0, discountDollarAmount:0, discountPercentage:0, itemStartDate:evDate, itemStartTime:null, itemEndDate:evDate, itemEndTime:null, itemHoursRented:null, eventTimeLineMarker:lg.eventTimeLineMarker, selectedTaxTypes:[], serviceStoreLocationID:null, venueName:loc.venueName, venueAddress:loc.address, venueAddress_line2:loc.line2, venueAddress_city:loc.city, venueAddress_state:loc.state, venueAddress_zipCode:loc.zip, venueAddress_county:loc.county, venueAddress_country:loc.country, venueAddress_latitude:loc.latitude, venueAddress_longitude:loc.longitude });
                   return fetch("/app/transactionItemRelation/addInventoryItemToContract",{method:"POST",headers:JH,credentials:"include",body:body}).catch(function(){});
                 }); }); }
+                // Delivery-timing upgrade (premium/exact) → its OWN line-item group, NOT Rental. Reuse a group
+                // whose name matches payload.windowUpgrade.groupName. Auto-CREATING that group needs the
+                // "+ Add Line Item Group" endpoint (not yet captured), so if no matching group exists yet we
+                // skip rather than misplace the charge in Rental. Best-effort.
+                var wu=o.payload.windowUpgrade;
+                if(wu&&wu.item){ addChain=addChain.then(function(){
+                  var gid=null;
+                  for(var k=0;k<groups.length;k++){ var gn=(groups[k].name||groups[k].title||groups[k].groupName||""); if(!groups[k].logisticsContainer && gn && String(gn).toLowerCase().indexOf(String(wu.groupName).toLowerCase())>=0){ gid=groups[k].id; break; } }
+                  if(gid==null) return; // no dedicated group yet — needs the create-group capture
+                  var it=wu.item;
+                  var body=JSON.stringify({ transactionID:Number(pid), lineItemGroupID:gid, parentRelationID:null, relationType:null, fulfillment:false, inventoryTypeStr:it.inventoryTypeStr, rateType:it.rateType, itemID:it.itemID, unitPrice:(it.unitPrice||0), quantity:(it.quantity||1) });
+                  return fetch("/app/transactionItemRelation/addInventoryItemToContract",{method:"POST",headers:JH,credentials:"include",body:body}).catch(function(){});
+                }); }
                 return addChain;
               }).catch(function(){});
             }).then(function(){
