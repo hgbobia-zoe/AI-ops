@@ -5,11 +5,13 @@
 import { HeartPulse } from "lucide-react";
 import { computeConnections, summarize } from "@/lib/health/connections";
 import { getRecentImports } from "@/lib/pull/state";
+import { refreshConnecteamHealth } from "@/lib/connecteam";
 import { ConnectionsDashboard } from "@/components/ConnectionsDashboard";
 
 export const dynamic = "force-dynamic";
 
 export default async function HealthPage(): Promise<React.JSX.Element> {
+  await refreshConnecteamHealth(); // live Connecteam check (TTL-cached), shared with the top status bar
   const connections = computeConnections();
   const summary = summarize(connections);
   const imports = getRecentImports(200);

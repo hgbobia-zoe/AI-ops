@@ -14,8 +14,9 @@ export function connecteamConfigured(): boolean {
   return Boolean(process.env.CONNECTEAM_API_KEY);
 }
 
-async function ctGet(path: string, timeoutMs = 12000): Promise<unknown | null> {
-  if (!connecteamConfigured()) return null;
+/** One GET attempt. `transient` marks a failure worth retrying (network error, timeout, or a 5xx/429
+ *  from Connecteam) vs. a definitive one (bad key / 4xx) that a retry can't fix. */
+async function ctGetOnce(path: string, timeoutMs: number): Promise<{ json: unknown | null; transient: boolean }> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -26,15 +27,73 @@ async function ctGet(path: string, timeoutMs = 12000): Promise<unknown | null> {
     });
     if (!res.ok) {
       console.error("[connecteam] GET", path, "HTTP", res.status);
-      return null;
+      return { json: null, transient: res.status >= 500 || res.status === 429 };
     }
-    return await res.json();
+    return { json: await res.json(), transient: false };
   } catch (e) {
     console.error("[connecteam] error", path, String(e));
-    return null;
+    return { json: null, transient: true }; // abort/timeout/network — a single slow response shouldn't count as "down"
   } finally {
     clearTimeout(t);
   }
+}
+
+async function ctGet(path: string, timeoutMs = 12000): Promise<unknown | null> {
+  if (!connecteamConfigured()) return null;
+  let r = await ctGetOnce(path, timeoutMs);
+  if (r.json === null && r.transient) {
+    await new Promise((res) => setTimeout(res, 400));
+    r = await ctGetOnce(path, timeoutMs); // one retry — a lone timeout/blip must not read as unreachable
+  }
+  return r.json;
+}
+
+// ── Live reachability (single source of truth for the status dots) ───────────────────────────────
+// The top status bar and the Connections dashboard used to read Connecteam health off the import
+// ledger — a row the risk scan writes — so a single "unreachable during scan" left a stale red dot
+// long after Connecteam was fine, and the two surfaces could disagree. This TTL-cached, single-flight
+// probe is the one live signal both now read, so they can never diverge and a stale ledger row can't
+// fabricate a failure.
+
+export interface ConnecteamHealth {
+  ok: boolean;
+  checkedAt: string; // ISO of the probe
+  detail: string;
+}
+
+const CT_HEALTH_TTL_MS = 90_000; // at most one real probe per 90s, however often either surface renders
+let _ctHealth: ConnecteamHealth | null = null;
+let _ctInflight: Promise<ConnecteamHealth> | null = null;
+
+/** The last live reachability result, or null if we haven't probed yet this process. Synchronous, so
+ *  the (sync) health computations can read it without changing their signatures. */
+export function connecteamHealthCached(): ConnecteamHealth | null {
+  return _ctHealth;
+}
+
+/** Refresh the live reachability probe, TTL-cached + single-flight: a fresh cached result short-circuits,
+ *  concurrent callers share one in-flight probe, and it never throws. Call this from an async surface
+ *  (layout / API route) before reading health; the sync `connecteamHealthCached()` then reflects it. */
+export async function refreshConnecteamHealth(now: number = Date.now()): Promise<ConnecteamHealth> {
+  if (!connecteamConfigured()) {
+    _ctHealth = { ok: false, checkedAt: new Date(now).toISOString(), detail: "not connected" };
+    return _ctHealth;
+  }
+  if (_ctHealth && now - Date.parse(_ctHealth.checkedAt) < CT_HEALTH_TTL_MS) return _ctHealth;
+  if (_ctInflight) return _ctInflight;
+  _ctInflight = (async () => {
+    // One cheap call (no pagination); ctGet already retries a transient miss once.
+    const j = (await ctGet("/scheduler/v1/schedulers")) as SchedResp | null;
+    const ok = j != null && Array.isArray(j.data?.schedulers);
+    return { ok, checkedAt: new Date().toISOString(), detail: ok ? "reachable" : "unreachable" } as ConnecteamHealth;
+  })()
+    .catch(() => ({ ok: false, checkedAt: new Date().toISOString(), detail: "unreachable" }) as ConnecteamHealth)
+    .then((h) => {
+      _ctHealth = h;
+      _ctInflight = null;
+      return h;
+    });
+  return _ctInflight;
 }
 
 /** Fetch ALL pages of a Connecteam list endpoint (they cap at a page size, so a single call

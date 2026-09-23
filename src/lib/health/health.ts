@@ -3,7 +3,7 @@
 
 import { getPullState, getRecentImports, type ImportRow } from "@/lib/pull/state";
 import { getDataCounts } from "@/lib/db/repo";
-import { connecteamConfigured } from "@/lib/connecteam";
+import { connecteamConfigured, connecteamHealthCached } from "@/lib/connecteam";
 
 export type HealthState = "FRESH" | "STALE" | "INCOMPLETE" | "RETRIEVAL_FAILED" | "UNVERIFIED" | "NEVER";
 
@@ -47,6 +47,7 @@ export function computeDataHealth(): SourceHealth[] {
   const bookAt = sources["bookings"]?.at ?? null;
   const ctImp = latest((r) => r.source === "connecteam");
   const ctAt = sources["connecteam"]?.at ?? null;
+  const ctLive = connecteamHealthCached();
 
   const out: SourceHealth[] = [
     {
@@ -80,15 +81,27 @@ export function computeDataHealth(): SourceHealth[] {
     {
       key: "connecteam",
       label: "Connecteam (staffing / labor cost)",
-      state: connecteamConfigured() ? pullState(ctAt, ctImp, 24, 0) : "UNVERIFIED",
-      lastAt: ctAt,
-      ageH: ageHours(ctAt),
+      // Live reachability probe is authoritative (shared with the top status bar so they can't disagree);
+      // the import-ledger row is only a fallback until the first probe lands this process.
+      state: !connecteamConfigured()
+        ? "UNVERIFIED"
+        : ctLive
+          ? ctLive.ok
+            ? "FRESH"
+            : "RETRIEVAL_FAILED"
+          : pullState(ctAt, ctImp, 24, 0),
+      lastAt: ctLive?.checkedAt ?? ctAt,
+      ageH: ageHours(ctLive?.checkedAt ?? ctAt),
       rows: null,
-      detail: connecteamConfigured()
-        ? ctImp && !ctImp.ok
-          ? "unreachable at last scan"
-          : "verified at last scan"
-        : "not connected",
+      detail: !connecteamConfigured()
+        ? "not connected"
+        : ctLive
+          ? ctLive.ok
+            ? "reachable (live check)"
+            : "unreachable (live check)"
+          : ctImp && !ctImp.ok
+            ? "unreachable at last scan"
+            : "verified at last scan",
     },
     {
       key: "gps",
