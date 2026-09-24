@@ -353,24 +353,30 @@ function DeliveryTypeStep({ intake, set }: { intake: Intake; set: (p: IntakePatc
   );
 }
 
-// Only for premium/exact: the same-day drop-off AND pick-up times we build the window around. Both required.
+// Only for premium/exact: the rep enters the START of each same-day window (drop-off + pick-up); the END is
+// auto-computed to match the option — Premium = +2 hours, Exact = +30 minutes — and shown live. Both required.
 function DeliveryTimeStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) => void }): React.JSX.Element {
+  const mins = intake.deliveryTier === "exact" ? 30 : 120;
   const width = intake.deliveryTier === "exact" ? "30-minute" : "2-hour";
+  const dropWin = windowLabel(intake.dropoffTime, mins);
+  const pickWin = windowLabel(intake.pickupTime, mins);
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-2 gap-3">
         <label className="block">
-          <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">Drop-off time</span>
+          <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">Drop-off — window start</span>
           <input type="time" value={intake.dropoffTime} onChange={(e) => set({ dropoffTime: e.target.value })} autoFocus
             className="w-full rounded border border-border bg-[var(--row)] px-3 py-3 text-[16px] outline-none focus:border-foreground/40" />
+          <span className="mt-1 block text-[12px] text-foreground/80">{dropWin ? `Window: ${dropWin}` : `Enter a time → ${width} window`}</span>
         </label>
         <label className="block">
-          <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">Pick-up time</span>
+          <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">Pick-up — window start</span>
           <input type="time" value={intake.pickupTime} onChange={(e) => set({ pickupTime: e.target.value })}
             className="w-full rounded border border-border bg-[var(--row)] px-3 py-3 text-[16px] outline-none focus:border-foreground/40" />
+          <span className="mt-1 block text-[12px] text-foreground/80">{pickWin ? `Window: ${pickWin}` : `Enter a time → ${width} window`}</span>
         </label>
       </div>
-      <p className="text-[11px] text-meta">We&apos;ll build the {width} window around each time. Both add the exact/premium timing as its own line item in Goodshuffle.</p>
+      <p className="text-[11px] text-meta">Enter the start of each window; we auto-fill the end to match the {width} option. This adds the {intake.deliveryTier === "exact" ? "exact-time" : "premium"} timing as its own line item in Goodshuffle.</p>
     </div>
   );
 }
@@ -713,12 +719,34 @@ function MiniTri({ label, value, onChange }: { label: string; value: TriState; o
 
 function triLabel(v: TriState): string { return v === "yes" ? "Yes" : v === "no" ? "No" : v === "not_sure" ? "Not sure" : "Not asked"; }
 
-// Review-row summary of the chosen delivery type (+ target time for same-day windows).
+// HH:MM (24h) → 12-hour clock ("14:00" → "2:00 PM"). Blank if unparseable.
+function to12(hhmm: string): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || "");
+  if (!m) return "";
+  let h = Number(m[1]);
+  const ap = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${h}:${m[2]} ${ap}`;
+}
+// A same-day delivery window from a START time + duration (minutes): "10:00 AM – 12:00 PM". Wraps at midnight.
+function windowLabel(start: string, mins: number): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(start || "");
+  if (!m) return "";
+  let t = (Number(m[1]) * 60 + Number(m[2]) + mins) % 1440;
+  if (t < 0) t += 1440;
+  const end = `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+  return `${to12(start)} – ${to12(end)}`;
+}
+
+// Review-row summary of the chosen delivery type (+ computed windows for same-day options).
 function deliveryTimingSummary(i: Intake): string {
   const t = DELIVERY_TYPES.find((x) => x.v === i.deliveryTier);
   if (!t) return "—";
-  const times = i.deliveryTier !== "standard" && (i.dropoffTime || i.pickupTime)
-    ? `, drop-off ${i.dropoffTime || "?"} / pick-up ${i.pickupTime || "?"}`
-    : "";
+  if (i.deliveryTier === "standard") return `${t.label} (${t.window}, ${t.price})`;
+  const mins = i.deliveryTier === "exact" ? 30 : 120;
+  const parts: string[] = [];
+  if (i.dropoffTime) parts.push(`drop-off ${windowLabel(i.dropoffTime, mins)}`);
+  if (i.pickupTime) parts.push(`pick-up ${windowLabel(i.pickupTime, mins)}`);
+  const times = parts.length ? `, ${parts.join(" / ")}` : "";
   return `${t.label} (${t.window}, ${t.price}${times})`;
 }

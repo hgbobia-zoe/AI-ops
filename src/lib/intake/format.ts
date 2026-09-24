@@ -87,13 +87,23 @@ const DELIVERY_TYPE_META: Record<string, { label: string; window: string; price:
   premium: { label: "Premium window", window: "same-day 2-hour", price: "+$100" },
   exact: { label: "Exact time", window: "same-day 30-minute", price: "+$150" },
 };
+// Same-day window from a START time + the option's duration (premium 2h / exact 30m): "10:00 AM–12:00 PM".
+function deliveryWindow(hhmm: string, tier: string): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || "");
+  if (!m) return "";
+  const mins = tier === "exact" ? 30 : 120;
+  let t = (Number(m[1]) * 60 + Number(m[2]) + mins) % 1440;
+  if (t < 0) t += 1440;
+  const end = `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+  return `${gsTime(hhmm)}–${gsTime(end)}`;
+}
 function deliveryTimingLine(i: Intake): string {
   const m = DELIVERY_TYPE_META[i.deliveryTier];
   if (!m) return i.deliveryTier || "Not set";
   if (i.deliveryTier === "standard") return `${m.label} · ${m.window} · ${m.price}`;
   const times: string[] = [];
-  if (i.dropoffTime) times.push(`drop-off ${gsTime(i.dropoffTime) || i.dropoffTime}`);
-  if (i.pickupTime) times.push(`pick-up ${gsTime(i.pickupTime) || i.pickupTime}`);
+  if (i.dropoffTime) times.push(`drop-off ${deliveryWindow(i.dropoffTime, i.deliveryTier)}`);
+  if (i.pickupTime) times.push(`pick-up ${deliveryWindow(i.pickupTime, i.deliveryTier)}`);
   const t = times.length ? ` · ${times.join(", ")} (own line-item group)` : "";
   return `${m.label} · ${m.window} · ${m.price}${t}`;
 }
