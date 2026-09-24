@@ -15,35 +15,35 @@ did via a popup (`window.open`) that fires only on a manual bookmarklet click �
 never drained automatically and intake shells got stuck on "Creating…". This runner navigates a tab
 instead of opening a popup, so creation just works on the schedule.
 
-## One-time setup
+## Start using it (sign in once, then it stays running)
 1. Ensure Node + this repo are on the machine (`npx tsx` + `playwright` with Chrome installed).
-2. Double-click **`run.cmd`** (or run it once from a terminal). A Chrome window opens.
-3. **Sign into Goodshuffle** in that window with a full-access (financial) office account. The session
-   persists in the profile at `%USERPROFILE%\ZoePull\profile`; you won't need to sign in again unless
-   Goodshuffle logs the profile out.
-4. It then pulls immediately and closes. Check `%USERPROFILE%\ZoePull\pull.log`.
+2. Double-click **`run.cmd`**. A dedicated Chrome window opens on the Goodshuffle sign-in page.
+3. **Sign into Goodshuffle** with a full-access (financial) office account.
+4. **Minimize that window and leave it.** It pulls immediately and then every ~10 minutes on its own,
+   forever — routes, bookings, and any queued project shells. No scheduled task, no clicking. The session
+   persists in the profile at `%USERPROFILE%\ZoePull\profile`; you only sign in again if Goodshuffle logs
+   the profile out (it pauses and waits for you in the same window).
+5. Logs go to `%USERPROFILE%\ZoePull\pull.log`; health shows on **/admin/pull**.
 
-## Schedule it (every 15 minutes, only while signed in)
-Open **Command Prompt** and run (adjust the path if the repo lives elsewhere):
+## Auto-start on boot (so you don't reopen it after a restart)
+Put a shortcut to `run.cmd` in the Startup folder:
+- Press **Win+R**, type **`shell:startup`**, Enter.
+- Drop a shortcut to `scripts\zoe-pull\run.cmd` in that folder.
+Now the watcher launches automatically each time you log into Windows.
 
-```
-schtasks /Create /TN "Zoe Auto-Pull" /TR "\"C:\Git\ZER\AI-OPS\scripts\zoe-pull\run.cmd\"" /SC MINUTE /MO 15 /RL LIMITED /F
-```
-
-- Runs as the logged-in user (needs a desktop for the browser), every 15 min.
-- Remove it later with: `schtasks /Delete /TN "Zoe Auto-Pull" /F`
-- Run it on demand: `schtasks /Run /TN "Zoe Auto-Pull"`
-
-By default each run briefly opens a Chrome window. Once the profile is logged in you can try **invisible**
-runs: uncomment `set "ZOE_HEADLESS=1"` in `run.cmd`. If Goodshuffle's Cloudflare challenges the headless
-browser (the log shows "signed out" / pull failed), leave it headful.
+## One-off mode (advanced)
+Setting `ZOE_WATCH` to anything but `1` (or unsetting it) makes the runner do a single pull and exit —
+useful for a manual run or a scheduled task. Watch mode (`ZOE_WATCH=1`, the default in `run.cmd`) is the
+recommended way.
 
 ## Environment overrides (optional)
+- `ZOE_WATCH=1` — persistent "sign in once, stays running" mode (default in `run.cmd`); anything else = one-off
+- `ZOE_INTERVAL_MIN` — watch-mode pull interval in minutes (default 10)
 - `ZOE_API` — Zoe Ops origin (default `https://zoe-dispatch.fly.dev`)
 - `GS_INGEST_TOKEN` — only if the server sets it (ingest APIs are fail-open otherwise)
 - `ZOE_PROFILE` — Chrome user-data-dir (default `%USERPROFILE%\ZoePull\profile`)
-- `ZOE_HEADLESS=1` — invisible run (only after the profile is logged in)
-- `ZOE_LOGIN_WAIT_MS` — how long the first run waits for a manual sign-in (default 180000)
+- `ZOE_HEADLESS=1` — invisible run (only after the profile is logged in; may trip Cloudflare)
+- `ZOE_LOGIN_WAIT_MS` — how long a one-off run waits for a manual sign-in (default 180000)
 
 ## Health
 Each run posts a heartbeat, so **/admin/pull** and the Connections health show it reporting in. The app

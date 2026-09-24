@@ -86,30 +86,37 @@ async function populateCreate(page: Page, op: { id: string; payload: Record<stri
   );
 }
 
-async function main(): Promise<void> {
-  fs.mkdirSync(PROFILE, { recursive: true });
-  const ctx: BrowserContext = await chromium.launchPersistentContext(PROFILE, { channel: "chrome", headless: HEADLESS, viewport: { width: 1280, height: 900 } });
-  const page = ctx.pages()[0] || (await ctx.newPage());
-  let heartbeatStatus = "error";
-  let heartbeatDetail = "";
-  try {
-    await page.goto(GS + "/app/dashboard", { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
-    if (!(await loggedIn(page))) {
-      if (HEADLESS) { log("NOT logged in and headless — run once headful to sign in. Aborting."); heartbeatStatus = "not_logged_in"; heartbeatDetail = "profile signed out"; return; }
-      log(`Not signed in — sign into Goodshuffle in the window (waiting up to ${Math.round(LOGIN_WAIT_MS / 1000)}s)…`);
-      const deadline = Date.now() + LOGIN_WAIT_MS;
-      while (Date.now() < deadline && !(await loggedIn(page))) await page.waitForTimeout(3000);
-      if (!(await loggedIn(page))) { log("Still not signed in — aborting."); heartbeatStatus = "not_logged_in"; return; }
-      log("Signed in.");
-    }
+const WATCH = process.env.ZOE_WATCH === "1";
+const INTERVAL_MS = Math.max(60_000, (Number(process.env.ZOE_INTERVAL_MIN) || 10) * 60_000);
 
-    // 1) READ PULL — reuse the exact in-app pull (routes + bookings + notes + photo drain), skipCreate.
+/** Post a heartbeat so /admin/pull + Connections health show the runner is alive (reuses the "extension" dot). */
+async function heartbeat(page: Page, status: string, detail: string): Promise<void> {
+  try { await page.evaluate(async ({ api, status, detail }) => { try { await fetch(api + "/api/pull/heartbeat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agent: "extension", status, detail, at: new Date().toISOString() }) }); } catch { /* best-effort */ } }, { api: API, status, detail }); } catch { /* ignore */ }
+}
+
+/** Ensure the profile is signed into Goodshuffle (headful only — can't sign in headless). `forever` waits
+ *  indefinitely (watch mode on a dropped session); otherwise up to ZOE_LOGIN_WAIT_MS. True once signed in. */
+async function ensureLoggedIn(page: Page, forever: boolean): Promise<boolean> {
+  if (await loggedIn(page)) return true;
+  if (HEADLESS) { log("Signed out and headless — run once headful to sign in."); return false; }
+  log(`Not signed in — sign into Goodshuffle in the window${forever ? "" : ` (waiting up to ${Math.round(LOGIN_WAIT_MS / 1000)}s)`}…`);
+  const deadline = Date.now() + LOGIN_WAIT_MS;
+  while (!(await loggedIn(page))) { if (!forever && Date.now() > deadline) break; await page.waitForTimeout(3000); }
+  const ok = await loggedIn(page);
+  log(ok ? "Signed in." : "Still not signed in.");
+  return ok;
+}
+
+/** One pull cycle: read-pull (routes/bookings/notes/photos) + create-drain (by navigation) + heartbeat. */
+async function runCycle(ctx: BrowserContext, page: Page): Promise<void> {
+  let status = "error";
+  let detail = "";
+  try {
+    // A fresh navigation resets window.__zoePullDone, so the wait below can't latch onto a stale value.
     await page.goto(GS + "/app/dashboard", { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
     await page.evaluate(buildOfficePullScript(API, TOKEN || undefined, 0, true));
     const pull = await page.waitForFunction(() => (window as unknown as { __zoePullDone?: unknown }).__zoePullDone, { timeout: 180000 }).then((h) => h.jsonValue()).catch(() => null);
     log("read-pull:", pull);
-
-    // 2) CREATE DRAIN — createNewProject via a real navigation (no popup), then populate + report + ack.
     const ops = (await page.evaluate(async (api) => {
       try { const r = await fetch(api + "/api/gs/outbox", { headers: { accept: "application/json" } }); const j = await r.json(); return ((j.ops || []) as Record<string, unknown>[]).filter((o) => o.op === "create_project" && o.payload && (o.payload as Record<string, unknown>).intakeId).map((o) => ({ id: o.id as string, payload: o.payload as Record<string, unknown> })); } catch { return []; }
     }, API)) as { id: string; payload: Record<string, unknown> }[];
@@ -120,22 +127,38 @@ async function main(): Promise<void> {
       try {
         await cp.goto(GS + "/app/project/createNewProject", { waitUntil: "domcontentloaded", timeout: 60000 });
         await cp.waitForFunction(() => /[?&]id=\d+/.test(location.href), { timeout: 30000 }).catch(() => {});
-        const res = await populateCreate(cp, op, API, TOKEN);
-        log("created:", res);
+        log("created:", await populateCreate(cp, op, API, TOKEN));
         created++;
       } catch (e) { log("create FAILED:", String(e).slice(0, 160)); }
       finally { await cp.close().catch(() => {}); }
     }
-
-    heartbeatStatus = "ok";
-    heartbeatDetail = `${(pull as { msg?: string } | null)?.msg || "read-pull done"} · ${created}/${ops.length} projects created`;
+    status = "ok";
+    detail = `${(pull as { msg?: string } | null)?.msg || "read-pull done"} · ${created}/${ops.length} projects created`;
   } catch (e) {
-    heartbeatDetail = String(e).slice(0, 160);
-    log("RUN ERROR:", heartbeatDetail);
+    detail = String(e).slice(0, 160);
+    log("cycle ERROR:", detail);
   } finally {
-    // Heartbeat so the app's Connections health shows the runner is alive (agent "extension" reuses the dot).
-    try { await page.evaluate(async ({ api, status, detail }) => { try { await fetch(api + "/api/pull/heartbeat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agent: "extension", status, detail, at: new Date().toISOString() }) }); } catch { /* best-effort */ } }, { api: API, status: heartbeatStatus, detail: heartbeatDetail }); } catch { /* ignore */ }
-    await ctx.close().catch(() => {});
+    await heartbeat(page, status, detail);
+  }
+}
+
+async function main(): Promise<void> {
+  fs.mkdirSync(PROFILE, { recursive: true });
+  const ctx: BrowserContext = await chromium.launchPersistentContext(PROFILE, { channel: "chrome", headless: HEADLESS, viewport: { width: 1280, height: 900 } });
+  const page = ctx.pages()[0] || (await ctx.newPage());
+  await page.goto(GS + "/app/dashboard", { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+  if (!(await ensureLoggedIn(page, WATCH))) { await heartbeat(page, "not_logged_in", "profile signed out"); if (!WATCH) await ctx.close().catch(() => {}); return; }
+
+  if (!WATCH) { await runCycle(ctx, page); await ctx.close().catch(() => {}); return; }
+
+  // WATCH MODE — the "sign in once, stays loaded" path: keep this browser open and pull on a timer forever,
+  // no scheduled task. Leave the window open (you can minimize it). If the Goodshuffle session ever drops,
+  // it pauses and waits for a re-login in the same window.
+  log(`Watch mode: pulling every ${Math.round(INTERVAL_MS / 60000)} min. Keep this window open (you can minimize it).`);
+  for (;;) {
+    if (!(await loggedIn(page))) { log("Goodshuffle session dropped — waiting for re-login in the window…"); await ensureLoggedIn(page, true); }
+    await runCycle(ctx, page);
+    await page.waitForTimeout(INTERVAL_MS);
   }
 }
 
