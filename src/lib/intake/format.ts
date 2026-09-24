@@ -123,13 +123,13 @@ function guests(i: Intake): string {
   return "Not asked";
 }
 
-/** A human-readable project name suggestion: "First Last · Wedding · 2027-06-20". Internal ops label
- *  (not customer-facing), used as the notes header until the GS rename endpoint is wired. */
+/** The Goodshuffle project name. Follows GSPRO's own default convention — "LastName - Street Address"
+ *  (e.g. "Singh - 8684 Wales Ct") — so created projects read the same as ones made in GSPRO by hand;
+ *  GSPRO appends the "(#id)" itself. Falls back gracefully when the last name or address is missing. */
 export function suggestEventName(i: Intake): string {
-  const who = [i.firstName.trim(), i.lastName.trim()].filter(Boolean).join(" ") || "New customer";
-  const parts = [who, eventTypeLabel(i)];
-  if (i.eventDate) parts.push(i.eventDate);
-  return parts.join(" · ");
+  const last = i.lastName.trim() || i.firstName.trim() || "New customer";
+  const addr = i.streetAddress.trim();
+  return addr ? `${last} - ${addr}` : last;
 }
 
 /** The internal-notes block stashed on the Goodshuffle project shell. Every captured fact, honestly. */
