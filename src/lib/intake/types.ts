@@ -21,7 +21,6 @@ export interface AccessNotes {
   accessRestrictions?: TriState;
   longCarry?: TriState; // long distance between truck access and setup area
   parkingRestrictions?: TriState;
-  deliveryWindow?: string; // a required delivery window, if the venue has one
   crewNotes?: string; // anything the delivery/setup team should know
 }
 

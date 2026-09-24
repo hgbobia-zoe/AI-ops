@@ -524,7 +524,6 @@ function AccessStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) => 
           <MiniTri label="Is there a loading dock?" value={a.loadingDock ?? ""} onChange={(v) => setA({ loadingDock: v })} />
           <MiniTri label="Any access restrictions?" value={a.accessRestrictions ?? ""} onChange={(v) => setA({ accessRestrictions: v })} />
           <MiniTri label="Long carry from truck to setup?" value={a.longCarry ?? ""} onChange={(v) => setA({ longCarry: v })} />
-          <TextField label="Required delivery window (if any)" value={a.deliveryWindow ?? ""} onChange={(v) => setA({ deliveryWindow: v })} placeholder="e.g. must deliver 8–10am" />
         </>
       )}
       <TextArea value={a.crewNotes ?? ""} onChange={(v) => setA({ crewNotes: v })} placeholder="Anything the delivery / setup team should know" rows={3} label="For the crew" />

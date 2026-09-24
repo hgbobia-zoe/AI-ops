@@ -144,7 +144,6 @@ export function formatIntakeNotes(i: Intake): string {
   pushIf("Access restrictions", a.accessRestrictions);
   pushIf("Long carry (truck→setup)", a.longCarry);
   pushIf("Parking restrictions", a.parkingRestrictions);
-  if (a.deliveryWindow && a.deliveryWindow.trim()) access.push(`Required delivery window: ${a.deliveryWindow.trim()}`);
   if (a.crewNotes && a.crewNotes.trim()) access.push(`For the crew: ${a.crewNotes.trim()}`);
 
   const lines: string[] = [
