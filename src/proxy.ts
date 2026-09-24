@@ -34,6 +34,7 @@ const PUBLIC: string[] = [
   "/api/gs/projects",
   "/api/gs/notes",
   "/api/gs/outbox",
+  "/api/gs/intake-result", // Auto-Pull reports the created project id back here; own token (fail-open), CORS-locked — must not bounce to auth
   "/api/pull/heartbeat", // Auto-Pull extension status ping; own token (fail-open), CORS-open
   "/api/openphone/webhook", // OpenPhone → us; authenticates by HMAC signature, not a session
   "/api/creative/callback", // n8n → us; authenticates by a per-generation callback token, not a session
