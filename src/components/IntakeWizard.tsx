@@ -35,7 +35,7 @@ const LOCATION_CLASSES: { v: Exclude<Intake["locationClass"], "">; label: string
 // ── Step registry (branching via `when`) ───────────────────────────────────────
 type StepId =
   | "customer" | "eventType" | "locationClass" | "guests" | "date" | "times"
-  | "location" | "delivery" | "deliveryType" | "deliveryTime" | "setup" | "pickup" | "access" | "notes";
+  | "location" | "delivery" | "deliveryFlexible" | "deliveryType" | "deliveryTime" | "setup" | "pickup" | "access" | "notes";
 
 // The three delivery types the rep walks the customer through. "standard" is the flexible day-before
 // option (our operational preference) and carries the free 9AM–8PM window; the other two are same-day
@@ -54,7 +54,7 @@ const SECTIONS: { label: string; steps: StepId[] }[] = [
   { label: "Event", steps: ["eventType", "locationClass", "guests"] },
   { label: "Schedule", steps: ["date", "times"] },
   { label: "Location", steps: ["location"] },
-  { label: "Logistics", steps: ["delivery", "deliveryType", "deliveryTime", "setup", "pickup", "access"] },
+  { label: "Logistics", steps: ["delivery", "deliveryFlexible", "deliveryType", "deliveryTime", "setup", "pickup", "access"] },
   { label: "Notes", steps: ["notes"] },
 ];
 const sectionIndexOf = (id: StepId | undefined): number => (id ? SECTIONS.findIndex((s) => s.steps.includes(id)) : 0);
@@ -78,7 +78,8 @@ const STEPS: StepDef[] = [
   { id: "times", title: "What time does it start and end?", canNext: (i) => !i.eventStartTime || !i.eventEndTime || i.eventEndTime > i.eventStartTime },
   { id: "location", title: "Where's the event?", canNext: () => true },
   { id: "delivery", title: "Will they need delivery?", canNext: () => true },
-  { id: "deliveryType", title: "Walk them through the 3 delivery options", subtitle: "Read all three to the customer so they choose with the full picture — including cost. We prefer the flexible day-before option: it gives us breathing room to work around other jobs, so we can reserve exact-time delivery for venues that truly require it.", when: wantsDelivery, canNext: (i) => !!i.deliveryTier },
+  { id: "deliveryFlexible", title: "Can we deliver the day before and pick up the day after?", subtitle: "Ask this first. We prefer it — it's no extra cost and gives us room to work around other jobs. Usually fine for a home unless they don't own it or the site restricts access. Yes sets the standard 9AM–8PM window; No means we pin down a same-day window next.", when: wantsDelivery, canNext: (i) => !!i.deliveryFlexible },
+  { id: "deliveryType", title: "Which same-day delivery window do they need?", subtitle: "They can't take the free day-before window, so walk them through the same-day options and their cost.", when: (i) => wantsDelivery(i) && i.deliveryFlexible !== "" && i.deliveryFlexible !== "yes", canNext: (i) => i.deliveryTier === "premium" || i.deliveryTier === "exact" },
   { id: "deliveryTime", title: "What times do they need?", subtitle: "They chose a same-day window, so lock in both the drop-off and the pick-up time we'll build it around. Both are required.", when: (i) => wantsDelivery(i) && (i.deliveryTier === "premium" || i.deliveryTier === "exact"), canNext: (i) => !!i.dropoffTime && !!i.pickupTime },
   { id: "setup", title: "Do they want setup help?", subtitle: "Setting up rental equipment on site → Event Readiness Service.", canNext: () => true },
   { id: "pickup", title: "Do they want breakdown help?", subtitle: "Helping tear down after — gathering chairs, removing cushions, etc. → Event Readiness Service.", canNext: () => true },
@@ -244,6 +245,14 @@ function StepBody({ step, intake, set }: { step: StepDef; intake: Intake; set: (
     case "times": return <TimesStep intake={intake} set={set} />;
     case "location": return <LocationStep intake={intake} set={set} />;
     case "delivery": return <TriChoice value={intake.deliveryRequired} onChange={(v) => set({ deliveryRequired: v })} />;
+    case "deliveryFlexible": return (
+      <TriChoice
+        value={intake.deliveryFlexible}
+        onChange={(v) => set(v === "yes"
+          ? { deliveryFlexible: "yes", deliveryTier: "standard", dropoffTime: "", pickupTime: "" } // yes → default flexible 9AM–8PM window
+          : { deliveryFlexible: v, ...(intake.deliveryTier === "standard" ? { deliveryTier: "" } : {}) })} // no/not sure → pick a same-day window next
+      />
+    );
     case "deliveryType": return <DeliveryTypeStep intake={intake} set={set} />;
     case "deliveryTime": return <DeliveryTimeStep intake={intake} set={set} />;
     case "setup": return <TriChoice value={intake.setupRequired} onChange={(v) => set({ setupRequired: v })} />;
@@ -316,18 +325,18 @@ function LocationClassStep({ intake, set }: { intake: Intake; set: (p: IntakePat
   );
 }
 
-// The forced walkthrough: all three delivery types on one screen, prices and our recommendation visible,
-// so the customer decides informed. Picking "standard" is the flexible/day-before answer → free 9AM–8PM
-// window, deliveryFlexible=yes, and no same-day time to capture. The paid tiers set deliveryFlexible=no.
+// Shown only when they CAN'T do the flexible day-before window (deliveryFlexible !== "yes"): the same-day
+// paid options (premium/exact) with prices, so the rep walks the customer through the choice. The flexible
+// "standard" option lives in the day-before question, not here.
 function DeliveryTypeStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) => void }): React.JSX.Element {
   return (
     <div className="space-y-2.5">
-      {DELIVERY_TYPES.map((t) => {
+      {DELIVERY_TYPES.filter((t) => t.v !== "standard").map((t) => {
         const on = intake.deliveryTier === t.v;
         return (
           <button
             key={t.v}
-            onClick={() => set({ deliveryTier: t.v, deliveryFlexible: t.v === "standard" ? "yes" : "no", ...(t.v === "standard" ? { dropoffTime: "", pickupTime: "" } : {}) })}
+            onClick={() => set({ deliveryTier: t.v })}
             className={`w-full rounded border px-4 py-3.5 text-left transition-colors ${on ? "border-foreground/70 bg-foreground/[0.08]" : "border-border hover:bg-[var(--row-hover)]"}`}
           >
             <div className="flex flex-wrap items-center gap-2">
