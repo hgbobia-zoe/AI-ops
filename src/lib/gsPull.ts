@@ -274,38 +274,35 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
               var items=(o.payload.addItems||[]);
               var legs=(o.payload.logisticsLegs||[]);
               var loc=o.payload.location;
-              if(!items.length && !(legs.length && loc)) return;
+              if(!items.length && !(legs.length && loc) && !o.payload.windowUpgrade) return;
               var JH={"content-type":"application/json","x-requested-with":"XMLHttpRequest",accept:"application/json"};
               return fetch("/app/vendorTransaction/initContractView?transactionID="+encodeURIComponent(pid),{headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}).then(function(r){ return r.json(); }).then(function(cv){
                 var groups=(cv&&cv.lineItemGroupsToLoad)||[];
                 var rentalGrp=null, logiGrp=null;
                 for(var i=0;i<groups.length;i++){ if(groups[i].logisticsContainer){ if(logiGrp==null) logiGrp=groups[i].id; } else if(rentalGrp==null){ rentalGrp=groups[i].id; } }
-                // Never fall back to the Logistics container for rental items — a fresh shell has ONLY a
-                // Logistics group until the first rental item creates a Rental group, so misrouting the waiver
-                // there would be wrong. If there's no rental group, skip the simple items rather than misplace.
+                // Group date (M/D/YYYY, fall back to today) for any group we create. makeGroup() creates a
+                // line-item group (saveLineItemGroupEdits, captured live 2026-09-23) → resolves its new id.
+                var gdate=(o.payload.eventDateMDY)||new Date().toLocaleDateString("en-US");
+                function makeGroup(name){ var gb=new URLSearchParams({ transactionID:String(pid), lineItemGroupID:"", lineItemGroupName:String(name), lineItemGroupFromDate:gdate, lineItemGroupToDate:gdate, recalculateDailyItems:"false" }); return fetch("/app/lineItemGroup/saveLineItemGroupEdits",{method:"POST",headers:GH,credentials:"include",body:gb}).then(function(r){return r.json();}).then(function(gj){ return (gj&&gj.newLineItemGroup&&gj.newLineItemGroup.id)||null; }); }
+                function addSvc(gid,it){ var body=JSON.stringify({ transactionID:Number(pid), lineItemGroupID:gid, parentRelationID:null, relationType:null, fulfillment:false, inventoryTypeStr:it.inventoryTypeStr, rateType:it.rateType, itemID:it.itemID, unitPrice:(it.unitPrice||0), quantity:(it.quantity||1) }); return fetch("/app/transactionItemRelation/addInventoryItemToContract",{method:"POST",headers:JH,credentials:"include",body:body}).catch(function(){}); }
                 var addChain=Promise.resolve();
-                if(rentalGrp!=null){ items.forEach(function(it){ addChain=addChain.then(function(){
-                  var body=JSON.stringify({ transactionID:Number(pid), lineItemGroupID:rentalGrp, parentRelationID:null, relationType:null, fulfillment:false, inventoryTypeStr:it.inventoryTypeStr, rateType:it.rateType, itemID:it.itemID, unitPrice:(it.unitPrice||0), quantity:(it.quantity||1) });
-                  return fetch("/app/transactionItemRelation/addInventoryItemToContract",{method:"POST",headers:JH,credentials:"include",body:body}).catch(function(){});
-                }); }); }
+                // PRIMARY group "Rental Items": the damage waiver (+ rentals added later in GS). A fresh shell has
+                // ONLY the Logistics group, so create the Rental group first, then add the simple items into it.
+                if(items.length){ addChain=addChain.then(function(){
+                  return (rentalGrp!=null?Promise.resolve(rentalGrp):makeGroup("Rental Items")).then(function(rgid){
+                    if(rgid==null) return; var c2=Promise.resolve(); items.forEach(function(it){ c2=c2.then(function(){ return addSvc(rgid,it); }); }); return c2;
+                  });
+                }); }
+                // LOGISTICS legs (base delivery, Event Readiness) → the Logistics container group (they carry the
+                // geocoded delivery address; Goodshuffle rejects them otherwise).
                 if(logiGrp!=null && loc){ var evDate=(o.payload.details&&o.payload.details.fromDateStr)||""; legs.forEach(function(lg){ addChain=addChain.then(function(){
                   var body=JSON.stringify({ inventoryInjection:true, itemID:lg.itemID, fulfillment:false, transactionID:Number(pid), lineItemGroupID:logiGrp, relationID:null, relationType:null, parentRelationID:null, inventoryTypeStr:"SERVICE", rateType:lg.rateType, title:lg.title, description:null, isSubrental:false, internalNotes:"", showItemDescription:true, showItemAttributes:true, quantity:1, unitPriceOverridden:false, unitPrice:0, mileageFee:0, discountDollarAmount:0, discountPercentage:0, itemStartDate:evDate, itemStartTime:null, itemEndDate:evDate, itemEndTime:null, itemHoursRented:null, eventTimeLineMarker:lg.eventTimeLineMarker, selectedTaxTypes:[], serviceStoreLocationID:null, venueName:loc.venueName, venueAddress:loc.address, venueAddress_line2:loc.line2, venueAddress_city:loc.city, venueAddress_state:loc.state, venueAddress_zipCode:loc.zip, venueAddress_county:loc.county, venueAddress_country:loc.country, venueAddress_latitude:loc.latitude, venueAddress_longitude:loc.longitude });
                   return fetch("/app/transactionItemRelation/addInventoryItemToContract",{method:"POST",headers:JH,credentials:"include",body:body}).catch(function(){});
                 }); }); }
-                // Delivery-timing upgrade (premium/exact) → its OWN line-item group, NOT Rental. CREATE the
-                // group (saveLineItemGroupEdits, captured live 2026-09-23), read the new id from the response
-                // (newLineItemGroup.id), then add the upgrade item into it. Best-effort per step.
+                // SECONDARY group "Delivery Timing": the premium/exact delivery-window upgrade, in its own group.
                 var wu=o.payload.windowUpgrade;
                 if(wu&&wu.item){ addChain=addChain.then(function(){
-                  var gdate=wu.groupDate||new Date().toLocaleDateString("en-US"); // M/D/YYYY (fallback: today)
-                  var gb=new URLSearchParams({ transactionID:String(pid), lineItemGroupID:"", lineItemGroupName:String(wu.groupName||"Delivery Timing"), lineItemGroupFromDate:gdate, lineItemGroupToDate:gdate, recalculateDailyItems:"false" });
-                  return fetch("/app/lineItemGroup/saveLineItemGroupEdits",{method:"POST",headers:GH,credentials:"include",body:gb}).then(function(r){return r.json();}).then(function(gj){
-                    var gid=gj&&gj.newLineItemGroup&&gj.newLineItemGroup.id;
-                    if(!gid) return;
-                    var it=wu.item;
-                    var body=JSON.stringify({ transactionID:Number(pid), lineItemGroupID:gid, parentRelationID:null, relationType:null, fulfillment:false, inventoryTypeStr:it.inventoryTypeStr, rateType:it.rateType, itemID:it.itemID, unitPrice:(it.unitPrice||0), quantity:(it.quantity||1) });
-                    return fetch("/app/transactionItemRelation/addInventoryItemToContract",{method:"POST",headers:JH,credentials:"include",body:body});
-                  }).catch(function(){});
+                  return makeGroup(wu.groupName||"Delivery Timing").then(function(gid){ if(gid==null) return; return addSvc(gid,wu.item); });
                 }); }
                 return addChain;
               }).catch(function(){});

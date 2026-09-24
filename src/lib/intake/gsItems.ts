@@ -55,11 +55,11 @@ export const BASE_DELIVERY_LEG: GsLogisticsLeg = { itemID: 392868144, title: "St
 // for now, pricing logic to follow).
 export const EVENT_READINESS_LEG: GsLogisticsLeg = { itemID: 481935095, title: "Event Readiness Service", rateType: "FLAT_FEE_WITH_MILEAGE", eventTimeLineMarker: "DROP_OFF", label: "Event Readiness Service" };
 
-type IntakeSlice = { setupRequired: string; deliveryTier: string; deliveryRequired: string; pickupRequired?: string; dropoffTime?: string; pickupTime?: string; eventDate?: string };
+type IntakeSlice = { setupRequired: string; deliveryTier: string; deliveryRequired: string; pickupRequired?: string; dropoffTime?: string; pickupTime?: string };
 
 // YYYY-MM-DD → M/D/YYYY (no leading zeros) — the format Goodshuffle's saveLineItemGroupEdits expects for
-// the group's from/to dates (captured live 2026-09-23). Empty when the date is missing/malformed.
-function mdyFromYmd(ymd: string | undefined): string {
+// a line-item group's from/to dates (captured live 2026-09-23). Empty when the date is missing/malformed.
+export function mdyFromYmd(ymd: string | undefined): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || "");
   return m ? `${Number(m[2])}/${Number(m[3])}/${m[1]}` : "";
 }
@@ -76,16 +76,15 @@ export function autoAddSimpleItems(): GsAddItem[] {
 const WINDOW_UPGRADE_GROUP = "Delivery Timing";
 
 export interface GsWindowUpgrade {
-  groupName: string; // the dedicated line-item group to create (saveLineItemGroupEdits)
-  groupDate: string; // M/D/YYYY for the group's from/to dates (event date; drainer falls back to today)
+  groupName: string; // the secondary line-item group to create (saveLineItemGroupEdits)
   item: GsAddItem; // the premium/exact upgrade service
   dropoffTime: string; // HH:MM, for the line-item internal note
   pickupTime: string; // HH:MM
 }
 
-/** The premium/exact delivery-window upgrade, placed in its own line-item group — returned only when delivery
- *  is wanted, the tier carries an upgrade (premium/exact, not the free standard window), AND a same-day
- *  drop-off OR pick-up time was captured ("if either of the two are present"). Null otherwise. */
+/** The premium/exact delivery-window upgrade, placed in the SECONDARY line-item group — returned only when
+ *  delivery is wanted, the tier carries an upgrade (premium/exact, not the free standard window), AND a
+ *  same-day drop-off OR pick-up time was captured ("if either of the two are present"). Null otherwise. */
 export function windowUpgradeGroup(intake: IntakeSlice): GsWindowUpgrade | null {
   if (intake.deliveryRequired === "no") return null;
   const item = DELIVERY_WINDOW_ITEMS[intake.deliveryTier];
@@ -93,7 +92,7 @@ export function windowUpgradeGroup(intake: IntakeSlice): GsWindowUpgrade | null 
   const dropoffTime = intake.dropoffTime || "";
   const pickupTime = intake.pickupTime || "";
   if (!dropoffTime && !pickupTime) return null;
-  return { groupName: WINDOW_UPGRADE_GROUP, groupDate: mdyFromYmd(intake.eventDate), item, dropoffTime, pickupTime };
+  return { groupName: WINDOW_UPGRADE_GROUP, item, dropoffTime, pickupTime };
 }
 
 /** LOGISTICS legs for the Logistics group — added only when we have a geocoded delivery location (the drainer
