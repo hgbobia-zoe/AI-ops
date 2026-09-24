@@ -23,6 +23,7 @@ import {
   setGenerationExternalRef,
   setGenerationCallbackToken,
   getGenerationCallbackToken,
+  claimGenerationForCallback,
   getGeneration,
   insertImage,
   getImage,
@@ -35,10 +36,16 @@ import { getVisualDNA } from "./visualDna";
 import { getActiveProvider } from "./providers";
 import { mintCallbackToken } from "./providers/n8n";
 import type { ImageGenerationInput, ImageGenerationResult, ProviderImageRef } from "./providers/types";
-import { isReferenceFirst, type CreativeJob, type Generation, type ImageBrief } from "./types";
+import { isReferenceFirst, DEFAULT_MAX_ATTEMPTS, type CreativeJob, type Generation, type ImageBrief } from "./types";
 
 /** System actor label for the n8n callback (an async, non-human transition). */
 export const N8N_ACTOR = "n8n";
+
+/** Outer cap on automated attempts (handoffs) per job. Overridable by env; falls back to the code default. */
+export function maxAttempts(): number {
+  const n = Number(process.env.CREATIVE_MAX_ATTEMPTS);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : DEFAULT_MAX_ATTEMPTS;
+}
 
 const DATA_DIR = dirname(process.env.DATABASE_PATH || "./data/dispatch.db");
 const GEN_DIR = join(DATA_DIR, "creative", "gen");
@@ -132,6 +139,22 @@ export async function generateForJob(jobId: string, actor: string | null, opts: 
   const provider = getActiveProvider();
   const attempt = nextAttempt(jobId);
   const useEdit = isReferenceFirst(job.sourceMode) && !!job.sourceImageId;
+  const cap = maxAttempts();
+
+  // ── Outer attempt cap (no infinite loops). n8n runs its OWN revision loop within one handoff; this backstop
+  //    stops a job being handed off forever. Past the cap we park in human review instead of generating. ──
+  if (attempt > cap) {
+    recordEvent({ jobId, kind: "max_attempts", from: job.status, to: "needs_revision", actor, note: `Reached the ${cap}-attempt cap; parked for human review` });
+    const parked = setJobStatus(jobId, "needs_revision", actor, `Reached the automated attempt cap (${cap}). Human review required.`, "max_attempts") ?? undefined;
+    return { ok: false, error: "max_attempts_reached", job: parked };
+  }
+
+  const refMeta = {
+    sourceImageId: job.sourceImageId,
+    referenceImageIds: job.referenceImageIds,
+    dnaVersion: brief.dnaVersion ?? null,
+    maxAttempts: cap,
+  };
 
   // ── Async provider (n8n): create the pending record + mint a callback token, hand off, and return. ──
   if (provider.async) {
@@ -139,12 +162,12 @@ export async function generateForJob(jobId: string, actor: string | null, opts: 
       jobId,
       attempt,
       provider: provider.id,
-      model: null,
+      model: job.selectedModel,
       brief,
       imageId: null,
       resultPath: null,
       placeholder: false,
-      resultMeta: { mode: useEdit ? "edit" : "generate" },
+      resultMeta: { mode: useEdit ? "edit" : "generate", ...refMeta },
       status: "generating",
       callbackToken: null, // set below once we have the row id (token derives from it)
     });
@@ -160,6 +183,8 @@ export async function generateForJob(jobId: string, actor: string | null, opts: 
       generationId: gen.id,
       brief,
       aspectRatio: job.aspectRatio,
+      model: job.selectedModel,
+      maxAttempts: cap,
       sourceImage: toRef(job.sourceImageId),
       referenceImages: job.referenceImageIds.map(toRef).filter((r): r is ProviderImageRef => r !== null),
       baseUrl: origin,
@@ -193,6 +218,8 @@ export async function generateForJob(jobId: string, actor: string | null, opts: 
     attempt,
     brief,
     aspectRatio: job.aspectRatio,
+    model: job.selectedModel,
+    maxAttempts: cap,
     sourceImage: toRef(job.sourceImageId),
     referenceImages: job.referenceImageIds.map(toRef).filter((r): r is ProviderImageRef => r !== null),
   };
@@ -228,12 +255,12 @@ export async function generateForJob(jobId: string, actor: string | null, opts: 
     jobId,
     attempt,
     provider: provider.id,
-    model: result.model ?? null,
+    model: result.model ?? job.selectedModel ?? null,
     brief,
     imageId: persisted?.imageId ?? null,
     resultPath: persisted?.path ?? result.url ?? null,
     placeholder: result.placeholder,
-    resultMeta: result.meta ?? null,
+    resultMeta: { ...(result.meta ?? {}), ...refMeta },
     status: "generating",
   });
   if (result.model && !job.selectedModel) setJobModel(jobId, result.model);
@@ -338,8 +365,10 @@ export async function completeAsyncGeneration(generationId: string, payload: Cal
   if (!gen) return { ok: false, error: "generation_not_found" };
   const job = getJob(gen.jobId);
   if (!job) return { ok: false, error: "job_not_found" };
-  // Idempotent: only a still-pending generation can be finished by a callback.
-  if (gen.status !== "generating") return { ok: true, already: true, job, generation: gen };
+  // Idempotent: atomically CLAIM the pending row. Only the FIRST callback wins the claim; a duplicate or
+  // concurrent callback (already claimed, or already resolved to pass/fail/error) is a no-op — it never
+  // creates a second record, downloads the image twice, or overwrites a later human/QA state.
+  if (!claimGenerationForCallback(generationId)) return { ok: true, already: true, job, generation: gen };
 
   if (payload.status !== "succeeded") {
     setGenerationStatus(generationId, "error");

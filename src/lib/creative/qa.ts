@@ -10,9 +10,36 @@ import {
   type Generation,
   type QaCheck,
   type QaReport,
+  type QaDecision,
+  type QaScorecard,
   type ZoeVisualDNA,
   isReferenceFirst,
 } from "./types";
+
+/** Coerce an unknown into a 0..100 integer, or undefined when it isn't a finite number. */
+const score100 = (v: unknown): number | undefined => {
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : undefined;
+};
+const cleanStrs = (v: unknown): string[] =>
+  Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x.trim() : "")).filter((x) => x.length > 0) : [];
+
+/** Pull a full 0..100 scorecard from the n8n dimensions blob (only when every axis is present + numeric). */
+function parseScorecard(d: unknown): QaScorecard | undefined {
+  if (!d || typeof d !== "object") return undefined;
+  const o = d as Record<string, unknown>;
+  const keys: (keyof QaScorecard)[] = [
+    "productAccuracy", "referenceFidelity", "photographicQuality", "architecturalRealism",
+    "humanRealism", "brandAlignment", "composition", "webUsability",
+  ];
+  const out = {} as QaScorecard;
+  for (const k of keys) {
+    const n = score100(o[k]);
+    if (n === undefined) return undefined; // partial scorecards are dropped rather than half-fabricated
+    out[k] = n;
+  }
+  return out;
+}
 
 const PASS_THRESHOLD = 80; // a generation passes QC at 80+ with no critical failure
 
@@ -102,6 +129,10 @@ export function runQa(job: CreativeJob, generation: Generation, dna: ZoeVisualDN
   const score = checks.length ? Math.round((passed / checks.length) * 100) : 0;
   const anyCriticalFail = checks.some((c) => c.critical && !c.pass);
   const verdict: "pass" | "fail" = !anyCriticalFail && score >= PASS_THRESHOLD ? "pass" : "fail";
+  // A failed critical brief-check is a hard failure (a real vision QA reports its own codes; this floor maps
+  // its critical checks). No `dimensions`: the rules floor inspects no pixels, so it never fabricates axes.
+  const hardFailures = checks.filter((c) => c.critical && !c.pass).map((c) => c.label);
+  const decision: QaDecision = verdict === "pass" ? "PASS" : "FAIL";
 
   const summary = anyCriticalFail
     ? "Failed a critical check (missing brief, image, or preserve guard)."
@@ -109,7 +140,17 @@ export function runQa(job: CreativeJob, generation: Generation, dna: ZoeVisualDN
       ? `Passed ${passed}/${checks.length} checks (${score}). Brief and constraints are well-formed and honored.`
       : `Scored ${score} (${passed}/${checks.length}); below the ${PASS_THRESHOLD} bar. Regenerate or revise the brief.`;
 
-  return { score, verdict, method: "rules", summary, checks };
+  return {
+    score,
+    verdict,
+    decision,
+    method: "rules",
+    summary,
+    checks,
+    hardFailures,
+    issues: checks.filter((c) => !c.critical && !c.pass).map((c) => c.note),
+    recommendedChanges: [],
+  };
 }
 
 // ── n8n path ────────────────────────────────────────────────────────────────────────────────────────
@@ -117,8 +158,13 @@ export function runQa(job: CreativeJob, generation: Generation, dna: ZoeVisualDN
 // reference-first constraint check (the one thing n8n can't know: did this job require a real source photo
 // as the truth, and was one attached?). The app still owns human approval regardless.
 export interface N8nQaInput {
-  score?: number;
-  verdict?: "pass" | "fail";
+  score?: number; // overall 0..100
+  verdict?: "pass" | "fail"; // legacy binary; `decision` is preferred
+  decision?: QaDecision; // PASS | FAIL | HUMAN_REVIEW (the richer outcome)
+  dimensions?: Partial<QaScorecard>; // the 0..100 multi-axis scorecard
+  hardFailures?: string[]; // any → forces FAIL regardless of scores
+  issues?: string[];
+  recommendedChanges?: string[];
   note?: string;
   checks?: { label: string; pass: boolean; note?: string }[];
 }
@@ -133,16 +179,38 @@ export function n8nQaReport(job: CreativeJob, n8n: N8nQaInput | null | undefined
     if (c && typeof c.label === "string") checks.push({ label: c.label, pass: !!c.pass, note: typeof c.note === "string" ? c.note : "", critical: false });
   }
 
-  // n8n's verdict (its generation-QA result). Falls back to score threshold, then the callback status.
-  const n8nVerdict: "pass" | "fail" = n8n?.verdict ?? (typeof n8n?.score === "number" ? (n8n.score >= N8N_PASS_THRESHOLD ? "pass" : "fail") : succeeded ? "pass" : "fail");
+  const hardFailures = cleanStrs(n8n?.hardFailures);
+  const dimensions = parseScorecard(n8n?.dimensions);
+
+  // n8n's decision (its vision generation-QA result). Priority: explicit decision → verdict → score → status.
+  // A non-empty hardFailures list ALWAYS forces FAIL: a beautiful image with the wrong Zoe equipment must not
+  // pass, whatever the numeric scores say.
+  let decision: QaDecision =
+    n8n?.decision ??
+    (n8n?.verdict === "pass"
+      ? "PASS"
+      : n8n?.verdict === "fail"
+        ? "FAIL"
+        : typeof n8n?.score === "number"
+          ? n8n.score >= N8N_PASS_THRESHOLD
+            ? "PASS"
+            : "FAIL"
+          : succeeded
+            ? "PASS"
+            : "FAIL");
+  if (hardFailures.length) decision = "FAIL";
+
   checks.push({
-    label: "n8n generation QA",
-    pass: n8nVerdict === "pass",
-    note: n8n?.note || (typeof n8n?.score === "number" ? `n8n QA score ${n8n.score}.` : succeeded ? "n8n reported success." : "n8n reported failure."),
+    label: "n8n vision QA",
+    pass: decision === "PASS",
+    note:
+      hardFailures.length
+        ? `Hard failure: ${hardFailures.slice(0, 3).join("; ")}.`
+        : n8n?.note || (typeof n8n?.score === "number" ? `n8n QA score ${n8n.score} (${decision}).` : succeeded ? `n8n reported ${decision}.` : "n8n reported failure."),
     critical: false,
   });
 
-  // Our LIGHT reference-first constraint check (the only thing we gate on).
+  // Our LIGHT reference-first constraint check (the only thing WE gate on beyond n8n's verdict).
   const refOk = !isReferenceFirst(job.sourceMode) || !!job.sourceImageId;
   checks.push({
     label: "Reference source attached",
@@ -150,14 +218,31 @@ export function n8nQaReport(job: CreativeJob, n8n: N8nQaInput | null | undefined
     note: refOk ? (isReferenceFirst(job.sourceMode) ? "A source-of-truth photo anchors this reference-first job." : "Scratch job; no source required.") : "Reference-first job with no source photo attached.",
     critical: true,
   });
+  if (!refOk) decision = "FAIL";
 
-  const verdict: "pass" | "fail" = refOk && n8nVerdict === "pass" ? "pass" : "fail";
+  const verdict: "pass" | "fail" = decision === "PASS" ? "pass" : "fail";
   const score = typeof n8n?.score === "number" ? Math.max(0, Math.min(100, Math.round(n8n.score))) : verdict === "pass" ? 100 : 0;
   const summary =
     !refOk
       ? "Blocked: reference-first job is missing its source photo."
-      : verdict === "pass"
+      : decision === "PASS"
         ? `n8n QA passed${typeof n8n?.score === "number" ? ` (${n8n.score})` : ""}; reference constraint OK. Ready for human review.`
-        : "n8n QA did not pass. Regenerate or revise.";
-  return { score, verdict, method: "n8n", summary, checks };
+        : hardFailures.length
+          ? `n8n QA hard failure (${hardFailures.slice(0, 2).join("; ")}). Regenerate or revise.`
+          : decision === "HUMAN_REVIEW"
+            ? "n8n QA is uncertain — routed to a human to judge."
+            : "n8n QA did not pass. Regenerate or revise.";
+
+  return {
+    score,
+    verdict,
+    decision,
+    method: "n8n",
+    summary,
+    checks,
+    dimensions,
+    hardFailures,
+    issues: cleanStrs(n8n?.issues),
+    recommendedChanges: cleanStrs(n8n?.recommendedChanges),
+  };
 }

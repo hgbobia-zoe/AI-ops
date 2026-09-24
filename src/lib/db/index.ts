@@ -1132,6 +1132,7 @@ CREATE TABLE IF NOT EXISTS creative_generations (
   status         TEXT NOT NULL,            -- generating | pass | fail | error | approved | rejected
   callback_token TEXT,                     -- async providers (n8n): per-generation callback credential
   external_ref   TEXT,                     -- async providers: the provider's run id (n8n execution id)
+  callback_claimed_at TEXT,                -- async: set once when a callback claims this pending row (idempotency guard)
   created_at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_creative_generations_job ON creative_generations(job_id, attempt DESC);
@@ -1225,6 +1226,8 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Creative Engine async providers (n8n): per-generation callback credential + the provider's run id.
   { table: "creative_generations", column: "callback_token", type: "TEXT" },
   { table: "creative_generations", column: "external_ref", type: "TEXT" },
+  { table: "creative_generations", column: "callback_claimed_at", type: "TEXT" }, // callback idempotency claim
+
   // Intake: single delivery class (residential | commercial | venue) replacing customer_type + location_type.
   { table: "sales_intake", column: "location_class", type: "TEXT" },
   // Intake: target delivery time for a same-day (premium/exact) window.

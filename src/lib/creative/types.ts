@@ -319,24 +319,79 @@ export interface ImageBrief {
   negativeConstraints: string[];
   imagePrompt: string;
   briefSource: "rules" | "ai_refined"; // honesty: how the concept/prompt were produced
+  dnaVersion?: string; // short hash of the Visual DNA the brief was composed from (frozen per generation)
   builtAt: string;
 }
 
-// ── QA report (deterministic; a real vision model plugs in later) ───────────────────────────────────
+// Default cap on AUTOMATED generation attempts (handoffs to the generator) per job before the job parks in
+// human review. n8n runs its own internal revision loop within one handoff; this is Tower's outer backstop
+// so a job can never loop forever. Sent to n8n as `maxAttempts` so it bounds its internal loop too.
+export const DEFAULT_MAX_ATTEMPTS = 3;
+
+// ── QA report (deterministic rules floor; a real vision model — run inside n8n — plugs in later) ─────
 export interface QaCheck {
   label: string;
   pass: boolean;
   note: string;
   critical: boolean;
 }
+
+// The three-way QA outcome. A generation is NOT simply pass/fail: a real vision QA can also send an image
+// to a human when it is uncertain (borderline) rather than auto-fail or auto-pass it.
+export type QaDecision = "PASS" | "FAIL" | "HUMAN_REVIEW";
+
+// The structured 0..100 scorecard a vision QA returns. Multi-axis on purpose: one generic "quality" number
+// hides the failure modes that matter (right equipment, preserved structure, believable people). A high
+// aesthetic score must NOT rescue an image with the wrong Zoe equipment — that is a hard failure (below).
+export interface QaScorecard {
+  productAccuracy: number; // the rental equipment shown is actually Zoe's, correctly rendered
+  referenceFidelity: number; // PRESERVE elements from the source survived the transformation
+  photographicQuality: number; // exposure, focus, dynamic range, believable optics
+  architecturalRealism: number; // structures/venues are physically possible (no warped tents/impossible spans)
+  humanRealism: number; // anatomy/hands/faces of any people are correct
+  brandAlignment: number; // reads as the Zoe house look (Visual DNA)
+  composition: number; // framing, balance, negative space for text
+  webUsability: number; // usable on the site/marketing surface at the target ratio
+}
+
+export const QA_DIMENSIONS: { key: keyof QaScorecard; label: string }[] = [
+  { key: "productAccuracy", label: "Product accuracy" },
+  { key: "referenceFidelity", label: "Reference fidelity" },
+  { key: "photographicQuality", label: "Photographic quality" },
+  { key: "architecturalRealism", label: "Architectural realism" },
+  { key: "humanRealism", label: "Human realism" },
+  { key: "brandAlignment", label: "Brand alignment" },
+  { key: "composition", label: "Composition" },
+  { key: "webUsability", label: "Web usability" },
+];
+
+// The hard-failure catalog — any one of these fails the generation REGARDLESS of the numeric scores. n8n
+// reports the codes it tripped in qaReport.hardFailures; the rules floor maps its critical checks here.
+export const QA_HARD_FAILURES = [
+  "incorrect_equipment", // materially wrong / misrepresented rental equipment
+  "distorted_structure", // warped or physically-wrong tent/structure
+  "impossible_architecture", // impossible spans, geometry, or venue architecture
+  "major_ai_artifact", // obvious large AI artifacts (melted objects, duplicated limbs, gibberish text)
+  "severe_anatomy", // severe human anatomy problems (hands, faces, limbs)
+  "preserve_violation", // a required PRESERVE element from the source was not preserved
+] as const;
+export type QaHardFailure = (typeof QA_HARD_FAILURES)[number];
+
 export interface QaReport {
-  score: number; // 0..100
-  verdict: "pass" | "fail";
+  score: number; // 0..100 (overall)
+  verdict: "pass" | "fail"; // binary drive for the lifecycle (pass → awaiting_approval, fail → needs_revision)
+  decision: QaDecision; // richer three-way outcome (PASS | FAIL | HUMAN_REVIEW); verdict = pass iff PASS
   // honesty about WHO judged: "rules" = our deterministic checks (no pixels inspected); "n8n" = the
-  // workflow's own generation-QA is primary and we layer only a light reference-first constraint check.
+  // workflow's own vision generation-QA is primary and we layer only a light reference-first constraint check.
   method: "rules" | "n8n";
   summary: string;
   checks: QaCheck[];
+  // ── Structured vision-QA fields (populated on the n8n path; the rules floor leaves `dimensions` undefined,
+  //    because with no pixels it cannot honestly score them). All optional so older stored reports parse. ──
+  dimensions?: QaScorecard; // the 0..100 multi-axis scorecard
+  hardFailures?: string[]; // hard-failure codes/messages tripped (any → verdict fail)
+  issues?: string[]; // non-fatal problems worth noting
+  recommendedChanges?: string[]; // concrete fixes for the next attempt (fed back to the generator)
 }
 
 // ── CreativeJob (the workflow row) ──────────────────────────────────────────────────────────────────

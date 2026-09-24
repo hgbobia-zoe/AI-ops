@@ -17,6 +17,7 @@ import {
   SOURCE_MODE_LABEL,
   ASPECT_RATIO_LABEL,
   GENERATION_STATUS_LABEL,
+  QA_DIMENSIONS,
   type CreativeJob,
   type Generation,
   type CreativeEvent,
@@ -46,6 +47,21 @@ function QaReportView({ report }: { report: QaReport }): React.JSX.Element {
         <span className="text-[10.5px] uppercase tracking-[0.05em] text-meta">{report.method === "n8n" ? "n8n QA + ref check" : "rules-based"}</span>
       </div>
       <p className="mb-1.5 text-[11.5px] text-meta">{report.summary}</p>
+      {report.hardFailures && report.hardFailures.length > 0 && (
+        <div className="mb-1.5 rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-200">
+          <span className="font-medium">Hard failures:</span> {report.hardFailures.join("; ")}
+        </div>
+      )}
+      {report.dimensions && (
+        <div className="mb-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] text-meta sm:grid-cols-4">
+          {QA_DIMENSIONS.map(({ key, label }) => (
+            <div key={key} className="flex items-center justify-between gap-1">
+              <span>{label}</span>
+              <span className="tabular-nums text-tertiary-text">{report.dimensions![key]}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <ul className="space-y-0.5">
         {report.checks.map((c, i) => (
           <li key={i} className="flex items-start gap-1.5 text-[11.5px]">
@@ -56,6 +72,13 @@ function QaReportView({ report }: { report: QaReport }): React.JSX.Element {
           </li>
         ))}
       </ul>
+      {report.recommendedChanges && report.recommendedChanges.length > 0 && (
+        <ul className="mt-1.5 space-y-0.5 border-t border-[var(--row-rule)] pt-1.5 text-[11px] text-meta">
+          {report.recommendedChanges.map((r, i) => (
+            <li key={i}>Next: {r}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

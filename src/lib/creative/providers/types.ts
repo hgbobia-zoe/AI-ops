@@ -22,6 +22,11 @@ export interface ImageGenerationInput {
   aspectRatio: AspectRatio;
   sourceImage?: ProviderImageRef | null; // reference-first edit anchor
   referenceImages?: ProviderImageRef[]; // additional style/subject references
+  /** Configured model hint (e.g. an OpenAI image model id). Null = let the execution plane (n8n) choose.
+   *  Free-text so new providers/models need NO schema change; the actual model used is echoed back on QA. */
+  model?: string | null;
+  /** Outer cap on automated attempts for this job (n8n bounds its internal revision loop to this). */
+  maxAttempts?: number;
   // ── Async plumbing (populated by the service for async providers only) ──
   /** The Generation row id (async providers echo it back on the callback). */
   generationId?: string;

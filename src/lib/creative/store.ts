@@ -330,6 +330,18 @@ export function setGenerationStatus(id: string, status: GenerationStatus): void 
   getDb().prepare("UPDATE creative_generations SET status=@status WHERE id=@id").run({ status, id });
 }
 
+/** Atomically CLAIM a pending generation for callback processing (idempotency guard). Returns true exactly
+ *  once: the first caller flips callback_claimed_at while status is still 'generating'. A duplicate or
+ *  concurrent callback (already claimed, or the generation already resolved to pass/fail/error) gets false
+ *  and must be treated as a no-op — so a second callback can never create a duplicate or overwrite a later
+ *  state. Single UPDATE = atomic under better-sqlite3's serialized writes. */
+export function claimGenerationForCallback(id: string): boolean {
+  const res = getDb()
+    .prepare("UPDATE creative_generations SET callback_claimed_at=@ts WHERE id=@id AND status='generating' AND callback_claimed_at IS NULL")
+    .run({ ts: now(), id });
+  return res.changes === 1;
+}
+
 // ── Images ──────────────────────────────────────────────────────────────────────────────────────────
 function toImage(r: any): CreativeImage {
   return {

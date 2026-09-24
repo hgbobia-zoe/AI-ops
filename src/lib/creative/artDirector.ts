@@ -7,7 +7,7 @@
 // constraints, preserve/transform, or negatives. It degrades gracefully: any failure keeps the rules brief.
 
 import { chat, llmConfigured } from "@/lib/llm";
-import { getVisualDNA } from "./visualDna";
+import { getVisualDNA, dnaVersion } from "./visualDna";
 import {
   type CreativeJob,
   type ImageBrief,
@@ -145,6 +145,7 @@ export function buildBriefDeterministic(job: CreativeJob, dna: ZoeVisualDNA = ge
     ...partial,
     imagePrompt: composePrompt(partial, dna),
     briefSource: "rules",
+    dnaVersion: dnaVersion(dna),
     builtAt: new Date().toISOString(),
   };
 }

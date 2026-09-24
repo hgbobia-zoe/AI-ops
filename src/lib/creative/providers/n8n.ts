@@ -13,6 +13,7 @@
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { getJson, setJson } from "@/lib/kv";
 import { getSecret, setSecret, hasSecret } from "@/lib/secrets";
+import { signImagePath } from "../assetUrl";
 import type { ImageGenerationInput, ImageGenerationProvider, ImageGenerationResult, ProviderImageRef } from "./types";
 
 export const N8N_WEBHOOK_KEY = "creative.n8n.webhookUrl";
@@ -46,13 +47,15 @@ export function mintCallbackToken(generationId: string): string {
   return createHmac("sha256", callbackSecret()).update(`${generationId}:${randomUUID()}`).digest("hex");
 }
 
-/** Build an absolute URL for an image ref the workflow will fetch (n8n runs off-box). */
-function absUrl(baseUrl: string | undefined, ref: ProviderImageRef | null | undefined): string | null {
+/** Build an absolute, SIGNED, short-lived URL for an image ref the workflow will fetch (n8n runs off-box and
+ *  carries no session). The signature lets the proxy admit this one fetch without exposing every image
+ *  publicly. Already-absolute (external) paths pass through untouched. */
+async function signedAbsUrl(baseUrl: string | undefined, ref: ProviderImageRef | null | undefined): Promise<string | null> {
   if (!ref) return null;
-  const path = ref.path;
-  if (/^https?:\/\//i.test(path)) return path;
-  if (!baseUrl) return path; // best effort; the callback + image URLs are built absolute upstream anyway
-  return `${baseUrl.replace(/\/+$/, "")}${path.startsWith("/") ? "" : "/"}${path}`;
+  if (/^https?:\/\//i.test(ref.path)) return ref.path;
+  const signed = await signImagePath(ref.id); // /api/creative/image/<id>?exp=&sig=
+  if (!baseUrl) return signed; // best effort in dev; the gate is off when there's no signing key anyway
+  return `${baseUrl.replace(/\/+$/, "")}${signed.startsWith("/") ? "" : "/"}${signed}`;
 }
 
 async function handOff(input: ImageGenerationInput, mode: "generate" | "edit"): Promise<ImageGenerationResult> {
@@ -62,21 +65,29 @@ async function handOff(input: ImageGenerationInput, mode: "generate" | "edit"): 
     return { ok: false, placeholder: false, error: "async plumbing missing (callbackUrl/token/generationId)" };
   }
 
+  const sourceUrl = input.sourceImage ? await signedAbsUrl(input.baseUrl, input.sourceImage) : null;
+  const referenceUrls = (
+    await Promise.all((input.referenceImages ?? []).map((r) => signedAbsUrl(input.baseUrl, r)))
+  ).filter((u): u is string => !!u);
+
   const body = {
     generationId: input.generationId,
     jobId: input.jobId,
     attempt: input.attempt,
+    maxAttempts: input.maxAttempts ?? null, // bound n8n's internal revision loop to Tower's cap
+    provider: "n8n",
+    model: input.model ?? null, // configured model hint; null = n8n chooses. Actual model echoed back on QA.
     callbackUrl: input.callbackUrl,
     callbackToken: input.callbackToken,
     brief: input.brief,
     aspectRatio: input.aspectRatio,
+    // PRESERVE = source of truth (must survive) · TRANSFORM = creative latitude. Explicit at top level so the
+    // workflow can gate on them without parsing the brief.
     preserve: input.brief.preserve,
     transform: input.brief.transform,
-    source: input.sourceImage ? { url: absUrl(input.baseUrl, input.sourceImage) } : null,
-    references: (input.referenceImages ?? [])
-      .map((r) => ({ url: absUrl(input.baseUrl, r) }))
-      .filter((r): r is { url: string } => !!r.url),
-    meta: { mode, briefSource: input.brief.briefSource },
+    source: sourceUrl ? { url: sourceUrl } : null,
+    references: referenceUrls.map((url) => ({ url })),
+    meta: { mode, briefSource: input.brief.briefSource, dnaVersion: input.brief.dnaVersion ?? null },
   };
 
   const headers: Record<string, string> = { "content-type": "application/json" };

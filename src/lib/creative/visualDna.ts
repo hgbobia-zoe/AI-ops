@@ -59,3 +59,16 @@ export function resetVisualDNA(): ZoeVisualDNA {
   setJson(DNA_KEY, DEFAULT_VISUAL_DNA);
   return getVisualDNA();
 }
+
+/** A short, stable content hash of a Visual DNA object, stamped onto each brief so every generation records
+ *  WHICH house look produced it (the DNA is an editable KV blob with no explicit version). Deterministic:
+ *  the same DNA always yields the same tag; any edit changes it. Non-crypto (labelling only). */
+export function dnaVersion(dna: ZoeVisualDNA = getVisualDNA()): string {
+  const json = JSON.stringify(dna);
+  let h = 2166136261; // FNV-1a 32-bit
+  for (let i = 0; i < json.length; i++) {
+    h ^= json.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `dna_${(h >>> 0).toString(16).padStart(8, "0")}`;
+}

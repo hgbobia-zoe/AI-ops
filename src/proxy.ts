@@ -12,6 +12,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifySession, SESSION_COOKIE } from "@/lib/auth/session";
 import { canSeeFinancials, canManageSettings, canSeeCoaching } from "@/lib/auth/roles";
+import { verifyImageSig } from "@/lib/creative/assetUrl";
 
 const PUBLIC: string[] = [
   "/login",
@@ -85,6 +86,15 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
   const { pathname } = req.nextUrl;
   if (isPublicPath(pathname)) return NextResponse.next();
   if (pathname.startsWith("/api/pod") && req.method === "GET") return NextResponse.next(); // public tracking images
+  // Creative source/reference images for the off-box n8n workflow: admit a GET ONLY when it carries a valid,
+  // unexpired signature (minted per-image at handoff). No session is needed, but images are NOT public — an
+  // unsigned/expired request falls through to the normal session gate below.
+  if (pathname.startsWith("/api/creative/image/") && req.method === "GET") {
+    const id = decodeURIComponent(pathname.slice("/api/creative/image/".length));
+    if (await verifyImageSig(id, req.nextUrl.searchParams.get("exp"), req.nextUrl.searchParams.get("sig"))) {
+      return NextResponse.next();
+    }
+  }
   // Driver truck-picker → kiosk reads its assigned route here. EXACT GET only, so the dispatcher write
   // actions under /api/route/* (close, reopen, driver, stop/remove) stay authenticated.
   if (pathname === "/api/route" && req.method === "GET") return NextResponse.next();
