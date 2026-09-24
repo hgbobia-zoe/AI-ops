@@ -19,7 +19,7 @@ import {
 } from "@/lib/db/repo";
 import { generateRecap } from "@/lib/coach/recap";
 import { analyzeSentiment } from "./sentiment";
-import { getCallTranscript, getCallSummary, openphoneUserInitials } from "./openphone";
+import { getCallTranscript, getCallSummary, getCallDetails, openphoneUserInitials } from "./openphone";
 import { slackNotifyAlert } from "@/lib/notify/slack";
 import { decideCallNote } from "@/lib/salesos/callNote";
 import { initialsOf, salesOsNoteLine } from "@/lib/salesos/noteFormat";
@@ -124,8 +124,19 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   // Match the customer's project once — shared by the note, the timeline row, and the state debrief.
   // A call's fields arrive spread across several webhook events (the summary event often omits the phone),
   // so fall back to whatever this call row already captured from an earlier event.
-  const dir = input.direction ?? existing?.direction ?? "incoming";
-  const custPhone = (dir === "outgoing" ? (input.toPhone ?? existing?.toPhone) : (input.fromPhone ?? existing?.fromPhone)) ?? null;
+  let dir = input.direction ?? existing?.direction ?? "incoming";
+  let custPhone = (dir === "outgoing" ? (input.toPhone ?? existing?.toPhone) : (input.fromPhone ?? existing?.fromPhone)) ?? null;
+  // The transcript/summary event that triggers the alert usually omits the phone, and the call.completed
+  // event may never have been stored — so if we still don't know who called, fetch the call's metadata by
+  // id to backfill the number (and direction). This is what keeps the alert from saying "unknown caller",
+  // and it also lets the booking match below recover the caller's name + project link.
+  if (!custPhone) {
+    const det = await getCallDetails(callId);
+    if (det) {
+      if (det.direction) dir = det.direction === "outgoing" ? "outgoing" : "incoming";
+      custPhone = det.customerPhone; // the party that isn't one of our own Quo numbers
+    }
+  }
   const digits = last10(custPhone);
   const booking = digits ? getBookingByPhoneDigits(digits) : null;
   const initials = (await openphoneUserInitials(input.agentUserId)) ?? initialsOf(input.agentName ?? null);
@@ -133,7 +144,7 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   // Caller name: Quo's contact name if any, else the matched customer, else whatever we already stored —
   // so the alert can name them instead of "unknown caller".
   const resolvedName = (input.contactName ?? "").trim() || booking?.clientName?.trim() || existing?.contactName?.trim() || null;
-  updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: resolvedName, eventType: input.eventType, fromPhone: input.fromPhone ?? null, toPhone: input.toPhone ?? null });
+  updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: resolvedName, eventType: input.eventType, fromPhone: input.fromPhone ?? (dir === "incoming" ? custPhone : null), toPhone: input.toPhone ?? (dir === "outgoing" ? custPhone : null) });
 
   // Log the call to Goodshuffle notes (conversation summary or voicemail) — regardless of sentiment.
   await maybeLogCallNote(id, input, !!existing?.noteLoggedAt, summary, booking, initials);

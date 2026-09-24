@@ -73,6 +73,28 @@ export async function getCallTranscript(callId: string): Promise<string | null> 
     .trim() || null;
 }
 
+export interface QuoCallDetails {
+  direction: string | null; // "incoming" | "outgoing"
+  participants: string[]; // every party on the call, E.164 (INCLUDES our own Quo number)
+  customerPhone: string | null; // the participant that is NOT one of our Quo numbers (the customer)
+}
+
+/** Fetch a single call's metadata (direction + the customer's number) by id. Used to BACKFILL the customer
+ *  phone when a transcript/summary webhook event arrives without it (that's what makes the frustrated-caller
+ *  alert say "unknown caller"). Note: OpenPhone's `participants` array includes OUR own Quo number, so the
+ *  customer is resolved by excluding our numbers. Key-gated, never throws; null when unconfigured/not found. */
+export async function getCallDetails(callId: string): Promise<QuoCallDetails | null> {
+  const apiKey = openphoneApiKey();
+  if (!apiKey || !callId) return null;
+  const json = await opGet(`/calls/${encodeURIComponent(callId)}`, apiKey);
+  const d = (json?.data as Record<string, unknown>) ?? null;
+  if (!d) return null;
+  const participants = Array.isArray(d.participants) ? (d.participants as unknown[]).map(String).filter(Boolean) : [];
+  const ours = new Set((await getOpenphonePhoneNumbers()).map((n) => last10(n.number)).filter((x): x is string => !!x));
+  const customerPhone = participants.find((p) => { const d10 = last10(p); return d10 && !ours.has(d10); }) ?? null;
+  return { direction: (d.direction as string) ?? null, participants, customerPhone };
+}
+
 /** Fetch a call's AI summary text when available, else null. */
 export async function getCallSummary(callId: string): Promise<string | null> {
   const apiKey = openphoneApiKey();
