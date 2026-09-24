@@ -12,12 +12,13 @@
  *  `publishToken` (when the KIOSK_PUBLISH_TOKEN secret is set) is sent as x-publish-token so the
  *  now-gated ingest endpoints accept the write — only logged-in users can see /admin/pull, so the
  *  token isn't exposed publicly. */
-export function buildOfficePullScript(apiBase: string, publishToken?: string, autoMs = 0): string {
+export function buildOfficePullScript(apiBase: string, publishToken?: string, autoMs = 0, skipCreate = false): string {
   const API = JSON.stringify(apiBase.replace(/\/+$/, ""));
   const PUB = JSON.stringify(publishToken ?? "");
   const AUTO = Math.max(0, Math.floor(autoMs)); // >0 → self-repeating auto-pull (no more manual clicks)
+  const SKIP = skipCreate ? "true" : "false"; // true → leave create_project ops for a native (Playwright) drainer
   return `(function(){
-    var PUB=${PUB}; var AUTO=${AUTO};
+    var PUB=${PUB}; var AUTO=${AUTO}; var SKIP_CREATE=${SKIP};
     function POSTH(){ return PUB ? {"content-type":"application/json","x-publish-token":PUB} : {"content-type":"application/json"}; }
   function banner(msg,color){ try{ var id="__zoePull"; var e=document.getElementById(id); if(!e){e=document.createElement("div");e.id=id;e.style.cssText="position:fixed;z-index:2147483647;top:14px;right:14px;padding:11px 15px;border-radius:8px;font:600 13px system-ui,sans-serif;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:360px";document.body.appendChild(e);} e.style.background=color; e.textContent=msg; }catch(x){} }
   function done(){ setTimeout(function(){var e=document.getElementById("__zoePull");if(e)e.remove();},7000); }
@@ -153,6 +154,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var emailOps=all.filter(function(o){ return o.op==="email_send" && o.transactionId && o.payload && o.payload.content; });
         var feeOps=all.filter(function(o){ return o.op==="set_delivery_fee" && o.transactionId && o.payload && o.payload.amount!=null; });
         var createOps=all.filter(function(o){ return o.op==="create_project" && o.payload && o.payload.intakeId; });
+        if(SKIP_CREATE) createOps=[]; // a standalone Playwright runner drains creates by navigation instead of a popup
         // Goodshuffle only CREATES a project on a real navigation (a fetch just returns the SPA shell), so we
         // open createNewProject in a POPUP. Do it HERE, synchronously right after the outbox fetch, so we're
         // still inside the bookmarklet click's transient activation (~5s) and the popup isn't blocked. The
@@ -323,7 +325,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
     }
 
     // Finish a cycle: one-shot fades the banner; auto keeps a persistent status with the last-run time.
-    function fin(msg,color){ if(AUTO){ var t=new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}); banner(msg+" · auto every "+Math.round(AUTO/60000)+"m (last "+t+")",color); } else { banner(msg,color); done(); } }
+    function fin(msg,color){ try{ window.__zoePullDone={at:Date.now(),msg:msg}; }catch(e){} if(AUTO){ var t=new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}); banner(msg+" · auto every "+Math.round(AUTO/60000)+"m (last "+t+")",color); } else { banner(msg,color); done(); } }
     function runOnce(){
       try{
         var pth=location.pathname.toLowerCase();
