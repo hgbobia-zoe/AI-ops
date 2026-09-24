@@ -31,6 +31,9 @@
 
     <div class="row"><input id="enabled" type="checkbox" /> <label for="enabled" style="margin:0;">Auto-pull enabled</label></div>
 
+    <div class="row"><input id="createDrainEnabled" type="checkbox" /> <label for="createDrainEnabled" style="margin:0;">Create projects from queued intakes</label></div>
+    <div class="hint">Off by default. When on, the extension drains <code>create_project</code> intake ops by opening a background Goodshuffle tab and populating a new project — no popup. Leave off if a standalone runner already creates projects. Reads/routes/bookings are unaffected either way.</div>
+
     <label for="radarToken">Opportunity Radar ingest token</label>
     <input id="radarToken" type="text" placeholder="(only if RADAR_INGEST_TOKEN is set on the server)" />
     <div class="hint">For the "Capture to Opportunity Radar" button. Leave blank unless RADAR_INGEST_TOKEN is configured on Zoe Ops.</div>

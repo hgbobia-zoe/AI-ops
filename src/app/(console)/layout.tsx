@@ -5,6 +5,7 @@
 import { redirect } from "next/navigation";
 import { ConsoleNav } from "@/components/ConsoleNav";
 import { PullHealthBanner } from "@/components/PullHealthBanner";
+import { ExtensionSync } from "@/components/ExtensionSync";
 import { StatusBar, type StatusIntegration } from "@/components/StatusBar";
 import { GuestShellBar } from "@/components/GuestShellBar";
 import { viewerRole, currentActor, getSession } from "@/lib/auth/getSession";
@@ -59,6 +60,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
       <div className="flex min-w-0 flex-1 flex-col">
         <StatusBar integrations={integrations} />
         {canManage && <PullHealthBanner initial={banner} />}
+        {canManage && <ExtensionSync stale={banner != null} />}
         <div className="min-w-0 flex-1">{children}</div>
       </div>
     </div>

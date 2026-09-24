@@ -43,15 +43,17 @@ export function PullExtensionInstall({ downloadHref }: { downloadHref: string })
         <li>Turn on <b>Developer mode</b> (top-right toggle).</li>
         <li>Click <b>Load unpacked</b> and choose the folder you just unzipped.</li>
         <li>
-          <span className="inline-flex items-center gap-1"><Puzzle className="size-3.5" /> &ldquo;Zoe Auto-Pull&rdquo;</span> appears. That&apos;s it — with
-          <b> pro.goodshuffle.com</b> open and signed in, it pulls every 10 minutes automatically. Click its toolbar icon to
+          <span className="inline-flex items-center gap-1"><Puzzle className="size-3.5" /> &ldquo;Zoe Auto-Pull&rdquo;</span> appears. That&apos;s it — as long as
+          you&apos;re <b>signed into Goodshuffle</b> in this browser, it pulls every 10 minutes automatically. You do
+          <b> not</b> need to keep a Goodshuffle tab open; the extension opens and keeps its own. Click its toolbar icon to
           see status or pull now.
         </li>
       </ol>
 
       <p className="text-[12px] text-muted-foreground">
-        Do this on the <b>office machine only</b> — the one that stays logged into Goodshuffle. The pull feeds the whole
-        team; nobody else needs to install anything. Use the same browser that&apos;s signed into GSPRO.
+        Do this on the <b>office machine only</b> — the one that stays signed into Goodshuffle. The pull feeds the whole
+        team; nobody else needs to install anything. Use the same browser that&apos;s signed into GSPRO. Logging into Zoe Ops
+        in this browser also kicks an immediate sync.
       </p>
     </div>
   );

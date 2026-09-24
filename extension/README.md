@@ -18,21 +18,38 @@ Two jobs, one extension (install on the **office machine** that stays logged int
 
 ## Auto-pull: how it works + staying healthy
 
-As of **v1.2.0** the auto-pull runs as a **declared content script** on `pro.goodshuffle.com`
-(`content.js` + `pull-injected.js`), not as a background injection. Declared content scripts get their
-site access at install, so the pull keeps working across Chrome updates instead of silently breaking
-when Chrome resets an extension's per-site permission (the old `chrome.scripting.executeScript` path was
-what kept getting revoked). The background worker now only drives the toolbar badge and the popup.
+**Install once, log into Goodshuffle in your browser, done — there's no tab to keep open.**
+
+As of **v1.3.0** the background service worker OWNS scheduling (via `chrome.alarms`, which survives the
+worker sleeping — a plain `setInterval` does not) and the Goodshuffle tab lifecycle. On each cycle (and
+on install/startup) it makes sure a signed-in `pro.goodshuffle.com` tab EXISTS — if none is open, it
+opens a single **pinned, background** tab at the GS dashboard and keeps it alive (no per-cycle flicker).
+The declared content script (`content.js` + `pull-injected.js`) then runs the read-pull IN that tab,
+using your own Goodshuffle cookies. Declared content scripts get their site access at install, so this
+keeps working across Chrome updates instead of breaking when Chrome resets a `chrome.scripting.executeScript`
+per-site permission (the old failure mode).
+
+**Log into Zoe Ops → it syncs.** The extension also listens for a handshake from the Zoe Ops platform
+(`externally_connectable`). When you open the console and the pull looks stale, Zoe Ops asks the
+extension to sync immediately using this browser's Goodshuffle session. If Goodshuffle is signed out, the
+extension opens a GS login tab so you can sign in; once you do, the next cycle pulls.
+
+**Creating projects from queued intakes (optional, OFF by default).** Turn on *"Create projects from
+queued intakes"* in Settings to have the extension drain `create_project` intake ops: for each one it
+opens a background GS tab at `createNewProject` and populates a new project (no popup, one at a time).
+Leave it OFF if a standalone runner already creates projects — reads/routes/bookings work either way.
 
 To stay healthy:
-- Keep **one signed-in `pro.goodshuffle.com` tab open** in this browser (the pull runs in that tab).
-- The toolbar badge shows **`ok`** (green) after each cycle; `!` means signed out / no tab / error.
+- Just stay **signed into Goodshuffle** in this browser. You do **not** need to keep a GS tab open — the
+  extension opens/keeps one itself.
+- The toolbar badge shows **`ok`** (green) after each cycle; `!` means signed out / error.
 - The app also alerts to Slack if the pull reports a failure for more than one cycle, so a broken
   puller is caught within minutes instead of going stale unnoticed.
 
 **After updating this folder, click ↻ Reload on `chrome://extensions`** so Chrome picks up the new
 version (unpacked extensions do not auto-update). If Chrome asks for site access, allow it on
-`pro.goodshuffle.com`.
+`pro.goodshuffle.com`. The extension ships a fixed `key` so its ID stays stable across reinstalls (the
+platform handshake relies on that ID).
 
 ## Using "Capture to Opportunity Radar"
 

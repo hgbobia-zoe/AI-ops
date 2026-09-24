@@ -21,6 +21,16 @@ function fmt(iso?: string): string {
   }
 }
 
+// Clock math lives outside render (the react-hooks/purity rule forbids Date.now() in a component body).
+function hoursAgo(iso?: string): number | null {
+  if (!iso) return null;
+  return Math.round((Date.now() - Date.parse(iso)) / 3_600_000);
+}
+function minutesAgo(iso?: string): number | null {
+  if (!iso) return null;
+  return Math.round((Date.now() - Date.parse(iso)) / 60_000);
+}
+
 export default async function PullSetupPage(): Promise<React.JSX.Element> {
   const h = await headers();
   const host = h.get("host") ?? "zoe-dispatch.fly.dev";
@@ -31,11 +41,11 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
   const autoScript = buildOfficePullScript(base, process.env.GS_INGEST_TOKEN, AUTO_MIN * 60 * 1000);
 
   const state = getPullState();
-  const ageH = state.lastPullAt ? Math.round((Date.now() - Date.parse(state.lastPullAt)) / 3_600_000) : null;
+  const ageH = hoursAgo(state.lastPullAt);
   const stale = ageH == null || ageH >= 26;
 
   const agent = state.agent;
-  const agentAgeMin = agent ? Math.round((Date.now() - Date.parse(agent.at)) / 60_000) : null;
+  const agentAgeMin = minutesAgo(agent?.at);
   const agentLive = agentAgeMin != null && agentAgeMin <= 30;
   const AGENT_STATUS_LABEL: Record<string, string> = {
     ok: "Pulling on schedule",
@@ -72,9 +82,11 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
           <Puzzle className="size-5" /> Auto-Pull extension (recommended)
         </h2>
         <p className="text-sm text-muted-foreground">
-          Install once on the <b>office machine</b> that stays logged into Goodshuffle. It then pulls every 10 minutes on
-          its own — no clicking, and it keeps running across browser restarts. Everyone else just uses the app; only this
-          one machine needs it.
+          Install once on the <b>office machine</b>, then just stay <b>signed into Goodshuffle</b> in that browser —
+          <b> there&apos;s no tab to keep open</b>. The extension schedules itself and opens/keeps its own background
+          Goodshuffle tab, pulling every 10 minutes across browser restarts. And when you log into Zoe Ops, it kicks an
+          immediate sync (prompting a Goodshuffle sign-in only if needed). Everyone else just uses the app; only this one
+          machine needs it.
         </p>
 
         {/* Live status from the extension's heartbeat */}

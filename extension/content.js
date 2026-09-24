@@ -1,15 +1,15 @@
 // Zoe Auto-Pull — content script. Declared to run on pro.goodshuffle.com (manifest content_scripts),
-// so it loads automatically with host access granted at install. It self-schedules the pull (no
-// background injection for Chrome to revoke), calls zoePull() from pull-injected.js (same content
-// world), posts the heartbeat directly (that endpoint is CORS-open), records lastRun, and tells the
-// background worker the status for the toolbar badge. A signed-in GSPRO tab must stay open — same as
-// before — but there is no per-site permission to re-grant after Chrome updates.
+// so it loads automatically with host access granted at install. It runs the read-pull IN this tab
+// (same-origin fetches carry the operator's Goodshuffle cookies), posts the heartbeat directly (that
+// endpoint is CORS-open), records lastRun, and tells the background worker the status for the badge.
+//
+// As of v1.3.0 SCHEDULING lives in the background service worker (chrome.alarms) — NOT a setInterval
+// here (the alarm also ENSURES this tab exists, so the operator no longer has to keep a GS tab open).
+// This script runs the pull on load and whenever the worker nudges it (storage.pullNow / a message).
 
 (function () {
   const DEFAULTS = { apiBase: "https://zoe-dispatch.fly.dev", intervalMin: 10, enabled: true };
   let running = false;
-  let timer = null;
-  let curIntervalMin = DEFAULTS.intervalMin;
 
   async function cfg() {
     const c = await chrome.storage.local.get(DEFAULTS);
@@ -41,11 +41,10 @@
     running = true;
     try {
       const { apiBase, intervalMin, enabled } = await cfg();
-      curIntervalMin = intervalMin;
       if (!enabled) { badge("off"); return; }
 
       // Cross-tab throttle: if another GSPRO tab pulled successfully very recently, don't duplicate the
-      // work. A manual "Pull now" always runs.
+      // work. A manual/handshake "Pull now" always runs.
       if (reason !== "manual") {
         const { lastRun } = await chrome.storage.local.get("lastRun");
         if (lastRun && lastRun.status === "ok" && Date.now() - lastRun.at < intervalMin * 60000 * 0.5) return;
@@ -65,28 +64,15 @@
     }
   }
 
-  function schedule(intervalMin) {
-    if (timer) clearInterval(timer);
-    curIntervalMin = intervalMin;
-    timer = setInterval(() => cycle("interval"), intervalMin * 60000);
-  }
+  // Run shortly after the page settles (covers a tab the worker just opened, and normal navigation).
+  setTimeout(() => cycle("load"), 4000);
 
-  // Kick off shortly after the page settles, then on the interval.
-  cfg().then(({ intervalMin }) => {
-    schedule(intervalMin);
-    setTimeout(() => cycle("load"), 4000);
-  });
-
-  // Manual "Pull now" from the popup flips storage.pullNow; react immediately. Also honor a direct
-  // message if the popup/background sends one.
+  // The worker nudges a pull by flipping storage.pullNow (reliable across tabs even when the SW slept).
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     if (changes.pullNow) cycle("manual");
-    if (changes.intervalMin) {
-      const v = Math.max(1, Number(changes.intervalMin.newValue) || DEFAULTS.intervalMin);
-      if (v !== curIntervalMin) schedule(v);
-    }
   });
+  // Also honor a direct message if the worker/popup sends one.
   chrome.runtime.onMessage.addListener((m, _s, resp) => {
     if (m && m.type === "zoe-pull-now") { cycle("manual").then(() => resp && resp({ ok: true })); return true; }
     return false;
