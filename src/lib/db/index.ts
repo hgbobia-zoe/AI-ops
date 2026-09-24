@@ -1168,6 +1168,43 @@ CREATE TABLE IF NOT EXISTS creative_events (
   ts          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_creative_events_job ON creative_events(job_id, ts);
+
+-- ── Communications / Voice Operations ─────────────────────────────────────────────────────────────
+-- "Give the Control Tower a voice." Quo owns telephony, Sona (future) owns conversation, and the Tower
+-- is the trusted intermediary between them and Zoe's data. These two tables are the ONLY new storage the
+-- blade needs: everything else (customer/event/order, calls, SMS timeline, risk) already has a home and is
+-- REFERENCED, never duplicated.
+
+-- The immutable communication event log — an append-only stream, one row per canonical event
+-- (call.started, transcript.available, sms.received, …) produced by the adapter from whatever a provider
+-- sends. NEVER updated or deleted; this is the audit/debug/analytics spine. Idempotent on the provider's
+-- event id so a retried webhook doesn't double-append. Preserves the raw payload for future analytics.
+CREATE TABLE IF NOT EXISTS comms_log (
+  id                TEXT PRIMARY KEY,
+  conversation_id   TEXT NOT NULL,     -- groups the events of one conversation (call id / sms thread key)
+  provider_event_id TEXT UNIQUE,       -- idempotency (a provider retrying delivery)
+  source            TEXT NOT NULL,     -- quo | sona | system | manual
+  channel           TEXT,              -- call | sms | voice
+  event_type        TEXT NOT NULL,     -- canonical: call.started | call.answered | call.ended | ...
+  direction         TEXT,              -- inbound | outbound
+  from_phone        TEXT,
+  to_phone          TEXT,
+  occurred_at       TEXT,              -- provider timestamp
+  payload           TEXT,              -- JSON canonical payload (adapter output; raw preserved inside)
+  ts                TEXT NOT NULL      -- append time
+);
+CREATE INDEX IF NOT EXISTS idx_comms_log_conv ON comms_log(conversation_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_comms_log_ts ON comms_log(ts DESC);
+
+-- Human reason-overrides. The call reason is CALCULATED deterministically at read time (never stale); a
+-- human can override that verdict and this is the only thing persisted. Reversible — delete the row to
+-- fall back to the calculated reason. Keyed by call_events.id.
+CREATE TABLE IF NOT EXISTS comms_reason_overrides (
+  call_id  TEXT PRIMARY KEY,
+  reason   TEXT NOT NULL,
+  actor    TEXT,
+  ts       TEXT NOT NULL
+);
 `;
 
 type DB = InstanceType<typeof Database>;

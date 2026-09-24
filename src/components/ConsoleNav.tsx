@@ -19,6 +19,7 @@ import {
   Megaphone, Send, Upload, CalendarDays, Star,
   HeartHandshake, Columns3, LifeBuoy, ClipboardCheck,
   Aperture, Plus, Dna,
+  Headset, PhoneCall, FlaskConical,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -88,6 +89,20 @@ const GROUPS: Group[] = [
       { href: "/creative", label: "Creative Engine", icon: Aperture, exact: true },
       { href: "/creative/new", label: "New Creative Job", icon: Plus },
       { href: "/creative/dna", label: "Visual DNA", icon: Dna, manage: true },
+    ],
+  },
+  {
+    // Communications / Voice Operations — "give the Control Tower a voice." The operating console over
+    // Zoe's inbound/outbound calls + SMS (Quo owns telephony; Sona will own conversation), with the
+    // context engine, tool registry and Voice Lab. Reads like a dispatch desk, not a chatbot. Sits under
+    // Sales — it's where the customer conversation actually happens.
+    label: "Communications",
+    icon: Headset,
+    blades: [
+      { href: "/communications", label: "Queue", icon: PhoneCall, exact: true },
+      { href: "/communications/lab", label: "Voice Lab", icon: FlaskConical },
+      { href: "/communications/tools", label: "Tool Registry", icon: Wrench },
+      { href: "/communications/status", label: "Integrations", icon: Plug },
     ],
   },
   {
