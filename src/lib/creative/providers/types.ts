@@ -36,6 +36,10 @@ export interface ImageGenerationInput {
   callbackUrl?: string;
   /** Per-generation callback credential the provider must echo back for the callback to be accepted. */
   callbackToken?: string;
+  /** Benchmark directive (Provider Benchmarking). When set, provider+model are PRESCRIPTIVE/authoritative:
+   *  the execution plane (n8n) MUST use exactly this provider + model — it does not choose. Absent for
+   *  normal (non-benchmark) generations, where `model` remains a hint and the provider chooses freely. */
+  directive?: { provider: string; model: string | null; experimentId?: string; testCaseId?: string; providerRunId?: string } | null;
 }
 
 export interface ImageGenerationResult {

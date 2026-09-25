@@ -88,6 +88,7 @@ const GROUPS: Group[] = [
       // humans approve). It produces the marketing/web imagery, so it lives under Marketing.
       { href: "/creative", label: "Creative Engine", icon: Aperture, exact: true },
       { href: "/creative/new", label: "New Creative Job", icon: Plus },
+      { href: "/creative/benchmarks", label: "Provider Benchmarks", icon: FlaskConical },
       { href: "/creative/dna", label: "Visual DNA", icon: Dna, manage: true },
     ],
   },

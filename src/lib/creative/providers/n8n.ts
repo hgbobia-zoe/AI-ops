@@ -70,13 +70,17 @@ async function handOff(input: ImageGenerationInput, mode: "generate" | "edit"): 
     await Promise.all((input.referenceImages ?? []).map((r) => signedAbsUrl(input.baseUrl, r)))
   ).filter((u): u is string => !!u);
 
+  // Benchmark directive: during a Provider Benchmark, provider+model are PRESCRIPTIVE — the request carries
+  // the specific provider/model the workflow MUST use (not the generic "n8n"/hint). Absent for normal jobs.
+  const directive = input.directive ?? null;
   const body = {
     generationId: input.generationId,
     jobId: input.jobId,
     attempt: input.attempt,
     maxAttempts: input.maxAttempts ?? null, // bound n8n's internal revision loop to Tower's cap
-    provider: "n8n",
-    model: input.model ?? null, // configured model hint; null = n8n chooses. Actual model echoed back on QA.
+    provider: directive?.provider ?? "n8n",
+    // Configured model hint; null = n8n chooses. During a benchmark this is AUTHORITATIVE (directive).
+    model: directive?.model ?? input.model ?? null,
     callbackUrl: input.callbackUrl,
     callbackToken: input.callbackToken,
     brief: input.brief,
@@ -87,7 +91,13 @@ async function handOff(input: ImageGenerationInput, mode: "generate" | "edit"): 
     transform: input.brief.transform,
     source: sourceUrl ? { url: sourceUrl } : null,
     references: referenceUrls.map((url) => ({ url })),
-    meta: { mode, briefSource: input.brief.briefSource, dnaVersion: input.brief.dnaVersion ?? null },
+    meta: {
+      mode,
+      briefSource: input.brief.briefSource,
+      dnaVersion: input.brief.dnaVersion ?? null,
+      // When present, the workflow MUST treat provider+model as prescriptive (see n8n contract §11).
+      ...(directive ? { benchmark: { provider: directive.provider, model: directive.model, prescriptive: true, experimentId: directive.experimentId ?? null, testCaseId: directive.testCaseId ?? null, providerRunId: directive.providerRunId ?? null } } : {}),
+    },
   };
 
   const headers: Record<string, string> = { "content-type": "application/json" };

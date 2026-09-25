@@ -1205,6 +1205,138 @@ CREATE TABLE IF NOT EXISTS comms_reason_overrides (
   actor    TEXT,
   ts       TEXT NOT NULL
 );
+
+-- ── Creative Engine — Provider Benchmarking ────────────────────────────────────────────────────────
+-- A CONTROLLED image-generation experiment: identical creative input handed to N providers; ONLY the
+-- provider/model changes. It EXTENDS the Creative Engine (it reuses creative_jobs / creative_generations /
+-- creative_images / creative_events and the 8-axis QA model — it never duplicates them). These tables hold
+-- only the experiment structure + the human evaluations; every derived number (success rate, QA pass rate,
+-- human approval rate, cost per approved image, …) is COMPUTED at read time from these rows + the linked
+-- generations — never persisted, so it can never go stale and is always explainable. Costs/QA come from the
+-- real generation callback meta; when absent the value is UNKNOWN, never fabricated.
+
+-- The experiment object. FROZEN creative inputs are captured at start (never silently changed): the source
+-- set, the Visual DNA snapshot + version, aspect ratio, preserve/transform, target audience, objective, and
+-- the prompt version. Only provider/model differs across the matrix.
+CREATE TABLE IF NOT EXISTS creative_experiments (
+  id                              TEXT PRIMARY KEY,   -- CX-<uuid>
+  seq                             INTEGER,            -- 1-based display number (experiment_001)
+  name                            TEXT NOT NULL,
+  description                     TEXT,
+  status                          TEXT NOT NULL,      -- draft | running | completed | archived
+  phase                           INTEGER NOT NULL DEFAULT 1,  -- 1 first-attempt | 2 regeneration | 3 cost-optimization (data model supports all; Phase 1 implemented)
+  asset_type                      TEXT,               -- creative AssetType applied to every case's job
+  -- ── FROZEN inputs (locked on start) ──
+  source_image_ids                TEXT,               -- JSON string[] of creative_images.id (the selected test set)
+  brief_id                        TEXT,               -- optional external brief reference (nullable)
+  visual_dna_version              TEXT,               -- frozen Visual DNA version tag (dnaVersion)
+  visual_dna_snapshot             TEXT,               -- JSON frozen ZoeVisualDNA
+  aspect_ratio                    TEXT,               -- frozen aspect ratio
+  preserve                        TEXT,               -- JSON string[] frozen PRESERVE rules
+  transform                       TEXT,               -- JSON string[] frozen TRANSFORM rules
+  target_audience                 TEXT,               -- frozen target audience
+  objective                       TEXT,               -- frozen target objective
+  prompt_version                  TEXT,               -- frozen prompt/composition version tag
+  target_generations_per_provider INTEGER NOT NULL DEFAULT 1,  -- Phase 1 = 1 (measure first-attempt performance)
+  blinding                        INTEGER NOT NULL DEFAULT 1,   -- 1 = blinded human eval (TEST A / TEST B)
+  auto_qa                         INTEGER NOT NULL DEFAULT 1,   -- 1 = reuse the automated 8-axis QA
+  human_eval                      INTEGER NOT NULL DEFAULT 1,   -- 1 = collect human evaluation
+  cost_tracking                   INTEGER NOT NULL DEFAULT 1,   -- 1 = record cost from the callback meta
+  created_by                      TEXT,
+  created_at                      TEXT NOT NULL,
+  started_at                      TEXT,
+  completed_at                    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_creative_experiments_status ON creative_experiments(status, created_at DESC);
+
+-- The FROZEN provider list for an experiment. blind_label (A/B/C…) is assigned at create so the human eval
+-- can be blinded; the label→provider mapping lives here (revealed in the UI only on demand). During a
+-- benchmark the provider+model are PRESCRIPTIVE (authoritative), not a hint — n8n must use exactly these.
+CREATE TABLE IF NOT EXISTS creative_experiment_providers (
+  id            TEXT PRIMARY KEY,   -- CXP-<uuid>
+  experiment_id TEXT NOT NULL,
+  provider_id   TEXT NOT NULL,      -- e.g. openai-image | higgsfield (free text; NOT hard-coded to two)
+  provider_name TEXT NOT NULL,      -- display name (OpenAI, Higgsfield, …)
+  model         TEXT,               -- frozen model id (prescriptive)
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  blind_label   TEXT NOT NULL,      -- A | B | C … (blinding)
+  sort_order    INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_creative_experiment_providers_exp ON creative_experiment_providers(experiment_id, sort_order);
+
+-- One test case = one source image in the fixed test set (testCase_001…). The source id + version are
+-- frozen so the experiment can never drift onto a mutated record. The paired preference ("which would you
+-- publish?") is recorded here at eval time (A | B | both | neither — a winner is NOT required).
+CREATE TABLE IF NOT EXISTS creative_experiment_cases (
+  id               TEXT PRIMARY KEY,   -- CXC-<uuid>
+  experiment_id    TEXT NOT NULL,
+  seq              INTEGER NOT NULL,   -- 1-based (testCase_001)
+  source_image_id  TEXT NOT NULL,      -- creative_images.id (frozen)
+  source_version   TEXT,               -- frozen source version (the image's immutable createdAt)
+  source_snapshot  TEXT,               -- JSON {id,path,name,mime,createdAt} frozen at start
+  job_id           TEXT,               -- the creative_jobs row created for this case (holds the ONE frozen brief both providers share)
+  preference       TEXT,               -- paired preference: providerRunId | 'both' | 'neither' | null
+  preference_note  TEXT,
+  preference_by    TEXT,
+  preference_at    TEXT,
+  created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_creative_experiment_cases_exp ON creative_experiment_cases(experiment_id, seq);
+
+-- The generation matrix cell: (experiment × test case × provider) → the reused creative_generations row.
+-- provider_id/model/blind_label are the DECLARED (prescriptive) values used for grouping in the scorecard;
+-- the linked generation records what ACTUALLY executed (executor + placeholder flag), kept honestly distinct.
+CREATE TABLE IF NOT EXISTS creative_experiment_runs (
+  id              TEXT PRIMARY KEY,   -- CXR-<uuid>
+  experiment_id   TEXT NOT NULL,
+  case_id         TEXT NOT NULL,
+  provider_ref_id TEXT NOT NULL,      -- creative_experiment_providers.id
+  provider_id     TEXT NOT NULL,      -- declared provider (grouping key)
+  model           TEXT,               -- declared model
+  blind_label     TEXT NOT NULL,      -- A | B | C …
+  job_id          TEXT,               -- creative_jobs.id (the case's job)
+  generation_id   TEXT,               -- creative_generations.id (the actual attempt) — reused model
+  status          TEXT NOT NULL,      -- pending | generating | succeeded | failed (coarse; recomputed from the generation at read time)
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_creative_experiment_runs_exp ON creative_experiment_runs(experiment_id);
+CREATE INDEX IF NOT EXISTS idx_creative_experiment_runs_case ON creative_experiment_runs(case_id);
+
+-- The HUMAN evaluation of one run's image. Kept SEPARATE from the automated QA on purpose — the two are
+-- never combined into a single score. Five criteria (PASS/FAIL each) + an overall approval + a decision.
+CREATE TABLE IF NOT EXISTS creative_experiment_evals (
+  id               TEXT PRIMARY KEY,  -- CXE-<uuid>
+  run_id           TEXT NOT NULL UNIQUE,
+  experiment_id    TEXT NOT NULL,
+  case_id          TEXT NOT NULL,
+  product_accuracy TEXT,              -- 'pass' | 'fail' | null (equipment correct?)
+  realism          TEXT,              -- looks like a real professional photo?
+  brand_fit        TEXT,              -- looks like Zoe Events?
+  composition      TEXT,              -- works in the intended website section?
+  usability        TEXT,             -- would you publish?
+  overall_approval TEXT,             -- 'pass' | 'fail' (the overall verdict)
+  decision         TEXT,             -- approve | reject | needs_revision
+  notes            TEXT,
+  evaluator        TEXT,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_creative_experiment_evals_exp ON creative_experiment_evals(experiment_id);
+
+-- Structured rejection reasons for a run (multiple allowed + free-text). Powers the failure-mode analysis
+-- ("most common failure modes per provider"). category ∈ PRODUCT | PHOTOGRAPHY | PEOPLE | ARCHITECTURE | BRAND | WEB.
+CREATE TABLE IF NOT EXISTS creative_experiment_failures (
+  id            TEXT PRIMARY KEY,   -- CXF-<uuid>
+  run_id        TEXT NOT NULL,
+  experiment_id TEXT NOT NULL,
+  category      TEXT NOT NULL,      -- PRODUCT | PHOTOGRAPHY | PEOPLE | ARCHITECTURE | BRAND | WEB
+  note          TEXT,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_creative_experiment_failures_run ON creative_experiment_failures(run_id);
+CREATE INDEX IF NOT EXISTS idx_creative_experiment_failures_exp ON creative_experiment_failures(experiment_id);
 `;
 
 type DB = InstanceType<typeof Database>;

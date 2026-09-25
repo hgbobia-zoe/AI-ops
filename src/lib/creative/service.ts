@@ -129,8 +129,16 @@ export interface GenerateOutcome {
 
 /** Run one generation attempt: art-direct (if needed) → provider → persist → QA → advance status. When the
  *  active provider is ASYNC (n8n), the attempt is handed off and left pending; the callback finishes it.
- *  `origin` is the app's public base URL (for absolute image + callback URLs); required for async providers. */
-export async function generateForJob(jobId: string, actor: string | null, opts: { origin?: string } = {}): Promise<GenerateOutcome> {
+ *  `origin` is the app's public base URL (for absolute image + callback URLs); required for async providers.
+ *  `directive` (Provider Benchmarking) makes provider+model PRESCRIPTIVE for this attempt — the execution
+ *  plane (n8n) must use exactly the given provider/model. The reused generation row records the actual
+ *  executor honestly; the benchmark groups the scorecard by its own declared provider, never by this row. */
+export async function generateForJob(
+  jobId: string,
+  actor: string | null,
+  opts: { origin?: string; directive?: { provider: string; model: string | null; experimentId?: string; testCaseId?: string; providerRunId?: string } | null } = {},
+): Promise<GenerateOutcome> {
+  const directive = opts.directive ?? null;
   const withBrief = await ensureBrief(jobId, actor);
   if (!withBrief) return { ok: false, error: "job_not_found" };
   const job = withBrief;
@@ -154,7 +162,10 @@ export async function generateForJob(jobId: string, actor: string | null, opts: 
     referenceImageIds: job.referenceImageIds,
     dnaVersion: brief.dnaVersion ?? null,
     maxAttempts: cap,
+    // Benchmark provenance (recorded honestly on the generation; the run row is the grouping key).
+    ...(directive ? { benchmark: { provider: directive.provider, model: directive.model, experimentId: directive.experimentId ?? null, testCaseId: directive.testCaseId ?? null, providerRunId: directive.providerRunId ?? null } } : {}),
   };
+  const effectiveModel = directive?.model ?? job.selectedModel;
 
   // ── Async provider (n8n): create the pending record + mint a callback token, hand off, and return. ──
   if (provider.async) {
@@ -162,7 +173,7 @@ export async function generateForJob(jobId: string, actor: string | null, opts: 
       jobId,
       attempt,
       provider: provider.id,
-      model: job.selectedModel,
+      model: effectiveModel,
       brief,
       imageId: null,
       resultPath: null,
@@ -183,13 +194,14 @@ export async function generateForJob(jobId: string, actor: string | null, opts: 
       generationId: gen.id,
       brief,
       aspectRatio: job.aspectRatio,
-      model: job.selectedModel,
+      model: effectiveModel,
       maxAttempts: cap,
       sourceImage: toRef(job.sourceImageId),
       referenceImages: job.referenceImageIds.map(toRef).filter((r): r is ProviderImageRef => r !== null),
       baseUrl: origin,
       callbackUrl: origin ? `${origin}/api/creative/callback` : "/api/creative/callback",
       callbackToken: token,
+      directive,
     };
 
     let result: ImageGenerationResult;
@@ -218,10 +230,11 @@ export async function generateForJob(jobId: string, actor: string | null, opts: 
     attempt,
     brief,
     aspectRatio: job.aspectRatio,
-    model: job.selectedModel,
+    model: effectiveModel,
     maxAttempts: cap,
     sourceImage: toRef(job.sourceImageId),
     referenceImages: job.referenceImageIds.map(toRef).filter((r): r is ProviderImageRef => r !== null),
+    directive,
   };
 
   let result: ImageGenerationResult;

@@ -227,6 +227,32 @@ check** (was a required source photo attached?) and records everything; **human 
 - New generation records are only ever created by an explicit Tower handoff (a human/queued action), never by
   a callback.
 
+## 11. Provider Benchmarking — provider/model are PRESCRIPTIVE (additive; no field changes)
+
+The **Provider Benchmarking** feature runs controlled experiments where the SAME creative input is handed to
+several providers and only the provider/model changes. It reuses this exact contract — no new required fields.
+Two clarifications apply **only when a request carries a benchmark directive**:
+
+- The request's existing **`provider`** and **`model`** fields become **authoritative/prescriptive**: n8n MUST
+  use exactly the given provider + model and MUST NOT choose its own. (Outside a benchmark, `model` remains a
+  hint and `provider` is `"n8n"`, unchanged.)
+- The request's `meta` gains a `benchmark` block (meta is already free-form, so this is additive):
+  ```jsonc
+  "meta": {
+    "mode": "edit",
+    "benchmark": {
+      "provider": "higgsfield",       // the provider to use (authoritative)
+      "model": "higgsfield-soul",     // the model to use (authoritative)
+      "prescriptive": true,           // n8n must not substitute its own provider/model
+      "experimentId": "CX-…", "testCaseId": "CXC-…", "providerRunId": "CXR-…"
+    }
+  }
+  ```
+- Everything else is identical: the same callback shape (echo the ACTUAL model used), the same 8-axis QA, the
+  same per-generation callback token + idempotency. Tower records cost/usage/timing from the callback `meta`
+  (`cost.usd`, `usage`, `processingMs`) per generation; absent cost is reported as **unknown**, never invented.
+- The Higgsfield (or any non-OpenAI) provider integration lives entirely in n8n — Tower only specifies it.
+
 ---
 
 ### Environment / config checklist

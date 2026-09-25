@@ -2,7 +2,7 @@
 // Tower-matching. Each row links to the job detail. Read-only server render (mutations happen on detail).
 
 import Link from "next/link";
-import { Images, Plus } from "lucide-react";
+import { Images, Plus, FlaskConical } from "lucide-react";
 import { listJobs } from "@/lib/creative/store";
 import { ASSET_TYPE_LABEL } from "@/lib/creative/types";
 import { StatusPill } from "@/components/creative/StatusPill";
@@ -36,12 +36,21 @@ export default function CreativeJobsPage(): React.JSX.Element {
             AI creates, rules constrain, AI evaluates, humans approve. Every asset&apos;s position in the pipeline is always visible.
           </p>
         </div>
-        <Link
-          href="/creative/new"
-          className="flex shrink-0 items-center gap-1.5 rounded border border-border px-3 py-2 text-[13px] font-medium text-foreground transition-colors hover:bg-[var(--row-hover)]"
-        >
-          <Plus className="size-4 text-tertiary-text" /> New job
-        </Link>
+        <div className="flex shrink-0 items-center gap-2">
+          <Link
+            href="/creative/benchmarks"
+            className="flex items-center gap-1.5 rounded border border-border px-3 py-2 text-[13px] font-medium text-foreground transition-colors hover:bg-[var(--row-hover)]"
+            title="Compare image providers under identical Zoe inputs"
+          >
+            <FlaskConical className="size-4 text-tertiary-text" /> Provider Benchmarks
+          </Link>
+          <Link
+            href="/creative/new"
+            className="flex items-center gap-1.5 rounded border border-border px-3 py-2 text-[13px] font-medium text-foreground transition-colors hover:bg-[var(--row-hover)]"
+          >
+            <Plus className="size-4 text-tertiary-text" /> New job
+          </Link>
+        </div>
       </header>
 
       {jobs.length === 0 ? (
