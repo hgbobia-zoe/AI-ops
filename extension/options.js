@@ -1,11 +1,11 @@
-const DEFAULTS = { apiBase: "https://zoe-dispatch.fly.dev", intervalMin: 10, enabled: true, createDrainEnabled: false, radarToken: "" };
+const DEFAULTS = { apiBase: "https://zoe-dispatch.fly.dev", intervalMin: 10, enabled: true, createDrainEnabled: true, radarToken: "" };
 
 async function load() {
   const c = await chrome.storage.local.get(DEFAULTS);
   document.getElementById("apiBase").value = c.apiBase || DEFAULTS.apiBase;
   document.getElementById("intervalMin").value = c.intervalMin || DEFAULTS.intervalMin;
   document.getElementById("enabled").checked = c.enabled !== false;
-  document.getElementById("createDrainEnabled").checked = c.createDrainEnabled === true;
+  document.getElementById("createDrainEnabled").checked = c.createDrainEnabled !== false;
   document.getElementById("radarToken").value = c.radarToken || "";
 }
 

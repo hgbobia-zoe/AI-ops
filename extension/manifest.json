@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAly0Nz2r2bXWBONjC+Dl8KCbkMsybY42wK9GduaIrdoaOclximW5KPHX2SDmnGoueu2GnmUUWIUQ4GECH+bbTpvWh94QW2kBYWh7biysSDpAAu0HHheTkr/u2HF85PRpamVSa8WGO0FMAoKStYoS9j1xm/WDs9LuKo9SFKygv2IQSWYUHbT/z0zHLS1yzCD1GLKXCRHCZ2v/HrB7F9+oy342c3qyPtqGSbIxQVYCI/inF2Mm9RtZpuGqpFmma9bUBtgHnUKFzW5X9O+RCSrOLWkRcro4CDDyrd3ws7XvWsIsFlLeALRELgZ8yWfojiJ7SoP4tJbo7X01q2PBqTCOohQIDAQAB",
   "name": "Zoe Auto-Pull + Opportunity Radar",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Keeps Zoe Ops fresh: the service worker schedules the pull with chrome.alarms and keeps a signed-in Goodshuffle tab alive (no tab to babysit), a declared content script does the read-pull, create_project ops are drained by background-opened tabs, and logging into Zoe Ops kicks an immediate sync. Also captures procurement/event opportunities into Opportunity Radar. Office machine only.",
   "permissions": ["scripting", "tabs", "storage", "activeTab", "alarms"],
   "host_permissions": ["https://pro.goodshuffle.com/*", "https://zoe-dispatch.fly.dev/*"],

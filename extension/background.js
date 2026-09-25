@@ -9,7 +9,7 @@
 //   • Handshake: logging into Zoe Ops posts {type:"zoe-sync-now"} via externally_connectable; we ensure
 //     the tab + pull immediately, and if GS is signed out we open a login tab (active) so the user can
 //     sign in.
-//   • create_project drain (OPT-IN, default OFF — see createDrainEnabled): background-orchestrated. We
+//   • create_project drain (default ON — toggle off in Options via createDrainEnabled): background-orchestrated. We
 //     fetch the outbox (background fetch, no CORS gate), and for each create op open a background tab to
 //     createNewProject; the declared create.js content script claims the op for that exact tab, runs the
 //     populate sequence, and asks us to close the tab. One create tab at a time. A stuck tab is reaped
@@ -18,7 +18,7 @@
 // SW lifecycle: no long-lived in-memory state is relied upon across sleeps — everything needed
 // (config, lastRun, pendingCreate) lives in chrome.storage.local; alarms, not timers, drive work.
 
-const DEFAULTS = { apiBase: "https://zoe-dispatch.fly.dev", intervalMin: 10, enabled: true, createDrainEnabled: false };
+const DEFAULTS = { apiBase: "https://zoe-dispatch.fly.dev", intervalMin: 10, enabled: true, createDrainEnabled: true };
 const PULL_ALARM = "zoe-pull";
 const CREATE_WATCHDOG = "zoe-create-watchdog";
 const GS_MATCH = "https://pro.goodshuffle.com/*";
@@ -50,7 +50,7 @@ async function cfg() {
     apiBase: (c.apiBase || DEFAULTS.apiBase).replace(/\/+$/, ""),
     intervalMin: Math.max(1, Number(c.intervalMin) || DEFAULTS.intervalMin),
     enabled: c.enabled !== false,
-    createDrainEnabled: c.createDrainEnabled === true,
+    createDrainEnabled: c.createDrainEnabled !== false,
   };
 }
 
@@ -60,7 +60,7 @@ async function seedDefaults() {
     apiBase: cur.apiBase || DEFAULTS.apiBase,
     intervalMin: cur.intervalMin || DEFAULTS.intervalMin,
     enabled: cur.enabled !== false,
-    createDrainEnabled: cur.createDrainEnabled === true,
+    createDrainEnabled: cur.createDrainEnabled !== false,
   });
 }
 
