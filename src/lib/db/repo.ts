@@ -576,6 +576,8 @@ export interface BookingView {
   clientEmail: string;
   clientPhone: string;
   quoteSentDate: string | null;
+  quoteSentAt: string | null; // ISO — precise quote-email send time (from the GS message thread)
+  quoteOpenedAt: string | null; // ISO — latest client open of the quote email
   dateCreated: string | null;
   lossReason: string | null;
   venue: string | null;
@@ -611,6 +613,8 @@ function toBookingView(r: Record<string, unknown>): BookingView {
     clientEmail: String(r.client_email ?? ""),
     clientPhone: String(r.client_phone ?? ""),
     quoteSentDate: (r.quote_sent_date as string) ?? null,
+    quoteSentAt: (r.quote_sent_at as string) ?? null,
+    quoteOpenedAt: (r.quote_opened_at as string) ?? null,
     dateCreated: (r.date_created as string) ?? null,
     lossReason: (r.loss_reason as string) ?? null,
     venue: (r.venue as string) ?? null,
@@ -1931,6 +1935,24 @@ export function getLastCommsAt(leadId: string): string | null {
   return r?.t ?? null;
 }
 
+/** The most recent OUTBOUND comms for a lead (the last time a rep reached out via SMS/call), with its
+ *  channel + actor + timestamp, or null. Companion to getLatestInboundForLead. */
+export function getLatestOutboundForLead(leadId: string): CommsEventView | null {
+  const r = getDb()
+    .prepare("SELECT * FROM comms_events WHERE lead_id = ? AND direction = 'outbound' ORDER BY COALESCE(occurred_at, ts) DESC LIMIT 1")
+    .get(leadId) as Record<string, unknown> | undefined;
+  return r ? toCommsEvent(r) : null;
+}
+
+/** The most recent comms row of ANY direction for a lead, keeping its channel + direction (getLastCommsAt
+ *  drops those). Null if the lead has no comms. */
+export function getLatestCommsRowForLead(leadId: string): CommsEventView | null {
+  const r = getDb()
+    .prepare("SELECT * FROM comms_events WHERE lead_id = ? ORDER BY COALESCE(occurred_at, ts) DESC LIMIT 1")
+    .get(leadId) as Record<string, unknown> | undefined;
+  return r ? toCommsEvent(r) : null;
+}
+
 // ── Customer state (Phase 5) — the evidence-driven state machine, one row per lead ──
 
 export interface CustomerStateRow {
@@ -2101,6 +2123,23 @@ export function insertCallEventIfNew(e: CallEventInput): string | null {
       ts: new Date().toISOString(),
     });
   return info.changes > 0 ? id : null;
+}
+
+/** Call events whose from/to matches a lead's phone (last 10 digits), newest first — the call detail
+ *  (incl. voicemails) for a project's timeline. call_events has no lead_id, so this is the phone link. */
+export function getCallEventsByPhoneDigits(digits10: string, limit = 50): CallEventView[] {
+  if (!/^\d{10}$/.test(digits10)) return [];
+  const norm = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(%c,''),'(',''),')',''),'-',''),' ',''),'+',''),'.','')";
+  const fromN = norm.replace("%c", "from_phone");
+  const toN = norm.replace("%c", "to_phone");
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM call_events WHERE ${fromN} LIKE '%' || ? OR ${toN} LIKE '%' || ?
+         ORDER BY COALESCE(occurred_at, ts) DESC LIMIT ?`,
+      )
+      .all(digits10, digits10, limit) as Record<string, unknown>[]
+  ).map(toCallEvent);
 }
 
 /** Look up a call event by its OpenPhone call id (several webhook events share one call). */
@@ -2542,4 +2581,99 @@ export function touchShiftPass(id: string): void {
   } catch {
     /* non-critical */
   }
+}
+
+// ── Goodshuffle client-email thread events (captured by the office pull) ─────────────────────────────
+// The server can't live-fetch Goodshuffle email (Cloudflare), so the pull posts these. FACTS ONLY,
+// idempotent on the Goodshuffle message id; direction/snippet are stored NULL when the source didn't
+// reliably provide them (never invented). Feeds buildLeadTimeline as channel='email'.
+
+export interface EmailEventInput {
+  providerMsgId: string; // Goodshuffle message id (idempotency)
+  bookingId: string;
+  direction?: "inbound" | "outbound" | null;
+  participant?: string | null;
+  subject?: string | null;
+  snippet?: string | null; // short preview, NOT the full body
+  occurredAt?: string | null; // ISO
+  openedAt?: string | null; // ISO — latest client open of this email
+}
+
+export interface EmailEventView {
+  id: string;
+  providerMsgId: string;
+  bookingId: string | null;
+  direction: "inbound" | "outbound" | null;
+  participant: string | null;
+  subject: string | null;
+  snippet: string | null;
+  occurredAt: string | null;
+  openedAt: string | null;
+  ts: string;
+}
+
+function toEmailEvent(r: Record<string, unknown>): EmailEventView {
+  const dir = (r.direction as string) ?? null;
+  return {
+    id: String(r.id),
+    providerMsgId: String(r.provider_msg_id ?? ""),
+    bookingId: (r.booking_id as string) ?? null,
+    direction: dir === "inbound" || dir === "outbound" ? dir : null,
+    participant: (r.participant as string) ?? null,
+    subject: (r.subject as string) ?? null,
+    snippet: (r.snippet as string) ?? null,
+    occurredAt: (r.occurred_at as string) ?? null,
+    openedAt: (r.opened_at as string) ?? null,
+    ts: String(r.ts),
+  };
+}
+
+/** Upsert captured client-email messages, idempotent on the Goodshuffle message id. A later capture can
+ *  fill an opened_at (opens happen after the send) or a subject/snippet that arrived later — COALESCE so
+ *  we never blank a known value with a null. Returns how many rows were written. */
+export function saveEmailEvents(items: EmailEventInput[]): number {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const up = db.prepare(
+    `INSERT INTO email_events (id, provider_msg_id, booking_id, direction, participant, subject, snippet, occurred_at, opened_at, ts)
+     VALUES (@id,@providerMsgId,@bookingId,@direction,@participant,@subject,@snippet,@occurredAt,@openedAt,@ts)
+     ON CONFLICT(provider_msg_id) DO UPDATE SET
+       booking_id=COALESCE(@bookingId, booking_id),
+       direction=COALESCE(@direction, direction),
+       participant=COALESCE(@participant, participant),
+       subject=COALESCE(@subject, subject),
+       snippet=COALESCE(@snippet, snippet),
+       occurred_at=COALESCE(@occurredAt, occurred_at),
+       opened_at=COALESCE(@openedAt, opened_at)`,
+  );
+  let n = 0;
+  const tx = db.transaction(() => {
+    for (const i of items) {
+      if (!i.providerMsgId || !i.bookingId) continue;
+      const r = up.run({
+        id: `EM-${randomUUID()}`,
+        providerMsgId: i.providerMsgId,
+        bookingId: i.bookingId,
+        direction: i.direction ?? null,
+        participant: i.participant ?? null,
+        subject: i.subject ?? null,
+        snippet: i.snippet ?? null,
+        occurredAt: i.occurredAt ?? null,
+        openedAt: i.openedAt ?? null,
+        ts: now,
+      });
+      n += r.changes;
+    }
+  });
+  tx();
+  return n;
+}
+
+/** Captured client-email messages for a lead, newest first. */
+export function getEmailEventsForLead(bookingId: string, limit = 50): EmailEventView[] {
+  return (
+    getDb()
+      .prepare("SELECT * FROM email_events WHERE booking_id = ? ORDER BY COALESCE(occurred_at, ts) DESC LIMIT ?")
+      .all(bookingId, limit) as Record<string, unknown>[]
+  ).map(toEmailEvent);
 }

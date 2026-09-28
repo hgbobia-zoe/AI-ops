@@ -49,9 +49,21 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var todayY=new Date().toISOString().slice(0,10);
         var openIds=Object.keys(all).filter(function(id){ var p=all[id]; if(p.signed) return false; var s=(p.statusLabel||"").toLowerCase(); if(s.indexOf("lost")>=0||s.indexOf("cancel")>=0||s.indexOf("dead")>=0) return false; var d=d2(p.logistics_start_date); return !d || d>=todayY; }).slice(0,80);
         function pullNotes(){
-          var notes=[];
+          var notes=[]; var emails=[];
           // Collect line-item titles from a project's loaded line-item groups (event-type signal).
           function titlesFrom(lists){ var t=[]; function w(o,d){ if(!o||typeof o!=="object"||d>7)return; if(Object.prototype.toString.call(o)==="[object Array]"){for(var k=0;k<o.length;k++)w(o[k],d+1);return;} if(o.itemTitle)t.push(o.itemTitle); for(var kk in o)w(o[kk],d+1);} (lists||[]).forEach(function(gj){w(gj,0);}); return t; }
+          // Capture the CLIENT EMAIL thread for the timeline. FACTS ONLY: id + subject + date + latest client
+          // open are reliably present; a body snippet is grabbed only if the message carries one (else null,
+          // never invented). Direction is asserted OUTBOUND only when the message has client recipients (a
+          // vendor->client email, same basis the quote-timestamp extraction relies on); otherwise it's left
+          // unknown (null) rather than guessed. snippet is a short preview, NOT the full body.
+          function emailsFrom(mv,id){ var msgs=(mv&&mv.client&&mv.client.messages)||[];
+            msgs.forEach(function(m){ if(!m||m.medium!=="EMAIL") return; var mid=(m.id!=null?String(m.id):(m.messageID!=null?String(m.messageID):"")); if(!mid) return;
+              var recips=m.clientRecipients||[]; var opened=null; recips.forEach(function(rp){ if(rp.messageOpenedDate && (!opened || rp.messageOpenedDate>opened)) opened=rp.messageOpenedDate; });
+              var rawBody=m.content||m.body||m.message||m.plainTextBody||m.htmlContent||m.htmlBody||m.preview||""; var snip=(typeof rawBody==="string"&&rawBody)?rawBody.replace(/<[^>]*>/g," ").replace(/\\s+/g," ").trim().slice(0,200):null;
+              var participant=null; if(recips.length){ var rp0=recips[0]; participant=(rp0.name||rp0.email||null); }
+              emails.push({ bookingId:String(id), providerMsgId:mid, direction:(recips.length?"outbound":null), participant:participant, subject:(m.subject||null), snippet:snip, occurredAt:(m.date||null), openedAt:opened });
+            }); }
           // Quote sent/opened from the client email thread (getMessagesForTransaction). sent = earliest
           // outbound quote email; opened = latest client open. Prefer emails whose subject mentions "quote";
           // fall back to any outbound email with client recipients.
@@ -64,13 +76,19 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             var pCV=fetch("/app/vendorTransaction/initContractView?transactionID="+id,H).then(function(r){ return r.ok?r.json():null; }).catch(function(){return null;});
             var pMsg=fetch("/app/conversation/getMessagesForTransaction?transactionID="+id,H).then(function(r){ return r.ok?r.json():null; }).catch(function(){return null;});
             return Promise.all([pCV,pMsg]).then(function(res){ var j=res[0], qt=quoteTimes(res[1]);
+              try{ emailsFrom(res[1], id); }catch(e){} // email capture rides on the message view, independent of the contract view
               if(!j) return; // no contract view → skip (don't blank stored notes with a partial record)
               var g=(j.lineItemGroupsToLoad)||[];
               return Promise.all(g.map(function(x){ return fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID="+x.id+"&transactionID="+id,H).then(function(r){return r.json();}).catch(function(){return null;}); })).then(function(lists){
                 notes.push({ bookingId:String(id), internalNotes:(j.internalNotes||"").trim(), clientNotes:(j.clientVisibleNotes||"").trim(), lastSentDate:null, lineItems:titlesFrom(lists), quoteSentAt:qt.sent, quoteOpenedAt:qt.opened });
               });
             }).catch(function(){}).then(function(){ return one(i+1); }); }
-          return one(0).then(function(){ if(!notes.length) return {updated:0}; return fetch(API+"/api/gs/notes",{method:"POST",headers:POSTH(),body:JSON.stringify({notes:notes})}).then(function(r){return r.json();}).catch(function(){return {updated:0};}); });
+          return one(0).then(function(){
+            var pN=notes.length?fetch(API+"/api/gs/notes",{method:"POST",headers:POSTH(),body:JSON.stringify({notes:notes})}).then(function(r){return r.json();}).catch(function(){return {updated:0};}):Promise.resolve({updated:0});
+            // Post the captured client-email thread too (idempotent server-side on the GS message id).
+            var pE=emails.length?fetch(API+"/api/gs/emails",{method:"POST",headers:POSTH(),body:JSON.stringify({emails:emails})}).then(function(r){return r.json();}).catch(function(){return {written:0};}):Promise.resolve({written:0});
+            return Promise.all([pN,pE]).then(function(rs){ return {updated:(rs[0]&&rs[0].updated)||0, emails:(rs[1]&&rs[1].written)||0}; });
+          });
         }
         return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr})}).then(function(r){return r.json();}).then(function(j){ return pullNotes().then(function(nj){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:(nj&&nj.updated)||0 }; }); }).catch(function(){ return { saved:0, partial:true }; });
       });

@@ -1337,6 +1337,26 @@ CREATE TABLE IF NOT EXISTS creative_experiment_failures (
 );
 CREATE INDEX IF NOT EXISTS idx_creative_experiment_failures_run ON creative_experiment_failures(run_id);
 CREATE INDEX IF NOT EXISTS idx_creative_experiment_failures_exp ON creative_experiment_failures(experiment_id);
+
+-- Goodshuffle CLIENT EMAIL thread messages (per open lead). The server can't live-fetch Goodshuffle
+-- (Cloudflare blocks datacenter IPs), so the office pull captures each message from
+-- getMessagesForTransaction and POSTs them here. FACTS ONLY, keyed by booking_id, idempotent on the
+-- Goodshuffle message id (provider_msg_id). Feeds buildLeadTimeline as channel='email'. A field the
+-- source doesn't reliably provide (e.g. direction on some messages, body snippet) is stored NULL, never
+-- guessed. opened_at is the latest client open of that email (from clientRecipients[].messageOpenedDate).
+CREATE TABLE IF NOT EXISTS email_events (
+  id              TEXT PRIMARY KEY,
+  provider_msg_id TEXT UNIQUE,    -- Goodshuffle message id (idempotency)
+  booking_id      TEXT,           -- matched project/booking id
+  direction       TEXT,           -- inbound | outbound | null (unknown — not asserted)
+  participant     TEXT,           -- client recipient name/email, when known
+  subject         TEXT,
+  snippet         TEXT,           -- short preview (first ~200 chars), when available — NOT the full body
+  occurred_at     TEXT,           -- message date (ISO)
+  opened_at       TEXT,           -- latest client open of this email (ISO), when tracked
+  ts              TEXT NOT NULL   -- when we recorded it
+);
+CREATE INDEX IF NOT EXISTS idx_email_events_booking ON email_events(booking_id, occurred_at DESC);
 `;
 
 type DB = InstanceType<typeof Database>;

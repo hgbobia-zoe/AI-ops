@@ -40,6 +40,28 @@ export function summarizeComms(internalNotes?: string | null, clientNotes?: stri
   return { attempts: dated.length, lastContact, channels, noResponse, latestNote, clientContext };
 }
 
+export interface DatedNoteLine {
+  rawDate: string; // the date token exactly as written in the note (e.g. "9/7") — NOT normalized to a year
+  text: string; // the full note line
+}
+
+// A date token anywhere in a note line — the team writes "HG - 9/7 - comment" (initials first), so the
+// date isn't at the start. We keep the token EXACTLY as written (no year inferred).
+const NOTE_DATE = /(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)/;
+
+/** Split the free-text internal notes into its dated lines, preserving the date token EXACTLY as written.
+ *  We deliberately do NOT infer a year (the team writes "9/7"), so callers must treat these as undated
+ *  note entries rather than sortable instants. Oldest-first (the order they appear in the note). */
+export function datedNoteLines(internalNotes?: string | null): DatedNoteLine[] {
+  const lines = (internalNotes ?? "").split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const out: DatedNoteLine[] = [];
+  for (const l of lines) {
+    const m = l.match(NOTE_DATE);
+    if (m) out.push({ rawDate: m[1], text: l });
+  }
+  return out;
+}
+
 export interface OutreachLead {
   firstName: string;
   eventName: string;

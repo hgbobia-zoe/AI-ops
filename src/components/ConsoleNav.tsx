@@ -17,7 +17,7 @@ import {
   TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
   RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator, Radar, IdCard,
   Megaphone, Send, Upload, CalendarDays, Star,
-  HeartHandshake, Columns3, LifeBuoy, ClipboardCheck,
+  HeartHandshake, Columns3, LifeBuoy, ClipboardCheck, ClipboardList,
   Aperture, Plus, Dna,
   Headset, PhoneCall, FlaskConical,
   type LucideIcon,
@@ -112,6 +112,7 @@ const GROUPS: Group[] = [
     blades: [
       { href: "/sales", label: "Sales", icon: TrendingUp },
       { href: "/salesos", label: "Sales OS", icon: Target },
+      { href: "/salesos/status", label: "Pipeline Status", icon: ClipboardList, financial: true },
       { href: "/coaching", label: "Coaching", icon: GraduationCap, coaching: true },
       { href: "/customers", label: "Customers", icon: Contact },
       { href: "/pricing", label: "Delivery Pricing", icon: Calculator },

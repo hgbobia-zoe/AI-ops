@@ -34,6 +34,7 @@ const PUBLIC: string[] = [
   "/api/route/import",
   "/api/gs/projects",
   "/api/gs/notes",
+  "/api/gs/emails", // Auto-Pull captures the client email thread; own token (fail-open), CORS-locked — must not bounce to auth
   "/api/gs/outbox",
   "/api/gs/intake-result", // Auto-Pull reports the created project id back here; own token (fail-open), CORS-locked — must not bounce to auth
   "/api/pull/heartbeat", // Auto-Pull extension status ping; own token (fail-open), CORS-open
