@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import { getDb } from "./index";
 import { todayInOpsTz } from "@/lib/dates";
 import { logChange } from "@/lib/history/store";
+import { detectLinenItems } from "@/lib/salesos/linen";
+import { slackNotify } from "@/lib/notify/slack";
 import type { Route, RouteStatus, Stop, StopState } from "@/lib/types";
 import type { CallRecap } from "@/lib/coach/recap";
 import { computeCallMetrics } from "@/lib/coach/metrics";
@@ -717,19 +719,29 @@ export function saveBookings(items: BookingRecord[]): void {
   const db = getDb();
   const now = new Date().toISOString();
 
-  // Prior revenue + status per booking, for change detection (revenue change + cancellation).
+  // Prior revenue + status per booking, for change detection (revenue change + cancellation +
+  // the signed→lost linen safeguard). Captured BEFORE the upsert overwrites the row.
   const prior = new Map<string, number | null>();
   const priorStatus = new Map<string, string>();
+  const priorSigned = new Map<string, number>();
+  const priorLineItems = new Map<string, string | null>();
+  const priorSafeguard = new Map<string, string | null>();
   const ids = items.map((i) => i.bookingId);
   if (ids.length > 0) {
     const ph = ids.map(() => "?").join(",");
-    for (const r of db.prepare(`SELECT booking_id, grand_total, status_label FROM bookings WHERE booking_id IN (${ph})`).all(...ids) as {
+    for (const r of db.prepare(`SELECT booking_id, grand_total, status_label, signed, line_items, cancel_safeguard_at FROM bookings WHERE booking_id IN (${ph})`).all(...ids) as {
       booking_id: string;
       grand_total: number | null;
       status_label: string | null;
+      signed: number | null;
+      line_items: string | null;
+      cancel_safeguard_at: string | null;
     }[]) {
       prior.set(String(r.booking_id), r.grand_total == null ? null : Number(r.grand_total));
       priorStatus.set(String(r.booking_id), (r.status_label ?? "").toLowerCase());
+      priorSigned.set(String(r.booking_id), Number(r.signed ?? 0));
+      priorLineItems.set(String(r.booking_id), r.line_items);
+      priorSafeguard.set(String(r.booking_id), r.cancel_safeguard_at);
     }
   }
 
@@ -770,7 +782,9 @@ export function saveBookings(items: BookingRecord[]): void {
   tx();
 
   // Log meaningful changes to Operational History.
+  // The lost/cancelled predicate — the SAME one getLostQuotes/getPipelineBreakdown use (lost|cancel|dead).
   const isCancelled = (s: string): boolean => s.includes("cancel") || s.includes("lost") || s.includes("dead");
+  const markSafeguard = db.prepare("UPDATE bookings SET cancel_safeguard_at = ? WHERE booking_id = ?");
   for (const i of items) {
     const before = prior.get(i.bookingId);
     const after = i.grandTotal ?? null;
@@ -803,7 +817,124 @@ export function saveBookings(items: BookingRecord[]): void {
         changeKey: `cancelled|${i.bookingId}`,
       });
     }
+    // Cancellation safeguard: a SIGNED project that flipped to lost/cancelled may have a live linen
+    // SUB-RENTAL that a rep forgot to cancel (a real incident: the linen shipped, Zoe ate the cost).
+    // Fire once per transition (guarded by cancel_safeguard_at), linen-gated.
+    runCancelSafeguard({
+      bookingId: i.bookingId,
+      eventName: i.eventName ?? "",
+      clientName: i.clientName ?? "",
+      known: priorStatus.has(i.bookingId),
+      wasSigned: priorSigned.get(i.bookingId) === 1 || /signed|won/.test(priorStatus.get(i.bookingId) ?? ""),
+      wasCancelled,
+      nowCancelled,
+      alreadyRan: priorSafeguard.get(i.bookingId) != null,
+      priorLineItems: priorLineItems.get(i.bookingId) ?? null,
+      markSafeguard,
+      now,
+    });
   }
+}
+
+interface CancelSafeguardCtx {
+  bookingId: string;
+  eventName: string;
+  clientName: string;
+  known: boolean; // the booking already existed before this pull
+  wasSigned: boolean; // its prior state was a signed/won contract
+  wasCancelled: boolean; // its prior state was already lost/cancelled
+  nowCancelled: boolean; // the new state is lost/cancelled
+  alreadyRan: boolean; // the safeguard already fired for this booking
+  priorLineItems: string | null; // bookings.line_items JSON (preserved across the upsert)
+  markSafeguard: { run: (...args: unknown[]) => unknown }; // prepared UPDATE that stamps cancel_safeguard_at
+  now: string;
+}
+
+/**
+ * The signed→lost linen safeguard. When a SIGNED Goodshuffle project flips to lost/cancelled, a rep
+ * may have marked it lost but forgotten to cancel the tablecloth/linen SUB-RENTAL — which then ships
+ * and Zoe eats the cost (a real incident). This fires EXACTLY ONCE per transition (idempotent via
+ * bookings.cancel_safeguard_at): it posts a best-effort Slack ask (delivery/ops channel) AND queues a
+ * GSPRO task, both asking a human to confirm the linen sub-rental was cancelled.
+ *
+ * Linen gate (three-way):
+ *   • linen titles FOUND        → fire, naming the matched line items.
+ *   • line items NOT captured   → fire with softer wording (missing data must not hide a risk).
+ *   • line items present, none  → skip the ask (still stamp cancel_safeguard_at so it isn't reconsidered).
+ *
+ * Deterministic (RULES CALCULATE, no LLM). Slack is isolated + best-effort — it can never fail the
+ * ingest; the durable GSPRO task is enqueued synchronously so the safety net survives a Slack outage.
+ */
+function runCancelSafeguard(ctx: CancelSafeguardCtx): void {
+  if (!ctx.known || !ctx.wasSigned || ctx.wasCancelled || !ctx.nowCancelled || ctx.alreadyRan) return;
+
+  const parsed = parseLineItems(ctx.priorLineItems); // string[] | null
+  const matched = detectLinenItems(parsed);
+  const haveTitles = Array.isArray(parsed) && parsed.length > 0;
+
+  // Stamp the idempotency marker regardless of the gate outcome — a re-pull must never reconsider it.
+  ctx.markSafeguard.run(ctx.now, ctx.bookingId);
+
+  const link = `https://pro.goodshuffle.com/app/project/detail?id=${ctx.bookingId}`;
+  const label = ctx.eventName || `project ${ctx.bookingId}`;
+  const forClient = ctx.clientName ? ` for ${ctx.clientName}` : "";
+
+  // Case 3: line items present but no linen — record the no-op and stop (no Slack, no task).
+  if (matched.length === 0 && haveTitles) {
+    logChange({
+      source: "goodshuffle",
+      entity: "event",
+      entityId: ctx.bookingId,
+      eventId: ctx.bookingId,
+      kind: "cancel_linen_safeguard",
+      field: ctx.eventName,
+      toValue: "signed→lost, no linen items — no action",
+      changeKey: `cancelsafeguard|${ctx.bookingId}`,
+    });
+    return;
+  }
+
+  // Cases 1 + 2: fire. Name the matched titles when we have them; soften when the pull hadn't captured them.
+  const found = matched.length > 0;
+  const noteContext = found
+    ? `Linen line items on this order: ${matched.join(", ")}. Confirm the sub-rental was cancelled.`
+    : `Line items were not captured for this order, so linen could not be verified. Confirm there was no linen sub-rental (tablecloths/linens) that still needs cancelling.`;
+
+  // (1) Durable GSPRO task (survives a Slack outage). transactionId top-level (drainer reads o.transactionId);
+  //     payload carries the human title + note. The drainer branch is best-effort until the endpoint is captured.
+  enqueueGsOp({
+    op: "create_gs_task",
+    transactionId: ctx.bookingId,
+    label: "confirm linen sub-rental cancelled",
+    payload: {
+      transactionID: ctx.bookingId,
+      title: "Confirm tablecloth/linen sub-rental was cancelled (project went signed → lost)",
+      note: noteContext,
+    },
+  });
+
+  // (2) Best-effort Slack ask on the delivery/ops channel — the immediate human safety net, isolated so
+  //     it can never fail the ingest, and independent of the task op above.
+  try {
+    const text = found
+      ? `:warning: *Cancelled signed project — confirm the linen order is cancelled.*\n<${link}|${label}>${forClient} went signed → lost. This order had linen items: ${matched.join(", ")}. Confirm the tablecloth/linen SUB-RENTAL was cancelled so we don't eat the cost.`
+      : `:warning: *Cancelled signed project — confirm any linen order is cancelled.*\n<${link}|${label}>${forClient} went signed → lost. We couldn't verify the line items on this order — confirm there was no linen sub-rental (tablecloths/linens) that still needs cancelling so we don't eat the cost.`;
+    void slackNotify(text).catch(() => {});
+  } catch {
+    // never let a Slack hiccup disturb the pull
+  }
+
+  // Log the fired safeguard to Operational History (idempotent via change_key).
+  logChange({
+    source: "goodshuffle",
+    entity: "event",
+    entityId: ctx.bookingId,
+    eventId: ctx.bookingId,
+    kind: "cancel_linen_safeguard",
+    field: ctx.eventName,
+    toValue: found ? `signed→lost, linen items flagged: ${matched.join(", ")}` : "signed→lost, line items unknown — confirm no linen sub-rental",
+    changeKey: `cancelsafeguard|${ctx.bookingId}`,
+  });
 }
 
 /** Booked events on/after `startYmd`, soonest first (the forward pipeline). Dated only. Excludes

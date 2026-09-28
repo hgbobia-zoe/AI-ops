@@ -1424,6 +1424,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Intake: split same-day window into explicit drop-off + pick-up times.
   { table: "sales_intake", column: "dropoff_time", type: "TEXT" },
   { table: "sales_intake", column: "pickup_time", type: "TEXT" },
+  // Cancellation safeguard: ISO ts set once the signed→lost linen safeguard has run for a booking, so
+  // repeated pulls never re-fire the Slack ask / GSPRO task (idempotency).
+  { table: "bookings", column: "cancel_safeguard_at", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {

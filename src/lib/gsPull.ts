@@ -171,6 +171,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var teamOps=all.filter(function(o){ return o.op==="add_team_member" && o.transactionId && o.payload && o.payload.userID; });
         var emailOps=all.filter(function(o){ return o.op==="email_send" && o.transactionId && o.payload && o.payload.content; });
         var feeOps=all.filter(function(o){ return o.op==="set_delivery_fee" && o.transactionId && o.payload && o.payload.amount!=null; });
+        var taskOps=all.filter(function(o){ return o.op==="create_gs_task" && o.transactionId && o.payload && o.payload.title; });
         var createOps=all.filter(function(o){ return o.op==="create_project" && o.payload && o.payload.intakeId; });
         if(SKIP_CREATE) createOps=[]; // a standalone Playwright runner drains creates by navigation instead of a popup
         // Goodshuffle only CREATES a project on a real navigation (a fetch just returns the SPA shell), so we
@@ -183,7 +184,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var createPopup=null;
         if(createOps.length){ try{ createPopup=window.open("/app/project/createNewProject","gscreate","width=520,height=640,left=40,top=40"); }catch(e){ createPopup=null; } }
         function popNewId(w){ return new Promise(function(resolve){ if(!w){ resolve(null); return; } var n=0; var iv=setInterval(function(){ n++; var got=null; try{ var h=w.location.href; if(h && h.indexOf("about:blank")<0){ var m=h.match(/[?&]id=(\\d+)/); if(m) got=m[1]; } }catch(e){} if(got){ clearInterval(iv); resolve(got); } else if(n>80){ clearInterval(iv); resolve(null); } }, 250); }); }
-        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, chain=Promise.resolve();
+        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, chain=Promise.resolve();
         // add_team_member: add a GSPRO user (Warehouse Desktop) to the project team on a signed project.
         teamOps.forEach(function(o){ chain=chain.then(function(){
           var body=new URLSearchParams({ transactionID:String(o.transactionId), userID:String(o.payload.userID), linkType:String(o.payload.linkType||"OTHER") });
@@ -232,6 +233,19 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             }).then(function(ok){ if(ok)emails++; else failed++; return ackOp(o.id,ok,"email_send_failed"); }).catch(function(e){ failed++; return ackOp(o.id,false,"email_send_"+(typeof e==="string"?e:"error")); });
           });
         });
+        // create_gs_task: queue a to-do on the GSPRO project (e.g. "confirm the linen sub-rental was
+        // cancelled" for a signed→lost order). BEST-EFFORT + STUBBED: the GSPRO internal "create task/to-do
+        // on a project" endpoint + body are NOT captured yet. TO CAPTURE: on a TEST project, add a task in
+        // the GSPRO UI with the browser Network tab recording, then replace GS_CREATE_TASK_ENDPOINT and the
+        // body shape below with the real endpoint + fields. Until then this POSTs to a PLACEHOLDER; on success
+        // it acks, and on failure (e.g. a 404 because the endpoint is a placeholder) it LEAVES THE OP PENDING
+        // (no ack) so it retries automatically once the real endpoint is wired — it never disrupts the rest
+        // of the drain (the .catch keeps the chain going and the Slack ask already went out independently).
+        var GS_CREATE_TASK_ENDPOINT="/app/vendorTransaction/saveTask"; // PLACEHOLDER — UNVERIFIED; see TO CAPTURE above.
+        taskOps.forEach(function(o){ chain=chain.then(function(){
+          var body=new URLSearchParams({ transactionID:String(o.transactionId), title:String(o.payload.title||""), note:String(o.payload.note||"") });
+          return fetch(GS_CREATE_TASK_ENDPOINT,{method:"POST",headers:{"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"},credentials:"include",body:body}).then(function(r){ return r.ok; }).then(function(ok){ if(ok){ tasks++; return ackOp(o.id,true); } /* leave PENDING on failure until the real endpoint is captured (do NOT ack) */ }).catch(function(){ /* leave PENDING; never disrupt the rest of the drain */ });
+        }); });
         // set_delivery_fee: override the project's Standard Delivery line(s) with our computed fee. Load the
         // contract's line item groups, find every base Standard Delivery line (inventory item 392868144),
         // and re-save each via saveInventoryTrackedLineItemEdit with unitPriceOverridden=true + our unitPrice
@@ -338,8 +352,8 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             });
           });
         });
-        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, created:created, fees:fees}; });
-      }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0, created:0, fees:0}; });
+        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, created:created, fees:fees, tasks:tasks}; });
+      }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0, created:0, fees:0, tasks:0}; });
     }
 
     // Finish a cycle: one-shot fades the banner; auto keeps a persistent status with the last-run time.
