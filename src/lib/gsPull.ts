@@ -234,17 +234,23 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
           });
         });
         // create_gs_task: queue a to-do on the GSPRO project (e.g. "confirm the linen sub-rental was
-        // cancelled" for a signed→lost order). BEST-EFFORT + STUBBED: the GSPRO internal "create task/to-do
-        // on a project" endpoint + body are NOT captured yet. TO CAPTURE: on a TEST project, add a task in
-        // the GSPRO UI with the browser Network tab recording, then replace GS_CREATE_TASK_ENDPOINT and the
-        // body shape below with the real endpoint + fields. Until then this POSTs to a PLACEHOLDER; on success
-        // it acks, and on failure (e.g. a 404 because the endpoint is a placeholder) it LEAVES THE OP PENDING
-        // (no ack) so it retries automatically once the real endpoint is wired — it never disrupts the rest
-        // of the drain (the .catch keeps the chain going and the Slack ask already went out independently).
-        var GS_CREATE_TASK_ENDPOINT="/app/vendorTransaction/saveTask"; // PLACEHOLDER — UNVERIFIED; see TO CAPTURE above.
+        // cancelled" for a signed→lost order). ENDPOINT CAPTURED + VERIFIED LIVE 2026-09-29 (POST 200):
+        //   POST /app/task/createTask  (form-urlencoded)
+        //     taskID=""                         (empty → create a new task)
+        //     taskText=<title[ + note]>         (the to-do text; GSPRO tasks are a single text field)
+        //     taskAssignedTransactionID=<id>    (the project this task hangs on)
+        //     taskAssignedUserID=""             (optional assignee; blank = unassigned)
+        //     taskDueDateStr="MMM D YYYY"       (e.g. "Sep 29 2026"; we default to today — this is urgent)
+        //     fromProjectView="true"
+        // Response: {createdTasksMap, assignedTasksMap, transactionTasks, notificationsForUser}. On success we
+        // ack; on failure we LEAVE THE OP PENDING (no ack) so it retries next cycle — the .catch keeps the
+        // chain going and the Slack ask already went out independently.
+        var GS_MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        function gsDueStr(){ var d=new Date(); return GS_MON[d.getMonth()]+" "+d.getDate()+" "+d.getFullYear(); }
         taskOps.forEach(function(o){ chain=chain.then(function(){
-          var body=new URLSearchParams({ transactionID:String(o.transactionId), title:String(o.payload.title||""), note:String(o.payload.note||"") });
-          return fetch(GS_CREATE_TASK_ENDPOINT,{method:"POST",headers:{"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"},credentials:"include",body:body}).then(function(r){ return r.ok; }).then(function(ok){ if(ok){ tasks++; return ackOp(o.id,true); } /* leave PENDING on failure until the real endpoint is captured (do NOT ack) */ }).catch(function(){ /* leave PENDING; never disrupt the rest of the drain */ });
+          var text=String(o.payload.title||""); if(o.payload.note) text+=" — "+String(o.payload.note);
+          var body=new URLSearchParams({ taskID:"", taskText:text, taskAssignedTransactionID:String(o.transactionId), taskAssignedUserID:"", taskDueDateStr:gsDueStr(), fromProjectView:"true" });
+          return fetch("/app/task/createTask",{method:"POST",headers:{"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"},credentials:"include",body:body}).then(function(r){ return r.ok; }).then(function(ok){ if(ok){ tasks++; return ackOp(o.id,true); } /* leave PENDING on failure so it retries */ }).catch(function(){ /* leave PENDING; never disrupt the rest of the drain */ });
         }); });
         // set_delivery_fee: override the project's Standard Delivery line(s) with our computed fee. Load the
         // contract's line item groups, find every base Standard Delivery line (inventory item 392868144),
