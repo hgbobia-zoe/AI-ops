@@ -215,16 +215,23 @@ export function deleteShift(id: string): void {
 }
 
 /**
- * Materialize a demand draft into the day's shifts, idempotently. A derived shift is keyed by
- * (date, role, routeId) so re-running demand generation refreshes counts/windows for routes that
- * are still auto-derived WITHOUT clobbering anything a human has touched — we skip refresh once a
- * shift leaves 'draft' or carries assignees/an Instawork gig. Returns the day's shifts after upsert.
+ * Materialize a demand draft into shifts, idempotently. A derived shift is keyed by
+ * (its own date, role, routeId) so re-running demand generation refreshes counts/windows for
+ * routes still auto-derived WITHOUT clobbering anything a human has touched — we skip refresh once
+ * a shift leaves 'draft' or carries assignees/an Instawork gig.
+ *
+ * Demand can span days: buildDemand emits driver/field shifts on the event day but the PREP shift
+ * the day BEFORE (and with no routeId). So each demand item is deduped against the existing rows
+ * for ITS OWN date — deduping everything against `date` would leave the prep row unmatched and spawn
+ * a duplicate on the prior day every run. `date` only selects which day's shifts to return.
  */
 export function syncDemand(date: string, demand: DemandShift[]): StaffShift[] {
   const db = getDb();
-  const existing = getShiftsForDate(date);
+  const dates = [...new Set(demand.map((d) => d.date))];
+  const existingByDate = new Map<string, StaffShift[]>(dates.map((dt) => [dt, getShiftsForDate(dt)]));
   const tx = db.transaction(() => {
     for (const d of demand) {
+      const existing = existingByDate.get(d.date) ?? [];
       const match = existing.find(
         (e) => e.source === "derived" && e.role === d.role && (e.routeId ?? null) === (d.routeId ?? null),
       );

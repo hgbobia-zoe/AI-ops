@@ -69,6 +69,7 @@ const GROUPS: Group[] = [
       { href: "/dispatch", label: "Dispatch", icon: Truck },
       { href: "/risk", label: "Event Risk", icon: AlertTriangle },
       { href: "/staffing", label: "Staffing", icon: Users },
+      { href: "/scheduling", label: "Scheduling", icon: CalendarDays },
       { href: "/finance", label: "Financial", icon: DollarSign, financial: true },
     ],
   },
