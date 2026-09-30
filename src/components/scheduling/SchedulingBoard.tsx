@@ -17,6 +17,7 @@ import { ShiftEditor } from "@/components/scheduling/ShiftEditor";
 import type { CrewMember } from "@/lib/connecteam";
 import { formatClockTime } from "@/lib/dates";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
+import type { ShiftCoverage } from "@/lib/scheduling/coverage";
 
 const BTN = "inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50 disabled:pointer-events-none";
 
@@ -39,12 +40,14 @@ export function SchedulingBoard({
   shifts,
   roster,
   busyUserIds,
+  coverage,
   hasRoutes,
 }: {
   date: string;
   shifts: StaffShift[];
   roster: CrewMember[];
   busyUserIds: number[];
+  coverage: Record<string, ShiftCoverage>;
   hasRoutes: boolean;
 }): React.JSX.Element {
   const router = useRouter();
@@ -108,7 +111,10 @@ export function SchedulingBoard({
                 </h2>
                 <div className="border border-border">
                   {group.map((s) => {
-                    const gap = shiftGap(s);
+                    const c = coverage[s.id];
+                    const covered = c ? c.covered : s.assignees.length;
+                    const gap = c ? c.gap : shiftGap(s);
+                    const scheduledNames = c?.scheduledNames ?? [];
                     const win = timeWindow(s);
                     return (
                       <button
@@ -132,10 +138,13 @@ export function SchedulingBoard({
                             {s.source === "derived" ? <Provenance kind="inferred" detail="rules" /> : <span className="text-[12px] text-meta">Manual</span>}
                           </div>
                           {s.reasons.length > 0 && <div className="mt-0.5 text-[11.5px] text-meta">{s.reasons.join(" · ")}</div>}
+                          {scheduledNames.length > 0 && (
+                            <div className="mt-0.5 text-[11.5px] text-positive">via Connecteam: {scheduledNames.join(", ")}</div>
+                          )}
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
-                          <span className={`text-[13px] tabular-nums ${s.assignees.length >= s.headcount ? "text-positive" : "text-foreground"}`}>
-                            {s.assignees.length}/{s.headcount}
+                          <span className={`text-[13px] tabular-nums ${covered >= s.headcount ? "text-positive" : "text-foreground"}`}>
+                            {covered}/{s.headcount}
                           </span>
                           {gap > 0 && <span className="rounded border border-attention/40 px-1.5 py-px text-[11px] text-attention">Instawork: {gap}</span>}
                         </div>

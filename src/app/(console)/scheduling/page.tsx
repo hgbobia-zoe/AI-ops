@@ -15,7 +15,7 @@ import { SchedulingBoard } from "@/components/scheduling/SchedulingBoard";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRouteForDate } from "@/lib/db/repo";
 import { getShiftsForDate } from "@/lib/scheduling/store";
-import { shiftGap } from "@/lib/scheduling/types";
+import { computeCoverage } from "@/lib/scheduling/coverage";
 import {
   getCrewForDateSafe,
   getUsersList,
@@ -50,20 +50,22 @@ export default async function SchedulingPage({
     ? await Promise.all([getCrewForDateSafe(date), getUsersList()])
     : [{ ok: false, shifts: [] as CrewShift[] }, [] as CrewMember[]];
 
-  // Who already has a Connecteam shift this day → "busy" mark in the assignee picker.
-  const busyUserIds = [...new Set(coverage.shifts.flatMap((s) => s.assignees.map((a) => a.userId)))];
-  const driverScheduled = distinctByRole(coverage.shifts, "driver");
-  const prepScheduled = distinctByRole(coverage.shifts, "prep");
+  // Distinct crew already on the Connecteam schedule this day (dedup by userId).
+  const scheduledCrew = dedupCrew(coverage.shifts.flatMap((s) => s.assignees));
+  const busyUserIds = [...new Set(scheduledCrew.map((a) => a.userId))];
+  const driverScheduled = scheduledCrew.filter((a) => a.role === "driver");
+  const prepScheduled = scheduledCrew.filter((a) => a.role === "prep");
+
+  // Net the scheduled crew against demand so a shift someone's already on doesn't read as a gap.
+  const cov = computeCoverage(shifts, scheduledCrew);
 
   const peopleNeeded = shifts.reduce((n, s) => n + s.headcount, 0);
-  const internalAssigned = shifts.reduce((n, s) => n + s.assignees.length, 0);
-  const gapTotal = shifts.reduce((n, s) => n + shiftGap(s), 0);
 
   const figures: Figure[] = [
     { label: "Shifts", value: shifts.length },
     { label: "People needed", value: peopleNeeded },
-    { label: "Internal", value: internalAssigned, tone: "positive" },
-    { label: "Gap → Instawork", value: gapTotal, tone: gapTotal > 0 ? "attention" : "default", sep: true },
+    { label: "Internal", value: cov.internalTotal, tone: "positive" },
+    { label: "Gap → Instawork", value: cov.gapTotal, tone: cov.gapTotal > 0 ? "attention" : "default", sep: true },
   ];
 
   return (
@@ -96,15 +98,16 @@ export default async function SchedulingPage({
         shifts={shifts}
         roster={roster}
         busyUserIds={busyUserIds}
+        coverage={cov.byShift}
         hasRoutes={routes.length > 0}
       />
     </main>
   );
 }
 
-function distinctByRole(shifts: CrewShift[], role: CrewMember["role"]): CrewMember[] {
+function dedupCrew(crew: CrewMember[]): CrewMember[] {
   const m = new Map<number, CrewMember>();
-  for (const s of shifts) for (const a of s.assignees) if (a.role === role) m.set(a.userId, a);
+  for (const a of crew) m.set(a.userId, a);
   return [...m.values()];
 }
 
