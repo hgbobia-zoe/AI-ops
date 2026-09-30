@@ -525,6 +525,41 @@ CREATE TABLE IF NOT EXISTS shift_passes (
   truck_name   TEXT                   -- display label for the assigned truck
 );
 
+-- Staffing / Scheduling — the app-owned shift model (the app is the source of truth). A human builds
+-- shifts here (pre-filled from route DEMAND via src/lib/scheduling/demand.ts), assigns internal crew,
+-- and the unfilled remainder becomes the temp gap-fill posted to Instawork. Shifts push OUT to
+-- Connecteam (internal, published) and Instawork (the gig) only after a human confirm. Distinct from
+-- the read-only Connecteam CrewShift and from shift_passes. FACTS ONLY: an unknown time stays null
+-- with window_known=0, never fabricated.
+CREATE TABLE IF NOT EXISTS staff_shifts (
+  id                       TEXT PRIMARY KEY,          -- "SH-"+uuid
+  date                     TEXT NOT NULL,             -- YYYY-MM-DD the work happens
+  role                     TEXT NOT NULL,             -- driver | field | prep
+  headcount                INTEGER NOT NULL DEFAULT 1,
+  start_time               TEXT,                      -- ISO; null when unknown
+  end_time                 TEXT,
+  window_known             INTEGER NOT NULL DEFAULT 0,-- 0 = time is a placeholder to confirm
+  location                 TEXT,                      -- "Warehouse" | venue address
+  route_id                 TEXT,                      -- link to the GS route/event
+  truck_id                 TEXT,
+  event_label              TEXT,
+  reasons                  TEXT,                      -- JSON string[] (why this headcount)
+  notes                    TEXT,
+  source                   TEXT NOT NULL DEFAULT 'manual',  -- derived | manual
+  status                   TEXT NOT NULL DEFAULT 'draft',   -- draft | confirmed | sent | cancelled
+  assignees                TEXT,                      -- JSON number[] of internal Connecteam userIds
+  instawork_headcount      INTEGER NOT NULL DEFAULT 0,-- remainder posted as the Instawork gig
+  pay_rate                 REAL,                      -- hourly rate for the Instawork gig
+  connecteam_shift_id      TEXT,
+  connecteam_scheduler_id  INTEGER,
+  connecteam_published_at  TEXT,
+  instawork_gig_id         TEXT,
+  instawork_posted_at      TEXT,
+  created_at               TEXT NOT NULL,
+  updated_at               TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_staff_shifts_date ON staff_shifts(date, status);
+
 -- ── Event Radar (early-demand intelligence) ──────────────────────────────────────────────────────
 -- Event Radar detects FUTURE events in the DMV that could create rental demand, well before the
 -- planner is shopping vendors, and hands qualified opportunities to Sales OS. Design law:
