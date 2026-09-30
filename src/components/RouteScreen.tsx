@@ -70,16 +70,7 @@ export function RouteScreen({
             onManualSubmit={m.submitManual}
           />
         ) : m.phase === "returned" ? (
-          <RouteSummaryPanel
-            summary={m.summary}
-            onGas={(putGas) =>
-              m.sendSide(
-                "GAS_LOG",
-                { putGas },
-                putGas ? "Logged: fueled up" : "Logged: not fueled",
-              )
-            }
-          />
+          <RouteSummaryPanel summary={m.summary} closeout={m.lastCloseout} />
         ) : (
           <>
             <CurrentStopView

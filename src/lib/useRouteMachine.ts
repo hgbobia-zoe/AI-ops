@@ -21,7 +21,7 @@ import { STATE_VISUAL } from "./stateVisual";
 import { automationsFor } from "./automations";
 import { getAvailableActions, resolveTransition } from "./stateMachine";
 import type { AvailableAction } from "./stateMachine";
-import type { ActionType, Route, Stop, StopState } from "./types";
+import type { ActionType, CloseoutResult, Route, Stop, StopState } from "./types";
 import { fetchRoute, triggerIngestion } from "./tablesRead";
 import { buildAction, flushQueue, getGps, sendAction } from "./webhookClient";
 import { queueSize } from "./offlineQueue";
@@ -66,6 +66,8 @@ export interface RouteMachine {
   error: string | null;
   notif: Record<string, StopNotif>;
   summary: RouteSummary;
+  /** The closeout the driver submitted on arriving back (drives the summary recap). */
+  lastCloseout: CloseoutResult | null;
   refresh: (force?: boolean) => Promise<void>;
   resync: () => Promise<void>;
   startRoute: () => Promise<void>;
@@ -92,6 +94,7 @@ export function useRouteMachine(truckId: string): RouteMachine {
   const [notif, setNotif] = useState<Record<string, StopNotif>>({});
   const [counters, setCounters] = useState({ exceptions: 0, dispatchMsgs: 0 });
   const [startedAt, setStartedAt] = useState<string | null>(null);
+  const [lastCloseout, setLastCloseout] = useState<CloseoutResult | null>(null);
   const loadedRef = useRef(false);
 
   const syncQueue = useCallback(() => setQueuedCount(queueSize()), []);
@@ -413,6 +416,9 @@ export function useRouteMachine(truckId: string): RouteMachine {
         }
 
         setStartedAt((s) => s ?? new Date().toISOString());
+        if (action === "ARRIVED_WAREHOUSE" && payload?.closeout) {
+          setLastCloseout(payload.closeout as CloseoutResult);
+        }
         applyLocal(action, toState, idx);
 
         // Record the customer automations this action fired.
@@ -536,6 +542,7 @@ export function useRouteMachine(truckId: string): RouteMachine {
     error,
     notif,
     summary,
+    lastCloseout,
     refresh,
     resync,
     startRoute,

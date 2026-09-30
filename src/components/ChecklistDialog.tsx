@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { downscaleImage, uploadPhotos } from "@/lib/media/photo";
 import type { ChecklistResult } from "@/lib/types";
 
 // Proof-of-delivery photos are captured HERE (camera) and saved to /api/pod on confirm; the returned
@@ -30,39 +31,6 @@ const ITEMS: { key: CheckKey; label: string }[] = [
   { key: "signed", label: "Customer signature collected (in Goodshuffle)" },
   { key: "siteClean", label: "Site left clean" },
 ];
-
-// Downscale a captured photo to a sane size before upload (phones shoot 3–8MB; Goodshuffle caps at
-// 8MB and the push is faster small). Longest edge ≤ 1600px, JPEG q0.82. Falls back to the raw data URL.
-function downscale(file: File): Promise<string> {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const src = String(reader.result);
-      const img = new Image();
-      img.onload = () => {
-        const max = 1600;
-        const scale = Math.min(1, max / Math.max(img.width, img.height));
-        const w = Math.round(img.width * scale);
-        const h = Math.round(img.height * scale);
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return resolve(src);
-        ctx.drawImage(img, 0, 0, w, h);
-        try {
-          resolve(canvas.toDataURL("image/jpeg", 0.82));
-        } catch {
-          resolve(src);
-        }
-      };
-      img.onerror = () => resolve(src);
-      img.src = src;
-    };
-    reader.onerror = () => resolve("");
-    reader.readAsDataURL(file);
-  });
-}
 
 export function ChecklistDialog({
   open,
@@ -92,7 +60,7 @@ export function ChecklistDialog({
 
   async function addPhotos(files: FileList | null) {
     if (!files?.length) return;
-    const added = await Promise.all(Array.from(files).map(downscale));
+    const added = await Promise.all(Array.from(files).map(downscaleImage));
     setPhotos((p) => [...p, ...added.filter(Boolean)]);
     if (fileRef.current) fileRef.current.value = ""; // allow re-selecting the same shot
   }
@@ -110,25 +78,13 @@ export function ChecklistDialog({
     let photoIds: string[] | undefined;
     if (photos.length > 0) {
       setSaving(true);
-      try {
-        const res = await fetch("/api/pod", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ photos }),
-        });
-        const data = (await res.json().catch(() => null)) as { photoIds?: string[] } | null;
-        if (!res.ok || !data?.photoIds?.length) {
-          setSaving(false);
-          setError("Couldn't save the photos — check signal and try again.");
-          return; // never leave with lost proof
-        }
-        photoIds = data.photoIds;
-      } catch {
-        setSaving(false);
-        setError("Couldn't save the photos — check signal and try again.");
-        return;
-      }
+      const ids = await uploadPhotos(photos);
       setSaving(false);
+      if (!ids) {
+        setError("Couldn't save the photos — check signal and try again.");
+        return; // never leave with lost proof
+      }
+      photoIds = ids;
     }
 
     onConfirm(

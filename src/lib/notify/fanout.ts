@@ -3,7 +3,7 @@
 // tracking links, and records everything to the DB. Called fire-and-forget from the
 // action intake so the tablet never waits. Every send is key-gated and never throws.
 
-import type { ActionType, Stop, Vehicle } from "@/lib/types";
+import type { ActionType, CloseoutResult, Stop, Vehicle } from "@/lib/types";
 import { sendSms } from "./sms";
 import { slackNotify } from "./slack";
 import { alertOps } from "./alert";
@@ -14,6 +14,7 @@ import { formatClockTime } from "@/lib/dates";
 export interface FanoutCtx {
   action: ActionType;
   truckId: string;
+  routeId?: string;
   driverId?: string;
   gps?: unknown;
   payload?: Record<string, unknown>;
@@ -21,6 +22,17 @@ export interface FanoutCtx {
   currentStop: Stop | null;
   nextStop: Stop | null;
 }
+
+// Human labels for the closeout items, in checklist order — used to name what a driver
+// couldn't confirm when flagging the closeout to the office.
+const CLOSEOUT_LABELS: [keyof CloseoutResult, string][] = [
+  ["refueled", "Refuel"],
+  ["itemsUnloaded", "Unload returned rentals"],
+  ["discrepanciesReported", "Report discrepancies"],
+  ["damageInspected", "Inspect for damage"],
+  ["securedKeysReturned", "Secure truck & return keys"],
+  ["notesSubmitted", "Submit route notes"],
+];
 
 function truckLabel(truckId: string): string {
   try {
@@ -178,9 +190,41 @@ export async function runFanout(ctx: FanoutCtx): Promise<void> {
         await slack(`✅ ${truck} completed final stop${cur ? ` (${cur.custName})` : ""} — heading back to the warehouse`);
         break;
       }
-      case "ARRIVED_WAREHOUSE":
-        await slack(`🏁 ${truck} back at the warehouse — route complete`);
+      case "ARRIVED_WAREHOUSE": {
+        const closeout = ctx.payload?.closeout as CloseoutResult | undefined;
+        const photoIds = (ctx.payload?.photoIds as string[] | undefined) ?? [];
+        if (!closeout) {
+          // Legacy tap with no closeout payload — keep the plain completion message.
+          await slack(`🏁 ${truck} back at the warehouse — route complete`);
+          break;
+        }
+        // Accountability record for the office (driver, truck, route, timestamp, answers).
+        insertAudit({
+          actor: ctx.driverId || ctx.truckId,
+          action: "ROUTE_CLOSEOUT",
+          entity: "route",
+          entityId: ctx.routeId ?? "",
+          after: { ...closeout, photoIds },
+        });
+        const missing = CLOSEOUT_LABELS.filter(([k]) => !closeout[k]).map(([, label]) => label);
+        const flagged = missing.length > 0 || closeout.hasIssue;
+        if (!flagged) {
+          await slack(`🏁 ${truck} back at the warehouse — route complete. Closeout clean ✓`);
+          break;
+        }
+        // Something couldn't be confirmed, or the driver reported an issue → flag the office.
+        const lines = [`⚠️ ${truck} route closeout needs attention`];
+        if (missing.length) {
+          lines.push(`• Not confirmed: ${missing.join(", ")}`);
+          if (closeout.overrideReason) lines.push(`• Reason: ${closeout.overrideReason}`);
+        }
+        if (closeout.hasIssue) {
+          lines.push(`• Issue reported: ${closeout.issueNote || "(no note)"}`);
+          if (photoIds.length) lines.push(`• Photo${photoIds.length > 1 ? "s" : ""} attached (${photoIds.length})`);
+        }
+        await slack(lines.join("\n"));
         break;
+      }
       case "REPORT_EXCEPTION": {
         const type = String(ctx.payload?.type ?? "Other");
         const reason = String(ctx.payload?.reason ?? "");

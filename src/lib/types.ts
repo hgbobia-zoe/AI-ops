@@ -53,6 +53,21 @@ export interface ChecklistResult {
   overrideReason?: string; // required when any box is unchecked
 }
 
+/** Driver Route Closeout — the mandatory vehicle/inventory close-out fired when the truck
+ *  arrives back at the warehouse (separate from route completion). Any unconfirmed item needs
+ *  a reason and is flagged to the office; the driver can still submit (exception handling). */
+export interface CloseoutResult {
+  refueled: boolean; // Refueled the truck to the end-of-day requirement
+  itemsUnloaded: boolean; // All returned rental items unloaded to their warehouse spots
+  discrepanciesReported: boolean; // Missing/damaged/unreturned items reported to dispatch
+  damageInspected: boolean; // Truck inspected for damage / warning lights / mechanical issues
+  securedKeysReturned: boolean; // Parked, locked, keys returned to the designated location
+  notesSubmitted: boolean; // All stops accounted for; route issues + final notes to dispatch
+  overrideReason?: string; // required when any item is unchecked (flagged to office)
+  hasIssue: boolean; // "Did anything happen today dispatch/management needs to know about?"
+  issueNote?: string; // required when hasIssue
+}
+
 /** Payload shapes keyed by action. Kept permissive; the intake validates. */
 export interface ActionPayloads {
   START_ROUTE: { date: string };
@@ -66,6 +81,11 @@ export interface ActionPayloads {
     checklist: ChecklistResult;
     photoIds?: string[];
     signatureId?: string;
+  };
+  ARRIVED_WAREHOUSE: {
+    closeout: CloseoutResult;
+    /** Optional photo(s) attached to a reported issue (ids from POST /api/pod). */
+    photoIds?: string[];
   };
   REPORT_EXCEPTION: { type: ExceptionType; reason: string };
   [key: string]: Record<string, unknown> | undefined;

@@ -97,6 +97,7 @@ export async function POST(req: Request): Promise<NextResponse<ActionResponse>> 
   void runFanout({
     action,
     truckId: body.truckId,
+    routeId: body.routeId,
     driverId: body.driverId,
     gps: body.gps,
     payload: body.payload,

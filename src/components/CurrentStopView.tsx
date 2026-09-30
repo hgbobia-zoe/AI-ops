@@ -15,6 +15,7 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { StateBadge } from "@/components/StateBadge";
 import { ChecklistDialog, type ProofRefs } from "@/components/ChecklistDialog";
+import { ReturnChecklistDialog } from "@/components/ReturnChecklistDialog";
 import { ExceptionDialog } from "@/components/ExceptionDialog";
 import { DispatchDialog } from "@/components/DispatchDialog";
 import { NotificationStatus } from "@/components/NotificationStatus";
@@ -22,7 +23,7 @@ import { ACTION_ICON, STATE_VISUAL } from "@/lib/stateVisual";
 import { useLiveEta } from "@/lib/eta/useLiveEta";
 import { formatClockTime } from "@/lib/dates";
 import type { AvailableAction } from "@/lib/stateMachine";
-import type { ActionType, ChecklistResult, ExceptionType, Stop } from "@/lib/types";
+import type { ActionType, ChecklistResult, CloseoutResult, ExceptionType, Stop } from "@/lib/types";
 import type { RoutePhase, StopNotif } from "@/lib/useRouteMachine";
 
 // Shared square-tile styles for the action grid.
@@ -53,6 +54,7 @@ export function CurrentStopView({
   onMessageDispatch: (message: string) => void;
 }) {
   const [checklistFor, setChecklistFor] = useState<AvailableAction | null>(null);
+  const [closeoutOpen, setCloseoutOpen] = useState(false);
   const [exceptionOpen, setExceptionOpen] = useState(false);
   const [dispatchOpen, setDispatchOpen] = useState(false);
   // Real ETA from the truck's live location while heading to this stop.
@@ -63,11 +65,21 @@ export function CurrentStopView({
       setExceptionOpen(true);
       return;
     }
+    // Arriving back at the warehouse fires the mandatory Route Closeout, not the tap itself.
+    if (action.action === "ARRIVED_WAREHOUSE") {
+      setCloseoutOpen(true);
+      return;
+    }
     if (action.requiresChecklist) {
       setChecklistFor(action);
       return;
     }
     onPerform(action.action);
+  }
+
+  function handleCloseoutConfirm(closeout: CloseoutResult, photoIds?: string[]) {
+    onPerform("ARRIVED_WAREHOUSE", { closeout, photoIds });
+    setCloseoutOpen(false);
   }
 
   if (phase === "returned") {
@@ -82,9 +94,14 @@ export function CurrentStopView({
     return (
       <div className="space-y-5">
         <Panel icon={<Home className="size-8" />} title="Heading back to warehouse" tone="info">
-          Last stop complete. Drive safe.
+          Last stop complete. Drive safe — you&apos;ll run the closeout when you get back.
         </Panel>
         <ActionButtons actions={actions} busy={busy} onClick={handleActionClick} />
+        <ReturnChecklistDialog
+          open={closeoutOpen}
+          onOpenChange={setCloseoutOpen}
+          onConfirm={handleCloseoutConfirm}
+        />
       </div>
     );
   }

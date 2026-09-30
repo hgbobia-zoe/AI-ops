@@ -1,17 +1,26 @@
 "use client";
 
-import { useState } from "react";
 import {
   CheckCircle2,
   MessageSquare,
   AlertTriangle,
   Send,
-  Fuel,
   Clock,
+  ClipboardCheck,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import type { RouteSummary } from "@/lib/useRouteMachine";
+import type { CloseoutResult } from "@/lib/types";
+
+// Human labels for the closeout items, in checklist order (mirrors the fanout summary).
+const CLOSEOUT_LABELS: [keyof CloseoutResult, string][] = [
+  ["refueled", "Refueled"],
+  ["itemsUnloaded", "Rentals unloaded"],
+  ["discrepanciesReported", "Discrepancies reported"],
+  ["damageInspected", "Inspected for damage"],
+  ["securedKeysReturned", "Secured & keys returned"],
+  ["notesSubmitted", "Route notes submitted"],
+];
 
 function elapsedLabel(startedAt: string | null): string {
   if (!startedAt) return "—";
@@ -42,20 +51,16 @@ function Stat({
   );
 }
 
-/** End-of-route wrap-up: automation KPIs + a fuel check. */
+/** End-of-route wrap-up: automation KPIs + the closeout recap. */
 export function RouteSummaryPanel({
   summary,
-  onGas,
+  closeout,
 }: {
   summary: RouteSummary;
-  onGas: (putGas: boolean) => void;
+  closeout: CloseoutResult | null;
 }) {
-  const [gas, setGas] = useState<boolean | null>(null);
-
-  function answer(putGas: boolean) {
-    setGas(putGas);
-    onGas(putGas);
-  }
+  const missing = closeout ? CLOSEOUT_LABELS.filter(([k]) => !closeout[k]).map(([, l]) => l) : [];
+  const flagged = closeout ? missing.length > 0 || closeout.hasIssue : false;
 
   return (
     <div className="space-y-5">
@@ -101,50 +106,56 @@ export function RouteSummaryPanel({
         </div>
       </div>
 
-      {/* Fuel check */}
-      <Card className="shadow-sm">
-        <CardContent className="space-y-4 px-6 py-6">
-          <div className="flex items-center gap-3">
-            <span className="flex size-11 items-center justify-center rounded-xl bg-primary/15 text-primary">
-              <Fuel className="size-6" />
-            </span>
-            <div>
-              <h2 className="text-lg font-semibold">Did you put gas in the truck?</h2>
-              <p className="text-sm text-muted-foreground">
-                Logged for the fleet team.
-              </p>
+      {/* Closeout recap — what the driver confirmed on arrival, and anything flagged. */}
+      {closeout && (
+        <Card className="shadow-sm">
+          <CardContent className="space-y-4 px-6 py-6">
+            <div className="flex items-center gap-3">
+              <span
+                className={`flex size-11 items-center justify-center rounded-xl ${
+                  flagged ? "bg-amber-400/15 text-amber-300" : "bg-primary/15 text-primary"
+                }`}
+              >
+                <ClipboardCheck className="size-6" />
+              </span>
+              <div>
+                <h2 className="text-lg font-semibold">
+                  {flagged ? "Closeout submitted — flagged for the office" : "Closeout complete"}
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  {flagged ? "The office was notified of what's below." : "All items confirmed. Truck's ready for tomorrow."}
+                </p>
+              </div>
             </div>
-          </div>
 
-          {gas === null ? (
-            <div className="grid grid-cols-2 gap-3">
-              <Button
-                onClick={() => answer(true)}
-                className="h-14 rounded-xl text-lg"
-              >
-                Yes
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => answer(false)}
-                className="h-14 rounded-xl text-lg"
-              >
-                No
-              </Button>
-            </div>
-          ) : (
-            <div
-              className={`rounded-xl p-3 text-center text-sm font-medium ${
-                gas
-                  ? "bg-white/15 text-foreground"
-                  : "bg-white/5 text-muted-foreground"
-              }`}
-            >
-              {gas ? "Logged: fueled up ✓" : "Logged: not fueled — fleet notified"}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            <ul className="space-y-2">
+              {CLOSEOUT_LABELS.map(([key, label]) => (
+                <li key={key} className="flex items-center gap-3 text-base">
+                  {closeout[key] ? (
+                    <CheckCircle2 className="size-5 shrink-0 text-primary" />
+                  ) : (
+                    <AlertTriangle className="size-5 shrink-0 text-amber-400" />
+                  )}
+                  <span className={closeout[key] ? "" : "text-amber-300"}>{label}</span>
+                </li>
+              ))}
+            </ul>
+
+            {closeout.overrideReason && (
+              <p className="rounded-xl bg-white/5 p-3 text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">Reason: </span>
+                {closeout.overrideReason}
+              </p>
+            )}
+            {closeout.hasIssue && (
+              <p className="rounded-xl bg-amber-400/[0.08] p-3 text-sm text-amber-200">
+                <span className="font-medium">Issue reported: </span>
+                {closeout.issueNote || "(no note)"}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
