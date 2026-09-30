@@ -130,7 +130,23 @@ export function useRouteMachine(truckId: string): RouteMachine {
       } else if (r.status === "ready" || r.status === "active") {
         setRoute(r);
         loadedRef.current = true;
-        setPhase(r.stops.length ? "stops" : "empty");
+        // "headingBack"/"returned" are CLIENT-ONLY phases (the server route has no
+        // such state — after the last stop the route stays ready/active with every
+        // stop Completed). A forced re-pull (the 5-min auto-repull, or the Refresh
+        // button) must NOT stomp them: doing so drops the driver out of headingBack
+        // into "stops" with no active stop and no buttons, so the "Arrived at
+        // Warehouse" button vanishes mid-drive-back and the route can't be closed.
+        // Preserve headingBack/returned as long as every stop is still Completed
+        // (nothing new to drive to); if a genuinely new active stop appears — e.g. a
+        // second dispatch of the day — fall through to "stops".
+        const allDone = r.stops.length > 0 && r.stops.every((s) => s.state === "Completed");
+        setPhase((cur) =>
+          (cur === "headingBack" || cur === "returned") && allDone
+            ? cur
+            : r.stops.length
+              ? "stops"
+              : "empty",
+        );
       } else if (r.status === "done") {
         // Office force-closed this route (e.g. the tablet died mid-shift). Invite a
         // fresh pull of today's route instead of hanging on "Loading…".
