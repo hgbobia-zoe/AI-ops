@@ -8,9 +8,10 @@
 // Rules (mirror the risk engine; documented here so they're easy to tune once Zoe reacts):
 //   - DRIVER: one shift per active route, spanning the route window (headcount 1).
 //   - FIELD:  extra on-site crew beyond the driver = crewForRoute.crew − 1, same window as the route.
-//   - PREP:   warehouse load/prep the day BEFORE the events = ceil(deliveryRoutes / warehousePerRoutes).
-//             We do NOT know the prep clock time, so its window is left unknown (windowKnown=false)
-//             for the human to set — never fabricated.
+//   - PREP:   warehouse load/prep the day BEFORE the events = one prep person per delivery route
+//             (Zoe's rule, confirmed 2026-09-30 — decoupled from the risk engine's own ÷3 warehouse
+//             ratio so this doesn't disturb Event Risk). We do NOT know the prep clock time, so its
+//             window is left unknown (windowKnown=false) for the human to set — never fabricated.
 //
 // FACTS ONLY: a route with no usable stop times yields a driver shift with windowKnown=false rather
 // than a made-up time. Done/closed routes are skipped.
@@ -23,6 +24,8 @@ import type { Route } from "@/lib/types";
 import type { DemandShift } from "./types";
 
 const WAREHOUSE = "Warehouse";
+// Zoe's warehouse prep staffing: one prep person per delivery route (confirmed 2026-09-30).
+const PREP_PER_ROUTE = 1;
 
 function toEngineRoute(r: Route): EngineRoute {
   return {
@@ -108,10 +111,9 @@ export function buildDemand(routes: Route[], cfg: RiskConfig = DEFAULT_RISK_CONF
     }
   }
 
-  // PREP — warehouse load the day before, sized by delivery-route count. One shift for the day.
+  // PREP — warehouse load the day before, one prep person per delivery route. One shift for the day.
   const deliveryRoutes = active.filter((r) => r.stops.some((s) => s.kind !== "pickup")).length;
-  const per = cfg.warehousePerRoutes || 3;
-  const prepCount = Math.ceil(deliveryRoutes / per);
+  const prepCount = deliveryRoutes * PREP_PER_ROUTE;
   if (prepCount > 0) {
     out.push({
       date: shiftYmd(eventDate, -1), // Zoe preps/loads the day before
