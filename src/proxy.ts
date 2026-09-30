@@ -32,6 +32,7 @@ const PUBLIC: string[] = [
   "/api/vehicles", // driver truck-picker (/select) reads the truck list; GET-only, not sensitive
   "/api/finance/revenue", // own token; hit by the pull, not a person
   "/api/route/import",
+  "/api/route/prune", // Auto-Pull sanitize: drop routes GS no longer has; own token (fail-open), CORS-locked
   "/api/gs/projects",
   "/api/gs/notes",
   "/api/gs/emails", // Auto-Pull captures the client email thread; own token (fail-open), CORS-locked — must not bounce to auth

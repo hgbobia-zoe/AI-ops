@@ -153,7 +153,15 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
           }); }); });
         return chain.then(function(){
           var keys=Object.keys(groups); var totalStops=0,failed=0,days=keys.length; var unm=Object.keys(unmatched);
-          return Promise.all(keys.map(function(k){ var g=groups[k]; totalStops+=g.stops.length; return fetch(API+"/api/route/import",{method:"POST",headers:POSTH(),body:JSON.stringify({truckId:g.truckId,date:g.date,stops:g.stops,gsRouteId:g.gsRouteId})}).then(function(r){ if(!r.ok)failed++; }).catch(function(){failed++;}); })).then(function(){ return {stops:totalStops,days:days,failed:failed,unmatched:unm}; });
+          function result(){ return {stops:totalStops,days:days,failed:failed,unmatched:unm}; }
+          return Promise.all(keys.map(function(k){ var g=groups[k]; totalStops+=g.stops.length; return fetch(API+"/api/route/import",{method:"POST",headers:POSTH(),body:JSON.stringify({truckId:g.truckId,date:g.date,stops:g.stops,gsRouteId:g.gsRouteId})}).then(function(r){ if(!r.ok)failed++; }).catch(function(){failed++;}); })).then(function(){
+            // Sanitize: after a FULL clean sweep, drop any of OUR routes GS no longer has (moved/cancelled).
+            // Only when nothing failed (partial pull must never prune). Keep = routes GS returned this sweep.
+            if(failed!==0 || keys.length===0) return result();
+            var keepIds=keys.map(function(k){ var g=groups[k]; return "R-"+g.date+"-"+g.truckId; });
+            var dset={}; keys.forEach(function(k){ dset[groups[k].date]=1; });
+            return fetch(API+"/api/route/prune",{method:"POST",headers:POSTH(),body:JSON.stringify({dates:Object.keys(dset),keepRouteIds:keepIds})}).then(function(){ return result(); }).catch(function(){ return result(); });
+          });
         });
       }).catch(function(){ return {stops:0,days:0,failed:1,unmatched:[]}; });
     }

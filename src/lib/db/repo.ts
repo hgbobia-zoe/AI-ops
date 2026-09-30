@@ -1540,6 +1540,48 @@ export function writeRoute(route: Route): void {
   tx(route);
 }
 
+/**
+ * Prune routes that Goodshuffle no longer has. The office pull is authoritative for the horizon it
+ * sweeps, so after a FULL successful sweep it sends the set of routes GS actually returned; any of OUR
+ * routes on a swept date that isn't in that set is stale (moved/cancelled in GS, e.g. a delivery
+ * reassigned to another truck) and is removed here — the import itself is additive and never did this.
+ *
+ * SAFETY, so a bad/partial pull can never wipe real data:
+ *   - Only dates the sweep POSITIVELY found a route on are touched (`dates` = distinct dates in the
+ *     keep set). A date with zero found routes is left alone — an empty/failed listRoutes prunes nothing.
+ *   - Only `ready` routes are removed. An `active`/`done` route (in progress or historical) is never
+ *     pruned, even if absent from the sweep.
+ *   - Derived, still-draft, unassigned staff shifts for a pruned route are cleared too (the phantom
+ *     shift on the board); a human-touched shift is left for them to resolve.
+ * Returns the routeIds removed.
+ */
+export function pruneStaleRoutes(dates: string[], keepRouteIds: string[]): { deleted: string[] } {
+  const db = getDb();
+  const keepDates = [...new Set(dates)].filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+  if (keepDates.length === 0) return { deleted: [] };
+  const keep = new Set(keepRouteIds);
+
+  const deleted: string[] = [];
+  const tx = db.transaction(() => {
+    const datePh = keepDates.map(() => "?").join(",");
+    const candidates = db
+      .prepare(`SELECT route_id FROM routes WHERE date IN (${datePh}) AND status = 'ready'`)
+      .all(...keepDates) as { route_id: string }[];
+    for (const { route_id } of candidates) {
+      if (keep.has(route_id)) continue; // GS still has this one
+      db.prepare("DELETE FROM stops WHERE route_id = ?").run(route_id);
+      db.prepare("DELETE FROM routes WHERE route_id = ?").run(route_id);
+      // Clear only the auto-derived, untouched shift(s) for the vanished route.
+      db.prepare(
+        "DELETE FROM staff_shifts WHERE route_id = ? AND source = 'derived' AND status = 'draft' AND (assignees IS NULL OR assignees = '[]')",
+      ).run(route_id);
+      deleted.push(route_id);
+    }
+  });
+  tx();
+  return { deleted };
+}
+
 export interface MessageRow {
   toPhone: string | null;
   body: string | null;
