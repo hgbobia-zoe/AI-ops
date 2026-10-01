@@ -10,6 +10,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Loader2, Check, Trash2, X, Send } from "lucide-react";
 import type { CrewMember } from "@/lib/connecteam";
 import { shiftGap, type ShiftRole, type ShiftStatus, type StaffShift } from "@/lib/scheduling/types";
@@ -177,6 +178,67 @@ export function ShiftEditor({
     }
   }
 
+  const alreadyPublished = !isNew && Boolean(shift?.connecteamShiftId);
+  const canPublish = !isNew && !alreadyPublished && !saving && Boolean(draft.start) && draft.assignees.length > 0;
+  const publishHint = alreadyPublished
+    ? "Already on Connecteam"
+    : isNew
+      ? "Save the shift first"
+      : !draft.start
+        ? "Set a start time first"
+        : draft.assignees.length === 0
+          ? "Assign internal crew first"
+          : `Notifies ${draft.assignees.length} crew`;
+
+  // Publish the internal half to Connecteam (notifies the assigned crew). Saves the current draft as
+  // CONFIRMED first so what's published matches what's on screen, then calls the publish endpoint.
+  async function publish(): Promise<void> {
+    if (!canPublish || !shift) return;
+    if (!window.confirm(`Publish this shift to Connecteam and notify ${draft.assignees.length} crew member${draft.assignees.length === 1 ? "" : "s"}?`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const startIso = localInputToIso(draft.start);
+      const endIso = localInputToIso(draft.end);
+      const payRate = draft.payRate.trim() === "" ? null : Number(draft.payRate);
+      const saveRes = await fetch(`/api/scheduling/shift/${shift.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role: draft.role,
+          headcount: draft.headcount,
+          startTime: startIso,
+          endTime: endIso,
+          windowKnown: startIso != null,
+          location: draft.location.trim() || null,
+          eventLabel: draft.eventLabel.trim() || null,
+          notes: draft.notes.trim() || null,
+          assignees: draft.assignees,
+          instaworkHeadcount: effectiveInsta,
+          payRate,
+          status: "confirmed",
+        }),
+      });
+      if (!saveRes.ok) {
+        setError("Couldn't save the shift before publishing.");
+        return;
+      }
+      const res = await fetch(`/api/scheduling/shift/${shift.id}/publish`, { method: "POST" });
+      const j = (await res.json().catch(() => null)) as { message?: string; notified?: number } | null;
+      if (!res.ok) {
+        setError(j?.message || "Connecteam publish failed. Try again.");
+        return;
+      }
+      toast.success(`Published to Connecteam — notified ${j?.notified ?? draft.assignees.length} crew`);
+      onClose();
+      router.refresh();
+    } catch {
+      setError("Connecteam publish failed. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function remove(): Promise<void> {
     if (isNew || !window.confirm("Delete this shift?")) return;
     setSaving(true);
@@ -315,18 +377,26 @@ export function ShiftEditor({
           <button onClick={() => save("confirmed")} disabled={saving} className={BTN}>
             <Check className="size-3.5" /> Confirm
           </button>
-          <div className="flex flex-col">
-            <button type="button" disabled title="Wired next" className={BTN + " opacity-50"}>
-              <Send className="size-3.5" /> Send to Connecteam + Instawork
+          {alreadyPublished ? (
+            <span className={BTN + " cursor-default border-positive/40 text-positive"}>
+              <Check className="size-3.5" /> On Connecteam
+            </span>
+          ) : (
+            <button onClick={publish} disabled={!canPublish} title={publishHint} className={BTN + " border-foreground text-foreground"}>
+              {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} Publish to Connecteam
             </button>
-          </div>
+          )}
           {!isNew && (
             <button onClick={remove} disabled={saving} className={BTN + " ml-auto text-critical hover:text-critical"}>
               <Trash2 className="size-3.5" /> Delete
             </button>
           )}
         </div>
-        <p className="mt-1.5 text-[11px] text-meta">External push is wired next.</p>
+        <p className="mt-1.5 text-[11px] text-meta">
+          {alreadyPublished
+            ? "Sent to Connecteam — the crew were notified."
+            : `Publishing notifies the assigned crew in Connecteam. ${publishHint}. The Instawork gap-fill is a separate step (coming next).`}
+        </p>
       </div>
     </div>
   );

@@ -444,3 +444,120 @@ export function shiftClock(unix: number, tz: string): string {
     minute: "2-digit",
   }).format(new Date(unix * 1000));
 }
+
+// ── Shift WRITE: publish a schedule the app built back into Connecteam ────────────────────────────
+// The scheduling blade builds shifts in-app; this pushes an approved one into Connecteam as a PUBLISHED
+// shift so the assigned crew are notified. Create endpoint (verified from Connecteam's API reference):
+//   POST /scheduler/v1/schedulers/{schedulerId}/shifts?notifyUsers=true
+//   body: an ARRAY of shift objects; each needs title (or jobId), startTime+endTime (Unix SECONDS) and
+//   timezone; isPublished=true + notifyUsers=true alerts the assigned users. Never throws.
+
+/** One POST attempt (mirrors ctGetOnce). `transient` = worth retrying (network/timeout/5xx/429). */
+async function ctPostOnce(
+  path: string,
+  body: unknown,
+  timeoutMs: number,
+): Promise<{ json: unknown | null; status: number; transient: boolean }> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: { "X-API-KEY": process.env.CONNECTEAM_API_KEY!, accept: "application/json", "content-type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      console.error("[connecteam] POST", path, "HTTP", res.status);
+      return { json, status: res.status, transient: res.status >= 500 || res.status === 429 };
+    }
+    return { json, status: res.status, transient: false };
+  } catch (e) {
+    console.error("[connecteam] POST error", path, String(e));
+    return { json: null, status: 0, transient: true };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * Pick the scheduler to publish into. Honors CONNECTEAM_SCHEDULER_ID; else the only one; else one named
+ * like "Job"/"Schedule"; else the first. Null when Connecteam is unreachable / has no scheduler.
+ */
+export async function getDefaultScheduler(): Promise<Scheduler | null> {
+  const list = await getSchedulers();
+  if (list.length === 0) return null;
+  const envId = Number(process.env.CONNECTEAM_SCHEDULER_ID);
+  if (envId) return list.find((s) => s.schedulerId === envId) ?? null;
+  if (list.length === 1) return list[0];
+  return list.find((s) => /job|schedul/i.test(s.name)) ?? list[0];
+}
+
+export interface PublishShiftInput {
+  schedulerId: number;
+  title: string;
+  startUnix: number;
+  endUnix: number;
+  timezone: string;
+  assignedUserIds: number[];
+}
+
+export interface PublishShiftResult {
+  ok: boolean;
+  shiftId?: string;
+  error?: string;
+}
+
+/**
+ * Create a PUBLISHED shift in Connecteam and notify the assigned crew. Reports ok ONLY when Connecteam
+ * actually accepted it and returned a shift — never fakes success. One retry on a transient failure.
+ */
+export async function createPublishedShift(input: PublishShiftInput): Promise<PublishShiftResult> {
+  if (!connecteamConfigured()) return { ok: false, error: "Connecteam not configured" };
+  if (!input.title.trim()) return { ok: false, error: "shift title required" };
+  if (!input.startUnix || !input.endUnix || input.endUnix <= input.startUnix) return { ok: false, error: "invalid time window" };
+
+  const body = [
+    {
+      title: input.title.slice(0, 120),
+      startTime: input.startUnix,
+      endTime: input.endUnix,
+      timezone: input.timezone,
+      isPublished: true,
+      isOpenShift: input.assignedUserIds.length === 0,
+      assignedUserIds: input.assignedUserIds,
+    },
+  ];
+  const path = `/scheduler/v1/schedulers/${input.schedulerId}/shifts?notifyUsers=true`;
+
+  let r = await ctPostOnce(path, body, 12000);
+  if (r.json === null && r.transient) {
+    await new Promise((res) => setTimeout(res, 400));
+    r = await ctPostOnce(path, body, 12000);
+  }
+  if (r.status !== 200 && r.status !== 201) {
+    const msg = extractErr(r.json) || `Connecteam HTTP ${r.status || "error"}`;
+    return { ok: false, error: msg };
+  }
+  const shiftId = extractCreatedShiftId(r.json);
+  // A 2xx with no identifiable shift id is treated as success but with no id to track back.
+  return { ok: true, shiftId };
+}
+
+/** Best-effort pull of the created shift id from Connecteam's (loosely documented) response shape. */
+function extractCreatedShiftId(json: unknown): string | undefined {
+  const shifts = findArray(json, ["shifts"]);
+  const first = shifts[0] as Record<string, unknown> | undefined;
+  const id = first?.id ?? (json as { data?: { id?: unknown } })?.data?.id;
+  return id != null ? String(id) : undefined;
+}
+
+/** Pull a human error message out of a Connecteam error body, if any. */
+function extractErr(json: unknown): string | null {
+  if (!json || typeof json !== "object") return null;
+  const o = json as Record<string, unknown>;
+  const m = o.message ?? o.error ?? (o.data as Record<string, unknown> | undefined)?.message;
+  return typeof m === "string" ? m : null;
+}
