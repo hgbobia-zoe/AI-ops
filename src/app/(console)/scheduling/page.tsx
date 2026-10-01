@@ -23,6 +23,8 @@ import {
   type CrewMember,
   type CrewShift,
 } from "@/lib/connecteam";
+import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
+import { summarizeInstaworkByRole, instaworkShiftsForDate } from "@/lib/instawork/reconcile";
 import { todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
 import type { Route } from "@/lib/types";
 
@@ -59,6 +61,12 @@ export default async function SchedulingPage({
   // Net the scheduled crew against demand so a shift someone's already on doesn't read as a gap.
   const cov = computeCoverage(shifts, scheduledCrew);
 
+  // Instawork (temp labor): what's already booked/pending for this day, to reconcile against the gap.
+  const iwOn = instaworkConfigured();
+  const iw = iwOn ? await getInstaworkShifts() : null;
+  const iwDayShifts = iw?.ok ? instaworkShiftsForDate(iw.shifts, date) : [];
+  const iwByRole = iw?.ok ? summarizeInstaworkByRole(iw.shifts, date) : null;
+
   const peopleNeeded = shifts.reduce((n, s) => n + s.headcount, 0);
 
   const figures: Figure[] = [
@@ -93,12 +101,24 @@ export default async function SchedulingPage({
             : `Connecteam today: ${driverScheduled.length} driver${driverScheduled.length === 1 ? "" : "s"}, ${prepScheduled.length} prep already scheduled.`}
       </p>
 
+      {/* Instawork context — temp labor already booked/pending for this day. */}
+      <p className="mb-5 text-[12.5px] text-meta">
+        {!iwOn
+          ? "Instawork isn't connected — add the session cookie in Settings to reconcile booked temp labor."
+          : iw && !iw.ok
+            ? "Instawork unverified — couldn't reach it, so this is not “nothing booked.”"
+            : iwDayShifts.length === 0
+              ? "Instawork today: nothing booked for this day."
+              : `Instawork today: ${iwDayShifts.reduce((n, s) => n + s.filled, 0)} booked, ${iwDayShifts.reduce((n, s) => n + Math.max(0, s.total - s.filled), 0)} pending across ${iwDayShifts.length} gig${iwDayShifts.length === 1 ? "" : "s"}.`}
+      </p>
+
       <SchedulingBoard
         date={date}
         shifts={shifts}
         roster={roster}
         busyUserIds={busyUserIds}
         coverage={cov.byShift}
+        instawork={iwByRole}
         hasRoutes={routes.length > 0}
       />
     </main>

@@ -10,6 +10,7 @@ import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2,
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
 import { SeoCredentialSettings } from "@/components/SeoCredentialSettings";
+import { InstaworkCredentialSettings } from "@/components/InstaworkCredentialSettings";
 
 const ADMIN_PIN = process.env.NEXT_PUBLIC_ADMIN_PIN || "0000";
 
@@ -250,6 +251,10 @@ export default function AdminPage() {
           {/* SEO Growth — Ubersuggest MCP credential */}
           <Section icon={<Search className="size-4" />} title="SEO Growth (Ubersuggest)">
             <SeoCredentialSettings />
+          </Section>
+
+          <Section icon={<Search className="size-4" />} title="Instawork (temp labor)">
+            <InstaworkCredentialSettings />
           </Section>
 
           {/* Tablet sign-ins (Goodshuffle / Ignition) */}

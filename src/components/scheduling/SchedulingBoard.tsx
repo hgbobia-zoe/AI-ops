@@ -18,6 +18,7 @@ import type { CrewMember } from "@/lib/connecteam";
 import { formatClockTime } from "@/lib/dates";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
 import type { ShiftCoverage } from "@/lib/scheduling/coverage";
+import type { InstaworkRoleSummary } from "@/lib/instawork/reconcile";
 
 const BTN = "inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50 disabled:pointer-events-none";
 
@@ -41,6 +42,7 @@ export function SchedulingBoard({
   roster,
   busyUserIds,
   coverage,
+  instawork,
   hasRoutes,
 }: {
   date: string;
@@ -48,6 +50,7 @@ export function SchedulingBoard({
   roster: CrewMember[];
   busyUserIds: number[];
   coverage: Record<string, ShiftCoverage>;
+  instawork: Record<ShiftRole, InstaworkRoleSummary> | null;
   hasRoutes: boolean;
 }): React.JSX.Element {
   const router = useRouter();
@@ -106,9 +109,17 @@ export function SchedulingBoard({
             const Icon = ROLE_META[role].icon;
             return (
               <section key={role}>
-                <h2 className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">
-                  <Icon className="size-3.5" /> {ROLE_META[role].label}
-                </h2>
+                <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                  <h2 className="flex items-center gap-1.5 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">
+                    <Icon className="size-3.5" /> {ROLE_META[role].label}
+                  </h2>
+                  {instawork && instawork[role].total > 0 && (
+                    <span className="text-[11.5px] text-meta">
+                      Instawork: <span className="text-positive">{instawork[role].booked} booked</span>
+                      {instawork[role].pending > 0 && <span className="text-attention"> · {instawork[role].pending} pending</span>}
+                    </span>
+                  )}
+                </div>
                 <div className="border border-border">
                   {group.map((s) => {
                     const c = coverage[s.id];
