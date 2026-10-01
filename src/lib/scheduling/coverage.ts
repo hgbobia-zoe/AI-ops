@@ -50,7 +50,11 @@ export function computeCoverage(shifts: StaffShift[], scheduled: CrewMember[]): 
     if (roleShifts.length === 0) continue;
     // People already explicitly assigned to ANY of this role's shifts — don't credit them twice.
     const assignedIds = new Set<number>(roleShifts.flatMap((s) => s.assignees));
-    const pool = scheduled.filter((c) => c.role === CREW_ROLE[role] && !assignedIds.has(c.userId));
+    // Only auto-credit roles Connecteam tags CLEANLY: driver (title "Driver") and prep (Warehouse/Asset).
+    // "field" maps to Connecteam's catch-all "other" bucket, which also contains admins/office staff — so
+    // auto-crediting it is wrong (e.g. an admin shown as field crew). Field needs real availability + an
+    // explicit pick (the recommendation engine), so it's NEVER auto-credited here — explicit assignees only.
+    const pool = role === "field" ? [] : scheduled.filter((c) => c.role === CREW_ROLE[role] && !assignedIds.has(c.userId));
     let pi = 0; // walk the scheduled pool across this role's shifts
 
     for (const s of roleShifts) {

@@ -64,10 +64,10 @@ describe("computeCoverage", () => {
     expect(cov.gapTotal).toBe(1);
   });
 
-  it("maps field demand to Connecteam 'other' crew", () => {
-    const cov = computeCoverage([shift({ id: "f1", role: "field" })], [crew(9, "Temp Lead", "other")]);
-    expect(cov.byShift.f1.gap).toBe(0);
-    expect(cov.byShift.f1.scheduledNames).toEqual(["Temp Lead"]);
+  it("does NOT auto-credit field from the catch-all 'other' bucket (admins aren't field crew)", () => {
+    const cov = computeCoverage([shift({ id: "f1", role: "field" })], [crew(9, "Admin Person", "other")]);
+    expect(cov.byShift.f1.gap).toBe(1); // stays a gap — field needs an explicit pick
+    expect(cov.byShift.f1.scheduledCredit).toBe(0);
   });
 
   it("credits multiple scheduled prep against a multi-headcount prep shift", () => {
