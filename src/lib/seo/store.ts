@@ -7,6 +7,7 @@ import { getDb } from "@/lib/db";
 import {
   type SeoOpportunity,
   type SeoStatus,
+  type SeoStage,
   type SeoStatusEvent,
   type SeoDiagnostic,
   type SeoMetrics,
@@ -14,8 +15,11 @@ import {
   type SeoMetricsSource,
   type SeoIntent,
   type SeoAction,
+  type SeoPriorityBreakdown,
   SEO_STATUSES,
+  SEO_STAGES,
 } from "./types";
+import { canTransition } from "./stages";
 
 // ── dedupe identity ────────────────────────────────────────────────────────────
 /**
@@ -47,9 +51,11 @@ interface OppRow {
   matched_url: string | null;
   recommended_action: string | null;
   priority: number | null;
+  priority_breakdown: string | null;
   explanation: string | null;
   owner: string | null;
   status: string;
+  stage: string | null;
   is_seed: number;
   created_at: string;
   updated_at: string;
@@ -75,6 +81,16 @@ function parseMetrics(s: string | null): SeoMetrics | null {
   }
 }
 
+function parseBreakdown(s: string | null): SeoPriorityBreakdown | null {
+  if (!s) return null;
+  try {
+    const v = JSON.parse(s);
+    return v && typeof v === "object" && Array.isArray((v as SeoPriorityBreakdown).components) ? (v as SeoPriorityBreakdown) : null;
+  } catch {
+    return null;
+  }
+}
+
 function toOpportunity(r: OppRow): SeoOpportunity {
   return {
     id: r.id,
@@ -92,9 +108,11 @@ function toOpportunity(r: OppRow): SeoOpportunity {
     matchedUrl: r.matched_url,
     recommendedAction: (r.recommended_action as SeoAction) ?? null,
     priority: r.priority,
+    priorityBreakdown: parseBreakdown(r.priority_breakdown),
     explanation: r.explanation,
     owner: r.owner,
     status: r.status as SeoStatus,
+    stage: (r.stage as SeoStage) ?? "DISCOVERED",
     isSeed: r.is_seed === 1,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -151,8 +169,8 @@ export function upsertOpportunity(input: UpsertOpportunityInput): string {
     `INSERT INTO seo_opportunities (
        id, dedupe_key, keyword, related_keywords, intent, location, category, competitor_refs,
        metrics, metrics_source, source, research_at, matched_url, recommended_action, priority,
-       explanation, owner, status, is_seed, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 'new', ?, ?, ?)`,
+       priority_breakdown, explanation, owner, status, stage, is_seed, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, 'new', 'DISCOVERED', ?, ?, ?)`,
   ).run(
     id,
     key,
@@ -176,6 +194,13 @@ export function upsertOpportunity(input: UpsertOpportunityInput): string {
 
 export function getOpportunity(id: string): SeoOpportunity | null {
   const r = getDb().prepare("SELECT * FROM seo_opportunities WHERE id = ?").get(id) as OppRow | undefined;
+  return r ? toOpportunity(r) : null;
+}
+
+/** Look up an opportunity by its dedupe identity (keyword+intent+geo). Lets discovery distinguish new vs refreshed. */
+export function findOpportunityByDedupe(keyword: string, intent: SeoIntent | null | undefined, location: string | null | undefined): SeoOpportunity | null {
+  const key = dedupeKey(keyword, intent ?? "unknown", location ?? null);
+  const r = getDb().prepare("SELECT * FROM seo_opportunities WHERE dedupe_key = ?").get(key) as OppRow | undefined;
   return r ? toOpportunity(r) : null;
 }
 
@@ -217,10 +242,84 @@ export function setOpportunityStatus(id: string, to: SeoStatus, actor: string | 
   return true;
 }
 
-function recordStatus(opportunityId: string, from: SeoStatus | null, to: SeoStatus, actor: string | null, note: string | null): void {
+// Append one lifecycle transition. The from/to columns are generic TEXT, so this records BOTH the Phase-1
+// `status` transitions and the Phase-2 `stage` transitions into the one decision-history table.
+function recordStatus(opportunityId: string, from: string | null, to: string, actor: string | null, note: string | null): void {
   getDb()
     .prepare("INSERT INTO seo_status_history (id, opportunity_id, from_status, to_status, actor, note, ts) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(`SEOH-${randomUUID()}`, opportunityId, from, to, actor, note, new Date().toISOString());
+}
+
+// ── Phase 2: Kanban stage + analysis ──────────────────────────────────────────────────────────────
+
+/** Count of opportunities in each Kanban stage (every stage present, 0 when none). */
+export function countsByStage(): Record<SeoStage, number> {
+  const out = Object.fromEntries(SEO_STAGES.map((s) => [s, 0])) as Record<SeoStage, number>;
+  const rows = getDb().prepare("SELECT COALESCE(stage, 'DISCOVERED') AS stage, COUNT(*) AS n FROM seo_opportunities GROUP BY COALESCE(stage, 'DISCOVERED')").all() as { stage: string; n: number }[];
+  for (const r of rows) {
+    if ((SEO_STAGES as string[]).includes(r.stage)) out[r.stage as SeoStage] = r.n;
+  }
+  return out;
+}
+
+export interface StageTransitionResult {
+  ok: boolean;
+  /** Why the transition was refused (invalid move or missing opportunity). */
+  error?: string;
+  from?: SeoStage;
+  to?: SeoStage;
+}
+
+/**
+ * Move an opportunity to a new Kanban stage, GUARDED by the transition map (stages.ts), and append the move
+ * to the decision history. Returns {ok:false} with an error for an invalid transition (nothing is written) or
+ * a missing opportunity. A same-stage move is a legal no-op (recorded only when a note is supplied). Pass
+ * {force:true} to bypass the guard (admin override) — still recorded.
+ */
+export function setOpportunityStage(id: string, to: SeoStage, actor: string | null, note?: string | null, opts: { force?: boolean } = {}): StageTransitionResult {
+  const db = getDb();
+  const row = db.prepare("SELECT COALESCE(stage, 'DISCOVERED') AS stage FROM seo_opportunities WHERE id = ?").get(id) as { stage: string } | undefined;
+  if (!row) return { ok: false, error: "not_found" };
+  const from = row.stage as SeoStage;
+  if (from === to && !note) return { ok: true, from, to }; // idempotent no-op
+  if (!opts.force && !canTransition(from, to)) return { ok: false, error: `invalid transition ${from} → ${to}`, from, to };
+  const now = new Date().toISOString();
+  db.prepare("UPDATE seo_opportunities SET stage = ?, updated_at = ? WHERE id = ?").run(to, now, id);
+  recordStatus(id, from, to, actor, note ?? null);
+  return { ok: true, from, to };
+}
+
+export interface AnalysisWrite {
+  matchedUrl: string | null;
+  recommendedAction: SeoAction;
+  priority: number;
+  priorityBreakdown: SeoPriorityBreakdown;
+  explanation: string;
+}
+
+/**
+ * Persist the derived decision (matched URL + recommended action + priority + breakdown + explanation) from
+ * the match/priority engines. Does NOT touch the human workflow state (status/stage/owner) — the caller moves
+ * the stage separately. Returns false if the opportunity is missing.
+ */
+export function setAnalysis(id: string, a: AnalysisWrite): boolean {
+  const db = getDb();
+  const exists = db.prepare("SELECT 1 FROM seo_opportunities WHERE id = ?").get(id);
+  if (!exists) return false;
+  db.prepare(
+    `UPDATE seo_opportunities
+       SET matched_url = ?, recommended_action = ?, priority = ?, priority_breakdown = ?, explanation = ?, updated_at = ?
+     WHERE id = ?`,
+  ).run(a.matchedUrl, a.recommendedAction, a.priority, JSON.stringify(a.priorityBreakdown), a.explanation, new Date().toISOString(), id);
+  return true;
+}
+
+/** The full decision history (status + stage transitions) for an opportunity, newest first — generic strings. */
+export function decisionHistory(id: string): { from: string | null; to: string; actor: string | null; note: string | null; ts: string }[] {
+  const rows = getDb()
+    .prepare("SELECT from_status, to_status, actor, note, ts FROM seo_status_history WHERE opportunity_id = ? ORDER BY ts DESC, rowid DESC")
+    .all(id) as { from_status: string | null; to_status: string; actor: string | null; note: string | null; ts: string }[];
+  return rows.map((r) => ({ from: r.from_status, to: r.to_status, actor: r.actor, note: r.note, ts: r.ts }));
 }
 
 export function statusHistory(opportunityId: string): SeoStatusEvent[] {

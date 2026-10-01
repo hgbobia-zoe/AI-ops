@@ -1526,6 +1526,10 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Cancellation safeguard: ISO ts set once the signed→lost linen safeguard has run for a booking, so
   // repeated pulls never re-fire the Slack ask / GSPRO task (idempotency).
   { table: "bookings", column: "cancel_safeguard_at", type: "TEXT" },
+  // SEO Growth Phase 2: the Kanban lifecycle stage (separate from the Phase-1 `status`) + the explainable
+  // priority breakdown JSON. Both additive on the Phase-1 seo_opportunities table.
+  { table: "seo_opportunities", column: "stage", type: "TEXT" },
+  { table: "seo_opportunities", column: "priority_breakdown", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {
@@ -1559,6 +1563,7 @@ function ensureIndexes(db: DB): void {
     CREATE INDEX IF NOT EXISTS idx_stops_contact ON stops(contact_id);
     CREATE INDEX IF NOT EXISTS idx_routes_date ON routes(date);
     CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_seo_opportunities_stage ON seo_opportunities(stage, updated_at DESC);
   `);
 }
 

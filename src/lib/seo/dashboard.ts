@@ -3,9 +3,9 @@
 // boundary. Phase 1 counts are almost all 0 (nothing pulled yet) — that is the correct, honest state.
 // Server-only.
 
-import { countsByStatus, latestSuccess, recentDiagnostics } from "./store";
+import { countsByStage, latestSuccess, recentDiagnostics } from "./store";
 import { getHealth } from "./ubersuggest";
-import type { SeoHealth, SeoStatus, SeoDiagnostic } from "./types";
+import type { SeoHealth, SeoStage, SeoDiagnostic } from "./types";
 
 export interface SeoOverview {
   /** Operational status items (spec §4). Each is a count of opportunities in that workflow state. */
@@ -27,16 +27,18 @@ export interface SeoOverview {
 }
 
 export function seoOverview(): SeoOverview {
-  const by: Record<SeoStatus, number> = countsByStatus();
+  // Counts come from the Phase-2 Kanban stage (the canonical workflow state), mapped onto the Overview's
+  // six honest buckets. (The Phase-1 `status` counts still exist via countsByStatus for back-compat.)
+  const by: Record<SeoStage, number> = countsByStage();
   const total = (Object.values(by) as number[]).reduce((a, b) => a + b, 0);
   return {
     counts: {
-      awaitingAnalysis: by.new,
-      awaitingApproval: by.awaiting_approval,
-      inProgress: by.in_progress,
-      draftsAwaitingReview: by.drafted,
-      recentlyPublished: by.published,
-      deferredOrRejected: by.deferred + by.rejected,
+      awaitingAnalysis: by.DISCOVERED,
+      awaitingApproval: by.ANALYZING,
+      inProgress: by.APPROVED + by.DRAFTING,
+      draftsAwaitingReview: by.REVIEW + by.APPROVED_FOR_PUBLISHING,
+      recentlyPublished: by.PUBLISHED + by.MONITORING,
+      deferredOrRejected: by.DEFERRED + by.REJECTED + by.CONSOLIDATED + by.BLOCKED,
       total,
     },
     health: getHealth(),

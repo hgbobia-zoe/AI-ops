@@ -6,9 +6,10 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search } from "lucide-react";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
+import { SeoCredentialSettings } from "@/components/SeoCredentialSettings";
 
 const ADMIN_PIN = process.env.NEXT_PUBLIC_ADMIN_PIN || "0000";
 
@@ -244,6 +245,11 @@ export default function AdminPage() {
               pin={pin}
               onChange={(patch) => setS({ ...s, ...patch })}
             />
+          </Section>
+
+          {/* SEO Growth — Ubersuggest MCP credential */}
+          <Section icon={<Search className="size-4" />} title="SEO Growth (Ubersuggest)">
+            <SeoCredentialSettings />
           </Section>
 
           {/* Tablet sign-ins (Goodshuffle / Ignition) */}

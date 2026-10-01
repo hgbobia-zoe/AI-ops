@@ -45,6 +45,7 @@ const PUBLIC: string[] = [
   "/api/coach", // Custodian live-coach bridge; authenticates by COACH_API_TOKEN bearer, not a session
   "/api/radar/ingest", // Opportunity Radar browser-agent POST; RADAR_INGEST_TOKEN + CORS-locked, not a session
   "/api/radar/cron", // Opportunity Radar scheduled source pull; RADAR_INGEST_TOKEN, hit by an external scheduler
+  "/api/seo/cron", // SEO Growth scheduled discovery pull; SEO_INGEST_TOKEN, hit by an external scheduler (not a session)
 ];
 
 function isPublicPath(pathname: string): boolean {
