@@ -26,6 +26,7 @@ import {
   getCrewForDateSafe,
   getUsersList,
   connecteamConfigured,
+  shiftClock,
   type CrewMember,
   type CrewShift,
 } from "@/lib/connecteam";
@@ -92,6 +93,21 @@ export default async function SchedulingPage({
   const busyUserIds = [...new Set(scheduledCrew.map((a) => a.userId))];
   const driverScheduled = scheduledCrew.filter((a) => a.role === "driver");
   const prepScheduled = scheduledCrew.filter((a) => a.role === "prep");
+
+  // Warehouse/prep crew scheduled in Connecteam THIS day, with their shift windows. Prep isn't tied to a
+  // route (it's day-level work — on the ground the delivery day), so without this the "N prep scheduled"
+  // count has nowhere to show — this surfaces the actual people + times in a day-level section on the board.
+  const prepCrewToday: { name: string; title: string | null; window: string }[] = [];
+  if (coverage.ok) {
+    const seen = new Set<string>();
+    for (const cs of coverage.shifts) {
+      for (const a of cs.assignees) {
+        if (a.role !== "prep" || seen.has(a.name)) continue;
+        seen.add(a.name);
+        prepCrewToday.push({ name: a.name, title: a.title ?? null, window: `${shiftClock(cs.startUnix, cs.timezone)} – ${shiftClock(cs.endUnix, cs.timezone)}` });
+      }
+    }
+  }
 
   // Net the scheduled crew against demand so a shift someone's already on doesn't read as a gap.
   const cov = computeCoverage(shifts, scheduledCrew);
@@ -164,9 +180,10 @@ export default async function SchedulingPage({
     }
   }
 
-  // Shifts with no route (prep lands the day before with no routeId; manual shifts) — or whose route isn't
-  // an active route this day — render in the "other" section so nothing is hidden.
-  const otherShifts = shifts.filter((s) => !s.routeId || !routeIds.has(s.routeId));
+  // Prep is day-level warehouse staffing (no route) — its NEED + scheduled crew show in the "Warehouse /
+  // Prep" section, so keep prep OUT of the generic "other" section (which is for manual / orphaned shifts).
+  const prepNeed = shifts.filter((s) => s.role === "prep").reduce((n, s) => n + s.headcount, 0);
+  const otherShifts = shifts.filter((s) => (!s.routeId || !routeIds.has(s.routeId)) && s.role !== "prep");
 
   const peopleNeeded = shifts.reduce((n, s) => n + s.headcount, 0);
 
@@ -223,6 +240,8 @@ export default async function SchedulingPage({
         coverage={cov.byShift}
         recommendations={recommendations}
         routeRecs={routeRecs}
+        prepCrewToday={prepCrewToday}
+        prepNeed={prepNeed}
         instawork={iwByRole}
         iwConfigured={iwOn}
         hasRoutes={routes.length > 0}

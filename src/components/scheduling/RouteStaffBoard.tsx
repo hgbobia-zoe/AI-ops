@@ -73,6 +73,8 @@ export function RouteStaffBoard({
   coverage,
   recommendations,
   routeRecs,
+  prepCrewToday,
+  prepNeed,
   instawork,
   iwConfigured,
   hasRoutes,
@@ -86,6 +88,8 @@ export function RouteStaffBoard({
   coverage: Record<string, ShiftCoverage>;
   recommendations: Record<string, CrewRecommendation[]>;
   routeRecs: RouteRecs;
+  prepCrewToday: { name: string; title: string | null; window: string }[];
+  prepNeed: number;
   instawork: Record<ShiftRole, InstaworkRoleSummary> | null;
   iwConfigured: boolean;
   hasRoutes: boolean;
@@ -138,7 +142,7 @@ export function RouteStaffBoard({
         </p>
       )}
 
-      {routeCards.length === 0 && otherShifts.length === 0 ? (
+      {routeCards.length === 0 && otherShifts.length === 0 && prepCrewToday.length === 0 && prepNeed === 0 ? (
         <p className="text-[13px] text-meta">No shifts built for this day yet.</p>
       ) : (
         <div className="space-y-6">
@@ -157,6 +161,46 @@ export function RouteStaffBoard({
                   onAdd={() => setAdding(rc)}
                 />
               ))}
+            </section>
+          )}
+
+          {/* Warehouse / Prep crew scheduled in Connecteam today — prep isn't route-tied, so it's shown at
+              the day level (this is where the "N prep scheduled" count becomes the actual people + times). */}
+          {(prepCrewToday.length > 0 || prepNeed > 0) && (
+            <section>
+              <h2 className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">
+                <Users className="size-3.5" /> Warehouse / Prep · today
+                {prepNeed > 0 && (
+                  <span className="font-normal normal-case text-meta">
+                    needs {prepNeed} · {prepCrewToday.length} scheduled in Connecteam
+                  </span>
+                )}
+                {prepNeed === 0 && prepCrewToday.length > 0 && (
+                  <span className="font-normal normal-case text-meta">({prepCrewToday.length} scheduled in Connecteam)</span>
+                )}
+              </h2>
+              <div className="surface border border-border">
+                {prepCrewToday.map((p) => (
+                  <div key={p.name} className="flex items-center justify-between gap-3 border-t border-[var(--row-rule)] px-3 py-2.5 text-[13px] first:border-t-0">
+                    <span className="min-w-0 truncate">
+                      <span className="font-medium text-foreground">{p.name}</span>
+                      {p.title && <span className="ml-1.5 text-[11px] text-meta">{p.title}</span>}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2 text-[12px] text-meta">
+                      <span className="tabular-nums">{p.window}</span>
+                      <span className="text-positive">Connecteam · scheduled</span>
+                    </span>
+                  </div>
+                ))}
+                {prepNeed > prepCrewToday.length && (
+                  <div className="flex items-center justify-between gap-3 border-t border-[var(--row-rule)] px-3 py-2.5 text-[13px] first:border-t-0">
+                    <span className="text-meta">
+                      {prepNeed - prepCrewToday.length} more prep {prepNeed - prepCrewToday.length === 1 ? "person" : "people"} needed on the ground today
+                    </span>
+                    <span className="shrink-0 text-[12px] text-amber-300">unfilled</span>
+                  </div>
+                )}
+              </div>
             </section>
           )}
 

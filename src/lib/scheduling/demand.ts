@@ -19,7 +19,6 @@
 import { routeWindow } from "@/lib/risk/engine";
 import { DEFAULT_RISK_CONFIG, type RiskConfig, type EngineRoute } from "@/lib/risk/types";
 import { crewForRoute } from "@/lib/crewRules";
-import { shiftYmd } from "@/lib/dates";
 import type { Route } from "@/lib/types";
 import type { DemandShift } from "./types";
 
@@ -111,19 +110,22 @@ export function buildDemand(routes: Route[], cfg: RiskConfig = DEFAULT_RISK_CONF
     }
   }
 
-  // PREP — warehouse load the day before, one prep person per delivery route. One shift for the day.
+  // PREP — warehouse crew on the DELIVERY DAY: they're on the ground (loading the trucks that morning,
+  // processing returns), one prep person per delivery route. (Loading NEXT-day trucks the evening before
+  // is a separate case the scheduler adds by hand — not auto-generated here.) One day-level shift, no
+  // routeId (prep serves the whole day, not one truck).
   const deliveryRoutes = active.filter((r) => r.stops.some((s) => s.kind !== "pickup")).length;
   const prepCount = deliveryRoutes * PREP_PER_ROUTE;
   if (prepCount > 0) {
     out.push({
-      date: shiftYmd(eventDate, -1), // Zoe preps/loads the day before
+      date: eventDate, // delivery day (NOT the day before)
       role: "prep",
       headcount: prepCount,
       startTime: null, // prep clock time is unknown — the human sets it (never fabricated)
       endTime: null,
       windowKnown: false,
       location: WAREHOUSE,
-      eventLabel: `Prep for ${eventDate}`,
+      eventLabel: "Warehouse / prep",
       reasons: [`${deliveryRoutes} delivery route${deliveryRoutes === 1 ? "" : "s"} → ${prepCount} prep crew`],
     });
   }

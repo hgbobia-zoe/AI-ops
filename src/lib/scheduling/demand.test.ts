@@ -75,15 +75,15 @@ describe("buildDemand", () => {
     expect(buildDemand([r]).some((d) => d.role === "field")).toBe(false);
   });
 
-  it("emits one prep shift the day BEFORE, one prep person per delivery route", () => {
+  it("emits one prep shift on the DELIVERY DAY, one prep person per delivery route", () => {
     // 4 delivery routes → 4 prep crew (Zoe's 1-per-route rule)
     const routes = [1, 2, 3, 4].map((i) =>
-      route({ routeId: `R${i}`, truckId: `T${i}`, stops: [stop({ routeId: `R${i}`, kind: "delivery", plannedWindow: "2026-10-03T14:00:00.000Z" })] }),
+      route({ routeId: `R${i}`, truckId: `T${i}`, date: "2026-10-03", stops: [stop({ routeId: `R${i}`, kind: "delivery", plannedWindow: "2026-10-03T14:00:00.000Z" })] }),
     );
     const demand = buildDemand(routes);
     const prep = demand.filter((d) => d.role === "prep");
     expect(prep).toHaveLength(1);
-    expect(prep[0].date).toBe("2026-10-02"); // day before
+    expect(prep[0].date).toBe("2026-10-03"); // delivery day (not day before)
     expect(prep[0].headcount).toBe(4);
     expect(prep[0].windowKnown).toBe(false); // prep clock time is unknown, not fabricated
     expect(prep[0].startTime).toBeNull();
