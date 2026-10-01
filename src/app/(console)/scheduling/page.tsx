@@ -16,6 +16,7 @@ import { getActiveVehicles } from "@/lib/vehicles";
 import { getRouteForDate } from "@/lib/db/repo";
 import { getShiftsForDate } from "@/lib/scheduling/store";
 import { computeCoverage } from "@/lib/scheduling/coverage";
+import { recommendCrew, type CrewRecommendation } from "@/lib/scheduling/availability";
 import {
   getCrewForDateSafe,
   getUsersList,
@@ -60,6 +61,13 @@ export default async function SchedulingPage({
 
   // Net the scheduled crew against demand so a shift someone's already on doesn't read as a gap.
   const cov = computeCoverage(shifts, scheduledCrew);
+
+  // Per-shift recommendations: who's actually FREE for this window + role (excludes office/admin). The
+  // human picks from these (or posts to Instawork) — grounded in the Connecteam schedule, not a guess.
+  const recommendations: Record<string, CrewRecommendation[]> = {};
+  if (configured && coverage.ok) {
+    for (const s of shifts) recommendations[s.id] = recommendCrew(s, coverage.shifts, roster);
+  }
 
   // Instawork (temp labor): what's already booked/pending for this day, to reconcile against the gap.
   const iwOn = instaworkConfigured();
@@ -118,6 +126,7 @@ export default async function SchedulingPage({
         roster={roster}
         busyUserIds={busyUserIds}
         coverage={cov.byShift}
+        recommendations={recommendations}
         instawork={iwByRole}
         hasRoutes={routes.length > 0}
       />

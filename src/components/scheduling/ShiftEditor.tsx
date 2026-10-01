@@ -13,6 +13,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Loader2, Check, Trash2, X, Send } from "lucide-react";
 import type { CrewMember } from "@/lib/connecteam";
+import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import { shiftGap, type ShiftRole, type ShiftStatus, type StaffShift } from "@/lib/scheduling/types";
 
 const INPUT = "w-full rounded border border-border bg-background px-2.5 py-1.5 text-[13px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
@@ -85,12 +86,14 @@ export function ShiftEditor({
   date,
   roster,
   busyUserIds,
+  recommendations,
   onClose,
 }: {
   shift: StaffShift | null;
   date: string; // the day being edited (for a new shift)
   roster: CrewMember[];
   busyUserIds: number[];
+  recommendations: CrewRecommendation[];
   onClose: () => void;
 }): React.JSX.Element {
   const router = useRouter();
@@ -316,6 +319,41 @@ export function ShiftEditor({
             <span className={LABEL}>Internal crew · {draft.assignees.length}/{draft.headcount}</span>
             {liveGap > 0 && <span className="text-[11.5px] text-attention">{liveGap} to fill</span>}
           </div>
+
+          {/* Recommendations: who's actually FREE for this window + role (excludes office/admin). Pick one. */}
+          {recommendations.length > 0 ? (
+            <div className="mb-2 rounded border border-positive/30 bg-positive/[0.06] p-2">
+              <div className="mb-1 text-[11px] font-medium uppercase tracking-[0.06em] text-positive">Recommended · free this window</div>
+              <div className="space-y-0.5">
+                {recommendations.map((r) => {
+                  const on = draft.assignees.includes(r.userId);
+                  return (
+                    <button
+                      key={r.userId}
+                      type="button"
+                      onClick={() => toggleAssignee(r.userId)}
+                      className="flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-[12.5px] transition-colors hover:bg-[var(--row-hover)]"
+                    >
+                      <span className="min-w-0 truncate">
+                        <span className="font-medium text-foreground">{r.name}</span>
+                        <span className="ml-1.5 text-[11px] text-meta">{r.reason}</span>
+                      </span>
+                      <span className={`shrink-0 text-[11px] ${on ? "text-positive" : "text-tertiary-text"}`}>{on ? "Added ✓" : "+ Add"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            !isNew && (
+              <p className="mb-2 text-[11.5px] text-meta">
+                {draft.role === "field"
+                  ? "No internal crew free for this window — post General Labor on Instawork for the gap."
+                  : "No one free for this window — pick from the roster below or post to Instawork."}
+              </p>
+            )
+          )}
+
           {roster.length === 0 ? (
             <p className="text-[12.5px] text-meta">No Connecteam roster available.</p>
           ) : (

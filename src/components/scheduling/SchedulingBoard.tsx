@@ -18,6 +18,7 @@ import type { CrewMember } from "@/lib/connecteam";
 import { formatClockTime } from "@/lib/dates";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
 import type { ShiftCoverage } from "@/lib/scheduling/coverage";
+import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import type { InstaworkRoleSummary } from "@/lib/instawork/reconcile";
 
 const BTN = "inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50 disabled:pointer-events-none";
@@ -42,6 +43,7 @@ export function SchedulingBoard({
   roster,
   busyUserIds,
   coverage,
+  recommendations,
   instawork,
   hasRoutes,
 }: {
@@ -50,6 +52,7 @@ export function SchedulingBoard({
   roster: CrewMember[];
   busyUserIds: number[];
   coverage: Record<string, ShiftCoverage>;
+  recommendations: Record<string, CrewRecommendation[]>;
   instawork: Record<ShiftRole, InstaworkRoleSummary> | null;
   hasRoutes: boolean;
 }): React.JSX.Element {
@@ -176,6 +179,7 @@ export function SchedulingBoard({
             date={date}
             roster={roster}
             busyUserIds={busyUserIds}
+            recommendations={editing !== "new" && editing ? recommendations[editing.id] ?? [] : []}
             onClose={() => setEditing(null)}
           />
         </SidePanelOverlay>
