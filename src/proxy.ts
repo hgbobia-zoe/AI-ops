@@ -61,6 +61,11 @@ const isSettings = (p: string): boolean =>
   p.startsWith("/api/passes") || // generating / listing / revoking / texting Shift Passes — owner/admin only
   p.startsWith("/api/pursuit"); // capability profile + bid pre-staging — owner/admin only
 
+// SEO Growth — keyword research + content pipeline. Settings-ish (it manages an integration + is
+// owner/admin-only, mirroring the `manage` nav flag), so it is gated to owner/admin here. Normal
+// session-gated console routes — NOT public, NOT token-gated like the ingest endpoints.
+const isSeo = (p: string): boolean => p === "/seo" || p.startsWith("/seo/") || p.startsWith("/api/seo");
+
 // A Shift Pass (guest) is scoped HARD to the dispatch board + the (already public) driver surface. It
 // is deny-by-default: only these prefixes are reachable, so no money, settings, coaching, sales, or the
 // supervisor board writes under /api/route/* are ever exposed to a contractor's link.
@@ -115,6 +120,7 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
 
   if (isFinancial(pathname) && !canSeeFinancials(session.role)) return deny(req, "forbidden");
   if (isSettings(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
+  if (isSeo(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
   if (isCoaching(pathname) && !canSeeCoaching(session.role)) return deny(req, "forbidden");
 
   return NextResponse.next();

@@ -1392,6 +1392,70 @@ CREATE TABLE IF NOT EXISTS email_events (
   ts              TEXT NOT NULL   -- when we recorded it
 );
 CREATE INDEX IF NOT EXISTS idx_email_events_booking ON email_events(booking_id, occurred_at DESC);
+
+-- ── SEO Growth Engine (Phase 1 foundation) ───────────────────────────────────────────────────────
+-- An SEO opportunity worklist fed (in later phases) from the Ubersuggest MCP and matched against Zoe's
+-- site. Phase 1 lays the spine. SAME DESIGN LAW as the rest of the platform: FACTS ONLY. Ubersuggest
+-- metrics are a third-party ESTIMATE, kept in a JSON blob WITH its retrieval timestamp and never mixed
+-- with internal workflow facts or business outcomes; an un-fetched metric is simply absent (never 0 or a
+-- guess). recommended_action/priority are DERIVED later (CREATE/IMPROVE/CONSOLIDATE/SKIP); until an
+-- opportunity is analyzed they stay null. Dedupe identity is keyword+intent+geography (dedupe_key), so a
+-- re-pull updates a row in place and never duplicates it (full matching lands in Phase 2).
+CREATE TABLE IF NOT EXISTS seo_opportunities (
+  id                 TEXT PRIMARY KEY,       -- SEOP-<uuid>
+  dedupe_key         TEXT UNIQUE NOT NULL,   -- normalized keyword|intent|geography — the idempotency key
+  keyword            TEXT NOT NULL,
+  related_keywords   TEXT,                   -- JSON string[] (Ubersuggest related/suggestions)
+  intent             TEXT,                   -- informational | commercial | transactional | navigational | unknown
+  location           TEXT,                   -- geography the metrics are for (e.g. "US", "Washington, DC")
+  category           TEXT,                   -- Zoe service category (tents, tables, linens, ...) — nullable
+  competitor_refs    TEXT,                   -- JSON string[] of competitor domains ranking for the keyword
+  metrics            TEXT,                   -- JSON blob of AVAILABLE Ubersuggest metrics (volume/difficulty/cpc/...) — absent fields are UNKNOWN
+  metrics_source     TEXT,                   -- ubersuggest | none  (provenance of the metrics blob)
+  source             TEXT NOT NULL,          -- ubersuggest | manual | derived (how this opportunity was discovered)
+  research_at        TEXT,                   -- ISO retrieval timestamp of the metrics (null = never fetched)
+  matched_url        TEXT,                   -- matched Zoe URL (null until matched in Phase 2)
+  recommended_action TEXT,                   -- CREATE | IMPROVE | CONSOLIDATE | SKIP (null until analyzed)
+  priority           INTEGER,                -- derived priority rank (null until analyzed)
+  explanation        TEXT,                   -- why this action/priority (human-readable)
+  owner              TEXT,                   -- assigned actor label
+  status             TEXT NOT NULL,          -- new | awaiting_approval | approved | in_progress | drafted | published | deferred | rejected
+  is_seed            INTEGER DEFAULT 0,      -- 1 = demo/seed data (never mistaken for a verified pull)
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_seo_opportunities_status ON seo_opportunities(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_seo_opportunities_action ON seo_opportunities(recommended_action);
+
+-- Append-only lifecycle log for an SEO opportunity (decision history). One row per status transition;
+-- never updated. Mirrors the audit-trail pattern used across the platform.
+CREATE TABLE IF NOT EXISTS seo_status_history (
+  id             TEXT PRIMARY KEY,
+  opportunity_id TEXT NOT NULL,
+  from_status    TEXT,
+  to_status      TEXT NOT NULL,
+  actor          TEXT,
+  note           TEXT,
+  ts             TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_seo_status_history_opp ON seo_status_history(opportunity_id, ts DESC);
+
+-- Integration / retrieval diagnostics for the Ubersuggest MCP boundary. One row per probe or data
+-- retrieval attempt, so the Overview can honestly answer "when did we last successfully reach Ubersuggest?"
+-- and surface errors / rate-limits / staleness WITHOUT fabricating data. ok=1 is a complete success.
+CREATE TABLE IF NOT EXISTS seo_diagnostics (
+  id           TEXT PRIMARY KEY,
+  ts           TEXT NOT NULL,
+  operation    TEXT NOT NULL,     -- probe | tools_list | keyword_research | domain | ... (the boundary call)
+  tool         TEXT,              -- MCP tool name when applicable
+  ok           INTEGER NOT NULL,  -- 1 = success, 0 = failed/partial
+  status_code  INTEGER,           -- HTTP status when known
+  rate_limited INTEGER DEFAULT 0, -- 1 = the attempt hit a provider rate-limit
+  duration_ms  INTEGER,
+  detail       TEXT               -- error message / note
+);
+CREATE INDEX IF NOT EXISTS idx_seo_diagnostics_ts ON seo_diagnostics(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_seo_diagnostics_ok ON seo_diagnostics(ok, ts DESC);
 `;
 
 type DB = InstanceType<typeof Database>;

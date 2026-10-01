@@ -13,9 +13,10 @@ import { llmConfigured } from "@/lib/llm";
 import { getSettings } from "@/lib/settings";
 import { loadGpsConfig, gpsProviderById } from "@/lib/providers";
 import { zonarConfigured, rateLimitedUntil } from "@/lib/eta/zonar";
+import { getHealth as seoHealth } from "@/lib/seo/ubersuggest";
 
 export type ConnStatus = "ok" | "attention" | "off";
-export type ConnCategory = "Data pull" | "Communications" | "AI" | "GPS";
+export type ConnCategory = "Data pull" | "Communications" | "AI" | "GPS" | "SEO";
 
 export interface Connection {
   key: string;
@@ -227,6 +228,21 @@ export function computeConnections(now: number = Date.now()): Connection[] {
       test: { kind: "gps", provider: gpsId },
     });
   }
+
+  // ── Ubersuggest (SEO Growth keyword research) ──
+  const seo = seoHealth();
+  const seoStatus: ConnStatus = seo.status === "ok" ? "ok" : seo.status === "stale" || seo.status === "error" ? "attention" : "off";
+  out.push({
+    key: "ubersuggest",
+    label: "Ubersuggest",
+    category: "SEO",
+    status: seoStatus,
+    headline: seo.headline,
+    detail: seo.detail,
+    lastAt: seo.lastSuccessAt,
+    fixHref: seo.configured ? "/seo" : "/admin",
+    fixLabel: seo.configured ? "Open SEO" : "Configure",
+  });
 
   // Problems first, then not-connected, then healthy — so what needs attention is on top.
   const rank: Record<ConnStatus, number> = { attention: 0, off: 1, ok: 2 };

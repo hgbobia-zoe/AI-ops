@@ -20,6 +20,7 @@ import {
   HeartHandshake, Columns3, LifeBuoy, ClipboardCheck, ClipboardList,
   Aperture, Plus, Dna,
   Headset, PhoneCall, FlaskConical,
+  Search, FileText, Rocket,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -91,6 +92,22 @@ const GROUPS: Group[] = [
       { href: "/creative/new", label: "New Creative Job", icon: Plus },
       { href: "/creative/benchmarks", label: "Provider Benchmarks", icon: FlaskConical },
       { href: "/creative/dna", label: "Visual DNA", icon: Dna, manage: true },
+    ],
+  },
+  {
+    // SEO Growth — the organic-demand engine: keyword research (Ubersuggest MCP), opportunity matching,
+    // competitor intelligence, content production (reusing the Creative Engine) and publishing. A big blade
+    // alongside Marketing (it fills the same top-of-funnel). Owner/admin only — it manages an integration
+    // credential — so every sub-blade carries `manage` (gated by canManageSettings, like settings-ish blades).
+    label: "SEO Growth",
+    icon: Search,
+    blades: [
+      { href: "/seo", label: "Overview", icon: Gauge, exact: true, manage: true },
+      { href: "/seo/opportunities", label: "Opportunities", icon: Search, manage: true },
+      { href: "/seo/competitors", label: "Competitors", icon: Building2, manage: true },
+      { href: "/seo/content", label: "Content Studio", icon: FileText, manage: true },
+      { href: "/seo/queue", label: "Review Queue", icon: ClipboardCheck, manage: true },
+      { href: "/seo/performance", label: "Performance", icon: Rocket, manage: true },
     ],
   },
   {
