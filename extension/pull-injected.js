@@ -78,7 +78,14 @@ function zoePull(apiBase) {
   function fetchEvent(txID) { const out = { items: undefined, contactId: undefined, grandTotalCents: undefined, paidCents: undefined };
     const pI = fetch("/app/vendorTransaction/initContractView?transactionID=" + txID, H).then((r) => r.json())
       .then((cv) => { if (cv && cv.contactID != null) out.contactId = String(cv.contactID); const g = (cv && cv.lineItemGroupsToLoad) || []; return Promise.all(g.map((x) => fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID=" + x.id + "&transactionID=" + txID, H).then((r) => r.json()).catch(() => null))); })
-      .then((lists) => { const items = []; function w(o, d) { if (!o || typeof o !== "object" || d > 7) return; if (Object.prototype.toString.call(o) === "[object Array]") { for (let i = 0; i < o.length; i++) w(o[i], d + 1); return; } if (o.itemTitle) items.push({ name: o.itemTitle, quantity: o.quantityBooked }); for (const k in o) w(o[k], d + 1); } (lists || []).forEach((gj) => { w(gj, 0); }); if (items.length) out.items = items; })
+      .then((lists) => { const items = [];
+        // Item photo for the driver load list. The image lives on the inventory item as
+        // item.thumbImagePath (a public CloudFront/S3 URL) — already in loadContractLineItemGroup, so no
+        // extra fetch. imgFrom matches any image/photo/thumb/picture key; imageOf also checks o.item.
+        const absUrl = (u) => { if (!u || typeof u !== "string") return null; const s = u.toLowerCase(); if (s.startsWith("http://") || s.startsWith("https://")) return u; if (u.slice(0, 2) === "//") return "https:" + u; if (u[0] === "/") return "https://pro.goodshuffle.com" + u; return null; };
+        const imgFrom = (o) => { if (!o || typeof o !== "object") return null; for (const k in o) { if (/image|photo|thumb|picture/i.test(k)) { const v = o[k]; const a = absUrl(v); if (a) return a; if (v && typeof v === "object") { const au = absUrl(v.url) || absUrl(v.path) || absUrl(v.src) || absUrl(v.thumbUrl) || absUrl(v.thumbnailUrl); if (au) return au; } } } return null; };
+        const imageOf = (o) => { const d0 = imgFrom(o); if (d0) return d0; const n = o.item || o.inventoryItem || o.itemData; if (n && typeof n === "object") { const u = imgFrom(n); if (u) return u; } return null; };
+        function w(o, d) { if (!o || typeof o !== "object" || d > 7) return; if (Object.prototype.toString.call(o) === "[object Array]") { for (let i = 0; i < o.length; i++) w(o[i], d + 1); return; } if (o.itemTitle) { const it = { name: o.itemTitle, quantity: o.quantityBooked }; const im = imageOf(o); if (im) it.image = im; items.push(it); } for (const k in o) w(o[k], d + 1); } (lists || []).forEach((gj) => { w(gj, 0); }); if (items.length) out.items = items; })
       .catch(() => {});
     const pR = fetch("/app/vendorPayment/loadPaymentHistoryAndContractTotals?transactionID=" + txID, H).then((r) => r.json())
       .then((pt) => { if (pt && typeof pt.grandTotal === "number") out.grandTotalCents = pt.grandTotal; const ph = pt && pt.paymentHistory; if (ph && typeof ph.totalContractApplicablePaid === "number") out.paidCents = ph.totalContractApplicablePaid; })
