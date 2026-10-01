@@ -34,6 +34,8 @@ import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client"
 import { summarizeInstaworkByRole, instaworkShiftsForDate, instaworkGigsForRoute } from "@/lib/instawork/reconcile";
 import { todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
+import { routeWindow } from "@/lib/risk/engine";
+import { DEFAULT_RISK_CONFIG, type EngineRoute } from "@/lib/risk/types";
 import type { Route } from "@/lib/types";
 
 const ROLE_ORDER: ShiftRole[] = ["driver", "field", "prep"];
@@ -49,6 +51,32 @@ function windowFromShifts(rs: StaffShift[]): { start: string | null; end: string
     if (s.endTime && (end === null || s.endTime > end)) end = s.endTime;
   }
   return { start, end, known: true };
+}
+
+/** The route's OWN operating window, straight from its stop times (same routeWindow the driver shift uses:
+ *  first stop − load buffer … last stop + return buffer). Routes always carry stop times, so this is the
+ *  authoritative window even before any shift is built — returned as ISO to match windowFromShifts. */
+function routeOwnWindow(route: Route): { start: string | null; end: string | null; known: boolean } {
+  const er: EngineRoute = {
+    routeId: route.routeId,
+    truckId: route.truckId,
+    date: route.date,
+    status: route.status,
+    gsRouteId: route.gsRouteId,
+    driverId: route.driverId,
+    driverName: route.driverName,
+    stops: route.stops.map((s) => ({ sequence: s.sequence, custName: s.custName, kind: s.kind, plannedWindow: s.plannedWindow, eta: s.eta, items: s.items })),
+  };
+  const w = routeWindow(er, DEFAULT_RISK_CONFIG);
+  if (!w) return { start: null, end: null, known: false };
+  return { start: new Date(w.startUnix * 1000).toISOString(), end: new Date(w.endUnix * 1000).toISOString(), known: true };
+}
+
+/** The window to show/assign for a route: a hand-tuned shift window wins when present, else the route's own
+ *  stop-derived window — so a route with times never reads "Set time" just because no shift exists yet. */
+function windowFor(route: Route, rs: StaffShift[]): { start: string | null; end: string | null; known: boolean } {
+  const w = windowFromShifts(rs);
+  return w.known ? w : routeOwnWindow(route);
 }
 
 /** A synthetic StaffShift for recommendCrew when a route+role has no shift yet (so "Add worker" can still
@@ -138,7 +166,7 @@ export default async function SchedulingPage({
 
   const routeCards: RouteCardData[] = routes.map((route) => {
     const rs = shifts.filter((s) => s.routeId === route.routeId);
-    const win = windowFromShifts(rs);
+    const win = windowFor(route, rs);
     const roles = (() => {
       const present = ROLE_ORDER.filter((role) => rs.some((s) => s.role === role));
       return present.length > 0 ? present : (["driver", "field"] as ShiftRole[]);
@@ -174,7 +202,7 @@ export default async function SchedulingPage({
   if (configured && coverage.ok) {
     for (const route of routes) {
       const rs = shifts.filter((s) => s.routeId === route.routeId);
-      const win = windowFromShifts(rs);
+      const win = windowFor(route, rs);
       const byRole: Partial<Record<ShiftRole, CrewRecommendation[]>> = {};
       for (const role of ROLE_ORDER) {
         const assignees = rs.filter((s) => s.role === role).flatMap((s) => s.assignees);
