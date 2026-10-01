@@ -11,6 +11,7 @@ import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } 
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
 import { SeoCredentialSettings } from "@/components/SeoCredentialSettings";
 import { InstaworkCredentialSettings } from "@/components/InstaworkCredentialSettings";
+import { RuntimeStatus } from "@/components/RuntimeStatus";
 
 const ADMIN_PIN = process.env.NEXT_PUBLIC_ADMIN_PIN || "0000";
 
@@ -255,6 +256,10 @@ export default function AdminPage() {
 
           <Section icon={<Search className="size-4" />} title="Instawork (temp labor)">
             <InstaworkCredentialSettings />
+          </Section>
+
+          <Section icon={<PlugZap className="size-4" />} title="Cloud runtime">
+            <RuntimeStatus />
           </Section>
 
           {/* Tablet sign-ins (Goodshuffle / Ignition) */}

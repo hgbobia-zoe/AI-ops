@@ -1,0 +1,41 @@
+# Cloud runtime tick — the off-machine clock. Every 15 min this hits the token-gated runtime endpoint,
+# which runs each configured server-side integration (Instawork, Ubersuggest discovery, Connecteam) on
+# Fly. This is what makes the integrations run UNATTENDED — no office machine, no browser. (Goodshuffle
+# still needs a logged-in browser until the cloud-browser path exists; it is not run here.)
+#
+# Setup (one-time): add two repo secrets in Settings → Secrets and variables → Actions:
+#   • RUNTIME_TOKEN — the SAME value set as the Fly secret RUNTIME_TOKEN on the app.
+#   • APP_BASE_URL  — optional; defaults to https://zoe-dispatch.fly.dev.
+# Nothing runs (endpoint returns 503) until RUNTIME_TOKEN is set on the app.
+
+name: Cloud runtime tick
+
+on:
+  schedule:
+    - cron: "*/15 * * * *" # every 15 minutes
+  workflow_dispatch: {} # allow a manual run from the Actions tab
+
+# Don't pile ticks up if one is slow.
+concurrency:
+  group: runtime-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run the runtime tick
+        env:
+          RUNTIME_TOKEN: ${{ secrets.RUNTIME_TOKEN }}
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+        run: |
+          if [ -z "$RUNTIME_TOKEN" ]; then
+            echo "RUNTIME_TOKEN secret is not set — skipping."; exit 0
+          fi
+          BASE="${APP_BASE_URL:-https://zoe-dispatch.fly.dev}"
+          echo "POST $BASE/api/runtime/tick"
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $RUNTIME_TOKEN" \
+            "$BASE/api/runtime/tick")
+          echo "HTTP $code"; cat /tmp/out.json; echo
+          test "$code" = "200"
