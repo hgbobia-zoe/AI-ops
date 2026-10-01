@@ -33,7 +33,7 @@ import {
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
 import { summarizeInstaworkByRole, instaworkShiftsForDate, instaworkGigsForRoute } from "@/lib/instawork/reconcile";
 import { todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
-import type { ShiftRole, StaffShift } from "@/lib/scheduling/types";
+import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
 import type { Route } from "@/lib/types";
 
 const ROLE_ORDER: ShiftRole[] = ["driver", "field", "prep"];
@@ -97,14 +97,18 @@ export default async function SchedulingPage({
   // Warehouse/prep crew scheduled in Connecteam THIS day, with their shift windows. Prep isn't tied to a
   // route (it's day-level work — on the ground the delivery day), so without this the "N prep scheduled"
   // count has nowhere to show — this surfaces the actual people + times in a day-level section on the board.
-  const prepCrewToday: { name: string; title: string | null; window: string }[] = [];
+  // userIds already pulled onto a route (any route-tied app shift) — a warehouse person MOVED to a route as
+  // a helper shouldn't still read as warehouse crew, so they drop out of this list (leaving a prep gap the
+  // section shows honestly).
+  const routeAssignedIds = new Set<number>(shifts.filter((s) => s.routeId).flatMap((s) => s.assignees));
+  const prepCrewToday: { userId: number; name: string; title: string | null; window: string }[] = [];
   if (coverage.ok) {
     const seen = new Set<string>();
     for (const cs of coverage.shifts) {
       for (const a of cs.assignees) {
-        if (a.role !== "prep" || seen.has(a.name)) continue;
+        if (a.role !== "prep" || seen.has(a.name) || routeAssignedIds.has(a.userId)) continue;
         seen.add(a.name);
-        prepCrewToday.push({ name: a.name, title: a.title ?? null, window: `${shiftClock(cs.startUnix, cs.timezone)} – ${shiftClock(cs.endUnix, cs.timezone)}` });
+        prepCrewToday.push({ userId: a.userId, name: a.name, title: a.title ?? null, window: `${shiftClock(cs.startUnix, cs.timezone)} – ${shiftClock(cs.endUnix, cs.timezone)}` });
       }
     }
   }
@@ -185,6 +189,13 @@ export default async function SchedulingPage({
   const prepNeed = shifts.filter((s) => s.role === "prep").reduce((n, s) => n + s.headcount, 0);
   const otherShifts = shifts.filter((s) => (!s.routeId || !routeIds.has(s.routeId)) && s.role !== "prep");
 
+  // Per-route FIELD gap — lets the "move to a route" picker surface where a helper is actually wanted.
+  const routeFieldNeed: Record<string, number> = {};
+  for (const s of shifts) {
+    if (!s.routeId || s.role !== "field") continue;
+    routeFieldNeed[s.routeId] = (routeFieldNeed[s.routeId] ?? 0) + (cov.byShift[s.id]?.gap ?? shiftGap(s));
+  }
+
   const peopleNeeded = shifts.reduce((n, s) => n + s.headcount, 0);
 
   const figures: Figure[] = [
@@ -242,6 +253,7 @@ export default async function SchedulingPage({
         routeRecs={routeRecs}
         prepCrewToday={prepCrewToday}
         prepNeed={prepNeed}
+        routeFieldNeed={routeFieldNeed}
         instawork={iwByRole}
         iwConfigured={iwOn}
         hasRoutes={routes.length > 0}

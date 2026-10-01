@@ -12,7 +12,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, RefreshCw, Plus, Truck as TruckIcon, UserPlus, Users } from "lucide-react";
+import { toast } from "sonner";
+import { Loader2, RefreshCw, Plus, Truck as TruckIcon, UserPlus, Users, ArrowRight } from "lucide-react";
 import { SidePanelOverlay } from "@/components/SidePanelOverlay";
 import { ShiftEditor } from "@/components/scheduling/ShiftEditor";
 import { AddWorkerPanel } from "@/components/scheduling/AddWorkerPanel";
@@ -56,6 +57,14 @@ export interface RouteCardData {
 
 export type RouteRecs = Record<string, Partial<Record<ShiftRole, CrewRecommendation[]>>>;
 
+/** A warehouse/prep person scheduled this day (Connecteam) — carries userId so they can be moved to a route. */
+export interface PrepPerson {
+  userId: number;
+  name: string;
+  title: string | null;
+  window: string;
+}
+
 function windowLabel(start: string | null, end: string | null, known: boolean): string {
   if (!known || !start) return "";
   const s = formatClockTime(start);
@@ -75,6 +84,7 @@ export function RouteStaffBoard({
   routeRecs,
   prepCrewToday,
   prepNeed,
+  routeFieldNeed,
   instawork,
   iwConfigured,
   hasRoutes,
@@ -88,8 +98,9 @@ export function RouteStaffBoard({
   coverage: Record<string, ShiftCoverage>;
   recommendations: Record<string, CrewRecommendation[]>;
   routeRecs: RouteRecs;
-  prepCrewToday: { name: string; title: string | null; window: string }[];
+  prepCrewToday: PrepPerson[];
   prepNeed: number;
+  routeFieldNeed: Record<string, number>;
   instawork: Record<ShiftRole, InstaworkRoleSummary> | null;
   iwConfigured: boolean;
   hasRoutes: boolean;
@@ -167,41 +178,14 @@ export function RouteStaffBoard({
           {/* Warehouse / Prep crew scheduled in Connecteam today — prep isn't route-tied, so it's shown at
               the day level (this is where the "N prep scheduled" count becomes the actual people + times). */}
           {(prepCrewToday.length > 0 || prepNeed > 0) && (
-            <section>
-              <h2 className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">
-                <Users className="size-3.5" /> Warehouse / Prep · today
-                {prepNeed > 0 && (
-                  <span className="font-normal normal-case text-meta">
-                    needs {prepNeed} · {prepCrewToday.length} scheduled in Connecteam
-                  </span>
-                )}
-                {prepNeed === 0 && prepCrewToday.length > 0 && (
-                  <span className="font-normal normal-case text-meta">({prepCrewToday.length} scheduled in Connecteam)</span>
-                )}
-              </h2>
-              <div className="surface border border-border">
-                {prepCrewToday.map((p) => (
-                  <div key={p.name} className="flex items-center justify-between gap-3 border-t border-[var(--row-rule)] px-3 py-2.5 text-[13px] first:border-t-0">
-                    <span className="min-w-0 truncate">
-                      <span className="font-medium text-foreground">{p.name}</span>
-                      {p.title && <span className="ml-1.5 text-[11px] text-meta">{p.title}</span>}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-2 text-[12px] text-meta">
-                      <span className="tabular-nums">{p.window}</span>
-                      <span className="text-positive">Connecteam · scheduled</span>
-                    </span>
-                  </div>
-                ))}
-                {prepNeed > prepCrewToday.length && (
-                  <div className="flex items-center justify-between gap-3 border-t border-[var(--row-rule)] px-3 py-2.5 text-[13px] first:border-t-0">
-                    <span className="text-meta">
-                      {prepNeed - prepCrewToday.length} more prep {prepNeed - prepCrewToday.length === 1 ? "person" : "people"} needed on the ground today
-                    </span>
-                    <span className="shrink-0 text-[12px] text-amber-300">unfilled</span>
-                  </div>
-                )}
-              </div>
-            </section>
+            <WarehousePrepSection
+              date={date}
+              prepCrew={prepCrewToday}
+              prepNeed={prepNeed}
+              routes={routeCards}
+              routeFieldNeed={routeFieldNeed}
+              shifts={shifts}
+            />
           )}
 
           {/* Prep + other shifts not tied to a route (e.g. day-before warehouse prep, manual shifts). */}
@@ -249,6 +233,155 @@ export function RouteStaffBoard({
         </SidePanelOverlay>
       )}
     </>
+  );
+}
+
+// ── Warehouse / Prep section ────────────────────────────────────────────────────
+// Day-level warehouse crew (prep isn't route-tied). Shows who's on the ground today + the day's prep need,
+// and lets the dispatcher MOVE a warehouse person onto a route as a field helper: picks a route → assigns
+// them to that route's field shift (creating it if needed). The moved person then renders on the route
+// card and drops out of this list, so pulling someone off warehouse shows as a prep shortfall here — the
+// honest tradeoff, surfaced rather than hidden.
+function WarehousePrepSection({
+  date,
+  prepCrew,
+  prepNeed,
+  routes,
+  routeFieldNeed,
+  shifts,
+}: {
+  date: string;
+  prepCrew: PrepPerson[];
+  prepNeed: number;
+  routes: RouteCardData[];
+  routeFieldNeed: Record<string, number>;
+  shifts: StaffShift[];
+}): React.JSX.Element {
+  const router = useRouter();
+  const [openFor, setOpenFor] = useState<number | null>(null); // userId whose route picker is open
+  const [working, setWorking] = useState<number | null>(null); // userId being moved
+  const [error, setError] = useState<string | null>(null);
+  const shortfall = prepNeed - prepCrew.length;
+
+  // Routes to offer, field-need-first so the dispatcher sees where a helper is actually wanted.
+  const routeOptions = [...routes].sort((a, b) => (routeFieldNeed[b.routeId] ?? 0) - (routeFieldNeed[a.routeId] ?? 0));
+
+  async function moveToRoute(person: PrepPerson, route: RouteCardData): Promise<void> {
+    setWorking(person.userId);
+    setError(null);
+    try {
+      // Attach to the route's existing field shift, or create one.
+      let shift = shifts.find((s) => s.routeId === route.routeId && s.role === "field") ?? null;
+      if (!shift) {
+        const res = await fetch("/api/scheduling/shift", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            date,
+            role: "field",
+            headcount: 1,
+            startTime: route.startTime,
+            endTime: route.endTime,
+            windowKnown: route.windowKnown,
+            location: null,
+            routeId: route.routeId,
+            truckId: route.truckId,
+            eventLabel: route.eventLabel,
+            source: "manual",
+          }),
+        });
+        if (!res.ok) { setError("Couldn't create the route shift. Try again."); return; }
+        shift = ((await res.json()) as { shift?: StaffShift }).shift ?? null;
+        if (!shift) { setError("Couldn't create the route shift. Try again."); return; }
+      }
+      const nextAssignees = shift.assignees.includes(person.userId) ? shift.assignees : [...shift.assignees, person.userId];
+      const nextHeadcount = Math.max(shift.headcount, nextAssignees.length);
+      const res = await fetch(`/api/scheduling/shift/${shift.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ assignees: nextAssignees, headcount: nextHeadcount }),
+      });
+      if (!res.ok) { setError("Couldn't move to the route. Try again."); return; }
+      toast.success(`${person.name} moved to ${route.truckName} as a field helper`);
+      setOpenFor(null);
+      router.refresh();
+    } catch {
+      setError("Couldn't move — try again.");
+    } finally {
+      setWorking(null);
+    }
+  }
+
+  return (
+    <section>
+      <h2 className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">
+        <Users className="size-3.5" /> Warehouse / Prep · today
+        {prepNeed > 0 ? (
+          <span className="font-normal normal-case text-meta">
+            needs {prepNeed} · {prepCrew.length} scheduled in Connecteam
+          </span>
+        ) : (
+          prepCrew.length > 0 && <span className="font-normal normal-case text-meta">({prepCrew.length} scheduled in Connecteam)</span>
+        )}
+      </h2>
+      <div className="surface border border-border">
+        {prepCrew.map((p) => (
+          <div key={p.userId} className="border-t border-[var(--row-rule)] px-3 py-2.5 text-[13px] first:border-t-0">
+            <div className="flex items-center justify-between gap-3">
+              <span className="min-w-0 truncate">
+                <span className="font-medium text-foreground">{p.name}</span>
+                {p.title && <span className="ml-1.5 text-[11px] text-meta">{p.title}</span>}
+              </span>
+              <span className="flex shrink-0 items-center gap-2.5 text-[12px] text-meta">
+                <span className="tabular-nums">{p.window}</span>
+                <span className="text-positive">Connecteam · scheduled</span>
+                {routeOptions.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={working !== null}
+                    onClick={() => setOpenFor((u) => (u === p.userId ? null : p.userId))}
+                    className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50"
+                  >
+                    {working === p.userId ? <Loader2 className="size-3 animate-spin" /> : <ArrowRight className="size-3" />} Move to a route
+                  </button>
+                )}
+              </span>
+            </div>
+            {openFor === p.userId && (
+              <div className="mt-2 rounded border border-border bg-[var(--row-hover)]/40 p-2">
+                <p className="mb-1.5 text-[11px] uppercase tracking-[0.06em] text-meta">Move {p.name} to a route as a field helper</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {routeOptions.map((r) => {
+                    const need = routeFieldNeed[r.routeId] ?? 0;
+                    return (
+                      <button
+                        key={r.routeId}
+                        type="button"
+                        disabled={working !== null}
+                        onClick={() => moveToRoute(p, r)}
+                        className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[12px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50"
+                      >
+                        <TruckIcon className="size-3" /> {r.truckName}
+                        {need > 0 && <span className="text-attention">needs {need}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        {shortfall > 0 && (
+          <div className="flex items-center justify-between gap-3 border-t border-[var(--row-rule)] px-3 py-2.5 text-[13px] first:border-t-0">
+            <span className="text-meta">
+              {shortfall} more prep {shortfall === 1 ? "person" : "people"} needed on the ground today
+            </span>
+            <span className="shrink-0 text-[12px] text-amber-300">unfilled</span>
+          </div>
+        )}
+      </div>
+      {error && <p className="mt-2 text-[12.5px] text-critical">{error}</p>}
+    </section>
   );
 }
 
