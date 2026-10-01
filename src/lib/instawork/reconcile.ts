@@ -38,6 +38,39 @@ export interface InstaworkRoleSummary {
   pending: number; // posted but unfilled
 }
 
+/** A route's window to match Instawork gigs against. A gig isn't tied to a truck, so matching is by day +
+ *  position→role + time-overlap. `startMs`/`endMs` are the route window in epoch ms (null = unknown). */
+export interface RouteWindowMatch {
+  date: string; // route's local day (YYYY-MM-DD)
+  startMs: number | null;
+  endMs: number | null;
+  roles: ShiftRole[]; // the roles this route staffs (driver + field…)
+}
+
+/** Does an Instawork gig's time window overlap [startMs, endMs]? Unknown windows (route or gig) don't
+ *  exclude — matching then falls back to day + role, which is the honest best signal we have. Pure. */
+export function gigOverlapsWindow(gig: InstaworkShift, startMs: number | null, endMs: number | null): boolean {
+  if (startMs == null || endMs == null) return true;
+  const gs = Date.parse(gig.startsAt);
+  const ge = Date.parse(gig.endsAt);
+  if (Number.isNaN(gs) || Number.isNaN(ge)) return true;
+  return gs < endMs && startMs < ge;
+}
+
+/**
+ * Instawork gigs that match a route: same local day, a position covering one of the route's roles, and a
+ * time-overlap with the route window. A gig isn't truck-specific, so it can match SEVERAL routes — the UI
+ * shows it under each and labels it an availability match, not an allocation. Pure + deterministic.
+ */
+export function instaworkGigsForRoute(gigs: InstaworkShift[], route: RouteWindowMatch): InstaworkShift[] {
+  return gigs.filter(
+    (g) =>
+      instaworkLocalDate(g) === route.date &&
+      route.roles.some((r) => instaworkCoversRole(g.position, r)) &&
+      gigOverlapsWindow(g, route.startMs, route.endMs),
+  );
+}
+
 /** Per-role Instawork coverage for a day (booked vs pending vs total), so the board can show whether a
  *  gap is already handled on Instawork. A General Labor gig counts toward BOTH field and prep (it can
  *  cover either) — this is an availability view, not an allocation, and is labelled as such in the UI. */

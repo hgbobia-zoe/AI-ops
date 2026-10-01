@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { instaworkCoversRole, instaworkLocalDate, instaworkShiftsForDate, summarizeInstaworkByRole } from "./reconcile";
+import {
+  instaworkCoversRole,
+  instaworkLocalDate,
+  instaworkShiftsForDate,
+  summarizeInstaworkByRole,
+  gigOverlapsWindow,
+  instaworkGigsForRoute,
+} from "./reconcile";
 import type { InstaworkShift } from "./types";
 
 function shift(p: Partial<InstaworkShift>): InstaworkShift {
@@ -67,5 +74,87 @@ describe("summarizeInstaworkByRole", () => {
   it("ignores shifts on other days", () => {
     const list = [shift({ position: "Driver", startsAt: "2026-10-05T06:00:00-07:00", endsAt: "2026-10-05T10:00:00-07:00" })];
     expect(summarizeInstaworkByRole(list, "2026-10-03").driver).toEqual({ total: 0, booked: 0, pending: 0 });
+  });
+});
+
+describe("gigOverlapsWindow", () => {
+  // The default fixture runs 2026-10-03 09:00–17:30 ET.
+  const g = shift({});
+  const et = (iso: string): number => Date.parse(iso);
+  it("overlapping windows match", () => {
+    expect(gigOverlapsWindow(g, et("2026-10-03T13:00:00-04:00"), et("2026-10-03T20:00:00-04:00"))).toBe(true);
+  });
+  it("disjoint windows do not match", () => {
+    // Route 06:00–08:00 ET, before the 09:00 gig start.
+    expect(gigOverlapsWindow(g, et("2026-10-03T06:00:00-04:00"), et("2026-10-03T08:00:00-04:00"))).toBe(false);
+  });
+  it("an unknown route window never excludes (falls back to day + role)", () => {
+    expect(gigOverlapsWindow(g, null, null)).toBe(true);
+    expect(gigOverlapsWindow(g, et("2026-10-03T06:00:00-04:00"), null)).toBe(true);
+  });
+});
+
+describe("instaworkGigsForRoute", () => {
+  const driverGig = shift({ id: "drv", position: "Driver" });
+  const laborGig = shift({ id: "lab", position: "General Labor" });
+  const otherDay = shift({ id: "x", position: "Driver", startsAt: "2026-10-04T06:00:00-07:00", endsAt: "2026-10-04T10:00:00-07:00" });
+  const gigs = [driverGig, laborGig, otherDay];
+  const et = (iso: string): number => Date.parse(iso);
+
+  it("matches by day + position→role + time overlap", () => {
+    const got = instaworkGigsForRoute(gigs, {
+      date: "2026-10-03",
+      startMs: et("2026-10-03T08:00:00-04:00"),
+      endMs: et("2026-10-03T18:00:00-04:00"),
+      roles: ["driver", "field"],
+    });
+    expect(got.map((g) => g.id).sort()).toEqual(["drv", "lab"]);
+  });
+
+  it("filters by role — a driver-only route ignores a General Labor gig", () => {
+    const got = instaworkGigsForRoute(gigs, {
+      date: "2026-10-03",
+      startMs: et("2026-10-03T08:00:00-04:00"),
+      endMs: et("2026-10-03T18:00:00-04:00"),
+      roles: ["driver"],
+    });
+    expect(got.map((g) => g.id)).toEqual(["drv"]);
+  });
+
+  it("excludes gigs on other days", () => {
+    const got = instaworkGigsForRoute(gigs, {
+      date: "2026-10-04",
+      startMs: et("2026-10-04T05:00:00-04:00"),
+      endMs: et("2026-10-04T12:00:00-04:00"),
+      roles: ["driver"],
+    });
+    expect(got.map((g) => g.id)).toEqual(["x"]);
+  });
+
+  it("excludes gigs outside the route window", () => {
+    const got = instaworkGigsForRoute(gigs, {
+      date: "2026-10-03",
+      startMs: et("2026-10-03T05:00:00-04:00"),
+      endMs: et("2026-10-03T08:00:00-04:00"), // ends before the 09:00 gig start
+      roles: ["driver", "field"],
+    });
+    expect(got).toEqual([]);
+  });
+
+  it("an unknown route window matches on day + role alone", () => {
+    const got = instaworkGigsForRoute(gigs, {
+      date: "2026-10-03",
+      startMs: null,
+      endMs: null,
+      roles: ["driver", "field"],
+    });
+    expect(got.map((g) => g.id).sort()).toEqual(["drv", "lab"]);
+  });
+
+  it("the same gig can match multiple routes (availability, not allocation)", () => {
+    const routeA = instaworkGigsForRoute(gigs, { date: "2026-10-03", startMs: et("2026-10-03T08:00:00-04:00"), endMs: et("2026-10-03T13:00:00-04:00"), roles: ["driver"] });
+    const routeB = instaworkGigsForRoute(gigs, { date: "2026-10-03", startMs: et("2026-10-03T12:00:00-04:00"), endMs: et("2026-10-03T18:00:00-04:00"), roles: ["driver"] });
+    expect(routeA.map((g) => g.id)).toEqual(["drv"]);
+    expect(routeB.map((g) => g.id)).toEqual(["drv"]);
   });
 });

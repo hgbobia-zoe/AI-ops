@@ -11,7 +11,12 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { DatePicker } from "@/components/DatePicker";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { FigureStrip, type Figure } from "@/components/console-primitives";
-import { SchedulingBoard } from "@/components/scheduling/SchedulingBoard";
+import {
+  RouteStaffBoard,
+  type RouteCardData,
+  type RouteRecs,
+  type MatchedGig,
+} from "@/components/scheduling/RouteStaffBoard";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRouteForDate } from "@/lib/db/repo";
 import { getShiftsForDate } from "@/lib/scheduling/store";
@@ -25,9 +30,38 @@ import {
   type CrewShift,
 } from "@/lib/connecteam";
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
-import { summarizeInstaworkByRole, instaworkShiftsForDate } from "@/lib/instawork/reconcile";
+import { summarizeInstaworkByRole, instaworkShiftsForDate, instaworkGigsForRoute } from "@/lib/instawork/reconcile";
 import { todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
+import type { ShiftRole, StaffShift } from "@/lib/scheduling/types";
 import type { Route } from "@/lib/types";
+
+const ROLE_ORDER: ShiftRole[] = ["driver", "field", "prep"];
+
+/** A route's operational window, taken from its shifts' own known windows (never fabricated). */
+function windowFromShifts(rs: StaffShift[]): { start: string | null; end: string | null; known: boolean } {
+  const withWin = rs.filter((s) => s.windowKnown && s.startTime);
+  if (withWin.length === 0) return { start: null, end: null, known: false };
+  let start = withWin[0].startTime!;
+  let end: string | null = null;
+  for (const s of withWin) {
+    if (s.startTime! < start) start = s.startTime!;
+    if (s.endTime && (end === null || s.endTime > end)) end = s.endTime;
+  }
+  return { start, end, known: true };
+}
+
+/** A synthetic StaffShift for recommendCrew when a route+role has no shift yet (so "Add worker" can still
+ *  show who's free). Only the fields recommendCrew reads matter; the rest are honest defaults. */
+function syntheticShift(date: string, role: ShiftRole, win: { start: string | null; end: string | null; known: boolean }, assignees: number[]): StaffShift {
+  return {
+    id: "", date, role, headcount: 1,
+    startTime: win.start, endTime: win.end, windowKnown: win.known,
+    location: null, routeId: null, truckId: null, eventLabel: null, reasons: [], notes: null,
+    source: "derived", status: "draft", assignees, instaworkHeadcount: 0, payRate: null,
+    connecteamShiftId: null, connecteamSchedulerId: null, connecteamPublishedAt: null,
+    instaworkGigId: null, instaworkPostedAt: null, createdAt: "", updatedAt: "",
+  } satisfies StaffShift;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -75,6 +109,65 @@ export default async function SchedulingPage({
   const iwDayShifts = iw?.ok ? instaworkShiftsForDate(iw.shifts, date) : [];
   const iwByRole = iw?.ok ? summarizeInstaworkByRole(iw.shifts, date) : null;
 
+  // ── Route-centric board data ──────────────────────────────────────────────
+  // Group the day's shifts by route. Each active route becomes a card; shifts not tied to a route (the
+  // day-before prep shift, manual shifts) fall into "other". Instawork gigs are matched to each route by
+  // day + role + time-overlap (a gig can match several routes — it isn't truck-specific).
+  const truckName = (id: string): string => trucks.find((t) => t.truckId === id)?.name ?? id;
+  const routeIds = new Set(routes.map((r) => r.routeId));
+
+  const routeCards: RouteCardData[] = routes.map((route) => {
+    const rs = shifts.filter((s) => s.routeId === route.routeId);
+    const win = windowFromShifts(rs);
+    const roles = (() => {
+      const present = ROLE_ORDER.filter((role) => rs.some((s) => s.role === role));
+      return present.length > 0 ? present : (["driver", "field"] as ShiftRole[]);
+    })();
+    const startMs = win.start ? Date.parse(win.start) : null;
+    const endMs = win.end ? Date.parse(win.end) : null;
+    const gigs: MatchedGig[] = instaworkGigsForRoute(iwDayShifts, { date, startMs, endMs, roles }).map((g) => ({
+      id: g.id,
+      position: g.position,
+      workers: g.workers,
+      filled: g.filled,
+      total: g.total,
+      pending: Math.max(0, g.total - g.filled),
+    }));
+    return {
+      routeId: route.routeId,
+      truckId: route.truckId,
+      truckName: truckName(route.truckId),
+      stopCount: route.stops.length,
+      driverName: route.driverName ?? null,
+      eventLabel: rs.find((s) => s.eventLabel)?.eventLabel ?? null,
+      startTime: win.start,
+      endTime: win.end,
+      windowKnown: win.known,
+      roles,
+      gigs,
+    };
+  });
+
+  // Per route+role availability for the Add-worker flow: who's FREE for the route window + role (excludes
+  // office/admin via recommendCrew). Computed for every role so a role with no shift yet still shows crew.
+  const routeRecs: RouteRecs = {};
+  if (configured && coverage.ok) {
+    for (const route of routes) {
+      const rs = shifts.filter((s) => s.routeId === route.routeId);
+      const win = windowFromShifts(rs);
+      const byRole: Partial<Record<ShiftRole, CrewRecommendation[]>> = {};
+      for (const role of ROLE_ORDER) {
+        const assignees = rs.filter((s) => s.role === role).flatMap((s) => s.assignees);
+        byRole[role] = recommendCrew(syntheticShift(date, role, win, assignees), coverage.shifts, roster);
+      }
+      routeRecs[route.routeId] = byRole;
+    }
+  }
+
+  // Shifts with no route (prep lands the day before with no routeId; manual shifts) — or whose route isn't
+  // an active route this day — render in the "other" section so nothing is hidden.
+  const otherShifts = shifts.filter((s) => !s.routeId || !routeIds.has(s.routeId));
+
   const peopleNeeded = shifts.reduce((n, s) => n + s.headcount, 0);
 
   const figures: Figure[] = [
@@ -120,14 +213,18 @@ export default async function SchedulingPage({
               : `Instawork today: ${iwDayShifts.reduce((n, s) => n + s.filled, 0)} booked, ${iwDayShifts.reduce((n, s) => n + Math.max(0, s.total - s.filled), 0)} pending across ${iwDayShifts.length} gig${iwDayShifts.length === 1 ? "" : "s"}.`}
       </p>
 
-      <SchedulingBoard
+      <RouteStaffBoard
         date={date}
+        routeCards={routeCards}
         shifts={shifts}
+        otherShifts={otherShifts}
         roster={roster}
         busyUserIds={busyUserIds}
         coverage={cov.byShift}
         recommendations={recommendations}
+        routeRecs={routeRecs}
         instawork={iwByRole}
+        iwConfigured={iwOn}
         hasRoutes={routes.length > 0}
       />
     </main>
