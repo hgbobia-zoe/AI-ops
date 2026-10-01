@@ -2738,7 +2738,19 @@ export function getShiftPass(id: string): ShiftPass | null {
 /** Newest first. */
 export function listShiftPasses(): ShiftPass[] {
   const rows = getDb().prepare("SELECT * FROM shift_passes ORDER BY created_at DESC").all() as ShiftPassRow[];
-  return rows.map(passOf);
+  // Drop a pass 24h after it ENDED (revoked → revoked_at; otherwise expires_at), so the list stays the
+  // current + just-ended passes instead of growing forever. Active passes are listed first.
+  const now = Date.now();
+  const cutoff = now - 24 * 3_600_000;
+  const active = (p: ShiftPass): boolean => !p.revokedAt && Date.parse(p.expiresAt) > now;
+  return rows
+    .map(passOf)
+    .filter((p) => {
+      const endIso = p.revokedAt ?? p.expiresAt;
+      const t = Date.parse(endIso);
+      return Number.isNaN(t) || t > cutoff; // keep if unparseable (safety) or within the 24h window
+    })
+    .sort((a, b) => (active(a) ? 0 : 1) - (active(b) ? 0 : 1)); // active first (stable)
 }
 
 /** Kill a pass immediately (sets revoked_at if not already revoked). Returns the updated pass. */

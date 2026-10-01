@@ -254,9 +254,16 @@ export function ShiftPassesAdmin(): React.JSX.Element {
         )}
       </section>
 
-      {/* List */}
+      {/* List — active passes first, then any that ended in the last 24h (older ones drop off). */}
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Passes</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Active &amp; recent passes
+          {passes && passes.length > 0 && (
+            <span className="ml-2 font-normal normal-case text-muted-foreground">
+              · {passes.filter((p) => p.status === "active").length} active
+            </span>
+          )}
+        </h2>
         {passes === null ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="size-4 animate-spin" /> Loading…

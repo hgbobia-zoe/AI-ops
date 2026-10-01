@@ -71,6 +71,7 @@ const GROUPS: Group[] = [
       { href: "/risk", label: "Event Risk", icon: AlertTriangle },
       { href: "/staffing", label: "Staffing", icon: Users },
       { href: "/scheduling", label: "Scheduling", icon: CalendarDays },
+      { href: "/admin/passes", label: "Shift Passes", icon: KeyRound, manage: true },
       { href: "/finance", label: "Financial", icon: DollarSign, financial: true },
     ],
   },
@@ -175,7 +176,7 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
   if (canManageSettings(role)) adminBlades.push({ href: "/admin/pull", label: "Pull Routes", icon: RefreshCw });
   if (canManageSettings(role)) adminBlades.push({ href: "/admin/health", label: "Connections", icon: Plug });
   if (canManageUsers(role)) adminBlades.push({ href: "/admin/users", label: "Team", icon: UsersRound });
-  if (canManageSettings(role)) adminBlades.push({ href: "/admin/passes", label: "Shift Passes", icon: KeyRound });
+  // Shift Passes moved to the Operations group (it's an ops task, not a setting).
   if (canManageSettings(role)) adminBlades.push({ href: "/admin", label: "Settings", icon: Settings });
 
   const parents: Group[] = [
