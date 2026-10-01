@@ -10,6 +10,8 @@
 // no new table. HONEST: a job with no credential is skipped and shown as "not configured", never faked.
 
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
+import { runInstaworkMonitor } from "@/lib/instawork/monitor";
+import { slackNotify } from "@/lib/notify/slack";
 import { discover } from "@/lib/seo/discovery";
 import { configured as ubersuggestConfigured } from "@/lib/seo/ubersuggest";
 import { connecteamConfigured, refreshConnecteamHealth } from "@/lib/connecteam";
@@ -36,7 +38,12 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     note: "Reads booked temp-labor shifts (cookie auth).",
     run: async () => {
       const r = await getInstaworkShifts();
-      return { ok: r.ok, detail: r.ok ? `${r.shifts.length} shifts` : r.error ?? r.status };
+      if (!r.ok) return { ok: false, detail: r.error ?? r.status };
+      // Monitor for no-shows / drop-offs: a booked worker disappearing near/after a gig's start →
+      // Slack. (Instawork's API has no no-show field; a removed worker is the signal.)
+      const alerts = runInstaworkMonitor(r.shifts);
+      for (const a of alerts) await slackNotify(a);
+      return { ok: true, detail: `${r.shifts.length} shifts${alerts.length ? ` · ${alerts.length} drop alert${alerts.length === 1 ? "" : "s"}` : ""}` };
     },
   },
   {
