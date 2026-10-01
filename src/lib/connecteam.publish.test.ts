@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPublishedShift } from "./connecteam";
+import { createPublishedShift, updatePublishedShift } from "./connecteam";
 
 const BASE_INPUT = {
   schedulerId: 42,
@@ -72,5 +72,26 @@ describe("createPublishedShift", () => {
     const r = await createPublishedShift(BASE_INPUT);
     expect(r.ok).toBe(false);
     expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe("updatePublishedShift", () => {
+  it("PUTs the shift with its id and keeps that id", async () => {
+    const fn = mockFetch(200, { data: { shifts: [{ id: 555 }] } });
+    const r = await updatePublishedShift({ ...BASE_INPUT, shiftId: "555" });
+    expect(r.ok).toBe(true);
+    expect(r.shiftId).toBe("555");
+    const [, init] = fn.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("PUT");
+    const sent = JSON.parse(String(init.body))[0];
+    expect(sent.id).toBe(555); // numeric id threaded into the body
+    expect(sent.isPublished).toBe(true);
+  });
+
+  it("surfaces an update error (never fakes success)", async () => {
+    mockFetch(400, { message: "shift not found" });
+    const r = await updatePublishedShift({ ...BASE_INPUT, shiftId: "999" });
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("shift not found");
   });
 });

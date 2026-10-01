@@ -452,8 +452,9 @@ export function shiftClock(unix: number, tz: string): string {
 //   body: an ARRAY of shift objects; each needs title (or jobId), startTime+endTime (Unix SECONDS) and
 //   timezone; isPublished=true + notifyUsers=true alerts the assigned users. Never throws.
 
-/** One POST attempt (mirrors ctGetOnce). `transient` = worth retrying (network/timeout/5xx/429). */
-async function ctPostOnce(
+/** One write attempt (POST/PUT; mirrors ctGetOnce). `transient` = worth retrying (network/timeout/5xx/429). */
+async function ctWriteOnce(
+  method: "POST" | "PUT",
   path: string,
   body: unknown,
   timeoutMs: number,
@@ -462,7 +463,7 @@ async function ctPostOnce(
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(`${BASE}${path}`, {
-      method: "POST",
+      method,
       headers: { "X-API-KEY": process.env.CONNECTEAM_API_KEY!, accept: "application/json", "content-type": "application/json" },
       cache: "no-store",
       body: JSON.stringify(body),
@@ -470,16 +471,26 @@ async function ctPostOnce(
     });
     const json = await res.json().catch(() => null);
     if (!res.ok) {
-      console.error("[connecteam] POST", path, "HTTP", res.status);
+      console.error("[connecteam]", method, path, "HTTP", res.status);
       return { json, status: res.status, transient: res.status >= 500 || res.status === 429 };
     }
     return { json, status: res.status, transient: false };
   } catch (e) {
-    console.error("[connecteam] POST error", path, String(e));
+    console.error("[connecteam]", method, "error", path, String(e));
     return { json: null, status: 0, transient: true };
   } finally {
     clearTimeout(t);
   }
+}
+
+/** Write with one retry on a transient failure. */
+async function ctWrite(method: "POST" | "PUT", path: string, body: unknown): Promise<{ json: unknown | null; status: number }> {
+  let r = await ctWriteOnce(method, path, body, 12000);
+  if (r.json === null && r.transient) {
+    await new Promise((res) => setTimeout(res, 400));
+    r = await ctWriteOnce(method, path, body, 12000);
+  }
+  return { json: r.json, status: r.status };
 }
 
 /**
@@ -510,40 +521,58 @@ export interface PublishShiftResult {
   error?: string;
 }
 
+/** The shift object both create (POST) and update (PUT) send; update adds `id`. */
+function shiftBody(input: PublishShiftInput, id?: string): Record<string, unknown> {
+  const o: Record<string, unknown> = {
+    title: input.title.slice(0, 120),
+    startTime: input.startUnix,
+    endTime: input.endUnix,
+    timezone: input.timezone,
+    isPublished: true,
+    isOpenShift: input.assignedUserIds.length === 0,
+    assignedUserIds: input.assignedUserIds,
+  };
+  if (id) o.id = /^\d+$/.test(id) ? Number(id) : id;
+  return o;
+}
+
+function validatePublishInput(input: PublishShiftInput): string | null {
+  if (!connecteamConfigured()) return "Connecteam not configured";
+  if (!input.title.trim()) return "shift title required";
+  if (!input.startUnix || !input.endUnix || input.endUnix <= input.startUnix) return "invalid time window";
+  return null;
+}
+
 /**
  * Create a PUBLISHED shift in Connecteam and notify the assigned crew. Reports ok ONLY when Connecteam
  * actually accepted it and returned a shift — never fakes success. One retry on a transient failure.
  */
 export async function createPublishedShift(input: PublishShiftInput): Promise<PublishShiftResult> {
-  if (!connecteamConfigured()) return { ok: false, error: "Connecteam not configured" };
-  if (!input.title.trim()) return { ok: false, error: "shift title required" };
-  if (!input.startUnix || !input.endUnix || input.endUnix <= input.startUnix) return { ok: false, error: "invalid time window" };
-
-  const body = [
-    {
-      title: input.title.slice(0, 120),
-      startTime: input.startUnix,
-      endTime: input.endUnix,
-      timezone: input.timezone,
-      isPublished: true,
-      isOpenShift: input.assignedUserIds.length === 0,
-      assignedUserIds: input.assignedUserIds,
-    },
-  ];
+  const bad = validatePublishInput(input);
+  if (bad) return { ok: false, error: bad };
   const path = `/scheduler/v1/schedulers/${input.schedulerId}/shifts?notifyUsers=true`;
-
-  let r = await ctPostOnce(path, body, 12000);
-  if (r.json === null && r.transient) {
-    await new Promise((res) => setTimeout(res, 400));
-    r = await ctPostOnce(path, body, 12000);
-  }
+  const r = await ctWrite("POST", path, [shiftBody(input)]);
   if (r.status !== 200 && r.status !== 201) {
-    const msg = extractErr(r.json) || `Connecteam HTTP ${r.status || "error"}`;
-    return { ok: false, error: msg };
+    return { ok: false, error: extractErr(r.json) || `Connecteam HTTP ${r.status || "error"}` };
   }
-  const shiftId = extractCreatedShiftId(r.json);
-  // A 2xx with no identifiable shift id is treated as success but with no id to track back.
-  return { ok: true, shiftId };
+  return { ok: true, shiftId: extractCreatedShiftId(r.json) };
+}
+
+/**
+ * Update an already-published Connecteam shift in place (collection-level PUT, id in the body) and
+ * re-notify the crew. Used when a sent shift is edited and re-published. Honest: ok only on a real 2xx.
+ * NOTE: the PUT body shape is inferred from the create schema + an `id`; on a shape mismatch Connecteam
+ * returns a 4xx which we surface (no corruption — the dispatcher can adjust in Connecteam).
+ */
+export async function updatePublishedShift(input: PublishShiftInput & { shiftId: string }): Promise<PublishShiftResult> {
+  const bad = validatePublishInput(input);
+  if (bad) return { ok: false, error: bad };
+  const path = `/scheduler/v1/schedulers/${input.schedulerId}/shifts?notifyUsers=true`;
+  const r = await ctWrite("PUT", path, [shiftBody(input, input.shiftId)]);
+  if (r.status !== 200 && r.status !== 201) {
+    return { ok: false, error: extractErr(r.json) || `Connecteam HTTP ${r.status || "error"}` };
+  }
+  return { ok: true, shiftId: input.shiftId };
 }
 
 /** Best-effort pull of the created shift id from Connecteam's (loosely documented) response shape. */

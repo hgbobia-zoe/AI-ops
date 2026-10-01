@@ -179,22 +179,27 @@ export function ShiftEditor({
   }
 
   const alreadyPublished = !isNew && Boolean(shift?.connecteamShiftId);
-  const canPublish = !isNew && !alreadyPublished && !saving && Boolean(draft.start) && draft.assignees.length > 0;
-  const publishHint = alreadyPublished
-    ? "Already on Connecteam"
-    : isNew
-      ? "Save the shift first"
-      : !draft.start
-        ? "Set a start time first"
-        : draft.assignees.length === 0
-          ? "Assign internal crew first"
+  const canPublish = !isNew && !saving && Boolean(draft.start) && draft.assignees.length > 0;
+  const publishHint = isNew
+    ? "Save the shift first"
+    : !draft.start
+      ? "Set a start time first"
+      : draft.assignees.length === 0
+        ? "Assign internal crew first"
+        : alreadyPublished
+          ? `Re-notifies ${draft.assignees.length} crew with the changes`
           : `Notifies ${draft.assignees.length} crew`;
 
-  // Publish the internal half to Connecteam (notifies the assigned crew). Saves the current draft as
-  // CONFIRMED first so what's published matches what's on screen, then calls the publish endpoint.
+  // Publish/update the internal half to Connecteam (notifies the assigned crew). Saves the current draft
+  // as CONFIRMED first so what's sent matches what's on screen, then calls the publish endpoint (which
+  // creates on first publish, or updates the existing Connecteam shift in place when it was already sent).
   async function publish(): Promise<void> {
     if (!canPublish || !shift) return;
-    if (!window.confirm(`Publish this shift to Connecteam and notify ${draft.assignees.length} crew member${draft.assignees.length === 1 ? "" : "s"}?`)) return;
+    const n = draft.assignees.length;
+    const prompt = alreadyPublished
+      ? `Update the Connecteam shift and re-notify ${n} crew member${n === 1 ? "" : "s"}?`
+      : `Publish this shift to Connecteam and notify ${n} crew member${n === 1 ? "" : "s"}?`;
+    if (!window.confirm(prompt)) return;
     setSaving(true);
     setError(null);
     try {
@@ -224,12 +229,13 @@ export function ShiftEditor({
         return;
       }
       const res = await fetch(`/api/scheduling/shift/${shift.id}/publish`, { method: "POST" });
-      const j = (await res.json().catch(() => null)) as { message?: string; notified?: number } | null;
+      const j = (await res.json().catch(() => null)) as { message?: string; notified?: number; updated?: boolean } | null;
       if (!res.ok) {
         setError(j?.message || "Connecteam publish failed. Try again.");
         return;
       }
-      toast.success(`Published to Connecteam — notified ${j?.notified ?? draft.assignees.length} crew`);
+      const notified = j?.notified ?? draft.assignees.length;
+      toast.success(j?.updated ? `Updated on Connecteam — re-notified ${notified} crew` : `Published to Connecteam — notified ${notified} crew`);
       onClose();
       router.refresh();
     } catch {
@@ -377,15 +383,10 @@ export function ShiftEditor({
           <button onClick={() => save("confirmed")} disabled={saving} className={BTN}>
             <Check className="size-3.5" /> Confirm
           </button>
-          {alreadyPublished ? (
-            <span className={BTN + " cursor-default border-positive/40 text-positive"}>
-              <Check className="size-3.5" /> On Connecteam
-            </span>
-          ) : (
-            <button onClick={publish} disabled={!canPublish} title={publishHint} className={BTN + " border-foreground text-foreground"}>
-              {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} Publish to Connecteam
-            </button>
-          )}
+          <button onClick={publish} disabled={!canPublish} title={publishHint} className={BTN + (alreadyPublished ? " border-positive/40 text-positive" : " border-foreground text-foreground")}>
+            {saving ? <Loader2 className="size-3.5 animate-spin" /> : alreadyPublished ? <Check className="size-3.5" /> : <Send className="size-3.5" />}
+            {alreadyPublished ? "Update on Connecteam" : "Publish to Connecteam"}
+          </button>
           {!isNew && (
             <button onClick={remove} disabled={saving} className={BTN + " ml-auto text-critical hover:text-critical"}>
               <Trash2 className="size-3.5" /> Delete
@@ -394,7 +395,7 @@ export function ShiftEditor({
         </div>
         <p className="mt-1.5 text-[11px] text-meta">
           {alreadyPublished
-            ? "Sent to Connecteam — the crew were notified."
+            ? "On Connecteam — editing and re-publishing updates the crew's shift and re-notifies them."
             : `Publishing notifies the assigned crew in Connecteam. ${publishHint}. The Instawork gap-fill is a separate step (coming next).`}
         </p>
       </div>

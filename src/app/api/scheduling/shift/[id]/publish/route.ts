@@ -8,7 +8,7 @@ import { NextResponse } from "next/server";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 import { getShiftById, updateShift } from "@/lib/scheduling/store";
-import { createPublishedShift, getDefaultScheduler } from "@/lib/connecteam";
+import { createPublishedShift, updatePublishedShift, getDefaultScheduler, getSchedulers } from "@/lib/connecteam";
 import type { ShiftRole } from "@/lib/scheduling/types";
 
 export const dynamic = "force-dynamic";
@@ -23,12 +23,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const shift = getShiftById(id);
   if (!shift) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-  // Idempotent — never double-publish.
-  if (shift.connecteamShiftId) {
-    return NextResponse.json({ ok: true, alreadyPublished: true, connecteamShiftId: shift.connecteamShiftId });
-  }
+  const isUpdate = Boolean(shift.connecteamShiftId);
 
-  // Human-approval + data gates.
+  // Human-approval + data gates (apply to both first publish and re-publish of an edited shift).
   if (shift.status !== "confirmed") {
     return NextResponse.json({ error: "confirm_first", message: "Confirm the shift before sending it to the crew." }, { status: 409 });
   }
@@ -39,7 +36,10 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: "no_assignees", message: "Assign internal crew before publishing (the Instawork gap is sent separately)." }, { status: 400 });
   }
 
-  const scheduler = await getDefaultScheduler();
+  // On an update, stay on the scheduler the shift was first published to; else pick the default.
+  const scheduler = isUpdate && shift.connecteamSchedulerId
+    ? (await getSchedulers()).find((s) => s.schedulerId === shift.connecteamSchedulerId) ?? (await getDefaultScheduler())
+    : await getDefaultScheduler();
   if (!scheduler) {
     return NextResponse.json({ error: "no_scheduler", message: "No Connecteam scheduler is reachable." }, { status: 400 });
   }
@@ -50,15 +50,17 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: "bad_time", message: "The shift's time window is invalid." }, { status: 400 });
   }
 
-  const title = `${ROLE_LABEL[shift.role]} — ${shift.eventLabel || shift.date}`;
-  const result = await createPublishedShift({
+  const input = {
     schedulerId: scheduler.schedulerId,
-    title,
+    title: `${ROLE_LABEL[shift.role]} — ${shift.eventLabel || shift.date}`,
     startUnix,
     endUnix,
     timezone: scheduler.timezone,
     assignedUserIds: shift.assignees,
-  });
+  };
+  const result = isUpdate
+    ? await updatePublishedShift({ ...input, shiftId: shift.connecteamShiftId! })
+    : await createPublishedShift(input);
 
   if (!result.ok) {
     return NextResponse.json({ error: "connecteam_failed", message: result.error ?? "Connecteam rejected the shift." }, { status: 502 });
@@ -66,10 +68,11 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
   updateShift(id, {
     status: "sent",
-    connecteamShiftId: result.shiftId ?? `ct-${Date.now()}`,
+    // Keep the original id on update; set it on first publish.
+    connecteamShiftId: shift.connecteamShiftId ?? result.shiftId ?? `ct-${Date.now()}`,
     connecteamSchedulerId: scheduler.schedulerId,
     connecteamPublishedAt: new Date().toISOString(),
   });
 
-  return NextResponse.json({ ok: true, connecteamShiftId: result.shiftId ?? null, notified: shift.assignees.length });
+  return NextResponse.json({ ok: true, updated: isUpdate, connecteamShiftId: shift.connecteamShiftId ?? result.shiftId ?? null, notified: shift.assignees.length });
 }
