@@ -33,6 +33,15 @@ const HEADLESS = process.env.ZOE_HEADLESS === "1";
 const LOGIN_WAIT_MS = Number(process.env.ZOE_LOGIN_WAIT_MS || 180000);
 const GS = "https://pro.goodshuffle.com";
 
+// Residential proxy (for the Fly/cloud deployment). Cloudflare blocks datacenter IPs, so when this runs
+// off a residential IP (office machine) no proxy is needed; in the cloud it MUST route through a
+// residential proxy so Goodshuffle sees a residential IP. Unset locally. Format: PROXY_SERVER like
+// "http://host:port" (or socks5://…), with PROXY_USERNAME/PROXY_PASSWORD for an authenticated proxy.
+const PROXY_SERVER = process.env.PROXY_SERVER || "";
+const PROXY = PROXY_SERVER
+  ? { server: PROXY_SERVER, username: process.env.PROXY_USERNAME || undefined, password: process.env.PROXY_PASSWORD || undefined }
+  : undefined;
+
 const log = (...a: unknown[]): void => console.log(new Date().toISOString(), ...a);
 
 /** Logged in when the projects search API returns its usual shape (a 302 to /ui/auth returns HTML). */
@@ -144,7 +153,16 @@ async function runCycle(ctx: BrowserContext, page: Page): Promise<void> {
 
 async function main(): Promise<void> {
   fs.mkdirSync(PROFILE, { recursive: true });
-  const ctx: BrowserContext = await chromium.launchPersistentContext(PROFILE, { channel: "chrome", headless: HEADLESS, viewport: { width: 1280, height: 900 } });
+  // channel:"chrome" uses the installed Chrome (office machine); in the Playwright container there's no
+  // "chrome" channel, so fall back to the bundled Chromium when ZOE_CHANNEL="chromium".
+  const channel = process.env.ZOE_CHANNEL === "chromium" ? undefined : "chrome";
+  const ctx: BrowserContext = await chromium.launchPersistentContext(PROFILE, {
+    channel,
+    headless: HEADLESS,
+    viewport: { width: 1280, height: 900 },
+    ...(PROXY ? { proxy: PROXY } : {}),
+  });
+  if (PROXY) log(`routing through proxy ${PROXY_SERVER.replace(/\/\/.*@/, "//")}`);
   const page = ctx.pages()[0] || (await ctx.newPage());
   await page.goto(GS + "/app/dashboard", { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
   if (!(await ensureLoggedIn(page, WATCH))) { await heartbeat(page, "not_logged_in", "profile signed out"); if (!WATCH) await ctx.close().catch(() => {}); return; }

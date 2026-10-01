@@ -1,0 +1,31 @@
+# Goodshuffle cloud puller — a SEPARATE Fly app (worker, no inbound HTTP). Deploy from this directory:
+#   cd deploy/gs-puller && flyctl launch --no-deploy --copy-config --name zoe-gs-puller
+#   (then set secrets + create the volume below, then `flyctl deploy`)
+# It builds the whole repo context, so run flyctl from the REPO ROOT with --config, or copy the repo in.
+# See README.md for the full activation + the residential-proxy requirement + the Cloudflare spike.
+
+app = "zoe-gs-puller"
+primary_region = "iad"
+
+[build]
+  dockerfile = "deploy/gs-puller/Dockerfile"
+
+# Logged-in Goodshuffle profile persists here (seed it once — see README). Survives restarts.
+[[mounts]]
+  source = "gs_puller_profile"
+  destination = "/profile"
+
+[env]
+  ZOE_API = "https://zoe-dispatch.fly.dev"
+  ZOE_PROFILE = "/profile"
+  ZOE_HEADLESS = "1"
+  ZOE_WATCH = "1"
+  ZOE_CHANNEL = "chromium"
+  ZOE_INTERVAL_MIN = "10"
+
+# Chromium needs real memory. One always-on machine (it's a loop, not request-driven).
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2048"
+
+# No [[services]] / [http_service]: this is a worker. The CMD's watch loop keeps it running.
