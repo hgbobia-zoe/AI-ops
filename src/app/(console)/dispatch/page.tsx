@@ -104,16 +104,26 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
     const routes = getRoutesForDate(t.truckId, date);
     return routes.length > 0 ? routes.map((route) => ({ truck: t, route })) : [{ truck: t, route: null as Route | null }];
   });
+  // A `done` route is "superseded" when the same truck has a newer, still-open route that day (e.g. a
+  // re-routed job that was closed, replaced by a fresh route). Collapse those so the board isn't
+  // cluttered by the earlier closed run — kept one click away under a disclosure, not removed.
+  const truckHasOpenRoute = new Set(fleet.filter((f) => f.route && f.route.status !== "done").map((f) => f.truck.truckId));
+  const isSuperseded = (f: { truck: { truckId: string }; route: Route | null }): boolean =>
+    Boolean(f.route) && f.route!.status === "done" && truckHasOpenRoute.has(f.truck.truckId);
+  const primaryFleet = fleet.filter((f) => !isSuperseded(f));
+  const supersededFleet = fleet.filter(isSuperseded);
+
   const isToday = date === today;
   const isFuture = date > today;
   const exceptions = isToday ? getOpenExceptions() : [];
   const messages = isToday ? getRecentMessages(30) : [];
-  const anyRoute = fleet.some((f) => f.route);
+  const anyRoute = primaryFleet.some((f) => f.route);
 
   const truckName = (id: string | null) =>
     trucks.find((t) => t.truckId === id)?.name ?? id ?? "—";
 
-  const withRoute = fleet.filter((f) => f.route);
+  // Figures + time board reflect the ACTIVE board (superseded closed routes excluded).
+  const withRoute = primaryFleet.filter((f) => f.route);
   const allStops = withRoute.flatMap((f) => f.route!.stops);
   const doneStops = allStops.filter((s) => s.state === "Completed" || s.state === "Returned").length;
   const driversAssigned = withRoute.filter((f) => f.route!.driverName).length;
@@ -151,11 +161,11 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
       )}
 
       {/* Scheduled time board — mirrors what's planned in Goodshuffle (not live) */}
-      {anyRoute && <TimeBoard fleet={fleet} isToday={isToday} />}
+      {anyRoute && <TimeBoard fleet={primaryFleet} isToday={isToday} />}
 
       {/* Fleet */}
       <section className="grid gap-4 lg:grid-cols-2">
-        {fleet.map(({ truck, route }) => (
+        {primaryFleet.map(({ truck, route }) => (
           <TruckCard
             key={`${truck.truckId}-${route?.routeId ?? "none"}`}
             name={truck.name}
@@ -165,6 +175,26 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
           />
         ))}
       </section>
+
+      {/* Superseded closed routes — collapsed. A truck's earlier (closed) run, replaced by a newer route. */}
+      {supersededFleet.length > 0 && (
+        <details className="group border border-border bg-panel/40">
+          <summary className="cursor-pointer select-none px-4 py-2.5 text-[13px] text-meta transition-colors hover:text-foreground">
+            {supersededFleet.length} earlier closed route{supersededFleet.length === 1 ? "" : "s"} today · replaced by a newer route — show
+          </summary>
+          <section className="grid gap-4 p-4 pt-0 lg:grid-cols-2">
+            {supersededFleet.map(({ truck, route }) => (
+              <TruckCard
+                key={`sup-${truck.truckId}-${route?.routeId ?? "none"}`}
+                name={truck.name}
+                route={route}
+                canSupervise={canSupervise}
+                noRouteLabel=""
+              />
+            ))}
+          </section>
+        </details>
+      )}
 
       {isToday && (
         <>
