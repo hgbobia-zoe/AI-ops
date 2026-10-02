@@ -279,6 +279,9 @@ export function useRouteMachine(truckId: string): RouteMachine {
     if (typeof navigator !== "undefined" && !navigator.onLine) return;
     rePullingRef.current = true;
     try {
+      // On the kiosk, pull Goodshuffle → DB first (the kiosk is the one device with a logged-in GS
+      // session). A failure here is fine and must stay silent — the office Auto-Pull may already have
+      // refreshed the DB.
       const res = await importGoodshuffleRouteViaKiosk(truckId);
       if (res.inKiosk && res.ok && res.stops.length) {
         await fetch("/api/route/import", {
@@ -286,9 +289,13 @@ export function useRouteMachine(truckId: string): RouteMachine {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ truckId, stops: res.stops, gsRouteId: res.gsRouteId }),
         });
-        await refresh(true); // adopt the reconciled route
       }
-      // Non-kiosk, or a pull that returned nothing/failed: keep the current route silently.
+      // ALWAYS adopt the latest server route — whether THIS kiosk just pulled it, or the OFFICE pull
+      // (or another device) already wrote last night's edit to the DB. Previously this refresh was
+      // nested inside the kiosk-pull-succeeded branch, so a kiosk whose own pull hiccuped kept showing
+      // a stale route even though the DB was fresh. reconcile makes adopting safe (keeps acted-on
+      // stops; only the upcoming tail re-orders).
+      await refresh(true);
     } catch {
       /* auto sync must never surface an error to the driver */
     } finally {
@@ -340,13 +347,15 @@ export function useRouteMachine(truckId: string): RouteMachine {
     [truckId, refresh],
   );
 
-  // Initial load + light polling for the (future) live data path.
+  // Initial load + light polling for the (future) live data path. On open, after the first DB read
+  // loads the route, kick ONE Goodshuffle re-pull so the driver starts on the freshest route (an edit
+  // made since the last pull shows immediately, not after the first interval).
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    void refresh();
+    void refresh().then(() => void rePull());
     const id = setInterval(() => void refresh(), appConfig.routePollMs);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [refresh, rePull]);
 
   // Auto re-pull the route FROM Goodshuffle on an interval, so edits made in Goodshuffle
   // (add/remove/reschedule/re-address an upcoming stop) show up in the app without anyone
@@ -490,11 +499,14 @@ export function useRouteMachine(truckId: string): RouteMachine {
         }
         receipt(action, res.error === "queued_offline", STATE_VISUAL[toState].label);
 
-        // Heading to the next customer: pull the current route so any overnight /
-        // mid-day change dispatch made to the upcoming stops is reflected before the
-        // driver rolls. Only when processed online (offline stays on optimistic state).
+        // Heading to the next customer: re-pull Goodshuffle → DB and adopt it, so any change
+        // dispatch made to the upcoming stops (reorder, re-address, add/remove) is reflected before
+        // the driver rolls. rePull pulls on the kiosk and always adopts the latest DB (so an office
+        // pull is picked up too); refresh(true) guarantees an immediate adopt even if a background
+        // rePull is mid-flight. Only when online (offline stays on optimistic state).
         if (action === "HEADING_NEXT" && res.error !== "queued_offline") {
           void refresh(true);
+          void rePull();
         }
         // Finished the route (closeout closed it server-side): pull so the truck's NEXT route of the
         // day surfaces as "Start next route" promptly, not on the slow background poll.
@@ -505,7 +517,7 @@ export function useRouteMachine(truckId: string): RouteMachine {
         setBusy(false);
       }
     },
-    [route, phase, truckId, syncQueue, receipt, refresh],
+    [route, phase, truckId, syncQueue, receipt, refresh, rePull],
   );
 
   const sendSide = useCallback(
