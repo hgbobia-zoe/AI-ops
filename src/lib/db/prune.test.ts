@@ -23,6 +23,12 @@ async function repo() {
 async function store() {
   return import("@/lib/scheduling/store");
 }
+// Backdate every route so the "don't prune a just-written route" guard (5-min window) doesn't protect
+// the test fixtures — simulates routes written in an earlier pull cycle, which is when prune really runs.
+async function ageAllRoutes() {
+  const { getDb } = await import("./index");
+  getDb().prepare("UPDATE routes SET updated_at = ?").run("2020-01-01T00:00:00.000Z");
+}
 
 function stop(routeId: string, seq: number): Stop {
   return {
@@ -49,11 +55,24 @@ describe("pruneStaleRoutes", () => {
     const { writeRoute, getRouteById, pruneStaleRoutes } = await repo();
     writeRoute(route("E450", DAY)); // still in GS
     writeRoute(route("NPR-1", DAY)); // gone from GS (stale)
+    await ageAllRoutes();
 
     const { deleted } = pruneStaleRoutes([DAY], [`R-${DAY}-E450`]);
     expect(deleted).toEqual([`R-${DAY}-NPR-1`]);
     expect(getRouteById(`R-${DAY}-NPR-1`)).toBeNull();
     expect(getRouteById(`R-${DAY}-E450`)).not.toBeNull(); // kept
+  });
+
+  it("never prunes a route written in the last few minutes (just-imported this cycle)", async () => {
+    const { writeRoute, getRouteById, pruneStaleRoutes } = await repo();
+    const D = "2026-10-20";
+    writeRoute(route("E450", D)); // keep
+    writeRoute(route("NPR-9", D)); // fresh (updated_at = now), NOT in keep
+    // A stale keep-list (e.g. an old extension on the previous id scheme) must NOT nuke a route that
+    // was just written. No aging here → NPR-9 is within the fresh window and survives.
+    const { deleted } = pruneStaleRoutes([D], [`R-${D}-E450`]);
+    expect(deleted).not.toContain(`R-${D}-NPR-9`);
+    expect(getRouteById(`R-${D}-NPR-9`)).not.toBeNull();
   });
 
   it("never prunes a date the sweep didn't cover", async () => {
@@ -92,6 +111,7 @@ describe("pruneStaleRoutes", () => {
     writeRoute(route("NPR-2", D)); // stale, but its shift is human-touched
     createShift({ date: D, role: "driver", headcount: 1, routeId: `R-${D}-NPR-1`, source: "derived" });
     createShift({ date: D, role: "driver", headcount: 1, routeId: `R-${D}-NPR-2`, source: "derived", assignees: [42] });
+    await ageAllRoutes();
 
     pruneStaleRoutes([D], [`R-${D}-E450`]);
     const shifts = getShiftsForDate(D);

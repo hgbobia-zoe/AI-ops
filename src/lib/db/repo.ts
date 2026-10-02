@@ -1583,22 +1583,30 @@ export function writeRoute(route: Route): void {
  *     keep set). A date with zero found routes is left alone — an empty/failed listRoutes prunes nothing.
  *   - Only `ready` routes are removed. An `active`/`done` route (in progress or historical) is never
  *     pruned, even if absent from the sweep.
+ *   - A route WRITTEN in the last few minutes is never pruned — it was almost certainly just imported
+ *     THIS pull cycle. This stops a pull whose keep-list is on an OLD id scheme (e.g. a not-yet-updated
+ *     extension) from importing a fresh route and then deleting it in the same sweep. A route GS truly
+ *     dropped won't have been touched by the import, so its updated_at is old and it still prunes.
  *   - Derived, still-draft, unassigned staff shifts for a pruned route are cleared too (the phantom
  *     shift on the board); a human-touched shift is left for them to resolve.
  * Returns the routeIds removed.
  */
+const PRUNE_MIN_AGE_MS = 5 * 60 * 1000; // don't prune a route written within the last 5 minutes
+
 export function pruneStaleRoutes(dates: string[], keepRouteIds: string[]): { deleted: string[] } {
   const db = getDb();
   const keepDates = [...new Set(dates)].filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d));
   if (keepDates.length === 0) return { deleted: [] };
   const keep = new Set(keepRouteIds);
+  const freshCutoff = new Date(Date.now() - PRUNE_MIN_AGE_MS).toISOString();
 
   const deleted: string[] = [];
   const tx = db.transaction(() => {
     const datePh = keepDates.map(() => "?").join(",");
+    // updated_at is ISO-8601, so a string comparison is a chronological one.
     const candidates = db
-      .prepare(`SELECT route_id FROM routes WHERE date IN (${datePh}) AND status = 'ready'`)
-      .all(...keepDates) as { route_id: string }[];
+      .prepare(`SELECT route_id FROM routes WHERE date IN (${datePh}) AND status = 'ready' AND updated_at < ?`)
+      .all(...keepDates, freshCutoff) as { route_id: string }[];
     for (const { route_id } of candidates) {
       if (keep.has(route_id)) continue; // GS still has this one
       db.prepare("DELETE FROM stops WHERE route_id = ?").run(route_id);
