@@ -157,6 +157,45 @@ export function getRouteById(routeId: string): Route | null {
   return row ? buildRoute(row) : null;
 }
 
+/** Debug: every route row from `fromDate` onward (id, Goodshuffle id, truck, status, stop count, first
+ *  few stop names) — powers the Admin → Pull Routes inspector so an operator can SEE exactly what a pull
+ *  wrote, without a prod DB shell. Read-only. */
+export interface RouteDebugRow {
+  routeId: string;
+  gsRouteId: string | null;
+  truckId: string;
+  date: string;
+  status: string;
+  updatedAt: string;
+  stopCount: number;
+  stopPreview: string;
+}
+export function getRoutesDebug(fromDate: string): RouteDebugRow[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT route_id, gs_route_id, truck_id, date, status, updated_at
+       FROM routes WHERE date >= ? ORDER BY date ASC, truck_id ASC, updated_at DESC LIMIT 80`,
+    )
+    .all(fromDate) as Array<{ route_id: string; gs_route_id: string | null; truck_id: string; date: string; status: string; updated_at: string }>;
+  return rows.map((r) => {
+    const stops = db
+      .prepare("SELECT cust_name FROM stops WHERE route_id = ? ORDER BY sequence")
+      .all(r.route_id) as Array<{ cust_name: string | null }>;
+    const names = stops.map((s) => s.cust_name || "?");
+    return {
+      routeId: r.route_id,
+      gsRouteId: r.gs_route_id,
+      truckId: r.truck_id,
+      date: r.date,
+      status: r.status,
+      updatedAt: r.updated_at,
+      stopCount: stops.length,
+      stopPreview: names.slice(0, 6).join(" → ") + (names.length > 6 ? " …" : ""),
+    };
+  });
+}
+
 /** A truck's route for a specific calendar day (YYYY-MM-DD), or null if none. With more than one route
  *  on the truck that day (a day + evening dispatch), returns the earliest-starting — use
  *  getRoutesForDate to see them all. */

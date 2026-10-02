@@ -8,7 +8,8 @@ import { PullBookmarklet } from "@/components/PullBookmarklet";
 import { PullExtensionInstall } from "@/components/PullExtensionInstall";
 import { buildOfficePullScript } from "@/lib/gsPull";
 import { getPullState } from "@/lib/pull/state";
-import { DISPLAY_TZ } from "@/lib/dates";
+import { getRoutesDebug } from "@/lib/db/repo";
+import { DISPLAY_TZ, todayInOpsTz } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +44,10 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
   const state = getPullState();
   const ageH = hoursAgo(state.lastPullAt);
   const stale = ageH == null || ageH >= 26;
+
+  // What the pull actually wrote: every route row from today onward. Lets an operator confirm a new
+  // Goodshuffle route arrived (and under which id/status) instead of guessing.
+  const dbRoutes = getRoutesDebug(todayInOpsTz());
 
   const agent = state.agent;
   const agentAgeMin = minutesAgo(agent?.at);
@@ -104,6 +109,47 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
         {/* Version query busts the browser cache when the zip is rebuilt — keep in sync with
             extension/manifest.json "version" (rebuild with scripts/build-extension-zip.ps1). */}
         <PullExtensionInstall downloadHref="/zoe-autopull-extension.zip?v=1.4.2" />
+      </section>
+
+      {/* Routes inspector — what the pull actually wrote to the DB (today onward). */}
+      <section className="mb-6 space-y-2">
+        <h2 className="text-lg font-semibold">Routes in the app (today →)</h2>
+        <p className="text-[13px] text-muted-foreground">
+          Exactly what&apos;s stored after a pull. If a route you built in Goodshuffle isn&apos;t here, the pull didn&apos;t
+          import it; if it&apos;s here as <code>done</code>, it&apos;s a closed route still on record.
+        </p>
+        {dbRoutes.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No routes stored from today onward.</p>
+        ) : (
+          <div className="overflow-x-auto border border-white/10">
+            <table className="w-full text-left text-[12px]">
+              <thead className="bg-white/[0.03] text-muted-foreground">
+                <tr>
+                  <th className="px-2.5 py-1.5 font-medium">Date</th>
+                  <th className="px-2.5 py-1.5 font-medium">Truck</th>
+                  <th className="px-2.5 py-1.5 font-medium">GS route</th>
+                  <th className="px-2.5 py-1.5 font-medium">Status</th>
+                  <th className="px-2.5 py-1.5 font-medium">Stops</th>
+                  <th className="px-2.5 py-1.5 font-medium">Order</th>
+                  <th className="px-2.5 py-1.5 font-medium">Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dbRoutes.map((r) => (
+                  <tr key={r.routeId} className="border-t border-white/5">
+                    <td className="whitespace-nowrap px-2.5 py-1.5 tabular-nums">{r.date}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5">{r.truckId}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-muted-foreground">{r.gsRouteId ?? "—"}</td>
+                    <td className={`whitespace-nowrap px-2.5 py-1.5 ${r.status === "done" ? "text-muted-foreground" : r.status === "active" ? "text-amber-300" : "text-emerald-300"}`}>{r.status}</td>
+                    <td className="px-2.5 py-1.5 tabular-nums">{r.stopCount}</td>
+                    <td className="px-2.5 py-1.5 text-muted-foreground">{r.stopPreview}</td>
+                    <td className="whitespace-nowrap px-2.5 py-1.5 text-muted-foreground">{fmt(r.updatedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       {/* Install the bookmarklet — no-install alternative */}
