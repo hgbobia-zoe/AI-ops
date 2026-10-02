@@ -114,7 +114,7 @@ function zoePull(apiBase) {
           if (!rdate) return;
           const daysOut = Math.round((Date.parse(rdate + "T00:00:00Z") - Date.parse(todayYmd + "T00:00:00Z")) / 86400000);
           const p = daysOut >= 0 && daysOut <= ENRICH ? attachItems(stops) : Promise.resolve(stops);
-          return p.then((st) => { const key = tid + "|" + rdate; if (!groups[key]) groups[key] = { truckId: tid, date: rdate, stops: [], gsRouteId: String(rt.id) }; groups[key].stops = groups[key].stops.concat(st); });
+          return p.then((st) => { const key = tid + "|" + rdate + "|" + rt.id; if (!groups[key]) groups[key] = { truckId: tid, date: rdate, stops: [], gsRouteId: String(rt.id) }; groups[key].stops = groups[key].stops.concat(st); });
         }); }); });
       return chain.then(() => {
         const keys = Object.keys(groups); let totalStops = 0, failed = 0; const days = keys.length; const unm = Object.keys(unmatched);
@@ -122,7 +122,7 @@ function zoePull(apiBase) {
         return Promise.all(keys.map((k) => { const g = groups[k]; totalStops += g.stops.length; return fetch(API + "/api/route/import", { method: "POST", headers: POSTH, body: JSON.stringify({ truckId: g.truckId, date: g.date, stops: g.stops, gsRouteId: g.gsRouteId }) }).then((r) => { if (!r.ok) failed++; }).catch(() => { failed++; }); })).then(() => {
           // Sanitize: after a FULL clean sweep, drop any of OUR routes GS no longer has. Never on a partial pull.
           if (failed !== 0 || keys.length === 0) return result();
-          const keepRouteIds = keys.map((k) => { const g = groups[k]; return "R-" + g.date + "-" + g.truckId; });
+          const keepRouteIds = keys.map((k) => { const g = groups[k]; return "R-" + g.date + "-" + g.truckId + "-" + g.gsRouteId; });
           const dset = {}; keys.forEach((k) => { dset[groups[k].date] = 1; });
           return fetch(API + "/api/route/prune", { method: "POST", headers: POSTH, body: JSON.stringify({ dates: Object.keys(dset), keepRouteIds }) }).then(() => result()).catch(() => result());
         });
