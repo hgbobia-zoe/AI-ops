@@ -10,8 +10,7 @@
 // extension/manifest.json); the extension declares externally_connectable for this origin.
 
 import { useEffect } from "react";
-
-const EXTENSION_ID = "mpneeiibeccfhenemglnfenogbgmkiep";
+import { EXTENSION_ID } from "@/lib/extensionId";
 
 interface ChromeRuntimeLike {
   runtime?: {

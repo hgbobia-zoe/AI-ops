@@ -23,6 +23,7 @@ import {
 } from "@/lib/db/repo";
 import { findRouteHealthIssues } from "@/lib/dispatch/routeHealth";
 import { ClosePastRoutesButton } from "@/components/ClosePastRoutesButton";
+import { PullRoutesButton } from "@/components/PullRoutesButton";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 import { DISPLAY_TZ, todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
@@ -136,7 +137,10 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
         </div>
         <div className="flex items-end gap-6">
           <FigureStrip figures={figures} />
-          <DateNav date={date} today={today} />
+          <div className="flex items-center gap-2">
+            <PullRoutesButton />
+            <DateNav date={date} today={today} />
+          </div>
         </div>
       </header>
 
