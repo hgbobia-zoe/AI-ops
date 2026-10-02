@@ -101,7 +101,9 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
           </span>
         </div>
 
-        <PullExtensionInstall downloadHref="/zoe-autopull-extension.zip" />
+        {/* Version query busts the browser cache when the zip is rebuilt — keep in sync with
+            extension/manifest.json "version" (rebuild with scripts/build-extension-zip.ps1). */}
+        <PullExtensionInstall downloadHref="/zoe-autopull-extension.zip?v=1.4.2" />
       </section>
 
       {/* Install the bookmarklet — no-install alternative */}
