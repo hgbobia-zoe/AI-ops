@@ -7,10 +7,22 @@ import {
   Send,
   Clock,
   ClipboardCheck,
+  Truck,
+  ArrowRight,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import type { RouteSummary } from "@/lib/useRouteMachine";
-import type { CloseoutResult } from "@/lib/types";
+import type { CloseoutResult, Route } from "@/lib/types";
+import { formatClockTime } from "@/lib/dates";
+
+/** A short label for the truck's next route of the day (stop count + when it starts, if known). */
+function nextRouteLabel(r: Route): string {
+  const n = r.stops.length;
+  const stopsTxt = `${n} stop${n === 1 ? "" : "s"}`;
+  const timed = r.stops.find((s) => s.plannedWindow || s.eta);
+  const raw = timed?.plannedWindow || timed?.eta;
+  return raw ? `${stopsTxt} · starts around ${formatClockTime(raw)}` : stopsTxt;
+}
 
 // Human labels for the closeout items, in checklist order (mirrors the fanout summary).
 const CLOSEOUT_LABELS: [keyof CloseoutResult, string][] = [
@@ -55,9 +67,13 @@ function Stat({
 export function RouteSummaryPanel({
   summary,
   closeout,
+  nextRoute,
+  onStartNext,
 }: {
   summary: RouteSummary;
   closeout: CloseoutResult | null;
+  nextRoute?: Route | null;
+  onStartNext?: () => void;
 }) {
   const missing = closeout ? CLOSEOUT_LABELS.filter(([k]) => !closeout[k]).map(([, l]) => l) : [];
   const flagged = closeout ? missing.length > 0 || closeout.hasIssue : false;
@@ -75,6 +91,31 @@ export function RouteSummaryPanel({
           </p>
         </CardContent>
       </Card>
+
+      {/* Next route of the day (morning → afternoon → night). Shown once this route is closed so the
+          driver advances deliberately, not by the screen swapping underneath them. */}
+      {nextRoute && onStartNext && (
+        <Card className="border-primary/40 shadow-sm">
+          <CardContent className="flex flex-col gap-3 px-6 py-5">
+            <div className="flex items-center gap-3">
+              <span className="flex size-11 items-center justify-center rounded-xl bg-primary/15 text-primary">
+                <Truck className="size-6" />
+              </span>
+              <div>
+                <h2 className="text-lg font-semibold">Next route ready</h2>
+                <p className="text-sm text-muted-foreground">{nextRouteLabel(nextRoute)}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onStartNext}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary px-4 py-4 text-base font-semibold text-primary-foreground transition active:scale-[0.99]"
+            >
+              Start next route <ArrowRight className="size-5" />
+            </button>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <Stat

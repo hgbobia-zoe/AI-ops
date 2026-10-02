@@ -68,9 +68,13 @@ export interface RouteMachine {
   summary: RouteSummary;
   /** The closeout the driver submitted on arriving back (drives the summary recap). */
   lastCloseout: CloseoutResult | null;
+  /** The truck's next route of the day, surfaced on the closeout screen once this one is closed. */
+  nextRoute: Route | null;
   refresh: (force?: boolean) => Promise<void>;
   resync: () => Promise<void>;
   startRoute: () => Promise<void>;
+  /** Advance to nextRoute (the "Start next route" action on the closeout screen). */
+  startNextRoute: () => void;
   submitManual: (stops: Stop[]) => void;
   perform: (action: ActionType, payload?: Record<string, unknown>) => Promise<void>;
   sendSide: (
@@ -95,7 +99,16 @@ export function useRouteMachine(truckId: string): RouteMachine {
   const [counters, setCounters] = useState({ exceptions: 0, dispatchMsgs: 0 });
   const [startedAt, setStartedAt] = useState<string | null>(null);
   const [lastCloseout, setLastCloseout] = useState<CloseoutResult | null>(null);
+  // The truck's NEXT route, once the current one is closed (a truck can run several routes a day —
+  // morning/afternoon/night). Held so the closeout screen can offer an explicit "Start next route"
+  // instead of the poll yanking the driver into the next route's stops.
+  const [nextRoute, setNextRoute] = useState<Route | null>(null);
   const loadedRef = useRef(false);
+  // Live mirrors of route/phase so refresh() can read them without being re-created on every change.
+  const routeRef = useRef<Route | null>(null);
+  const phaseRef = useRef<RoutePhase>("loading");
+  useEffect(() => { routeRef.current = route; }, [route]);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
 
   const syncQueue = useCallback(() => setQueuedCount(queueSize()), []);
 
@@ -131,6 +144,17 @@ export function useRouteMachine(truckId: string): RouteMachine {
       } else if (r.status === "failed") {
         if (!loadedRef.current) setPhase("failed");
       } else if (r.status === "ready" || r.status === "active") {
+        // The driver finished the current route (closeout → it's now `done` server-side) and a
+        // DIFFERENT route is the truck's active one — its next dispatch of the day. Don't yank the
+        // closeout screen into the new route's stops; hold it and surface an explicit "Start next
+        // route" (startNextRoute adopts it). This is the only place `r` is a different route id while
+        // the driver is still on the closeout screen.
+        const inCloseout = phaseRef.current === "headingBack" || phaseRef.current === "returned";
+        if (inCloseout && routeRef.current && r.routeId !== routeRef.current.routeId) {
+          setNextRoute(r);
+          setError(null);
+          return;
+        }
         setRoute(r);
         loadedRef.current = true;
         // "headingBack"/"returned" are CLIENT-ONLY phases (the server route has no
@@ -140,8 +164,8 @@ export function useRouteMachine(truckId: string): RouteMachine {
         // into "stops" with no active stop and no buttons, so the "Arrived at
         // Warehouse" button vanishes mid-drive-back and the route can't be closed.
         // Preserve headingBack/returned as long as every stop is still Completed
-        // (nothing new to drive to); if a genuinely new active stop appears — e.g. a
-        // second dispatch of the day — fall through to "stops".
+        // (nothing new to drive to); if a genuinely new active stop appears on the SAME
+        // route (a mid-day add to this route) — fall through to "stops".
         const allDone = r.stops.length > 0 && r.stops.every((s) => s.state === "Completed");
         setPhase((cur) =>
           (cur === "headingBack" || cur === "returned") && allDone
@@ -163,6 +187,28 @@ export function useRouteMachine(truckId: string): RouteMachine {
 
   /** Force-pull the current server route (Refresh button / on advancing). */
   const resync = useCallback(() => refresh(true), [refresh]);
+
+  /** Advance to the truck's next route of the day (offered on the closeout screen). Adopts the held
+   *  next route and resets the per-route client state (notifications, counters, closeout) so the new
+   *  route starts clean, then force-pulls its freshest copy. */
+  const startNextRoute = useCallback(() => {
+    if (!nextRoute) return;
+    const nextPhase: RoutePhase = nextRoute.stops.length ? "stops" : "empty";
+    // Update the refs synchronously too: the forced refresh below reads routeRef/phaseRef, which the
+    // effects only sync on the NEXT render — without this it'd see the OLD route/phase and wrongly
+    // re-hold the next route instead of adopting it.
+    routeRef.current = nextRoute;
+    phaseRef.current = nextPhase;
+    setRoute(nextRoute);
+    setNextRoute(null);
+    setStartedAt(null);
+    setLastCloseout(null);
+    setNotif({});
+    setCounters({ exceptions: 0, dispatchMsgs: 0 });
+    loadedRef.current = true;
+    setPhase(nextPhase);
+    void refresh(true);
+  }, [nextRoute, refresh]);
 
   // Start Route → trigger ingestion; polling picks up scraping → ready/failed.
   const startRouteRef = useRef<() => void>(() => {});
@@ -450,6 +496,11 @@ export function useRouteMachine(truckId: string): RouteMachine {
         if (action === "HEADING_NEXT" && res.error !== "queued_offline") {
           void refresh(true);
         }
+        // Finished the route (closeout closed it server-side): pull so the truck's NEXT route of the
+        // day surfaces as "Start next route" promptly, not on the slow background poll.
+        if (action === "ARRIVED_WAREHOUSE" && res.error !== "queued_offline") {
+          void refresh(true);
+        }
       } finally {
         setBusy(false);
       }
@@ -543,9 +594,11 @@ export function useRouteMachine(truckId: string): RouteMachine {
     notif,
     summary,
     lastCloseout,
+    nextRoute,
     refresh,
     resync,
     startRoute,
+    startNextRoute,
     submitManual,
     perform,
     sendSide,

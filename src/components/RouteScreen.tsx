@@ -70,7 +70,12 @@ export function RouteScreen({
             onManualSubmit={m.submitManual}
           />
         ) : m.phase === "returned" ? (
-          <RouteSummaryPanel summary={m.summary} closeout={m.lastCloseout} />
+          <RouteSummaryPanel
+            summary={m.summary}
+            closeout={m.lastCloseout}
+            nextRoute={m.nextRoute}
+            onStartNext={m.startNextRoute}
+          />
         ) : (
           <>
             <CurrentStopView
