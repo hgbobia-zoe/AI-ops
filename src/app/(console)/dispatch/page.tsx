@@ -19,7 +19,7 @@ import { DatePicker } from "@/components/DatePicker";
 import {
   getOpenExceptions,
   getRecentMessages,
-  getRouteForDate,
+  getRoutesForDate,
 } from "@/lib/db/repo";
 import { findRouteHealthIssues } from "@/lib/dispatch/routeHealth";
 import { ClosePastRoutesButton } from "@/components/ClosePastRoutesButton";
@@ -97,7 +97,12 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
   // supervisor controls (assign driver, close/reopen a route, reopen/remove a stop) are hidden.
   const canSupervise = (await viewerRole()) !== "guest";
   const trucks = getActiveVehicles();
-  const fleet = trucks.map((t) => ({ truck: t, route: getRouteForDate(t.truckId, date) }));
+  // A truck can run more than one route a day (a day route + an evening route) — show each as its own
+  // card. Trucks with no route keep one empty card so the full fleet is always visible.
+  const fleet = trucks.flatMap((t) => {
+    const routes = getRoutesForDate(t.truckId, date);
+    return routes.length > 0 ? routes.map((route) => ({ truck: t, route })) : [{ truck: t, route: null as Route | null }];
+  });
   const isToday = date === today;
   const isFuture = date > today;
   const exceptions = isToday ? getOpenExceptions() : [];
@@ -148,7 +153,7 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
       <section className="grid gap-4 lg:grid-cols-2">
         {fleet.map(({ truck, route }) => (
           <TruckCard
-            key={truck.truckId}
+            key={`${truck.truckId}-${route?.routeId ?? "none"}`}
             name={truck.name}
             route={route}
             canSupervise={canSupervise}
@@ -292,7 +297,7 @@ function TimeBoard({ fleet, isToday }: { fleet: { truck: { name: string; truckId
           const { lanes, count } = packLanes(positioned.map((p) => p.leftPct));
           const rowH = Math.max(48, count * LANE_H + 8);
           return (
-            <div key={truck.truckId} className="flex border-b border-[var(--row-rule)] last:border-b-0">
+            <div key={`${truck.truckId}-${r.routeId}`} className="flex border-b border-[var(--row-rule)] last:border-b-0">
               <div className="flex shrink-0 flex-col justify-center px-3" style={{ width: LABEL_W }}>
                 <div className="text-[14px] font-medium">{truck.name}</div>
                 <div className="text-[12px] text-meta">{r.driverName || "No driver"} · {done}/{r.stops.length}</div>

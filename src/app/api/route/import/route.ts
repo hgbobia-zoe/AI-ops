@@ -6,7 +6,7 @@
 //         dayOfPhone?, plannedWindow?, eta? }, ...] }
 
 import { NextResponse } from "next/server";
-import { getRouteForDate, writeRoute } from "@/lib/db/repo";
+import { getRouteById, writeRoute } from "@/lib/db/repo";
 import { todayInOpsTz } from "@/lib/dates";
 import { alertRouteRisks } from "@/lib/notify/routeRisk";
 import { scheduleScanSoon } from "@/lib/risk/scan";
@@ -56,16 +56,21 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
 
   const date = body.date || todayInOpsTz();
-  const routeId = `R-${date}-${truckId}`;
+  // Identity is PER GOODSHUFFLE ROUTE: a truck can run more than one route a day (a day route and an
+  // evening route), and each must be its own row. The Goodshuffle route id makes them distinct; without
+  // one (a manual/test import) we fall back to the one-per-truck-per-day id.
+  const routeId = body.gsRouteId ? `R-${date}-${truckId}-${body.gsRouteId}` : `R-${date}-${truckId}`;
 
-  // Reconcile the fresh pull against the SAME date's existing route (not the truck's latest, which
-  // may be another day) — preserving every acted-on stop, matching by Goodshuffle txId (never array
-  // position), and overlaying the active EnRoute stop with any corrected address. Pure + tested in
-  // src/lib/ingest/reconcile.ts.
-  const existing = getRouteForDate(truckId, date);
+  // Reconcile the fresh pull against THIS route's own prior stops (by routeId, not the truck/day) —
+  // preserving every acted-on stop, matching by Goodshuffle txId (never array position), and overlaying
+  // the active EnRoute stop with any corrected address. Pure + tested in src/lib/ingest/reconcile.ts.
+  const existing = getRouteById(routeId);
   const { stops, keptCount } = reconcileStops(existing?.stops ?? [], stopsIn, routeId);
 
-  writeRoute({ routeId, date, truckId, status: "ready", gsRouteId: body.gsRouteId, stops });
+  // Safety: a late re-pull must NOT resurrect a route the office/driver already closed. Keep a closed
+  // route closed (reconcileStops still preserves its real stop states); only an open route stays "ready".
+  const status = existing?.status === "done" ? "done" : "ready";
+  writeRoute({ routeId, date, truckId, status, gsRouteId: body.gsRouteId, stops });
 
   // NOTE: revenue is NOT written here. The single source of truth is the `bookings` feed
   // (searchProjects), keyed by the same id as the stop's txId — see getBookingRevenueByIds. The
@@ -78,7 +83,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   // Proactive Slack heads-up for business/office stops scheduled outside open hours
   // (so a truck doesn't roll up while the place is closed). Fire-and-forget; throttled.
-  void alertRouteRisks({ routeId, date, truckId, status: "ready", stops }, truckId);
+  void alertRouteRisks({ routeId, date, truckId, status, stops }, truckId);
 
   // Route data just changed → refresh the Event Risk queue. Debounced so the 3 AM all-trucks
   // pull (a burst of imports) settles into ONE scan; runScan itself is throttled to 5 min.

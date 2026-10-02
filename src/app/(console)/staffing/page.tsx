@@ -19,7 +19,7 @@ import {
 import { openShiftsWithSuggestions } from "@/lib/staffing/openShifts";
 import { OpenShiftsPanel } from "@/components/OpenShiftsPanel";
 import { getActiveVehicles } from "@/lib/vehicles";
-import { getRouteForDate } from "@/lib/db/repo";
+import { getRoutesForDate } from "@/lib/db/repo";
 import { crewForRoute } from "@/lib/crewRules";
 import { todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
 import type { Route } from "@/lib/types";
@@ -41,8 +41,8 @@ export default async function StaffingPage({
 
   const trucks = getActiveVehicles();
   const routes = trucks
-    .map((t) => getRouteForDate(t.truckId, date))
-    .filter((r): r is Route => Boolean(r) && r!.status !== "done");
+    .flatMap((t) => getRoutesForDate(t.truckId, date))
+    .filter((r) => r.status !== "done");
 
   const configured = connecteamConfigured();
   const [crewDResult, crewPrev, crewNext, usersList] = configured

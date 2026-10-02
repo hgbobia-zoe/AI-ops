@@ -18,7 +18,7 @@ import {
   type MatchedGig,
 } from "@/components/scheduling/RouteStaffBoard";
 import { getActiveVehicles } from "@/lib/vehicles";
-import { getRouteForDate } from "@/lib/db/repo";
+import { getRoutesForDate } from "@/lib/db/repo";
 import { getShiftsForDate } from "@/lib/scheduling/store";
 import { computeCoverage } from "@/lib/scheduling/coverage";
 import { recommendCrew, type CrewRecommendation } from "@/lib/scheduling/availability";
@@ -106,8 +106,8 @@ export default async function SchedulingPage({
 
   const trucks = getActiveVehicles();
   const routes = trucks
-    .map((t) => getRouteForDate(t.truckId, date))
-    .filter((r): r is Route => Boolean(r) && r!.status !== "done");
+    .flatMap((t) => getRoutesForDate(t.truckId, date))
+    .filter((r) => r.status !== "done");
 
   const shifts = getShiftsForDate(date);
 

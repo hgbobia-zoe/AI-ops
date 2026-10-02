@@ -6,7 +6,7 @@
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { getActiveVehicles } from "@/lib/vehicles";
 import {
-  getRouteForDate,
+  getRoutesForDate,
   getOpenExceptions,
   getPipelineBookingsInRange,
   getUpcomingCapacity,
@@ -114,7 +114,7 @@ export async function commandCenter(): Promise<CommandCenter> {
 
   // Today's execution, straight off the fleet's routes.
   const trucks = getActiveVehicles();
-  const routes = trucks.map((t) => getRouteForDate(t.truckId, today)).filter((r): r is NonNullable<typeof r> => Boolean(r));
+  const routes = trucks.flatMap((t) => getRoutesForDate(t.truckId, today));
   const stops = routes.flatMap((r) => r.stops ?? []);
   const todayBookings = getPipelineBookingsInRange(today, today);
   const today_ops: TodayOps = {

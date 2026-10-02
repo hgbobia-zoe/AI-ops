@@ -4,10 +4,9 @@
 
 import { NextResponse } from "next/server";
 import { getActiveVehicles } from "@/lib/vehicles";
-import { getRouteForDate } from "@/lib/db/repo";
+import { getRoutesForDate } from "@/lib/db/repo";
 import { buildDemand } from "@/lib/scheduling/demand";
 import { syncDemand } from "@/lib/scheduling/store";
-import type { Route } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -22,8 +21,8 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return NextResponse.json({ error: "date_required" }, { status: 400 });
 
   const routes = getActiveVehicles()
-    .map((t) => getRouteForDate(t.truckId, date))
-    .filter((r): r is Route => Boolean(r) && r!.status !== "done");
+    .flatMap((t) => getRoutesForDate(t.truckId, date))
+    .filter((r) => r.status !== "done");
 
   if (routes.length === 0) return NextResponse.json({ shifts: [], note: "no routes" });
 

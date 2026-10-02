@@ -4,7 +4,7 @@
 // ONLY meaningful changes (new HIGH/CRITICAL, escalations, resolutions, regressions).
 
 import { getActiveVehicles } from "@/lib/vehicles";
-import { getRouteForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity, saveCostEntries } from "@/lib/db/repo";
+import { getRoutesForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity, saveCostEntries } from "@/lib/db/repo";
 import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/history/store";
 import { getCrewForDateSafe, connecteamConfigured, getPayRates, rateForUserOn, type CrewShift, type CrewRole } from "@/lib/connecteam";
 import { allocateDriverLabor, type CostEntryInput } from "@/lib/finance/allocation";
@@ -108,7 +108,7 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   const unverifiedStaffingDates = new Set<string>(); // dates Connecteam couldn't confirm — freeze, don't resolve
   const capacityResults: CapacityResult[] = [];
   for (const date of dates) {
-    const rawRoutes = trucks.map((t) => getRouteForDate(t.truckId, date)).filter((r): r is NonNullable<typeof r> => Boolean(r));
+    const rawRoutes = trucks.flatMap((t) => getRoutesForDate(t.truckId, date));
     if (rawRoutes.length === 0) continue;
     const routes: EngineRoute[] = rawRoutes.map((r) => ({
       routeId: r.routeId,

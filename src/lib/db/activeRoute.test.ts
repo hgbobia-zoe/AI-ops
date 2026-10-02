@@ -3,15 +3,15 @@ import { writeRoute, getActiveRouteForTruck } from "./repo";
 import type { Route, RouteStatus } from "@/lib/types";
 
 // DATABASE_PATH is ":memory:" (vitest.config.ts).
-function seed(truckId: string, date: string, status: RouteStatus = "ready"): void {
-  const routeId = `R-${date}-${truckId}`;
+function seed(truckId: string, date: string, status: RouteStatus = "ready", opts: { gsRouteId?: string; startTime?: string } = {}): void {
+  const routeId = opts.gsRouteId ? `R-${date}-${truckId}-${opts.gsRouteId}` : `R-${date}-${truckId}`;
   const route: Route = {
     routeId,
     date,
     truckId,
     status,
     stops: [
-      { stopId: `${routeId}-S1`, routeId, customerId: "C1", sequence: 1, state: "Waiting", custName: `${date} stop`, custPhone: "+15555550111", address: "1 Main St" },
+      { stopId: `${routeId}-S1`, routeId, customerId: "C1", sequence: 1, state: "Waiting", custName: `${date} ${opts.gsRouteId ?? "stop"}`, custPhone: "+15555550111", address: "1 Main St", plannedWindow: opts.startTime },
     ],
   };
   writeRoute(route);
@@ -46,5 +46,30 @@ describe("getActiveRouteForTruck (tablet route = today, never a future day)", ()
     const today = "2026-09-17";
     seed("DONE", "2026-09-15", "done");
     expect(getActiveRouteForTruck("DONE", today)).toBeNull();
+  });
+
+  // Two routes on the SAME truck the SAME day (a day route + an evening route) — the incident fix.
+  it("returns the EARLIER-starting route when a truck has two today", () => {
+    const today = "2026-10-02";
+    seed("TWO", today, "ready", { gsRouteId: "DAY", startTime: `${today}T14:00:00.000Z` });
+    seed("TWO", today, "ready", { gsRouteId: "EVE", startTime: `${today}T23:00:00.000Z` });
+    const r = getActiveRouteForTruck("TWO", today);
+    expect(r?.routeId).toBe(`R-${today}-TWO-DAY`);
+  });
+
+  it("ADVANCES to the evening route once the day route is closed", () => {
+    const today = "2026-10-02";
+    seed("ADV", today, "done", { gsRouteId: "DAY", startTime: `${today}T14:00:00.000Z` }); // day route finished
+    seed("ADV", today, "ready", { gsRouteId: "EVE", startTime: `${today}T23:00:00.000Z` }); // evening still to run
+    const r = getActiveRouteForTruck("ADV", today);
+    expect(r?.routeId).toBe(`R-${today}-ADV-EVE`);
+    expect(r?.status).toBe("ready");
+  });
+
+  it("with BOTH routes done, returns a route (end state) rather than null", () => {
+    const today = "2026-10-02";
+    seed("ALLDONE", today, "done", { gsRouteId: "DAY", startTime: `${today}T14:00:00.000Z` });
+    seed("ALLDONE", today, "done", { gsRouteId: "EVE", startTime: `${today}T23:00:00.000Z` });
+    expect(getActiveRouteForTruck("ALLDONE", today)).not.toBeNull();
   });
 });

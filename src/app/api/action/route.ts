@@ -17,6 +17,7 @@ import {
   updateStopState,
 } from "@/lib/db/repo";
 import { runFanout } from "@/lib/notify/fanout";
+import { closeOneRoute } from "@/lib/dispatch/closeRoute";
 import type { ActionRequest, ActionResponse, Stop } from "@/lib/types";
 
 export async function POST(req: Request): Promise<NextResponse<ActionResponse>> {
@@ -90,6 +91,14 @@ export async function POST(req: Request): Promise<NextResponse<ActionResponse>> 
     } else {
       updateStopState(body.stopId, toState);
     }
+  }
+
+  // Warehouse-arrival closeout = the driver finished the route. Close it server-side (same bookkeeping as
+  // an office close) so it leaves the active board AND the truck's NEXT route (e.g. an evening dispatch)
+  // surfaces on the driver link. Idempotent: replays are dropped above (isNew) and closeOneRoute no-ops a
+  // route that's already done.
+  if (action === "ARRIVED_WAREHOUSE" && body.routeId) {
+    closeOneRoute(body.routeId);
   }
 
   // Fan-out runs async; the response returns immediately.

@@ -149,7 +149,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             if(!rdate) return;
             var daysOut=Math.round((Date.parse(rdate+"T00:00:00Z")-Date.parse(todayYmd+"T00:00:00Z"))/86400000);
             var p=(daysOut>=0&&daysOut<=ENRICH)?attachItems(stops):Promise.resolve(stops);
-            return p.then(function(st){ var key=tid+"|"+rdate; if(!groups[key])groups[key]={truckId:tid,date:rdate,stops:[],gsRouteId:String(rt.id)}; groups[key].stops=groups[key].stops.concat(st); });
+            return p.then(function(st){ var key=tid+"|"+rdate+"|"+rt.id; if(!groups[key])groups[key]={truckId:tid,date:rdate,stops:[],gsRouteId:String(rt.id)}; groups[key].stops=groups[key].stops.concat(st); });
           }); }); });
         return chain.then(function(){
           var keys=Object.keys(groups); var totalStops=0,failed=0,days=keys.length; var unm=Object.keys(unmatched);
@@ -158,7 +158,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             // Sanitize: after a FULL clean sweep, drop any of OUR routes GS no longer has (moved/cancelled).
             // Only when nothing failed (partial pull must never prune). Keep = routes GS returned this sweep.
             if(failed!==0 || keys.length===0) return result();
-            var keepIds=keys.map(function(k){ var g=groups[k]; return "R-"+g.date+"-"+g.truckId; });
+            var keepIds=keys.map(function(k){ var g=groups[k]; return "R-"+g.date+"-"+g.truckId+"-"+g.gsRouteId; });
             var dset={}; keys.forEach(function(k){ dset[groups[k].date]=1; });
             return fetch(API+"/api/route/prune",{method:"POST",headers:POSTH(),body:JSON.stringify({dates:Object.keys(dset),keepRouteIds:keepIds})}).then(function(){ return result(); }).catch(function(){ return result(); });
           });

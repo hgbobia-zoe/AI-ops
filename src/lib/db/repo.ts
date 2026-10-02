@@ -112,16 +112,39 @@ export function getRoute(truckId: string): Route | null {
   return row ? buildRoute(row) : null;
 }
 
-/** The route a TABLET/kiosk should show for its truck: TODAY's route (ops timezone), else the most
- *  recent still-unfinished route from on/before today (an overnight or carried-over job). Never a
- *  FUTURE route — the multi-week pull seeds days ahead, and the driver screen must stay on today, not
- *  jump to whatever was imported last. Returns null when the truck has nothing active → "no route yet". */
+/** Earliest scheduled stop time on a route, as a unix ms — used to order a truck's routes (day before
+ *  evening). Routes with no timed stop sort last (MAX_SAFE_INTEGER), never NaN. */
+function earliestStopMs(r: Route): number {
+  let min = Number.MAX_SAFE_INTEGER;
+  for (const s of r.stops) {
+    const raw = s.plannedWindow || s.eta;
+    if (!raw) continue;
+    const t = Date.parse(raw);
+    if (!Number.isNaN(t) && t < min) min = t;
+  }
+  return min;
+}
+
+/** The route a TABLET/kiosk should show for its truck: the NEXT route to work TODAY (ops timezone) —
+ *  the earliest-starting route that isn't finished, so once a route is closed the truck's next route
+ *  (e.g. an evening dispatch on the same truck) surfaces on its own. When every route today is done,
+ *  returns the most-recently-updated one (a sane end state → the screen re-prompts). Falls back to the
+ *  most recent still-unfinished route from on/before today (an overnight/carried-over job). Never a
+ *  FUTURE route — the multi-week pull seeds days ahead. Returns null when the truck has nothing. */
 export function getActiveRouteForTruck(truckId: string, today: string = todayInOpsTz()): Route | null {
   const db = getDb();
-  const todays = db
-    .prepare("SELECT * FROM routes WHERE truck_id = ? AND date = ? ORDER BY updated_at DESC LIMIT 1")
-    .get(truckId, today) as RouteRow | undefined;
-  if (todays) return buildRoute(todays);
+  const rows = db.prepare("SELECT * FROM routes WHERE truck_id = ? AND date = ?").all(truckId, today) as RouteRow[];
+  if (rows.length > 0) {
+    const built = rows.map((row) => ({ row, route: buildRoute(row) }));
+    const workable = built.filter((b) => b.route.status !== "done");
+    if (workable.length > 0) {
+      workable.sort((a, b) => earliestStopMs(a.route) - earliestStopMs(b.route) || a.row.updated_at.localeCompare(b.row.updated_at));
+      return workable[0].route;
+    }
+    // Every route today is done → show the one closed most recently (maps to a re-prompt, not a resurrect).
+    built.sort((a, b) => b.row.updated_at.localeCompare(a.row.updated_at));
+    return built[0].route;
+  }
   const carry = db
     .prepare("SELECT * FROM routes WHERE truck_id = ? AND date <= ? AND status != 'done' ORDER BY date DESC LIMIT 1")
     .get(truckId, today) as RouteRow | undefined;
@@ -134,12 +157,21 @@ export function getRouteById(routeId: string): Route | null {
   return row ? buildRoute(row) : null;
 }
 
-/** A truck's route for a specific calendar day (YYYY-MM-DD), or null if none. */
+/** A truck's route for a specific calendar day (YYYY-MM-DD), or null if none. With more than one route
+ *  on the truck that day (a day + evening dispatch), returns the earliest-starting — use
+ *  getRoutesForDate to see them all. */
 export function getRouteForDate(truckId: string, date: string): Route | null {
-  const row = getDb()
-    .prepare("SELECT * FROM routes WHERE truck_id = ? AND date = ? ORDER BY updated_at DESC LIMIT 1")
-    .get(truckId, date) as RouteRow | undefined;
-  return row ? buildRoute(row) : null;
+  const routes = getRoutesForDate(truckId, date);
+  return routes[0] ?? null;
+}
+
+/** ALL of a truck's routes for a calendar day, earliest-starting first — a truck can run more than one
+ *  route a day (e.g. a day route and an evening route), each its own row keyed by Goodshuffle route id. */
+export function getRoutesForDate(truckId: string, date: string): Route[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM routes WHERE truck_id = ? AND date = ?")
+    .all(truckId, date) as RouteRow[];
+  return rows.map(buildRoute).sort((a, b) => earliestStopMs(a) - earliestStopMs(b));
 }
 
 /** Distinct route dates, newest first — for the dispatch history picker. */
