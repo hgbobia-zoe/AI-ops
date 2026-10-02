@@ -28,6 +28,9 @@ export interface PullState {
   agentFailingSince?: string; // ISO the agent first started failing (cleared on a healthy heartbeat)
   agentAlertedAt?: string; // ISO we last Slack-alerted about a failing agent (cool-off dedup)
   routeHealthAlerted?: Record<string, string>; // routeId → ISO we last Slack-alerted it (overdue routes)
+  instaworkOk?: boolean; // last Instawork probe result (undefined until first probe) — drives OK↔failed flip alerts
+  instaworkFailingSince?: string; // ISO Instawork first started failing (cleared on a good probe)
+  instaworkAlertedAt?: string; // ISO we last Slack-alerted an Instawork failure (cool-off dedup)
   // Legacy single-value fields (kept so the existing freshness banner keeps working).
   lastPullAt?: string;
   lastStops?: number;
@@ -116,6 +119,34 @@ export function recordAgentHeartbeat(agent: string, status: AgentStatus, detail:
   }
 
   s.agent = { agent, status, detail: detail ?? null, at: now.toISOString() };
+  save(s);
+  return { alert };
+}
+
+/** Record the result of an Instawork live probe and decide whether to Slack. Mirrors the agent-heartbeat
+ *  bookkeeping: once Instawork has worked at least once, a failing probe Slack-alerts (so an expired
+ *  cookie is caught), deduped by a 2h cool-off that also caps a SUSTAINED outage at one page per 2h; and
+ *  one alert on recovery (only if we had alerted the failure). Honest: a cold-start first-ever observation
+ *  never pages, and a failed probe is never reported as OK. Returns `alert` = the message to send, or null. */
+export function recordInstaworkProbe(ok: boolean, detail: string | null, now: Date = new Date()): { alert: string | null } {
+  const s = getPullState();
+  const seenBefore = s.instaworkOk !== undefined; // don't page on a cold-start first glance (no known-good baseline)
+  let alert: string | null = null;
+
+  if (!ok) {
+    if (!s.instaworkFailingSince) s.instaworkFailingSince = now.toISOString();
+    const alertedAgo = s.instaworkAlertedAt ? now.getTime() - Date.parse(s.instaworkAlertedAt) : Infinity;
+    if (seenBefore && alertedAgo > ALERT_COOLOFF_MS) {
+      alert = `Zoe Instawork connection is down (${detail || "unreachable"}). The session cookie has likely expired. Re-paste it in Settings so temp-labor reconciliation keeps working. Failing since ${s.instaworkFailingSince}.`;
+      s.instaworkAlertedAt = now.toISOString();
+    }
+  } else {
+    if (s.instaworkAlertedAt) alert = `Zoe Instawork connection recovered (${detail || "ok"}).`;
+    s.instaworkFailingSince = undefined;
+    s.instaworkAlertedAt = undefined;
+  }
+
+  s.instaworkOk = ok;
   save(s);
   return { alert };
 }

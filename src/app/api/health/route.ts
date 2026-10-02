@@ -8,12 +8,15 @@ import { canManageSettings } from "@/lib/auth/roles";
 import { pullBannerState, getRecentImports } from "@/lib/pull/state";
 import { computeConnections, summarize } from "@/lib/health/connections";
 import { refreshConnecteamHealth } from "@/lib/connecteam";
+import { refreshInstaworkHealth } from "@/lib/instawork/client";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(): Promise<NextResponse> {
   if (!canManageSettings(await viewerRole())) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  await refreshConnecteamHealth(); // live Connecteam check (TTL-cached) — same signal the top status bar reads
+  // Live reachability probes (TTL-cached) before reading health, so an expired cookie / unreachable
+  // service surfaces as ATTENTION on its own and the two surfaces can't disagree.
+  await Promise.all([refreshConnecteamHealth(), refreshInstaworkHealth()]);
   const connections = computeConnections();
   return NextResponse.json({
     banner: pullBannerState(),

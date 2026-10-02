@@ -15,6 +15,7 @@ import { isPassLive, passIdFromUid } from "@/lib/auth/pass";
 import { pullBannerState } from "@/lib/pull/state";
 import { computeConnections, type ConnStatus } from "@/lib/health/connections";
 import { refreshConnecteamHealth } from "@/lib/connecteam";
+import { refreshInstaworkHealth } from "@/lib/instawork/client";
 
 const TONE: Record<ConnStatus, StatusIntegration["tone"]> = { ok: "ok", attention: "warn", off: "idle" };
 
@@ -44,14 +45,15 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
   // Status-bar integrations — a curated few from the connections health.
   let integrations: StatusIntegration[] = [];
   if (canManage) {
-    await refreshConnecteamHealth(); // live Connecteam check (TTL-cached) — same signal the Connections page reads
+    // Live checks (TTL-cached) — same signals the Connections page reads, so the dots can't disagree.
+    await Promise.all([refreshConnecteamHealth(), refreshInstaworkHealth()]);
     const conns = computeConnections();
     const pick = (key: string, name: string): StatusIntegration | null => {
       const c = conns.find((x) => x.key === key);
       if (!c) return null;
       return { name, tone: TONE[c.status], note: c.status === "ok" ? undefined : c.headline.toLowerCase() };
     };
-    integrations = [pick("routes", "Goodshuffle"), pick("openphone", "Quo"), pick("connecteam", "Connecteam"), pick("gps", "GPS")].filter((x): x is StatusIntegration => x !== null);
+    integrations = [pick("routes", "Goodshuffle"), pick("openphone", "Quo"), pick("connecteam", "Connecteam"), pick("instawork", "Instawork"), pick("gps", "GPS")].filter((x): x is StatusIntegration => x !== null);
   }
 
   return (

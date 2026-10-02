@@ -10,7 +10,8 @@
 // cookie → not_configured (no call); a failed/empty response → ok:false (UNVERIFIED), never fabricated.
 
 import { getSecret } from "@/lib/secrets";
-import { logImport } from "@/lib/pull/state";
+import { logImport, recordInstaworkProbe } from "@/lib/pull/state";
+import { slackNotify } from "@/lib/notify/slack";
 import type { InstaworkResult, InstaworkShift } from "./types";
 
 const BASE = (process.env.INSTAWORK_BASE_URL || "https://app.instawork.com").replace(/\/$/, "");
@@ -90,4 +91,52 @@ export async function getInstaworkShifts(timeframe = "in_progress_upcoming"): Pr
   } finally {
     clearTimeout(t);
   }
+}
+
+// ── Live reachability probe (proactive expiry detection) ─────────────────────────────────────────
+// Mirrors refreshConnecteamHealth: a TTL-cached, single-flight probe so an expired/missing cookie is
+// caught on its own (the top status bar + Connections dashboard call this before reading health) instead
+// of only showing up as passive text on the Scheduling board. Each real probe runs getInstaworkShifts
+// (which records the import-ledger row the Connections row reads) and, on an OK↔failed flip, Slacks once
+// via recordInstaworkProbe's deduped bookkeeping. HONEST: a failed probe is ATTENTION, never a fake OK.
+
+export interface InstaworkHealth {
+  ok: boolean;
+  checkedAt: string; // ISO of the probe
+  detail: string;
+}
+
+const IW_HEALTH_TTL_MS = 10 * 60_000; // at most one real probe per ~10 min, however often a surface renders
+let _iwHealth: InstaworkHealth | null = null;
+let _iwInflight: Promise<InstaworkHealth> | null = null;
+
+/** The last live probe result, or null if we haven't probed yet this process. Synchronous. */
+export function instaworkHealthCached(): InstaworkHealth | null {
+  return _iwHealth;
+}
+
+/** Refresh the Instawork live probe, TTL-cached + single-flight; never throws. Call from an async surface
+ *  (layout / health API) before reading the Connections health. No cookie → not configured (no call, no
+ *  alert); otherwise one real Instawork call per TTL window, with a Slack alert on the OK↔failed flip. */
+export async function refreshInstaworkHealth(now: number = Date.now()): Promise<InstaworkHealth> {
+  if (!instaworkConfigured()) {
+    _iwHealth = { ok: false, checkedAt: new Date(now).toISOString(), detail: "not configured" };
+    return _iwHealth;
+  }
+  if (_iwHealth && now - Date.parse(_iwHealth.checkedAt) < IW_HEALTH_TTL_MS) return _iwHealth;
+  if (_iwInflight) return _iwInflight;
+  _iwInflight = (async () => {
+    const r = await getInstaworkShifts(); // logs the import-ledger row (ok/fail + detail)
+    const detail = r.ok ? `${r.shifts.length} shifts` : r.error || r.status;
+    const { alert } = recordInstaworkProbe(r.ok, detail);
+    if (alert) void slackNotify(alert); // deduped by recordInstaworkProbe (2h cool-off), one on recovery
+    return { ok: r.ok, checkedAt: new Date().toISOString(), detail } as InstaworkHealth;
+  })()
+    .catch(() => ({ ok: false, checkedAt: new Date().toISOString(), detail: "unreachable" }) as InstaworkHealth)
+    .then((h) => {
+      _iwHealth = h;
+      _iwInflight = null;
+      return h;
+    });
+  return _iwInflight;
 }

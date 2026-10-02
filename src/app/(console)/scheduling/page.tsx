@@ -260,13 +260,21 @@ export default async function SchedulingPage({
 
       {/* Instawork context — temp labor already booked/pending for this day. */}
       <p className="mb-5 text-[12.5px] text-meta">
-        {!iwOn
-          ? "Instawork isn't connected — add the session cookie in Settings to reconcile booked temp labor."
-          : iw && !iw.ok
-            ? "Instawork unverified — couldn't reach it, so this is not “nothing booked.”"
-            : iwDayShifts.length === 0
-              ? "Instawork today: nothing booked for this day."
-              : `Instawork today: ${iwDayShifts.reduce((n, s) => n + s.filled, 0)} booked, ${iwDayShifts.reduce((n, s) => n + Math.max(0, s.total - s.filled), 0)} pending across ${iwDayShifts.length} gig${iwDayShifts.length === 1 ? "" : "s"}.`}
+        {!iwOn ? (
+          <>
+            {"Instawork isn't connected. Add the session cookie to reconcile booked temp labor. "}
+            <Link href="/admin" className="underline underline-offset-2 hover:text-foreground">Fix in settings →</Link>
+          </>
+        ) : iw && !iw.ok ? (
+          <>
+            {"Instawork unverified: couldn't reach it, so this is not “nothing booked.” "}
+            <Link href="/admin" className="underline underline-offset-2 hover:text-foreground">Fix in settings →</Link>
+          </>
+        ) : iwDayShifts.length === 0 ? (
+          "Instawork today: nothing booked for this day."
+        ) : (
+          `Instawork today: ${iwDayShifts.reduce((n, s) => n + s.filled, 0)} booked, ${iwDayShifts.reduce((n, s) => n + Math.max(0, s.total - s.filled), 0)} pending across ${iwDayShifts.length} gig${iwDayShifts.length === 1 ? "" : "s"}.`
+        )}
       </p>
 
       <RouteStaffBoard
