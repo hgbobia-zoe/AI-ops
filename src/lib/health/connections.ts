@@ -8,7 +8,7 @@ import { getPullState, getLatestImportBySource, type ImportRow } from "@/lib/pul
 import { computeDataHealth, type HealthState } from "./health";
 import { openphoneApiKey } from "@/lib/comms/openphone";
 import { connecteamConfigured } from "@/lib/connecteam";
-import { instaworkConfigured } from "@/lib/instawork/client";
+import { INSTAWORK_STALE_MIN } from "@/lib/instawork/store";
 import { slackConfigured, slackAlertConfigured } from "@/lib/notify/slack";
 import { llmConfigured } from "@/lib/llm";
 import { getSettings } from "@/lib/settings";
@@ -42,29 +42,55 @@ function fromHealth(s: HealthState): ConnStatus {
   return "attention"; // STALE / INCOMPLETE / RETRIEVAL_FAILED / NEVER
 }
 
-/** The Instawork connection row's status, extracted as a pure function so it can be unit-tested without
- *  a DB (computeConnections reads live stores). HONEST: no cookie → OFF (we never called); a configured
- *  cookie whose last call FAILED → ATTENTION (likely expired/blocked — unverified, never a fake OK); a
- *  configured cookie whose last call succeeded (or that hasn't been called yet) → OK. `last` is the
- *  latest "instawork" import-ledger row (getLatestImportBySource), or null when none exists yet. */
+/** A short "N min/h ago" phrase for a past ISO timestamp. */
+function agoPhrase(ts: string, now: number): string {
+  const min = Math.max(0, Math.round((now - Date.parse(ts)) / 60_000));
+  if (!Number.isFinite(min)) return "a while ago";
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  return `${h}h ago`;
+}
+
+/** The Instawork connection row's status, derived from the BROWSER-PULL freshness. Instawork now syncs
+ *  from the logged-in office browser (Auto-Pull extension → /api/instawork/import), so the signal is the
+ *  last import-ledger row the ingest wrote. Extracted as a pure function so it's unit-testable without a DB.
+ *  HONEST: never pulled → OFF (nothing synced yet); last import failed OR older than INSTAWORK_STALE_MIN →
+ *  ATTENTION (session likely signed out in the office browser, never a fake OK); a fresh success → OK.
+ *  `last` is the latest "instawork" import-ledger row (getLatestImportBySource), or null when none exists. */
 export function instaworkRowStatus(
-  configured: boolean,
   last: Pick<ImportRow, "ok" | "detail" | "ts"> | null,
-): { status: ConnStatus; headline: string; detail: string; lastAt: string | null } {
-  if (!configured) {
-    return { status: "off", headline: "Not connected", detail: "Add the Instawork session cookie to reconcile temp labor.", lastAt: null };
-  }
-  if (last && !last.ok) {
+  now: number = Date.now(),
+): { status: ConnStatus; headline: string; detail: string; lastAt: string | null; fixHref: string | null; fixLabel: string | null } {
+  if (!last) {
     return {
-      status: "attention",
-      headline: "Cookie expired / unreachable",
-      detail: last.detail
-        ? `Last check failed (${last.detail}). Re-paste the session cookie in Settings.`
-        : "The last check failed. Re-paste the session cookie in Settings.",
-      lastAt: last.ts,
+      status: "off",
+      headline: "Not connected",
+      detail: "Log into Instawork in the office browser to sync temp labor (Auto-Pull extension).",
+      lastAt: null,
+      fixHref: "/admin",
+      fixLabel: "How to connect",
     };
   }
-  return { status: "ok", headline: "Connected", detail: "Temp-labor shifts, reconciled against the schedule.", lastAt: last?.ts ?? null };
+  const ageMin = (now - Date.parse(last.ts)) / 60_000;
+  const stale = !Number.isFinite(ageMin) || ageMin > INSTAWORK_STALE_MIN;
+  if (!last.ok || stale) {
+    return {
+      status: "attention",
+      headline: "Session stale / signed out",
+      detail: `Last synced ${agoPhrase(last.ts, now)}; re-open Instawork in the office browser.`,
+      lastAt: last.ts,
+      fixHref: "/admin",
+      fixLabel: "Re-connect",
+    };
+  }
+  return {
+    status: "ok",
+    headline: "Connected",
+    detail: "Temp-labor shifts, reconciled against the schedule.",
+    lastAt: last.ts,
+    fixHref: null,
+    fixLabel: null,
+  };
 }
 
 export function computeConnections(now: number = Date.now()): Connection[] {
@@ -164,10 +190,11 @@ export function computeConnections(now: number = Date.now()): Connection[] {
   });
 
   // ── Instawork (temp labor top-up) ──
-  // Connects via a replayed session cookie (no official API), so an expired cookie surfaces here as
-  // ATTENTION ("re-paste the cookie") rather than dying silently on the Scheduling board. Last-call
-  // state comes from the import ledger, which the live probe (refreshInstaworkHealth) keeps current.
-  const iw = instaworkRowStatus(instaworkConfigured(), getLatestImportBySource()["instawork"] ?? null);
+  // Now syncs from the logged-in office browser (Auto-Pull extension → /api/instawork/import), so the row
+  // is FRESHNESS-based: a stale/absent sync surfaces here as ATTENTION/OFF ("re-open Instawork in the
+  // office browser") instead of dying silently on the Scheduling board. State comes from the import ledger
+  // row the ingest writes on each browser pull.
+  const iw = instaworkRowStatus(getLatestImportBySource()["instawork"] ?? null, now);
   out.push({
     key: "instawork",
     label: "Instawork",
@@ -176,8 +203,8 @@ export function computeConnections(now: number = Date.now()): Connection[] {
     headline: iw.headline,
     detail: iw.detail,
     lastAt: iw.lastAt,
-    fixHref: iw.status === "ok" ? null : "/admin",
-    fixLabel: iw.status === "ok" ? null : iw.status === "off" ? "Open settings" : "Re-paste cookie",
+    fixHref: iw.fixHref,
+    fixLabel: iw.fixLabel,
   });
 
   // ── Slack notifications (delivery + customer alerts) ──

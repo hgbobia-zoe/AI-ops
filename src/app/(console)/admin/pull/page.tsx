@@ -108,7 +108,7 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
 
         {/* Version query busts the browser cache when the zip is rebuilt — keep in sync with
             extension/manifest.json "version" (rebuild with scripts/build-extension-zip.ps1). */}
-        <PullExtensionInstall downloadHref="/zoe-autopull-extension.zip?v=1.4.2" />
+        <PullExtensionInstall downloadHref="/zoe-autopull-extension.zip?v=1.5.0" />
       </section>
 
       {/* Routes inspector — what the pull actually wrote to the DB (today onward). */}

@@ -15,47 +15,51 @@ function row(p: Partial<ImportRow> & { ok: boolean }): ImportRow {
   };
 }
 
-describe("instaworkRowStatus", () => {
-  it("no cookie → OFF (never called), with the add-cookie prompt", () => {
-    const r = instaworkRowStatus(false, null);
+const NOW = Date.parse("2026-10-02T12:00:00.000Z");
+
+describe("instaworkRowStatus (browser-pull freshness)", () => {
+  it("never pulled → OFF, prompts logging into Instawork in the office browser", () => {
+    const r = instaworkRowStatus(null, NOW);
     expect(r.status).toBe("off");
     expect(r.headline).toBe("Not connected");
-    expect(r.detail).toBe("Add the Instawork session cookie to reconcile temp labor.");
+    expect(r.detail).toContain("office browser");
     expect(r.lastAt).toBeNull();
+    expect(r.fixHref).toBe("/admin");
+    expect(r.fixLabel).toBe("How to connect");
   });
 
-  it("no cookie → OFF even if a stale ledger row exists (config presence wins)", () => {
-    const r = instaworkRowStatus(false, row({ ok: true, ts: "2026-10-01T00:00:00.000Z" }));
-    expect(r.status).toBe("off");
-    expect(r.lastAt).toBeNull();
-  });
-
-  it("configured + last call FAILED → ATTENTION with the failure detail + re-paste prompt", () => {
-    const r = instaworkRowStatus(true, row({ ok: false, detail: "HTTP 403", ts: "2026-10-02T13:00:00.000Z" }));
-    expect(r.status).toBe("attention");
-    expect(r.headline).toBe("Cookie expired / unreachable");
-    expect(r.detail).toContain("HTTP 403");
-    expect(r.detail).toContain("Re-paste the session cookie");
-    expect(r.lastAt).toBe("2026-10-02T13:00:00.000Z");
-  });
-
-  it("configured + last call failed with no detail → ATTENTION, still prompts a re-paste", () => {
-    const r = instaworkRowStatus(true, row({ ok: false, detail: null }));
-    expect(r.status).toBe("attention");
-    expect(r.detail).toContain("Re-paste the session cookie");
-  });
-
-  it("configured + last call OK → OK (Connected)", () => {
-    const r = instaworkRowStatus(true, row({ ok: true, detail: "3 shifts", ts: "2026-10-02T14:00:00.000Z" }));
+  it("a fresh successful import → OK (Connected)", () => {
+    const r = instaworkRowStatus(row({ ok: true, ts: "2026-10-02T11:30:00.000Z" }), NOW); // 30 min old
     expect(r.status).toBe("ok");
     expect(r.headline).toBe("Connected");
-    expect(r.lastAt).toBe("2026-10-02T14:00:00.000Z");
+    expect(r.lastAt).toBe("2026-10-02T11:30:00.000Z");
+    expect(r.fixHref).toBeNull();
   });
 
-  it("configured + no call recorded yet → OK (honest: no failure evidence, never a fake failure)", () => {
-    const r = instaworkRowStatus(true, null);
-    expect(r.status).toBe("ok");
-    expect(r.headline).toBe("Connected");
-    expect(r.lastAt).toBeNull();
+  it("a stale import (older than 120 min) → ATTENTION, says re-open Instawork", () => {
+    const r = instaworkRowStatus(row({ ok: true, ts: "2026-10-02T09:00:00.000Z" }), NOW); // 3h old
+    expect(r.status).toBe("attention");
+    expect(r.headline).toBe("Session stale / signed out");
+    expect(r.detail).toContain("re-open Instawork");
+    expect(r.detail).toContain("3h ago");
+    expect(r.fixHref).toBe("/admin");
+    expect(r.fixLabel).toBe("Re-connect");
+  });
+
+  it("a recent import that FAILED → ATTENTION (never a fake OK)", () => {
+    const r = instaworkRowStatus(row({ ok: false, ts: "2026-10-02T11:50:00.000Z" }), NOW); // 10 min old
+    expect(r.status).toBe("attention");
+    expect(r.headline).toBe("Session stale / signed out");
+    expect(r.lastAt).toBe("2026-10-02T11:50:00.000Z");
+  });
+
+  it("exactly at the 120-min boundary is still OK; just past it is stale", () => {
+    expect(instaworkRowStatus(row({ ok: true, ts: "2026-10-02T10:00:00.000Z" }), NOW).status).toBe("ok"); // 120 min
+    expect(instaworkRowStatus(row({ ok: true, ts: "2026-10-02T09:59:00.000Z" }), NOW).status).toBe("attention"); // 121 min
+  });
+
+  it("minutes-ago phrasing under an hour", () => {
+    const r = instaworkRowStatus(row({ ok: false, ts: "2026-10-02T11:30:00.000Z" }), NOW);
+    expect(r.detail).toContain("30 min ago");
   });
 });

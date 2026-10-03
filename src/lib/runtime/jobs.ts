@@ -10,12 +10,13 @@
 // no new table. HONEST: a job with no credential is skipped and shown as "not configured", never faked.
 
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
+import { INSTAWORK_STALE_MIN } from "@/lib/instawork/store";
 import { runInstaworkMonitor } from "@/lib/instawork/monitor";
 import { slackNotify } from "@/lib/notify/slack";
 import { discover } from "@/lib/seo/discovery";
 import { configured as ubersuggestConfigured } from "@/lib/seo/ubersuggest";
 import { connecteamConfigured, refreshConnecteamHealth } from "@/lib/connecteam";
-import { logImport, getLatestImportBySource, type ImportRow } from "@/lib/pull/state";
+import { logImport, getLatestImportBySource, recordInstaworkProbe, type ImportRow } from "@/lib/pull/state";
 
 export type RuntimeBucket = "server" | "browser";
 
@@ -35,10 +36,22 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     label: "Instawork shifts",
     bucket: "server",
     configured: instaworkConfigured,
-    note: "Reads booked temp-labor shifts (cookie auth).",
+    note: "Reads booked temp-labor shifts from the browser-pulled snapshot (Auto-Pull extension).",
     run: async () => {
+      // Reads the browser-pulled snapshot (no network). Freshness = how recently the extension stored it;
+      // once-fresh then stale (or never pulled) → the session likely signed out in the office browser.
       const r = await getInstaworkShifts();
-      if (!r.ok) return { ok: false, detail: r.error ?? r.status };
+      const ageMin = (Date.now() - Date.parse(r.fetchedAt)) / 60_000;
+      const isFresh = r.ok && Number.isFinite(ageMin) && ageMin <= INSTAWORK_STALE_MIN;
+      const detail = r.ok
+        ? isFresh
+          ? `${r.shifts.length} shifts`
+          : `snapshot ${Math.round(ageMin)}m old — re-open Instawork in the office browser`
+        : "no snapshot yet — log into Instawork in the office browser";
+      // Slack once on a fresh→stale flip and once on recovery (2h-deduped in recordInstaworkProbe).
+      const { alert } = recordInstaworkProbe(isFresh, detail);
+      if (alert) void slackNotify(alert);
+      if (!isFresh) return { ok: false, detail };
       // Monitor for no-shows / drop-offs: a booked worker disappearing near/after a gig's start →
       // Slack. (Instawork's API has no no-show field; a removed worker is the signal.)
       const alerts = runInstaworkMonitor(r.shifts);

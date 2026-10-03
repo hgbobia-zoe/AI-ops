@@ -25,6 +25,8 @@ const GS_MATCH = "https://pro.goodshuffle.com/*";
 const GS_DASHBOARD = "https://pro.goodshuffle.com/app/dashboard";
 const GS_CREATE = "https://pro.goodshuffle.com/app/project/createNewProject";
 const GS_LOGIN = "https://pro.goodshuffle.com/app/login";
+const IW_MATCH = "https://app.instawork.com/*";
+const IW_HOME = "https://app.instawork.com/";
 const CREATE_TIMEOUT_MS = 90_000; // reap an unclaimed/stuck create tab after this
 
 // ── Badge ─────────────────────────────────────────────────────────────────────
@@ -96,8 +98,30 @@ async function ensureGsTab() {
   }
 }
 
+/** Return a live app.instawork.com tab, creating a single pinned background one if none exists. Same
+ *  find-or-create logic as ensureGsTab: Instawork now pulls the same way (its declared content script,
+ *  instawork.js, does the same-origin fetch + POST). We never close it. `justOpened` says we created it
+ *  (its content script auto-runs on load, so we don't also need to nudge it). */
+async function ensureInstaworkTab() {
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: IW_MATCH });
+  } catch (e) {
+    tabs = [];
+  }
+  const live = tabs.find((t) => t.id != null);
+  if (live) return { tab: live, justOpened: false };
+  try {
+    const tab = await chrome.tabs.create({ url: IW_HOME, pinned: true, active: false });
+    return { tab, justOpened: true };
+  } catch (e) {
+    return { tab: null, justOpened: false };
+  }
+}
+
 /** Nudge the content script in existing GS tab(s) to run a pull now. The content script watches
- *  storage.pullNow and also accepts a direct message; storage is the reliable cross-tab trigger. */
+ *  storage.pullNow and also accepts a direct message; storage is the reliable cross-tab trigger. The
+ *  Instawork content script watches the SAME storage.pullNow, so this one nudge pulls both. */
 async function triggerPull() {
   await chrome.storage.local.set({ pullNow: Date.now() });
 }
@@ -112,12 +136,17 @@ async function runPullCycle(reason) {
     return { ok: true, enabled: false };
   }
   const { tab, justOpened } = await ensureGsTab();
+  // Keep a signed-in Instawork tab alive too, so one alarm cycle pulls both. Instawork's own content
+  // script does the fetch + POST; a freshly-opened tab auto-runs on load, an existing one gets the same
+  // storage.pullNow nudge below. Best-effort — never let it block or break the GS read-pull.
+  const iw = await ensureInstaworkTab().catch(() => ({ justOpened: false }));
   if (!tab) {
     badgeFor("no_tab");
     return { ok: false, reason: "no_tab" };
   }
-  // A newly created tab's content script auto-runs on load; an existing one needs a nudge.
-  if (!justOpened) await triggerPull();
+  // A newly created tab's content script auto-runs on load; an existing one needs a nudge. One
+  // storage.pullNow nudges BOTH content scripts, so fire it if either tab was already open.
+  if (!justOpened || !iw.justOpened) await triggerPull();
   // Best-effort, opt-in create drain (never blocks or breaks the read-pull).
   drainCreates(reason).catch(() => {});
   return { ok: true, tabId: tab.id, justOpened };
