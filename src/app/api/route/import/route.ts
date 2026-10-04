@@ -11,7 +11,8 @@ import { todayInOpsTz } from "@/lib/dates";
 import { alertRouteRisks } from "@/lib/notify/routeRisk";
 import { scheduleScanSoon } from "@/lib/risk/scan";
 import { recordPull, logImport } from "@/lib/pull/state";
-import { reconcileStops } from "@/lib/ingest/reconcile";
+import { reconcileStops, forceReconcileStops } from "@/lib/ingest/reconcile";
+import { consumeForceResync } from "@/lib/ingest/forceResync";
 import type { Stop } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -65,7 +66,14 @@ export async function POST(req: Request): Promise<NextResponse> {
   // preserving every acted-on stop, matching by Goodshuffle txId (never array position), and overlaying
   // the active EnRoute stop with any corrected address. Pure + tested in src/lib/ingest/reconcile.ts.
   const existing = getRouteById(routeId);
-  const { stops, keptCount } = reconcileStops(existing?.stops ?? [], stopsIn, routeId);
+  // An explicit "Re-sync from Goodshuffle" arms a one-shot force flag (src/lib/ingest/forceResync.ts).
+  // When set, THIS import applies Goodshuffle's exact order even to in-progress stops (forceReconcileStops),
+  // and consuming it clears the flag so the force applies to exactly one import. Otherwise the normal,
+  // progress-protecting merge runs unchanged.
+  const force = consumeForceResync(routeId);
+  const { stops, keptCount } = force
+    ? forceReconcileStops(existing?.stops ?? [], stopsIn, routeId)
+    : reconcileStops(existing?.stops ?? [], stopsIn, routeId);
 
   // Safety: a late re-pull must NOT resurrect a route the office/driver already closed. Keep a closed
   // route closed (reconcileStops still preserves its real stop states); only an open route stays "ready".

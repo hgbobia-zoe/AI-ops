@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { RotateCcw } from "lucide-react";
 import { Header } from "@/components/Header";
 import { CurrentStopView } from "@/components/CurrentStopView";
 import { RouteOverview } from "@/components/RouteOverview";
@@ -37,6 +38,16 @@ export function RouteScreen({
     toast.dismiss("ota");
     toast.message(msg ?? "Couldn't check for updates.");
   }, []);
+
+  // Driver "Re-sync from Goodshuffle": force this route to match Goodshuffle's current order, even while
+  // it's in progress. Guarded by a confirm because it can change the next stop.
+  const onResync = useCallback(() => {
+    if (!window.confirm("Pull the latest route order from Goodshuffle? This can change your next stop.")) return;
+    toast.loading("Re-syncing from Goodshuffle…", { id: "resync" });
+    void m.resyncFromGoodshuffle().finally(() => toast.dismiss("resync"));
+  }, [m]);
+
+  const routeLoaded = m.phase === "stops" || m.phase === "headingBack" || m.phase === "returned";
 
   return (
     <div className={kiosk ? "flex h-full flex-col bg-background" : "min-h-dvh bg-background"}>
@@ -96,6 +107,16 @@ export function RouteScreen({
               <RouteOverview stops={stops} activeIndex={m.activeIndex} />
             )}
           </>
+        )}
+
+        {routeLoaded && (
+          <button
+            onClick={onResync}
+            disabled={m.busy}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+          >
+            <RotateCcw className="size-4" /> Re-sync from Goodshuffle
+          </button>
         )}
       </main>
     </div>

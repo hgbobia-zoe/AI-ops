@@ -12,7 +12,7 @@
 //    txId-matched incoming stop (the emergency-address-change path).
 //  - Refresh the not-yet-started tail from the pull; drop upcoming stops Goodshuffle removed.
 
-import type { Stop } from "@/lib/types";
+import type { Stop, StopState } from "@/lib/types";
 
 function buildStop(s: Partial<Stop>, ids: { stopId: string; customerId: string; sequence: number }): Stop {
   return {
@@ -101,4 +101,78 @@ export function reconcileStops(existing: Stop[], incoming: Partial<Stop>[], rout
   );
 
   return { stops: [...keptRenum, ...upcomingStops], keptCount: kept.length };
+}
+
+// ── Force re-sync ──────────────────────────────────────────────────────────────
+//
+// forceReconcileStops is the EXPLICIT "Re-sync from Goodshuffle" variant. Unlike reconcileStops (which
+// protects in-progress work and only reorders the Waiting tail), this makes the route match Goodshuffle's
+// CURRENT order exactly — even for an in-progress route — because the office/driver asked for it on
+// purpose. It is still honest and safe: a delivery that actually happened (Completed/Returned, with its
+// POD + timestamps) is NEVER erased.
+//
+// Semantics (matched by Goodshuffle txId, never array position):
+//  - Output order IS the incoming (Goodshuffle) order, one stop per incoming row.
+//  - Incoming row matches an existing Completed/Returned stop → keep it AS-IS (same stopId, state,
+//    arrivedAt/completedAt, proof/POD); only renumber to the GS position and overlay the mutable
+//    customer/address fields from incoming.
+//  - Incoming row matches an existing stop in ANY OTHER state (Waiting/EnRoute/Exception/HeadingBack/…)
+//    → REDIRECT: keep its stopId + txId but reset state to "Waiting" and clear arrivedAt/completedAt,
+//    at the GS position, overlaying the mutable fields. (So moving a stop ahead of the one the driver is
+//    EnRoute to resets that driver stop to Waiting — the route literally re-orders.)
+//  - Incoming row with no existing match → a brand-new Waiting stop at that position.
+//  - A stop in existing but NOT in incoming is DROPPED (Goodshuffle removed it) — EXCEPT a
+//    Completed/Returned stop, which is appended at the END keeping its done state + POD, so a delivery
+//    that happened is never silently erased from the record.
+//  - keptCount = number of Completed/Returned stops preserved (both repositioned and appended).
+//
+// Pure (no DB), like reconcileStops.
+export function forceReconcileStops(existing: Stop[], incoming: Partial<Stop>[], routeId: string): ReconcileResult {
+  const withRoute = (s: Stop): Stop => ({ ...s, routeId });
+  const isDone = (st: StopState): boolean => st === "Completed" || st === "Returned";
+
+  // Match by STABLE identity (Goodshuffle txId), never by array position.
+  const existingByTx = new Map<string, Stop>();
+  for (const s of existing) if (s.txId) existingByTx.set(s.txId, s);
+
+  // Reserve EVERY existing stopId so a brand-new stop can never be minted with a colliding id — a matched
+  // stop keeps its id wherever Goodshuffle moved it, and a done stop missing from the pull is appended
+  // keeping its id too. Reserving a dropped stop's id as well is harmless and keeps this simple.
+  const reserved = new Set<string>(existing.map((s) => s.stopId));
+
+  const matchedTx = new Set<string>();
+  const out: Stop[] = [];
+
+  incoming.forEach((inc, i) => {
+    const sequence = i + 1;
+    const match = inc.txId ? existingByTx.get(inc.txId) : undefined;
+    if (match && inc.txId) matchedTx.add(inc.txId);
+
+    if (match && isDone(match.state)) {
+      // Finished delivery: keep state/timestamps/POD/stopId; only reposition + overlay mutable fields.
+      out.push(withRoute({ ...overlay(match, inc), sequence }));
+    } else if (match) {
+      // REDIRECT an in-progress/upcoming stop to Goodshuffle's position: keep identity, reset to Waiting.
+      out.push(withRoute({ ...overlay(match, inc), state: "Waiting", arrivedAt: undefined, completedAt: undefined, sequence }));
+    } else {
+      // Brand-new Goodshuffle stop at this position. Dedupe the id against preserved stopIds.
+      let stopId = `${routeId}-S${sequence}`;
+      while (reserved.has(stopId)) stopId += "x";
+      reserved.add(stopId);
+      out.push(withRoute(buildStop(inc, { stopId, customerId: `${routeId}-C${sequence}`, sequence })));
+    }
+  });
+
+  // Never silently erase a delivery that happened: a Completed/Returned stop missing from the pull is
+  // appended at the end (done state + POD intact). Non-done stops missing from the pull are dropped.
+  for (const s of existing) {
+    if (!isDone(s.state)) continue;
+    if (s.txId && matchedTx.has(s.txId)) continue;
+    out.push(withRoute({ ...s }));
+  }
+
+  // Renumber contiguously (covers the appended done tail too).
+  const stops = out.map((s, i) => ({ ...s, sequence: i + 1 }));
+  const keptCount = stops.filter((s) => isDone(s.state)).length;
+  return { stops, keptCount };
 }

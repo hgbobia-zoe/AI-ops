@@ -72,6 +72,9 @@ export interface RouteMachine {
   nextRoute: Route | null;
   refresh: (force?: boolean) => Promise<void>;
   resync: () => Promise<void>;
+  /** Explicit "Re-sync from Goodshuffle": arm the server-side one-shot force flag for this route, then
+   *  re-pull — so the DB adopts Goodshuffle's CURRENT order even for in-progress stops. */
+  resyncFromGoodshuffle: () => Promise<void>;
   startRoute: () => Promise<void>;
   /** Advance to nextRoute (the "Start next route" action on the closeout screen). */
   startNextRoute: () => void;
@@ -302,6 +305,23 @@ export function useRouteMachine(truckId: string): RouteMachine {
       rePullingRef.current = false;
     }
   }, [truckId, refresh]);
+
+  // Explicit "Re-sync from Goodshuffle" (driver button). Arm the server-side one-shot force flag for the
+  // loaded route, then re-pull: the kiosk pull POSTs the route to /api/route/import, which consumes the
+  // flag and applies Goodshuffle's CURRENT order (even to in-progress stops) before adopting the DB.
+  const resyncFromGoodshuffle = useCallback(async () => {
+    if (!route) return;
+    try {
+      await fetch("/api/route/resync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ routeId: route.routeId }),
+      });
+    } catch {
+      /* if arming fails, the re-pull below still runs the normal (progress-protecting) merge */
+    }
+    void rePull();
+  }, [route, rePull]);
 
   // Manual fallback when the scrape fails: dispatch enters stops by hand. Persists
   // to the server (so actions → SMS work), then adopts the server route.
@@ -609,6 +629,7 @@ export function useRouteMachine(truckId: string): RouteMachine {
     nextRoute,
     refresh,
     resync,
+    resyncFromGoodshuffle,
     startRoute,
     startNextRoute,
     submitManual,

@@ -10,6 +10,7 @@ import { CompleteStopButton } from "@/components/CompleteStopButton";
 import { RemoveStopButton } from "@/components/RemoveStopButton";
 import { CloseRouteButton } from "@/components/CloseRouteButton";
 import { RemoveRouteButton } from "@/components/RemoveRouteButton";
+import { ResyncRouteButton } from "@/components/ResyncRouteButton";
 import { ReopenRouteButton } from "@/components/ReopenRouteButton";
 import { DriverAssign } from "@/components/DriverAssign";
 import { QuoteReviewButton } from "@/components/QuoteReviewButton";
@@ -529,6 +530,7 @@ function TruckCard({
             <span className="text-xs text-muted-foreground">Tablet down / dead battery?</span>
           )}
           <div className="flex items-center gap-2">
+            {route.status !== "done" && <ResyncRouteButton routeId={route.routeId} />}
             <RemoveRouteButton routeId={route.routeId} />
             {route.status === "done" ? (
               <ReopenRouteButton routeId={route.routeId} />
