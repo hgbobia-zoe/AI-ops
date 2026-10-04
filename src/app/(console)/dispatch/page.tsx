@@ -35,6 +35,7 @@ import { getActiveVehicles } from "@/lib/vehicles";
 import { STATE_VISUAL } from "@/lib/stateVisual";
 import type { Route, Stop } from "@/lib/types";
 import { FigureStrip, type Figure } from "@/components/console-primitives";
+import { BladeAgents } from "@/components/aiorg/BladeAgents";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +55,7 @@ export default async function DispatchPage({
   const canClose = canManageSettings(await viewerRole());
   return (
     <main className="p-6">
+      <BladeAgents blade="dispatch" className="mb-4" />
       {ignitionUrl && (
         <a
           href={ignitionUrl}

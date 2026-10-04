@@ -12,6 +12,7 @@ import { opsCycleConfig } from "@/lib/finance/config";
 import { getRouteLaborCosts, getInstaworkLedger, getLaborReconciliation, getProjectLaborLineage, getLaborLedgerSummary } from "@/lib/db/repo";
 import type { Variance } from "@/lib/finance/calc";
 import { FigureStrip, tableCls, theadCls, thCls, type Figure } from "@/components/console-primitives";
+import { BladeAgents } from "@/components/aiorg/BladeAgents";
 
 export const dynamic = "force-dynamic";
 
@@ -87,6 +88,8 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         </div>
         <FigureStrip figures={figures} />
       </header>
+
+      <BladeAgents blade="finance" className="mb-5" />
 
       {/* Period tabs (dimension A week + dimension B operational cycle + month) */}
       <nav className="mb-3 flex flex-wrap gap-4 border-b border-border pb-2">

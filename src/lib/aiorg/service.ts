@@ -10,14 +10,17 @@ import { todayInOpsTz } from "@/lib/dates";
 import {
   AI_EMPLOYEES,
   HUMANS,
+  agentIdsForBlade,
   getEmployee,
 } from "./registry";
 import {
   buildEmployeeView,
+  pickKeySignal,
   priorityLabel,
   rollupHumans,
   type AiEmployeeView,
   type AiMetric,
+  type BladeKey,
   type EmployeeSignal,
   type HumanCard,
 } from "./types";
@@ -74,7 +77,21 @@ export interface AiOrgOverview {
   counts: { live: number; seed: number; partial: number; coming: number };
   /** Honest run freshness for the Runs page (real runtime-jobs ledger). */
   runs: JobStatus[];
+  /** Still-pending approvals per agent id (real; from the ai_approvals queue). */
+  pendingByAgent: Record<string, number>;
+  /** Open exceptions attributed to each agent id (real; the ranked attention feed routed by source). */
+  exceptionsByAgent: Record<string, number>;
 }
+
+// Which agent owns each ranked-exception source (deterministic routing of the EXISTING attention feed —
+// not a new signal). The Priority/Exception agent is the aggregate filter, so it carries the whole feed;
+// Dispatch/Route carries the real driver field-exception count.
+const EXCEPTION_OWNER_BY_SOURCE: Record<string, string> = {
+  risk: "event-risk",
+  sales: "lead-intelligence",
+  finance: "business-intelligence",
+  customer: "sales-coach",
+};
 
 const money = (n: number | null | undefined): string => (n == null ? "—" : (n < 0 ? "-$" : "$") + Math.abs(Math.round(n)).toLocaleString("en-US"));
 
@@ -205,6 +222,15 @@ export async function aiOrg(opts: { showMoney?: boolean } = {}): Promise<AiOrgOv
     source: i.source,
   }));
 
+  // Attribute the ranked exception feed to its owning agent (deterministic routing of real items).
+  const exceptionsByAgent: Record<string, number> = {};
+  for (const x of exceptions) {
+    const owner = EXCEPTION_OWNER_BY_SOURCE[x.source];
+    if (owner) exceptionsByAgent[owner] = (exceptionsByAgent[owner] ?? 0) + 1;
+  }
+  if (exceptions.length) exceptionsByAgent["priority-exception"] = exceptions.length;
+  if (dispatch && dispatch.exceptions) exceptionsByAgent["dispatch-route"] = dispatch.exceptions;
+
   // Per-human card counts. openApprovals (v2) = real pending ai_approvals summed over this human's
   // employees; openExceptions = this human's employees currently needing attention; aiActivityToday =
   // today's attributed sales activity (Jessie's domain), 0 elsewhere.
@@ -234,7 +260,41 @@ export async function aiOrg(opts: { showMoney?: boolean } = {}): Promise<AiOrgOv
 
   const runs = safeSync(() => runtimeStatus(), []) ?? [];
 
-  return { today, humans, employees, activeWork, exceptions, outcomes, counts, runs };
+  return { today, humans, employees, activeWork, exceptions, outcomes, counts, runs, pendingByAgent, exceptionsByAgent };
+}
+
+// ── Per-blade view (the BladeAgents strip's data) ─────────────────────────────
+/** One agent's compact cell for the in-blade strip: its derived view (honesty already enforced by
+ *  buildEmployeeView), the ONE key signal to show, and the real pending-approval / open-exception counts. */
+export interface BladeAgentCell {
+  view: AiEmployeeView;
+  keySignal: AiMetric | null;
+  pendingApprovals: number;
+  openExceptions: number;
+}
+
+export interface BladeAgentsView {
+  blade: BladeKey;
+  agents: BladeAgentCell[];
+}
+
+/** The AI employees that work inside one blade, filtered from the SAME aiOrg aggregation (no new reads,
+ *  no fabrication — a "coming" agent still carries no metrics). `showMoney` redacts $-bearing signals. */
+export async function bladeAgents(blade: BladeKey, opts: { showMoney?: boolean } = {}): Promise<BladeAgentsView> {
+  const org = await aiOrg(opts);
+  const byId = new Map(org.employees.map((e) => [e.id, e]));
+  const agents: BladeAgentCell[] = [];
+  for (const id of agentIdsForBlade(blade)) {
+    const view = byId.get(id);
+    if (!view) continue;
+    agents.push({
+      view,
+      keySignal: pickKeySignal(view.metrics),
+      pendingApprovals: org.pendingByAgent[id] ?? 0,
+      openExceptions: org.exceptionsByAgent[id] ?? 0,
+    });
+  }
+  return { blade, agents };
 }
 
 /** One employee's full view + config, for the detail page. Null when the id is unknown. */

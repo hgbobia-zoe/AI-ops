@@ -1,6 +1,7 @@
-// AI Org — the org command center (§5.1). Top-down bands: HUMANS -> AI EMPLOYEES -> ACTIVE WORK ->
-// EXCEPTIONS -> OUTCOMES. A governance surface over Zoe's AI workforce; it SURFACES what the modules
-// already compute and never fabricates. Owner/admin only; $ metrics reuse canSeeFinancials.
+// AI Org — the org command center (§5.1), slimmed to an EXEC OVERVIEW. The detailed per-agent presence now
+// lives INSIDE each blade (the BladeAgents strip); this landing is the per-human manager rollup, org-wide
+// pending approvals, the ranked exceptions feed and measured outcomes — fewer, higher-signal elements, not
+// a wall of 19 agent cards. The full roster stays at /ai-org/employees. Owner/admin only; $ reuses canSeeFinancials.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -8,13 +9,11 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings, canSeeFinancials } from "@/lib/auth/roles";
 import { aiOrg } from "@/lib/aiorg/service";
-import { HUMANS } from "@/lib/aiorg/registry";
 import { FigureStrip, type Figure } from "@/components/console-primitives";
-import { BackingBadge, HealthMark, MetricRow, OrgTabs, StateDot } from "@/components/aiorg/AiOrgBits";
+import { OrgTabs, StateDot } from "@/components/aiorg/AiOrgBits";
 
 export const dynamic = "force-dynamic";
 
-const DEPT_LABEL: Record<string, string> = { sales: "Sales", backoffice: "Back Office", marketing: "Marketing", ops_exec: "Ops / Exec" };
 const P_TONE: Record<string, string> = { P0: "text-critical", P1: "text-attention", P2: "text-attention", P3: "text-meta" };
 
 function ago(ts: string): string {
@@ -32,12 +31,15 @@ export default async function AiOrgPage(): Promise<React.JSX.Element> {
   const showMoney = canSeeFinancials(role);
   const org = await aiOrg({ showMoney });
 
+  const totalApprovals = org.humans.reduce((n, h) => n + h.openApprovals, 0);
+
   const figures: Figure[] = [
     { label: "Live", value: org.counts.live, tone: "positive" },
     { label: "Seed", value: org.counts.seed, tone: org.counts.seed ? "attention" : "default" },
     { label: "Partial", value: org.counts.partial },
     { label: "Coming", value: org.counts.coming },
-    { label: "Exceptions", value: org.exceptions.length, tone: org.exceptions.length ? "attention" : "default", sep: true },
+    { label: "Approvals", value: totalApprovals, tone: totalApprovals ? "attention" : "default", sep: true },
+    { label: "Exceptions", value: org.exceptions.length, tone: org.exceptions.length ? "attention" : "default" },
   ];
 
   return (
@@ -46,15 +48,15 @@ export default async function AiOrgPage(): Promise<React.JSX.Element> {
       <header className="mb-4 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-[22px] font-medium tracking-tight">AI Org</h1>
-          <p className="text-[12.5px] text-meta">The control plane over Zoe&apos;s AI workforce. Rules calculate, AI interprets, humans decide. Read and draft only.</p>
+          <p className="text-[12.5px] text-meta">Exec overview of Zoe&apos;s AI workforce. Each AI team now works inside its own blade; this is the manager rollup, approvals and exceptions. Rules calculate, AI interprets, humans decide.</p>
         </div>
         <FigureStrip figures={figures} />
       </header>
 
       <OrgTabs active="/ai-org" />
 
-      {/* ── HUMANS ── */}
-      <Band title="Humans">
+      {/* ── MANAGERS (per-human rollup) ── */}
+      <Band title="Managers" subtitle="Each human and the AI team they own — open the agent in context from its blade">
         <div className="grid gap-px overflow-hidden border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
           {org.humans.map((h) => (
             <div key={h.name} className="bg-panel p-4">
@@ -80,31 +82,14 @@ export default async function AiOrgPage(): Promise<React.JSX.Element> {
         </div>
       </Band>
 
-      {/* ── AI EMPLOYEES ── */}
-      <Band title="AI Employees">
-        <div className="border border-border">
-          {HUMANS.map((h) => {
-            const mine = org.employees.filter((e) => e.owner === h.name);
-            if (mine.length === 0) return null;
-            return (
-              <div key={h.name}>
-                <div className="border-t border-[var(--row-rule)] bg-background px-3 py-1.5 text-[10.5px] font-medium uppercase tracking-[0.1em] text-meta first:border-t-0">{h.name}</div>
-                {mine.map((e) => (
-                  <Link key={e.id} href={`/ai-org/${e.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-[var(--row-rule)] px-3 py-2.5 transition-colors hover:bg-[var(--row-hover)]">
-                    <StateDot state={e.state} />
-                    <span className="w-[160px] shrink-0 text-[13.5px] font-medium text-foreground">{e.name}</span>
-                    <span className="w-[84px] shrink-0 text-[11px] uppercase tracking-[0.06em] text-meta">{DEPT_LABEL[e.department]}</span>
-                    <BackingBadge backing={e.backing} />
-                    <span className="min-w-[120px] flex-1">
-                      {e.backing === "coming" ? <span className="text-[12px] text-meta">Not wired yet — no data source</span> : <MetricRow metrics={e.metrics} />}
-                    </span>
-                    <HealthMark health={e.health} />
-                  </Link>
-                ))}
-              </div>
-            );
-          })}
+      {/* ── APPROVALS + ROSTER (where the detail now lives) ── */}
+      <Band title="Pending approvals" subtitle="AI-prepared actions awaiting a human decision">
+        <div className="flex flex-wrap items-center gap-4 border border-border px-4 py-3 text-[13px]">
+          <span className="text-[20px] font-medium tabular-nums text-foreground">{totalApprovals}</span>
+          <span className="text-meta">{totalApprovals === 1 ? "action waits" : "actions wait"} for approve / reject / edit.</span>
+          <Link href="/ai-org/approvals" className="ml-auto text-[12.5px] text-tertiary-text transition-colors hover:text-foreground">Open Approvals →</Link>
         </div>
+        <p className="mt-2 text-[12px] text-meta">Per-agent detail now lives inside each blade (the &ldquo;AI employees working here&rdquo; strip). The full roster is at <Link href="/ai-org/employees" className="text-tertiary-text underline-offset-2 hover:text-foreground hover:underline">AI Employees</Link>.</p>
       </Band>
 
       {/* ── ACTIVE WORK ── */}
@@ -113,7 +98,7 @@ export default async function AiOrgPage(): Promise<React.JSX.Element> {
           <Empty>No recent AI activity recorded yet.</Empty>
         ) : (
           <div className="border border-border">
-            {org.activeWork.slice(0, 12).map((a, i) => {
+            {org.activeWork.slice(0, 6).map((a, i) => {
               const row = (
                 <div className="flex items-center justify-between gap-3 px-3 py-2 text-[13px]">
                   <span className="min-w-0 truncate"><span className="text-foreground">{a.label}</span> <span className="text-meta">· {a.actor}</span></span>

@@ -9,6 +9,7 @@ import { marketingDashboard } from "@/lib/marketing/dashboard";
 import { ChannelHub } from "@/components/marketing/ChannelHub";
 import { REVIEW_SOURCE_LABEL, CHANNEL_LABEL, AUDIENCE_LABEL, PROSPECT_STATUS_LABEL, PROSPECT_OPEN_STAGES } from "@/lib/marketing/types";
 import { formatYmdLong } from "@/lib/dates";
+import { BladeAgents } from "@/components/aiorg/BladeAgents";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +49,8 @@ export default function MarketingHome(): React.JSX.Element {
         <h1 className="flex items-center gap-2 text-[22px] font-medium tracking-tight"><Megaphone className="size-5 text-meta" /> Marketing</h1>
         <p className="mt-1 text-[13px] text-meta">Zoe&apos;s outreach command center — prospects, campaigns, content, and reputation across weddings/social and corporate/gov. The win is a quote agreed; from there it&apos;s Goodshuffle and Sales OS.</p>
       </header>
+
+      <BladeAgents blade="marketing" className="mb-5" />
 
       {/* Metrics */}
       <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">

@@ -7,6 +7,7 @@
 import { salesCommandCenter } from "@/lib/salesos/commandCenter";
 import { viewerRole, viewerForPanel } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
+import { BladeAgents } from "@/components/aiorg/BladeAgents";
 import { SalesShell } from "./SalesShell";
 
 export const dynamic = "force-dynamic";
@@ -16,8 +17,11 @@ export default async function SalesOsLayout({ children }: { children: React.Reac
   const cc = salesCommandCenter();
   const viewer = await viewerForPanel();
   return (
-    <SalesShell queue={cc.items} showMoney={showMoney} needAttention={cc.needAttention} justReplied={cc.justReplied} totalPotential={cc.totalPotential} viewer={viewer}>
-      {children}
-    </SalesShell>
+    <>
+      <BladeAgents blade="salesos" className="mx-6 mt-4" />
+      <SalesShell queue={cc.items} showMoney={showMoney} needAttention={cc.needAttention} justReplied={cc.justReplied} totalPotential={cc.totalPotential} viewer={viewer}>
+        {children}
+      </SalesShell>
+    </>
   );
 }

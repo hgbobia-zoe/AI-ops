@@ -9,7 +9,7 @@
 // changes, or permanent deletion is APPROVAL_REQUIRED. v1 DECLARES this authority model on the detail
 // page; it is not an execution engine yet (read/draft-only).
 
-import type { AIEmployee, Human, Tool } from "./types";
+import type { AIEmployee, BladeKey, Human, Tool } from "./types";
 
 // ── The real human roster (no fabricated people / departments) ────────────────
 export const HUMANS: Human[] = [
@@ -459,4 +459,56 @@ export const AI_EMPLOYEES: AIEmployee[] = [
 /** One employee by id, or undefined. */
 export function getEmployee(id: string): AIEmployee | undefined {
   return AI_EMPLOYEES.find((e) => e.id === id);
+}
+
+// ── Blade mapping (additive) ────────────────────────────────────────────────
+// Which AI employees surface INSIDE each operating blade's page. This is the per-blade strip's source of
+// placement truth: each human sees their own AI team in context. Some pages deliberately surface a wider
+// set than one canonical home — staffing+scheduling share the back-office roster, finance+command share
+// the exec trio — so the same id appears under more than one blade here. Every id must exist in
+// AI_EMPLOYEES (asserted by the test). No fabrication: the strip only ever shows real registry agents.
+export const BLADE_AGENTS: Record<BladeKey, string[]> = {
+  salesos: ["lead-intelligence", "quote-analyst", "lost-quote", "outreach", "sales-coach"],
+  scheduling: ["scheduling", "staffing", "back-office", "hiring"],
+  staffing: ["staffing", "scheduling", "back-office", "hiring"],
+  marketing: ["content", "campaign-analyst", "competitive-intelligence"],
+  radar: ["event-radar"],
+  dispatch: ["dispatch-route", "inventory-exception"],
+  "event-risk": ["event-risk", "inventory-exception"],
+  finance: ["business-intelligence", "executive-briefing", "priority-exception"],
+  command: ["executive-briefing", "priority-exception", "business-intelligence"],
+};
+
+// The canonical home blade per employee (the one page that "owns" it). Drives the additive `blade` field
+// stamped onto each config below. Every live/seed/partial agent has a home; a "coming" agent still
+// declares its intended home so it shows (as "not wired yet") where it will live.
+const CANONICAL_BLADE: Record<string, BladeKey> = {
+  "lead-intelligence": "salesos",
+  "quote-analyst": "salesos",
+  "lost-quote": "salesos",
+  outreach: "salesos",
+  "sales-coach": "salesos",
+  staffing: "staffing",
+  scheduling: "scheduling",
+  hiring: "staffing",
+  "back-office": "staffing",
+  "event-radar": "radar",
+  content: "marketing",
+  "campaign-analyst": "marketing",
+  "competitive-intelligence": "marketing",
+  "executive-briefing": "command",
+  "event-risk": "event-risk",
+  "dispatch-route": "dispatch",
+  "inventory-exception": "event-risk",
+  "business-intelligence": "finance",
+  "priority-exception": "command",
+};
+
+// Stamp the additive `blade` field onto each config from the canonical map (kept here so the per-agent
+// home and the per-page composition stay in one file and can't drift unnoticed — the test guards it).
+for (const e of AI_EMPLOYEES) e.blade = CANONICAL_BLADE[e.id];
+
+/** The employee ids that surface in a given blade's strip (in display order). */
+export function agentIdsForBlade(blade: BladeKey): string[] {
+  return BLADE_AGENTS[blade] ?? [];
 }

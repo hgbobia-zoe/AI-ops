@@ -1,12 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { AI_EMPLOYEES, HUMANS } from "./registry";
+import { AI_EMPLOYEES, BLADE_AGENTS, HUMANS, agentIdsForBlade } from "./registry";
 import {
   authoritySplit,
   buildEmployeeView,
+  pickKeySignal,
   priorityLabel,
   rollupHumans,
   type AIEmployee,
   type AiEmployeeView,
+  type AiMetric,
+  type BladeKey,
   type Tool,
 } from "./types";
 
@@ -85,6 +88,51 @@ describe("rollupHumans", () => {
     expect(cards[0].openExceptions).toBe(1);
     expect(cards[0].aiActivityToday).toBe(4);
     expect(cards[1].employeeCount).toBe(1);
+  });
+});
+
+describe("pickKeySignal — the one in-blade signal", () => {
+  const m = (label: string, value: string | number, tone?: AiMetric["tone"]): AiMetric => ({ label, value, tone });
+  it("returns null when there are no metrics (a 'coming' agent)", () => {
+    expect(pickKeySignal([])).toBeNull();
+  });
+  it("prefers a critical/attention-toned metric over a neutral one", () => {
+    expect(pickKeySignal([m("Open", 3), m("Act now", 2, "attention")])?.label).toBe("Act now");
+    expect(pickKeySignal([m("Open", 3, "attention"), m("Crit", 1, "critical")])?.label).toBe("Crit");
+  });
+  it("falls back to the first metric when tones are equal", () => {
+    expect(pickKeySignal([m("First", 9), m("Second", 1)])?.label).toBe("First");
+  });
+});
+
+describe("blade mapping — per-blade filtered view", () => {
+  const ids = new Set(AI_EMPLOYEES.map((e) => e.id));
+  const BLADES = Object.keys(BLADE_AGENTS) as BladeKey[];
+
+  it("every id listed under a blade is a real employee", () => {
+    for (const blade of BLADES) {
+      for (const id of BLADE_AGENTS[blade]) expect(ids.has(id)).toBe(true);
+    }
+  });
+
+  it("agentIdsForBlade returns the mapped ids", () => {
+    expect(agentIdsForBlade("salesos")).toContain("lead-intelligence");
+    expect(agentIdsForBlade("event-risk")).toContain("event-risk");
+    expect(agentIdsForBlade("event-risk")).toContain("inventory-exception");
+  });
+
+  it("every employee declares a canonical blade and is listed under it", () => {
+    for (const e of AI_EMPLOYEES) {
+      expect(e.blade).toBeTruthy();
+      expect(BLADE_AGENTS[e.blade as BladeKey]).toContain(e.id);
+    }
+  });
+
+  it("every live / seed / partial agent surfaces in at least one blade (none orphaned)", () => {
+    const placed = new Set(BLADES.flatMap((b) => BLADE_AGENTS[b]));
+    for (const e of AI_EMPLOYEES) {
+      if (e.backing !== "coming") expect(placed.has(e.id)).toBe(true);
+    }
   });
 });
 

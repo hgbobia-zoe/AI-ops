@@ -49,6 +49,7 @@ import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/type
 import { routeWindow } from "@/lib/risk/engine";
 import { DEFAULT_RISK_CONFIG, type EngineRoute } from "@/lib/risk/types";
 import type { Route } from "@/lib/types";
+import { BladeAgents } from "@/components/aiorg/BladeAgents";
 
 const ROLE_ORDER: ShiftRole[] = ["driver", "field", "prep"];
 
@@ -347,6 +348,8 @@ export default async function SchedulingPage({
           <DateNav date={date} today={today} />
         </div>
       </header>
+
+      <BladeAgents blade="scheduling" className="mb-5" />
 
       {/* Connecteam coverage context — what's ALREADY scheduled internally that day. */}
       <p className="mb-5 text-[12.5px] text-meta">

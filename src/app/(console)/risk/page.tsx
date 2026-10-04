@@ -14,6 +14,7 @@ import { getEventTimeline } from "@/lib/history/store";
 import { SEVERITY_RANK, type RiskSeverity } from "@/lib/risk/types";
 import { todayInOpsTz, formatYmdLong } from "@/lib/dates";
 import { FigureStrip, tableCls, theadCls, thCls, type Figure } from "@/components/console-primitives";
+import { BladeAgents } from "@/components/aiorg/BladeAgents";
 
 export const dynamic = "force-dynamic";
 
@@ -71,6 +72,8 @@ export default async function EventRiskPage(): Promise<React.JSX.Element> {
         </div>
         <FigureStrip figures={figures} />
       </header>
+
+      <BladeAgents blade="event-risk" className="mb-5" />
 
       {unverified && <p className="mb-5 text-[12.5px] text-attention">Staffing data is unavailable (Connecteam) for one or more days — those checks are marked unverified, not confirmed clear. Reconnect Connecteam and re-scan.</p>}
 

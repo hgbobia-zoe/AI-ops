@@ -17,6 +17,7 @@ import { KIND_LABEL, JURISDICTION_LABEL, MATURITY_LABEL, type Jurisdiction, type
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 import { todayInOpsTz, formatYmdLong } from "@/lib/dates";
+import { BladeAgents } from "@/components/aiorg/BladeAgents";
 
 export const dynamic = "force-dynamic";
 
@@ -122,6 +123,8 @@ export default async function OpportunityRadarPage({ searchParams }: { searchPar
         </div>
         <FigureStrip figures={figures} />
       </header>
+
+      <BladeAgents blade="radar" className="mb-5" />
 
       <RadarTabs />
 

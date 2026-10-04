@@ -7,6 +7,21 @@
 // ── Org structure ───────────────────────────────────────────────────────────
 export type AiDept = "sales" | "backoffice" | "marketing" | "ops_exec";
 
+/** The existing operating blade an AI employee lives inside. Additive mapping so each human sees their
+ *  own AI team in context (the BladeAgents strip). A canonical home per agent; some blade PAGES surface a
+ *  wider set (staffing+scheduling share the back-office roster, finance+command share the exec trio) —
+ *  that page composition lives in BLADE_AGENTS in registry.ts, not here. */
+export type BladeKey =
+  | "salesos"
+  | "scheduling"
+  | "staffing"
+  | "marketing"
+  | "radar"
+  | "dispatch"
+  | "event-risk"
+  | "finance"
+  | "command";
+
 /** Honest backing state of an employee's data source (see the per-agent table in the design doc).
  *  - live:    real wired data today
  *  - seed:    the workflow is live but running on demo/seed data (badged SEED, e.g. Event Radar)
@@ -71,6 +86,8 @@ export interface AIEmployee {
   runKey?: string;
   /** The connections.ts health key for this employee's data source, when it has one. */
   healthKey?: string;
+  /** The canonical operating blade this employee lives inside (additive — drives the per-blade strip). */
+  blade?: BladeKey;
 }
 
 // ── A human manager (real roster, no fabricated people) ───────────────────────
@@ -175,6 +192,24 @@ export function authoritySplit(toolbox: Tool[]): { can: Tool[]; requiresApproval
  *  notes no P0-P3 literal exists in code — this is a label mapping, not new severity logic). PURE. */
 export function priorityLabel(priority: "critical" | "high" | "medium" | "info"): "P0" | "P1" | "P2" | "P3" {
   return priority === "critical" ? "P0" : priority === "high" ? "P1" : priority === "medium" ? "P2" : "P3";
+}
+
+/** Pick the ONE highest-signal metric for a compact per-blade strip. Prefers a critical/attention-toned
+ *  number over a neutral one, tie-breaking by declaration order. Returns null when there is no metric
+ *  (a "coming" employee always yields null, since its metrics are empty). PURE. */
+const TONE_RANK: Record<string, number> = { critical: 3, attention: 2, positive: 1, default: 0 };
+export function pickKeySignal(metrics: AiMetric[]): AiMetric | null {
+  if (metrics.length === 0) return null;
+  let best = metrics[0];
+  let bestRank = TONE_RANK[best.tone ?? "default"] ?? 0;
+  for (let i = 1; i < metrics.length; i++) {
+    const r = TONE_RANK[metrics[i].tone ?? "default"] ?? 0;
+    if (r > bestRank) {
+      best = metrics[i];
+      bestRank = r;
+    }
+  }
+  return best;
 }
 
 /** Roll employee views up into per-human manager cards. PURE given the per-human approval/exception/

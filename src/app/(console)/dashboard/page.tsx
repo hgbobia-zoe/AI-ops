@@ -15,6 +15,7 @@ import { formatYmdLong } from "@/lib/dates";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 import type { Priority } from "@/lib/ops/manager";
+import { BladeAgents } from "@/components/aiorg/BladeAgents";
 
 export const dynamic = "force-dynamic";
 
@@ -123,6 +124,8 @@ export default async function DashboardPage({
           <CircleDot className="size-3" /> {s.label}
         </span>
       </header>
+
+      <BladeAgents blade="command" className="mb-5" />
 
       {/* Focus filter — flat tabs */}
       <div className="mb-5 flex flex-wrap gap-5 border-b border-border pb-2">

@@ -24,6 +24,7 @@ import { crewForRoute } from "@/lib/crewRules";
 import { todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
 import type { Route } from "@/lib/types";
 import { FigureStrip, type Figure } from "@/components/console-primitives";
+import { BladeAgents } from "@/components/aiorg/BladeAgents";
 
 export const dynamic = "force-dynamic";
 
@@ -80,6 +81,8 @@ export default async function StaffingPage({
           <DateNav date={date} today={today} />
         </div>
       </header>
+
+      <BladeAgents blade="staffing" className="mb-5" />
 
       {!configured && <p className="mb-6 text-[12.5px] text-attention">Connecteam isn&apos;t connected — no crew data to show.</p>}
 
