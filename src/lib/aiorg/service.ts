@@ -38,6 +38,7 @@ import { getShiftsForDate } from "@/lib/scheduling/store";
 import { shiftGap } from "@/lib/scheduling/types";
 import { recentSalesActivity } from "@/lib/salesos/audit";
 import { runtimeStatus, type JobStatus } from "@/lib/runtime/jobs";
+import { countPendingByAgent } from "./approvals";
 
 // ── Public shapes ─────────────────────────────────────────────────────────────
 export interface ActivityEntry {
@@ -204,14 +205,15 @@ export async function aiOrg(opts: { showMoney?: boolean } = {}): Promise<AiOrgOv
     source: i.source,
   }));
 
-  // Per-human card counts — DISPLAY only in v1 (no per-owner Slack routing yet). openApprovals stays 0
-  // until the Approvals surface is wired (v2); openExceptions = this human's employees currently needing
-  // attention; aiActivityToday = today's attributed sales activity (Jessie's domain), 0 elsewhere.
+  // Per-human card counts. openApprovals (v2) = real pending ai_approvals summed over this human's
+  // employees; openExceptions = this human's employees currently needing attention; aiActivityToday =
+  // today's attributed sales activity (Jessie's domain), 0 elsewhere.
+  const pendingByAgent = safeSync(() => countPendingByAgent(), {}) ?? {};
   const perHuman: Record<string, { openApprovals: number; openExceptions: number; aiActivityToday: number }> = {};
   for (const h of HUMANS) {
     const mine = employees.filter((v) => v.owner === h.name);
     perHuman[h.name] = {
-      openApprovals: 0,
+      openApprovals: mine.reduce((n, v) => n + (pendingByAgent[v.id] ?? 0), 0),
       openExceptions: mine.filter((v) => v.state === "attention").length,
       aiActivityToday: h.name === "Jessie" ? todaysActivity : 0,
     };

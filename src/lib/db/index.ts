@@ -143,6 +143,40 @@ CREATE TABLE IF NOT EXISTS gs_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_gs_outbox_status ON gs_outbox(status, created_at);
 
+-- AI Org v2 — Approvals over the outbox. One row per AI-prepared action awaiting a human OK. An AI
+-- employee PROPOSES (from a real, already-computed draft/signal); this row carries the six-field
+-- approval card (what/why/data_used/expected_outcome/risk/what_if_approved) built DETERMINISTICALLY
+-- from the real facts. A human (owner/admin) APPROVE / REJECT / EDIT / REQUEST MORE INFO. On approve,
+-- execution routes to the EXISTING path only (a gs_outbox op), respecting the send gates; forbidden
+-- action types (money/pricing/schedule/hiring/instawork) record intent only and never execute. Status:
+-- pending | approved | rejected | edited | info_requested | executed | failed. outbox_op_id links to
+-- the gs_outbox row once enqueued. idempotency_key makes proposing the same action twice a no-op, and
+-- the status guard + the stored outbox_op_id make approving twice never double-execute.
+CREATE TABLE IF NOT EXISTS ai_approvals (
+  id                 TEXT PRIMARY KEY,
+  agent_id           TEXT NOT NULL,       -- AI employee id (registry)
+  owner              TEXT,                -- human owner (manager) for per-human counts
+  title              TEXT NOT NULL,       -- short headline
+  action_type        TEXT NOT NULL,       -- send_email | send_sms | append_note | create_gs_task | modify_quote | ...
+  action_payload     TEXT,                -- JSON describing the concrete action (editable before approve)
+  card_what          TEXT,                -- the six-field card: WHAT the AI wants to do
+  card_why           TEXT,                -- WHY (from the real signal)
+  card_data_used     TEXT,                -- DATA USED (traceable refs)
+  card_expected      TEXT,                -- EXPECTED OUTCOME
+  card_risk          TEXT,                -- RISK
+  card_what_if       TEXT,                -- WHAT HAPPENS IF APPROVED
+  financial          INTEGER DEFAULT 0,   -- 1 = dollar-bearing card ($-redacted for non-financial roles)
+  status             TEXT NOT NULL,       -- pending | approved | rejected | edited | info_requested | executed | failed
+  created_at         TEXT NOT NULL,
+  decided_by         TEXT,                -- actor who decided
+  decided_at         TEXT,
+  decision_note      TEXT,                -- reject reason / more-info note / honest execution note
+  outbox_op_id       TEXT,                -- gs_outbox id once enqueued (null = not executed)
+  idempotency_key    TEXT UNIQUE          -- proposing the same action twice is a no-op
+);
+CREATE INDEX IF NOT EXISTS idx_ai_approvals_status ON ai_approvals(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_approvals_agent ON ai_approvals(agent_id, status);
+
 -- Event Risk Engine (MVP2). Persisted risks with a stable signature so re-scans update in
 -- place (never duplicate); lifecycle OPEN→ACKNOWLEDGED→IN_PROGRESS→RESOLVED/DISMISSED.
 CREATE TABLE IF NOT EXISTS risk_items (
