@@ -361,11 +361,18 @@ export function syncInstaworkAssignments(
   gig: { gigId: string | null; workers: string[] },
   actor: string = "system",
   now: Date = new Date(),
-): { created: number; removed: number } {
+  startMs: number | null = null,
+): { created: number; removed: number; noShows: number } {
   const db = getDb();
   let created = 0;
   let removed = 0;
+  let noShows = 0;
   const want = new Set(gig.workers);
+  // A worker who leaves the booked set AFTER the shift start is a probable NO-SHOW (same signal the
+  // Instawork monitor uses); before start, it is a drop (REPLACED). Never fabricated — only on a worker
+  // the fresh snapshot actually lost.
+  const afterStart = startMs != null && now.getTime() >= startMs;
+  const goneState: AssignmentState = afterStart ? "NO_SHOW" : "REPLACED";
   const tx = db.transaction(() => {
     const existing = getAssignmentsForShift(shift.id).filter((a) => a.workerKind === "instawork");
     const byName = new Map<string, ShiftAssignment>();
@@ -373,9 +380,10 @@ export function syncInstaworkAssignments(
 
     for (const a of existing) {
       if (a.instaworkWorker == null || want.has(a.instaworkWorker) || !isLiveAssignment(a.state)) continue;
-      updateAssignment(a.id, { state: "REPLACED" });
+      updateAssignment(a.id, { state: goneState, noShow: goneState === "NO_SHOW" });
       removed += 1;
-      logShiftEvent({ shiftId: shift.id, assignmentId: a.id, actor, kind: "reassigned", field: "state", fromValue: a.state, toValue: "REPLACED", changeKey: `${a.id}:iw_dropped:${now.toISOString()}` }, now);
+      if (goneState === "NO_SHOW") noShows += 1;
+      logShiftEvent({ shiftId: shift.id, assignmentId: a.id, actor, kind: "reassigned", field: "state", fromValue: a.state, toValue: goneState, changeKey: `${a.id}:iw_${goneState.toLowerCase()}:${now.toISOString()}` }, now);
     }
 
     for (const name of gig.workers) {
@@ -390,7 +398,7 @@ export function syncInstaworkAssignments(
     }
   });
   tx();
-  return { created, removed };
+  return { created, removed, noShows };
 }
 
 /**

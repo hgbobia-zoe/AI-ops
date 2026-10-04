@@ -15,7 +15,7 @@ export interface ShiftException {
   signature: string; // stable identity for idempotent persistence (same discipline as risk_items)
   shiftId: string;
   routeId: string | null;
-  code: "understaffed" | "no_truck" | "no_window" | "not_published" | "supervisor_missing" | "packet_undelivered" | "unconfirmed";
+  code: "understaffed" | "no_truck" | "no_window" | "not_published" | "supervisor_missing" | "packet_undelivered" | "unconfirmed" | "replacement_needed";
   severity: ExceptionSeverity;
   title: string;
   detail: string;
@@ -83,6 +83,16 @@ export function scanShiftExceptions(input: ScanInput): ShiftException[] {
     // #10 Supervisor missing on a multi-person shift — YELLOW.
     if (s.headcount > 1 && s.supervisorUserId == null) {
       out.push(ex(s, "supervisor_missing", "YELLOW", "No supervisor", "Multi-person shift has no lead assigned", "Assign lead"));
+    }
+
+    // #7/#11 Replacement needed — a worker who WAS on this shift is a no-show (deterministic no_show flag
+    // or NO_SHOW state), which reopens the seat. Fire regardless of the comms loop (a no-show is a hard
+    // fact, not a comms step). Priority to fill: other qualified internal first, then Instawork. The
+    // runtime enriches the detail with the est. additional temp cost. RED near/after start.
+    const allAssignments = input.assignmentsByShift?.get(s.id);
+    if (allAssignments && allAssignments.some((a) => a.noShow || a.state === "NO_SHOW")) {
+      const red = startMs == null || startMs - now < 2 * HOUR_MS;
+      out.push(ex(s, "replacement_needed", red ? "RED" : "YELLOW", "Replacement needed", "A worker is a no-show. Fill from other internal first, then Instawork.", "Reassign or post gig"));
     }
 
     // Assignment-grained checks (only when assignments are provided AND the comms loop is live).

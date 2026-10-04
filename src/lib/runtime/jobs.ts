@@ -16,6 +16,7 @@ import { slackNotify } from "@/lib/notify/slack";
 import { discover } from "@/lib/seo/discovery";
 import { configured as ubersuggestConfigured } from "@/lib/seo/ubersuggest";
 import { connecteamConfigured, refreshConnecteamHealth } from "@/lib/connecteam";
+import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
 import { logImport, getLatestImportBySource, recordInstaworkProbe, type ImportRow } from "@/lib/pull/state";
 
 export type RuntimeBucket = "server" | "browser";
@@ -80,6 +81,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     run: async () => {
       const h = await refreshConnecteamHealth();
       return { ok: h.ok, detail: h.detail };
+    },
+  },
+  {
+    key: "shift-lifecycle",
+    label: "Shift lifecycle + exceptions",
+    bucket: "server",
+    configured: () => true, // app-owned (reads whatever integrations are configured; safe when none are)
+    note: "Recomputes shift readiness, advances lifecycle states, mirrors Connecteam timesheets (read-only), reconciles Instawork fills, and persists the exception queue. No sends, no external writes.",
+    run: async () => {
+      const r = await runShiftLifecycleTick();
+      return { ok: r.ok, detail: r.detail };
     },
   },
   {

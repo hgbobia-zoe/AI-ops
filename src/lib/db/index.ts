@@ -629,6 +629,28 @@ CREATE TABLE IF NOT EXISTS shift_assignment_events (
 );
 CREATE INDEX IF NOT EXISTS idx_shift_assignment_events_shift ON shift_assignment_events(shift_id, ts DESC);
 
+-- Persisted shift EXCEPTION queue (the runtime tick reconciles scanShiftExceptions into this by STABLE
+-- signature, same discipline as risk_items: existing updated in place, newly-gone RESOLVED, a resolved
+-- one that returns REGRESSED). ONLY ACTIONABLE rows; an UNVERIFIED integration is never persisted as an
+-- exception (UNKNOWN, not a fabricated alert). detail carries the human text (incl. est. replacement cost).
+CREATE TABLE IF NOT EXISTS shift_exceptions (
+  id                TEXT PRIMARY KEY,   -- "SX-"+uuid
+  signature         TEXT NOT NULL UNIQUE, -- stable identity (shiftId:code) for idempotent reconcile
+  shift_id          TEXT NOT NULL,
+  route_id          TEXT,
+  date              TEXT,               -- the shift's date (so reconcile only touches scanned dates)
+  code              TEXT NOT NULL,      -- understaffed | no_truck | no_window | not_published | supervisor_missing | packet_undelivered | unconfirmed | replacement_needed
+  severity          TEXT NOT NULL,      -- RED | YELLOW
+  status            TEXT NOT NULL,      -- OPEN | ACKNOWLEDGED | RESOLVED
+  title             TEXT NOT NULL,
+  detail            TEXT NOT NULL,
+  fix_label         TEXT NOT NULL,
+  first_detected_at TEXT NOT NULL,
+  last_seen_at      TEXT NOT NULL,
+  resolved_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_shift_exceptions_status ON shift_exceptions(status, date);
+
 -- ── Event Radar (early-demand intelligence) ──────────────────────────────────────────────────────
 -- Event Radar detects FUTURE events in the DMV that could create rental demand, well before the
 -- planner is shopping vendors, and hands qualified opportunities to Sales OS. Design law:
