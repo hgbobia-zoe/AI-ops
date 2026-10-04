@@ -13,10 +13,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Plus, Truck as TruckIcon, UserPlus, Users, ArrowRight, Wand2, MapPin } from "lucide-react";
+import { Loader2, RefreshCw, Plus, Truck as TruckIcon, UserPlus, Users, ArrowRight, Wand2, MapPin, SlidersHorizontal } from "lucide-react";
 import { SidePanelOverlay } from "@/components/SidePanelOverlay";
 import { ShiftEditor } from "@/components/scheduling/ShiftEditor";
 import { AddWorkerPanel } from "@/components/scheduling/AddWorkerPanel";
+import { OverridePanel } from "@/components/scheduling/OverridePanel";
 import type { CrewMember } from "@/lib/connecteam";
 import { formatClockTime } from "@/lib/dates";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
@@ -24,6 +25,7 @@ import type { ShiftCoverage } from "@/lib/scheduling/coverage";
 import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import type { PlannedAssignment } from "@/lib/scheduling/optimize";
 import type { ShiftReadinessLevel } from "@/lib/scheduling/readiness";
+import type { MoveEligibility, MoveFit } from "@/lib/scheduling/planView";
 import type { InstaworkRoleSummary } from "@/lib/instawork/reconcile";
 
 const BTN =
@@ -99,6 +101,7 @@ export function RouteStaffBoard({
   prepNeed,
   routeFieldNeed,
   proposedByRoute,
+  moveEligibilityByPerson,
   instawork,
   iwConfigured,
   hasRoutes,
@@ -116,6 +119,7 @@ export function RouteStaffBoard({
   prepNeed: number;
   routeFieldNeed: Record<string, number>;
   proposedByRoute: Record<string, PlannedAssignment[]>;
+  moveEligibilityByPerson: Record<number, Record<string, MoveEligibility>>;
   instawork: Record<ShiftRole, InstaworkRoleSummary> | null;
   iwConfigured: boolean;
   hasRoutes: boolean;
@@ -125,6 +129,7 @@ export function RouteStaffBoard({
   const [note, setNote] = useState<string | null>(null);
   const [editing, setEditing] = useState<StaffShift | "new" | null>(null);
   const [adding, setAdding] = useState<RouteCardData | null>(null);
+  const [overriding, setOverriding] = useState<RouteCardData | null>(null);
 
   const nameOf = (userId: number): CrewMember | undefined => roster.find((m) => m.userId === userId);
 
@@ -196,6 +201,7 @@ export function RouteStaffBoard({
                   iwConfigured={iwConfigured}
                   onEdit={(s) => setEditing(s)}
                   onAdd={() => setAdding(rc)}
+                  onOverride={() => setOverriding(rc)}
                 />
               ))}
             </section>
@@ -210,6 +216,7 @@ export function RouteStaffBoard({
               prepNeed={prepNeed}
               routes={routeCards}
               routeFieldNeed={routeFieldNeed}
+              moveEligibilityByPerson={moveEligibilityByPerson}
               shifts={shifts}
             />
           )}
@@ -258,6 +265,20 @@ export function RouteStaffBoard({
           />
         </SidePanelOverlay>
       )}
+
+      {overriding !== null && (
+        <SidePanelOverlay onClose={() => setOverriding(null)}>
+          <OverridePanel
+            date={date}
+            card={overriding}
+            shifts={shifts.filter((s) => s.routeId === overriding.routeId)}
+            roster={roster}
+            recsByRole={routeRecs[overriding.routeId] ?? {}}
+            routeOptions={routeCards.filter((r) => r.routeId !== overriding.routeId)}
+            onClose={() => setOverriding(null)}
+          />
+        </SidePanelOverlay>
+      )}
     </>
   );
 }
@@ -268,12 +289,19 @@ export function RouteStaffBoard({
 // them to that route's field shift (creating it if needed). The moved person then renders on the route
 // card and drops out of this list, so pulling someone off warehouse shows as a prep shortfall here — the
 // honest tradeoff, surfaced rather than hidden.
+const FIT_TONE: Record<MoveFit, string> = {
+  "good-fit": "text-positive",
+  "exceeds-availability": "text-attention",
+  "qualification-mismatch": "text-meta",
+};
+
 function WarehousePrepSection({
   date,
   prepCrew,
   prepNeed,
   routes,
   routeFieldNeed,
+  moveEligibilityByPerson,
   shifts,
 }: {
   date: string;
@@ -281,6 +309,7 @@ function WarehousePrepSection({
   prepNeed: number;
   routes: RouteCardData[];
   routeFieldNeed: Record<string, number>;
+  moveEligibilityByPerson: Record<number, Record<string, MoveEligibility>>;
   shifts: StaffShift[];
 }): React.JSX.Element {
   const router = useRouter();
@@ -379,16 +408,20 @@ function WarehousePrepSection({
                 <div className="flex flex-wrap gap-1.5">
                   {routeOptions.map((r) => {
                     const need = routeFieldNeed[r.routeId] ?? 0;
+                    const elig = moveEligibilityByPerson[p.userId]?.[r.routeId];
+                    const ok = !elig || elig.fit === "good-fit";
                     return (
                       <button
                         key={r.routeId}
                         type="button"
-                        disabled={working !== null}
+                        disabled={working !== null || !ok}
+                        title={elig ? elig.label : undefined}
                         onClick={() => moveToRoute(p, r)}
-                        className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[12px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50"
+                        className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[12px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <TruckIcon className="size-3" /> {r.truckName}
                         {need > 0 && <span className="text-attention">needs {need}</span>}
+                        {elig && <span className={FIT_TONE[elig.fit]}>{elig.label}</span>}
                       </button>
                     );
                   })}
@@ -427,6 +460,7 @@ function RouteCard({
   iwConfigured,
   onEdit,
   onAdd,
+  onOverride,
 }: {
   card: RouteCardData;
   shifts: StaffShift[];
@@ -436,6 +470,7 @@ function RouteCard({
   iwConfigured: boolean;
   onEdit: (s: StaffShift) => void;
   onAdd: () => void;
+  onOverride: () => void;
 }): React.JSX.Element {
   const win = windowLabel(card.startTime, card.endTime, card.windowKnown);
   const deliveries = card.stops.filter((s) => s.kind === "delivery").length;
@@ -516,9 +551,14 @@ function RouteCard({
             )}
           </div>
         </div>
-        <button onClick={onAdd} className={BTN + " shrink-0"}>
-          <UserPlus className="size-3.5" /> Add worker
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button onClick={onAdd} className={BTN}>
+            <UserPlus className="size-3.5" /> Add worker
+          </button>
+          <button onClick={onOverride} className={BTN} title="Override the plan: remove, replace, move or assign a worker (reason required).">
+            <SlidersHorizontal className="size-3.5" /> Override
+          </button>
+        </div>
       </div>
 
       {/* People on the route (one list, not grouped by role) */}

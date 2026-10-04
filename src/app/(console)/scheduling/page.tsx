@@ -24,7 +24,7 @@ import { computeCoverage } from "@/lib/scheduling/coverage";
 import { recommendCrew, type CrewRecommendation } from "@/lib/scheduling/availability";
 import { shiftWindowHours, gigWindowHours, internalRateFor, internalSeat, tempSeat, computeTempExposure, type LaborSeat } from "@/lib/scheduling/cost";
 import { optimizeStaffing, type PlannedAssignment } from "@/lib/scheduling/optimize";
-import { summarizePlan, computeStaffingHealth } from "@/lib/scheduling/planView";
+import { summarizePlan, computeStaffingHealth, moveEligibility, type MoveEligibility } from "@/lib/scheduling/planView";
 import { StaffingPlanPreview } from "@/components/scheduling/StaffingPlanPreview";
 import { computeShiftReadiness } from "@/lib/scheduling/readiness";
 import { scanShiftExceptions } from "@/lib/scheduling/exceptions";
@@ -347,6 +347,29 @@ export default async function SchedulingPage({
     (proposedByRoute[a.routeId] ??= []).push(a);
   }
 
+  // Move-to-route eligibility (prep person x route): the SAME predicates the optimizer uses, so an invalid
+  // move is labelled before it is made. Busy windows come from the person's Connecteam shifts that day.
+  const busyByUser = new Map<number, Array<[number, number]>>();
+  for (const cs of coverage.shifts) {
+    for (const a of cs.assignees) {
+      const l = busyByUser.get(a.userId) ?? [];
+      l.push([cs.startUnix * 1000, cs.endUnix * 1000]);
+      busyByUser.set(a.userId, l);
+    }
+  }
+  const roleOf = (uid: number): CrewMember["role"] => roster.find((m) => m.userId === uid)?.role ?? "other";
+  const moveEligibilityByPerson: Record<number, Record<string, MoveEligibility>> = {};
+  for (const p of prepCrewToday) {
+    const map: Record<string, MoveEligibility> = {};
+    for (const rc of routeCards) {
+      const startMs = rc.startTime ? Date.parse(rc.startTime) : NaN;
+      const endMs = rc.endTime ? Date.parse(rc.endTime) : NaN;
+      const routeWindow = rc.windowKnown && !Number.isNaN(startMs) && !Number.isNaN(endMs) ? { startMs, endMs } : null;
+      map[rc.routeId] = moveEligibility({ workerRole: roleOf(p.userId), targetRole: "field", routeWindow, workerBusyWindows: busyByUser.get(p.userId) ?? [] });
+    }
+    moveEligibilityByPerson[p.userId] = map;
+  }
+
   // Plan summary + day-level staffing health (deterministic rollups over coverage/optimize/cost/readiness).
   const redExceptionCount = shiftExceptions.filter((e) => e.severity === "RED").length;
   const planSummary = summarizePlan({
@@ -447,6 +470,7 @@ export default async function SchedulingPage({
         prepNeed={prepNeed}
         routeFieldNeed={routeFieldNeed}
         proposedByRoute={proposedByRoute}
+        moveEligibilityByPerson={moveEligibilityByPerson}
         instawork={iwByRole}
         iwConfigured={iwOn}
         hasRoutes={routes.length > 0}

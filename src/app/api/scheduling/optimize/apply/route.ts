@@ -126,6 +126,27 @@ export async function POST(req: Request): Promise<NextResponse> {
   });
   tx();
 
+  // Audit the AUTO STAFF run: one day-level event (considered / assigned / routes / temp / saving). The
+  // apply recomputed from live DB state, so any manual override between preview and apply is preserved by
+  // construction. No schema change — the event's to_value already carries JSON blobs elsewhere.
+  logShiftEvent({
+    shiftId: null,
+    actor,
+    kind: "auto_staff_run",
+    field: "plan",
+    toValue: JSON.stringify({
+      date,
+      considered: plan.assignments.length,
+      internalPlaced,
+      tempRecorded,
+      routes: writes.length,
+      tempHoursSaved: plan.tempHoursSaved,
+      tempCountSaved: plan.tempCountSaved,
+      overridesPreserved: true,
+    }),
+    changeKey: `${date}:auto_staff:${Date.now()}`,
+  });
+
   return NextResponse.json({
     ok: true,
     applied: true,
