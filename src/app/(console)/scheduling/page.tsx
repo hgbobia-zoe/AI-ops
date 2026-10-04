@@ -35,6 +35,7 @@ import { ShiftReadinessExceptions, type ReadinessRow } from "@/components/schedu
 import { ROLE_LABEL } from "@/components/scheduling/RouteStaffBoard";
 import {
   getCrewForDateSafe,
+  getCrewForDate,
   getUsersList,
   getPayRates,
   connecteamConfigured,
@@ -43,6 +44,8 @@ import {
   type CrewShift,
   type PayRate,
 } from "@/lib/connecteam";
+import { openShiftsWithSuggestions } from "@/lib/staffing/openShifts";
+import { StaffingRosterSections } from "@/components/scheduling/StaffingRosterSections";
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
 import { summarizeInstaworkByRole, instaworkShiftsForDate, instaworkGigsForRoute } from "@/lib/instawork/reconcile";
 import { todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
@@ -124,6 +127,8 @@ export default async function SchedulingPage({
   const today = todayInOpsTz();
   const date = sp?.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : today;
   const isToday = date === today;
+  const dayBefore = shiftYmd(date, -1);
+  const nextDay = shiftYmd(date, 1);
 
   const trucks = getActiveVehicles();
   const routes = trucks
@@ -137,9 +142,9 @@ export default async function SchedulingPage({
   const commsWired = shiftCommsEnabled();
 
   const configured = connecteamConfigured();
-  const [coverage, roster, rates] = configured
-    ? await Promise.all([getCrewForDateSafe(date), getUsersList(), getPayRates(date, date)])
-    : [{ ok: false, shifts: [] as CrewShift[] }, [] as CrewMember[], new Map<number, PayRate[]>()];
+  const [coverage, roster, rates, crewPrev, crewNext] = configured
+    ? await Promise.all([getCrewForDateSafe(date), getUsersList(), getPayRates(date, date), getCrewForDate(dayBefore), getCrewForDate(nextDay)])
+    : [{ ok: false, shifts: [] as CrewShift[] }, [] as CrewMember[], new Map<number, PayRate[]>(), [] as CrewShift[], [] as CrewShift[]];
 
   // Distinct crew already on the Connecteam schedule this day (dedup by userId).
   const scheduledCrew = dedupCrew(coverage.shifts.flatMap((s) => s.assignees));
@@ -360,6 +365,9 @@ export default async function SchedulingPage({
     readinessLevels: readinessRows.map((r) => r.level),
   });
 
+  // Open (unassigned) Connecteam shifts + who's free to take them (folded in from the former Staffing blade).
+  const openShifts = configured && coverage.ok ? openShiftsWithSuggestions(coverage.shifts, roster) : [];
+
   const money = (n: number | null): string => (n == null ? "n/a" : `$${Math.round(n).toLocaleString()}`);
   const hrs = (n: number | null): string | number => (n == null ? "n/a" : n);
   const pct = (n: number | null): string => (n == null ? "n/a" : `${Math.round(n * 100)}%`);
@@ -442,6 +450,20 @@ export default async function SchedulingPage({
         instawork={iwByRole}
         iwConfigured={iwOn}
         hasRoutes={routes.length > 0}
+      />
+
+      <StaffingRosterSections
+        configured={configured}
+        verified={coverage.ok}
+        openShifts={openShifts}
+        crewD={coverage.shifts}
+        crewPrev={crewPrev}
+        crewNext={crewNext}
+        routes={routes}
+        date={date}
+        dayBefore={dayBefore}
+        nextDay={nextDay}
+        isToday={isToday}
       />
     </main>
   );

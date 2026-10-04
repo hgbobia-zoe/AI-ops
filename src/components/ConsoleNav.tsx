@@ -13,7 +13,7 @@ import { useState } from "react";
 import {
   Menu, X, ChevronRight,
   LayoutGrid, Tag, Building2, Wrench,
-  Gauge, ListChecks, Truck, AlertTriangle, Users, DollarSign,
+  Gauge, ListChecks, Truck, AlertTriangle, DollarSign,
   TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
   RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator, Radar, IdCard,
   Megaphone, Send, Upload, CalendarDays, Star,
@@ -84,7 +84,6 @@ const GROUPS: Group[] = [
       { href: "/ops", label: "Ops Manager", icon: ListChecks },
       { href: "/dispatch", label: "Dispatch", icon: Truck },
       { href: "/risk", label: "Event Risk", icon: AlertTriangle },
-      { href: "/staffing", label: "Staffing", icon: Users },
       { href: "/scheduling", label: "Scheduling", icon: CalendarDays },
       { href: "/admin/passes", label: "Shift Passes", icon: KeyRound, manage: true },
       { href: "/finance", label: "Financial", icon: DollarSign, financial: true },
