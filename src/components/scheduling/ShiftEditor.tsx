@@ -11,7 +11,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, Check, Trash2, X, Send } from "lucide-react";
+import { Loader2, Check, Trash2, X, Send, FileText } from "lucide-react";
 import type { CrewMember } from "@/lib/connecteam";
 import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import { shiftGap, type ShiftRole, type ShiftStatus, type StaffShift } from "@/lib/scheduling/types";
@@ -103,6 +103,35 @@ export function ShiftEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const busy = useMemo(() => new Set(busyUserIds), [busyUserIds]);
+
+  // Packet preview (read-only, send-gated). Previews what each assigned worker would receive; when
+  // SHIFT_COMMS_ENABLED is off the server records the packet only and sends nothing.
+  interface PacketAssignment { assignmentId: string; displayName: string; workerKind: string; version: string; touches: { on_assign: string }; dispatch: { state: string; gated: boolean; reason?: string } }
+  const [packet, setPacket] = useState<{ gated: boolean; assignments: PacketAssignment[] } | null>(null);
+  const [packetLoading, setPacketLoading] = useState(false);
+
+  async function previewPacket(): Promise<void> {
+    if (isNew || !shift) return;
+    setPacketLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/scheduling/shift/${shift.id}/packet`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ touch: "on_assign" }),
+      });
+      const j = (await res.json().catch(() => null)) as { ok?: boolean; gated?: boolean; assignments?: PacketAssignment[]; error?: string } | null;
+      if (!res.ok || !j?.ok) {
+        setError(j?.error === "forbidden" ? "Only an owner or admin can preview packets." : "Couldn't build the packet.");
+        return;
+      }
+      setPacket({ gated: Boolean(j.gated), assignments: j.assignments ?? [] });
+    } catch {
+      setError("Couldn't build the packet.");
+    } finally {
+      setPacketLoading(false);
+    }
+  }
 
   const set = <K extends keyof Draft>(k: K, v: Draft[K]): void => setDraft((d) => ({ ...d, [k]: v }));
 
@@ -409,6 +438,36 @@ export function ShiftEditor({
           </select>
         </label>
 
+        {/* Packet preview (read-only, send-gated) */}
+        {packet && (
+          <div className="mt-4 rounded border border-border bg-[var(--row-hover)]/40 p-3">
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className={LABEL}>Shift packet preview</span>
+              <span className={`text-[11px] ${packet.gated ? "text-attention" : "text-positive"}`}>
+                {packet.gated ? "Preview only (sending is off)" : "Sending is on"}
+              </span>
+            </div>
+            {packet.assignments.length === 0 ? (
+              <p className="text-[12px] text-meta">No assigned workers yet. Assign crew, then preview.</p>
+            ) : (
+              <div className="space-y-2.5">
+                {packet.assignments.map((pa) => (
+                  <div key={pa.assignmentId} className="rounded border border-[var(--row-rule)] p-2">
+                    <div className="mb-1 flex items-center justify-between text-[11.5px]">
+                      <span className="font-medium text-foreground">{pa.displayName}</span>
+                      <span className="text-meta">
+                        {pa.workerKind} · {pa.dispatch.state}
+                        {pa.dispatch.reason ? ` (${pa.dispatch.reason})` : ""}
+                      </span>
+                    </div>
+                    <pre className="whitespace-pre-wrap break-words text-[11.5px] text-tertiary-text">{pa.touches.on_assign}</pre>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {error && <p className="mt-3 text-[12.5px] text-critical">{error}</p>}
       </div>
 
@@ -425,6 +484,11 @@ export function ShiftEditor({
             {saving ? <Loader2 className="size-3.5 animate-spin" /> : alreadyPublished ? <Check className="size-3.5" /> : <Send className="size-3.5" />}
             {alreadyPublished ? "Update on Connecteam" : "Publish to Connecteam"}
           </button>
+          {!isNew && (
+            <button onClick={previewPacket} disabled={packetLoading} title="Preview the shift packet each worker would receive (sending is off by default)." className={BTN}>
+              {packetLoading ? <Loader2 className="size-3.5 animate-spin" /> : <FileText className="size-3.5" />} Preview packet
+            </button>
+          )}
           {!isNew && (
             <button onClick={remove} disabled={saving} className={BTN + " ml-auto text-critical hover:text-critical"}>
               <Trash2 className="size-3.5" /> Delete

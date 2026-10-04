@@ -72,6 +72,11 @@ function toAssignment(r: Row): ShiftAssignment {
   };
 }
 
+export function getAssignmentById(id: string): ShiftAssignment | null {
+  const r = getDb().prepare("SELECT * FROM shift_assignments WHERE id = ?").get(id) as Row | undefined;
+  return r ? toAssignment(r) : null;
+}
+
 export function getAssignmentsForShift(shiftId: string): ShiftAssignment[] {
   const rows = getDb()
     .prepare("SELECT * FROM shift_assignments WHERE shift_id = ? ORDER BY worker_kind, display_name")
