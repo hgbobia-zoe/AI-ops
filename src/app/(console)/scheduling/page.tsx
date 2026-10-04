@@ -23,6 +23,8 @@ import { getShiftsForDate } from "@/lib/scheduling/store";
 import { computeCoverage } from "@/lib/scheduling/coverage";
 import { recommendCrew, type CrewRecommendation } from "@/lib/scheduling/availability";
 import { shiftWindowHours, gigWindowHours, internalRateFor, internalSeat, tempSeat, computeTempExposure, type LaborSeat } from "@/lib/scheduling/cost";
+import { optimizeStaffing } from "@/lib/scheduling/optimize";
+import { StaffingPlanPreview } from "@/components/scheduling/StaffingPlanPreview";
 import {
   getCrewForDateSafe,
   getUsersList,
@@ -245,6 +247,22 @@ export default async function SchedulingPage({
     for (let i = 0; i < gig.filled; i++) laborSeats.push(tempSeat(h, gig.basePrice));
   }
   const economics = computeTempExposure(laborSeats);
+
+  // ── Optimizer PREVIEW (read-only) — the deterministic internal-first plan + the temp it would avoid.
+  const staffingPlan = optimizeStaffing({
+    date,
+    shifts,
+    coverage: cov,
+    roster,
+    dayShifts: coverage.shifts,
+    rates,
+    instawork: { ok: Boolean(iw?.ok), gigs: iw?.ok ? iw.shifts : [] },
+  });
+  const routeLabelFor = (routeId: string | null): string => {
+    if (!routeId) return "Other";
+    const r = routes.find((x) => x.routeId === routeId);
+    return r ? truckName(r.truckId) : routeId;
+  };
   const money = (n: number | null): string => (n == null ? "n/a" : `$${Math.round(n).toLocaleString()}`);
   const hrs = (n: number | null): string | number => (n == null ? "n/a" : n);
   const pct = (n: number | null): string => (n == null ? "n/a" : `${Math.round(n * 100)}%`);
@@ -303,6 +321,8 @@ export default async function SchedulingPage({
           `Instawork today: ${iwDayShifts.reduce((n, s) => n + s.filled, 0)} booked, ${iwDayShifts.reduce((n, s) => n + Math.max(0, s.total - s.filled), 0)} pending across ${iwDayShifts.length} gig${iwDayShifts.length === 1 ? "" : "s"}.`
         )}
       </p>
+
+      <StaffingPlanPreview plan={staffingPlan} routeLabel={routeLabelFor} />
 
       <RouteStaffBoard
         date={date}
