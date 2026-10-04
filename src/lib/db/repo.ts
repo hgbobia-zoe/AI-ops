@@ -1294,66 +1294,432 @@ export function getDataCounts(): { bookings: number; routes: number } {
 
 // ── Direct cost entries + event-level economics ──────────────────────────────
 
-/** Upsert cost entries, idempotent by source_ref (a re-scan re-derives the same driver-labor rows). */
+/** Upsert cost entries, idempotent by source_ref (a re-scan re-derives the same labor rows). Carries
+ *  the FI-Phase 1 attribution fields (bucket/method/confidence/worker) when present. */
 export function saveCostEntries(items: import("@/lib/finance/allocation").CostEntryInput[]): void {
   const db = getDb();
   const now = new Date().toISOString();
   const up = db.prepare(
-    `INSERT INTO cost_entries (id, type, class, event_id, route_id, day, amount, amount_status, hours, rate, source, source_ref, note, captured_at)
-     VALUES (@id,@type,@klass,@eventId,@routeId,@day,@amount,@amountStatus,@hours,@rate,@source,@sourceRef,@note,@now)
-     ON CONFLICT(source_ref) DO UPDATE SET amount=@amount, amount_status=@amountStatus, hours=@hours, rate=@rate, note=@note, captured_at=@now`,
+    `INSERT INTO cost_entries (id, type, class, event_id, route_id, day, amount, amount_status, hours, rate, source, source_ref, note, worker_kind, worker_ref, shift_id, bucket, method, confidence, captured_at)
+     VALUES (@id,@type,@klass,@eventId,@routeId,@day,@amount,@amountStatus,@hours,@rate,@source,@sourceRef,@note,@workerKind,@workerRef,@shiftId,@bucket,@method,@confidence,@now)
+     ON CONFLICT(source_ref) DO UPDATE SET amount=@amount, amount_status=@amountStatus, hours=@hours, rate=@rate, note=@note,
+       event_id=@eventId, route_id=@routeId, worker_kind=@workerKind, worker_ref=@workerRef, shift_id=@shiftId, bucket=@bucket, method=@method, confidence=@confidence, captured_at=@now`,
   );
   const tx = db.transaction(() => {
-    for (const i of items)
-      up.run({
-        id: `CE-${randomUUID()}`,
-        type: i.type,
-        klass: i.class,
-        eventId: i.eventId ?? null,
-        routeId: i.routeId ?? null,
-        day: i.day ?? null,
-        amount: i.amount,
-        amountStatus: i.amountStatus,
-        hours: i.hours ?? null,
-        rate: i.rate ?? null,
-        source: i.source,
-        sourceRef: i.sourceRef,
-        note: i.note ?? null,
-        now,
-      });
+    for (const i of items) up.run(costEntryParams(i, now));
+  });
+  tx();
+}
+
+function costEntryParams(i: import("@/lib/finance/allocation").CostEntryInput, now: string): Record<string, unknown> {
+  return {
+    id: `CE-${randomUUID()}`,
+    type: i.type,
+    klass: i.class,
+    eventId: i.eventId ?? null,
+    routeId: i.routeId ?? null,
+    day: i.day ?? null,
+    amount: i.amount,
+    amountStatus: i.amountStatus,
+    hours: i.hours ?? null,
+    rate: i.rate ?? null,
+    source: i.source,
+    sourceRef: i.sourceRef,
+    note: i.note ?? null,
+    workerKind: i.workerKind ?? null,
+    workerRef: i.workerRef ?? null,
+    shiftId: i.shiftId ?? null,
+    bucket: i.bucket ?? null,
+    method: i.method ?? null,
+    confidence: i.confidence ?? null,
+    now,
+  };
+}
+
+/** Clean-rewrite the DERIVED labor ledger for a set of days: delete the auto-derived labor leaves for
+ *  those days (including legacy `driver-labor:*` rows from the old allocator), then insert the freshly
+ *  computed leaves. This keeps the ledger a faithful partition of each day's shift costs — a route that
+ *  loses a stop between scans drops its stale leaf instead of lingering. Manual/non-labor rows untouched. */
+export function saveDerivedLabor(days: string[], items: import("@/lib/finance/allocation").CostEntryInput[]): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const del = db.prepare(
+    `DELETE FROM cost_entries WHERE type='labor' AND source IN ('connecteam','instawork','derived')
+       AND day = ? AND (source_ref LIKE 'labor:%' OR source_ref LIKE 'driver-labor:%')`,
+  );
+  const up = db.prepare(
+    `INSERT INTO cost_entries (id, type, class, event_id, route_id, day, amount, amount_status, hours, rate, source, source_ref, note, worker_kind, worker_ref, shift_id, bucket, method, confidence, captured_at)
+     VALUES (@id,@type,@klass,@eventId,@routeId,@day,@amount,@amountStatus,@hours,@rate,@source,@sourceRef,@note,@workerKind,@workerRef,@shiftId,@bucket,@method,@confidence,@now)
+     ON CONFLICT(source_ref) DO UPDATE SET amount=@amount, amount_status=@amountStatus, hours=@hours, rate=@rate, note=@note,
+       event_id=@eventId, route_id=@routeId, worker_kind=@workerKind, worker_ref=@workerRef, shift_id=@shiftId, bucket=@bucket, method=@method, confidence=@confidence, captured_at=@now`,
+  );
+  const tx = db.transaction(() => {
+    for (const d of new Set(days)) del.run(d);
+    for (const i of items) up.run(costEntryParams(i, now));
   });
   tx();
 }
 
 export interface EventCost {
-  labor: number | null; // ACTUAL direct labor ($), or null when unknown
-  laborStatus: "ACTUAL" | "UNAVAILABLE" | "NONE";
+  labor: number | null; // customer-bucket direct labor ($), ACTUAL or ESTIMATED; null when unknown
+  laborStatus: "ACTUAL" | "ESTIMATED" | "UNAVAILABLE" | "NONE";
+  internal: number | null; // internal (Connecteam) share
+  temp: number | null; // temp (Instawork) share
+  /** The best (most honest) attribution method across this event's leaves, for the UI badge. */
+  method: "ACTUAL_STOP" | "DERIVED_STOP" | "PLANNED" | "ESTIMATED" | "UNALLOCATED" | null;
+  confidence: "HIGH" | "MEDIUM" | "LOW" | null;
 }
 
-/** Per-event direct cost (labor only, today). ACTUAL when resolved; UNAVAILABLE when labor was
- *  expected but a rate/shift was missing; NONE when no cost data exists for the event. */
+const METHOD_RANK: Record<string, number> = { ACTUAL_STOP: 5, DERIVED_STOP: 4, PLANNED: 3, ESTIMATED: 2, UNALLOCATED: 1 };
+
+/** Per-event direct cost (customer-bucket labor). ACTUAL only when a leaf is a real on-stop clock with a
+ *  real rate; otherwise ESTIMATED (planned/derived split) — never shown as ACTUAL. UNAVAILABLE when labor
+ *  was expected but a rate/shift was missing; NONE when no labor is attributed to the event. Also returns
+ *  the internal/temp split + the best attribution method, for the Projects view + lineage. */
 export function getEventDirectCosts(ids: string[]): Map<string, EventCost> {
   const out = new Map<string, EventCost>();
   if (ids.length === 0) return out;
   const ph = ids.map(() => "?").join(",");
   const rows = getDb()
-    .prepare(`SELECT event_id, amount, amount_status FROM cost_entries WHERE class='DIRECT' AND event_id IN (${ph})`)
-    .all(...ids) as { event_id: string; amount: number | null; amount_status: string }[];
-  const agg = new Map<string, { sum: number; anyActual: boolean; anyUnavail: boolean }>();
+    .prepare(
+      `SELECT event_id, amount, amount_status, worker_kind, method, confidence FROM cost_entries
+       WHERE class='DIRECT' AND type='labor' AND event_id IN (${ph})
+         AND (bucket='customer' OR bucket IS NULL)`,
+    )
+    .all(...ids) as { event_id: string; amount: number | null; amount_status: string; worker_kind: string | null; method: string | null; confidence: string | null }[];
+  interface Agg {
+    actual: number;
+    estimated: number;
+    internal: number;
+    temp: number;
+    anyActual: boolean;
+    anyEstimated: boolean;
+    anyUnavail: boolean;
+    method: string | null;
+    confidence: string | null;
+  }
+  const agg = new Map<string, Agg>();
   for (const r of rows) {
-    const a = agg.get(r.event_id) ?? { sum: 0, anyActual: false, anyUnavail: false };
-    if (r.amount_status === "ACTUAL" && r.amount != null) {
-      a.sum += r.amount;
-      a.anyActual = true;
+    const a: Agg = agg.get(r.event_id) ?? { actual: 0, estimated: 0, internal: 0, temp: 0, anyActual: false, anyEstimated: false, anyUnavail: false, method: null, confidence: null };
+    if (r.amount != null && (r.amount_status === "ACTUAL" || r.amount_status === "ESTIMATED")) {
+      if (r.amount_status === "ACTUAL") {
+        a.actual += r.amount;
+        a.anyActual = true;
+      } else {
+        a.estimated += r.amount;
+        a.anyEstimated = true;
+      }
+      if (r.worker_kind === "instawork") a.temp += r.amount;
+      else a.internal += r.amount;
     } else if (r.amount_status === "UNAVAILABLE") {
       a.anyUnavail = true;
     }
+    if (r.method && (a.method == null || (METHOD_RANK[r.method] ?? 0) < (METHOD_RANK[a.method] ?? 0))) {
+      // Keep the WORST (most honest) method across the event's leaves — don't overclaim confidence.
+      a.method = r.method;
+      a.confidence = r.confidence;
+    }
     agg.set(r.event_id, a);
   }
-  for (const [id, a] of agg)
-    out.set(id, a.anyActual ? { labor: Math.round(a.sum * 100) / 100, laborStatus: "ACTUAL" } : a.anyUnavail ? { labor: null, laborStatus: "UNAVAILABLE" } : { labor: null, laborStatus: "NONE" });
-  for (const id of ids) if (!out.has(id)) out.set(id, { labor: null, laborStatus: "NONE" });
+  const money = (n: number): number => Math.round(n * 100) / 100;
+  for (const [id, a] of agg) {
+    const total = money(a.actual + a.estimated);
+    const hasLabor = a.anyActual || a.anyEstimated;
+    out.set(id, {
+      labor: hasLabor ? total : null,
+      laborStatus: a.anyEstimated ? "ESTIMATED" : a.anyActual ? "ACTUAL" : a.anyUnavail ? "UNAVAILABLE" : "NONE",
+      internal: hasLabor ? money(a.internal) : null,
+      temp: hasLabor ? money(a.temp) : null,
+      method: (a.method as EventCost["method"]) ?? null,
+      confidence: (a.confidence as EventCost["confidence"]) ?? null,
+    });
+  }
+  for (const id of ids) if (!out.has(id)) out.set(id, { labor: null, laborStatus: "NONE", internal: null, temp: null, method: null, confidence: null });
   return out;
+}
+
+// ── Labor-ledger aggregations (FI-Phase 2–5) — different GROUP BYs of the SAME cost_entries leaves, so
+//    the three reporting dimensions (week / operational cycle / project) reconcile to each other. These
+//    read the REALIZED/attributed labor (ACTUAL or ESTIMATED); the planned scorecard stays in service.ts.
+
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+interface LaborLeafRow {
+  day: string | null;
+  route_id: string | null;
+  event_id: string | null;
+  amount: number | null;
+  amount_status: string;
+  hours: number | null;
+  rate: number | null;
+  worker_kind: string | null;
+  worker_ref: string | null;
+  shift_id: string | null;
+  bucket: string | null;
+  method: string | null;
+  confidence: string | null;
+  note: string | null;
+}
+
+function laborLeavesInRange(start: string, end: string): LaborLeafRow[] {
+  return getDb()
+    .prepare(
+      `SELECT day, route_id, event_id, amount, amount_status, hours, rate, worker_kind, worker_ref, shift_id, bucket, method, confidence, note
+       FROM cost_entries WHERE type='labor' AND class='DIRECT' AND day >= ? AND day <= ?`,
+    )
+    .all(start, end) as LaborLeafRow[];
+}
+
+const KNOWN = (r: LaborLeafRow): boolean => r.amount != null && (r.amount_status === "ACTUAL" || r.amount_status === "ESTIMATED");
+const bucketOf = (r: LaborLeafRow): string => (r.bucket === "prep" ? "warehouse" : r.bucket ?? (r.event_id ? "customer" : "unallocated"));
+
+export interface LaborLedgerSummary {
+  totalCost: number | null;
+  totalHours: number | null;
+  internalCost: number | null;
+  internalHours: number | null;
+  tempCost: number | null;
+  tempHours: number | null;
+  /** Cost by bucket (prep folded into warehouse). */
+  byBucket: { customer: number; travel: number; warehouse: number; unallocated: number };
+  internalWorkers: number;
+  tempWorkers: number;
+  /** Measured internal $/h over priced internal leaves (for the premium; never hardcoded). */
+  avgInternalRate: number | null;
+  /** Equivalent-internal cost of the temp hours + the premium (temp − equivalent). Null when unknown. */
+  equivalentInternalCost: number | null;
+  tempPremium: number | null;
+  anyEstimated: boolean;
+  anyUnavailable: boolean;
+}
+
+/** Roll the attributed labor leaves in [start,end] into the period labor scorecard (dimension A or B —
+ *  the same code, a different date range). */
+export function getLaborLedgerSummary(start: string, end: string): LaborLedgerSummary {
+  const rows = laborLeavesInRange(start, end);
+  let totalCost = 0;
+  let totalHours = 0;
+  let internalCost = 0;
+  let internalHours = 0;
+  let tempCost = 0;
+  let tempHours = 0;
+  const byBucket = { customer: 0, travel: 0, warehouse: 0, unallocated: 0 };
+  const internalWorkers = new Set<string>();
+  const tempWorkers = new Set<string>();
+  let anyEstimated = false;
+  let anyUnavailable = false;
+  let anyKnown = false;
+  for (const r of rows) {
+    if (r.amount_status === "UNAVAILABLE") anyUnavailable = true;
+    if (!KNOWN(r)) continue;
+    anyKnown = true;
+    if (r.amount_status === "ESTIMATED") anyEstimated = true;
+    const amt = r.amount as number;
+    const h = r.hours ?? 0;
+    totalCost += amt;
+    totalHours += h;
+    const b = bucketOf(r) as keyof typeof byBucket;
+    byBucket[b] += amt;
+    if (r.worker_kind === "instawork") {
+      tempCost += amt;
+      tempHours += h;
+      if (r.worker_ref) tempWorkers.add(r.worker_ref);
+    } else {
+      internalCost += amt;
+      internalHours += h;
+      if (r.worker_ref) internalWorkers.add(r.worker_ref);
+    }
+  }
+  const avgInternalRate = internalHours > 0 ? round2(internalCost / internalHours) : null;
+  const equivalentInternalCost = avgInternalRate != null && tempHours > 0 ? round2(tempHours * avgInternalRate) : null;
+  const tempPremium = equivalentInternalCost != null && tempCost > 0 ? round2(tempCost - equivalentInternalCost) : null;
+  return {
+    totalCost: anyKnown ? round2(totalCost) : null,
+    totalHours: anyKnown ? round2(totalHours) : null,
+    internalCost: internalWorkers.size > 0 ? round2(internalCost) : null,
+    internalHours: internalWorkers.size > 0 ? round2(internalHours) : null,
+    tempCost: tempWorkers.size > 0 ? round2(tempCost) : null,
+    tempHours: tempWorkers.size > 0 ? round2(tempHours) : null,
+    byBucket: { customer: round2(byBucket.customer), travel: round2(byBucket.travel), warehouse: round2(byBucket.warehouse), unallocated: round2(byBucket.unallocated) },
+    internalWorkers: internalWorkers.size,
+    tempWorkers: tempWorkers.size,
+    avgInternalRate,
+    equivalentInternalCost,
+    tempPremium,
+    anyEstimated,
+    anyUnavailable,
+  };
+}
+
+export interface RouteLaborRow {
+  routeId: string;
+  date: string | null;
+  cost: number | null;
+  hours: number | null;
+  customer: number;
+  travel: number;
+  warehouse: number;
+  unallocated: number;
+  internal: number;
+  temp: number;
+  projectIds: string[];
+}
+
+/** Per-route labor (the ROUTES bridge view). Groups the leaves by route_id — the reconciliation anchor. */
+export function getRouteLaborCosts(start: string, end: string): RouteLaborRow[] {
+  const rows = laborLeavesInRange(start, end);
+  const byRoute = new Map<string, RouteLaborRow & { _known: boolean }>();
+  for (const r of rows) {
+    if (!r.route_id) continue;
+    const row = byRoute.get(r.route_id) ?? { routeId: r.route_id, date: r.day, cost: 0, hours: 0, customer: 0, travel: 0, warehouse: 0, unallocated: 0, internal: 0, temp: 0, projectIds: [], _known: false };
+    if (KNOWN(r)) {
+      row._known = true;
+      const amt = r.amount as number;
+      (row.cost as number) += amt;
+      (row.hours as number) += r.hours ?? 0;
+      const b = bucketOf(r) as "customer" | "travel" | "warehouse" | "unallocated";
+      row[b] += amt;
+      if (r.worker_kind === "instawork") row.temp += amt;
+      else row.internal += amt;
+      if (r.event_id && !row.projectIds.includes(r.event_id)) row.projectIds.push(r.event_id);
+    }
+    byRoute.set(r.route_id, row);
+  }
+  return [...byRoute.values()].map((r) => ({
+    routeId: r.routeId,
+    date: r.date,
+    cost: r._known ? round2(r.cost as number) : null,
+    hours: r._known ? round2(r.hours as number) : null,
+    customer: round2(r.customer),
+    travel: round2(r.travel),
+    warehouse: round2(r.warehouse),
+    unallocated: round2(r.unallocated),
+    internal: round2(r.internal),
+    temp: round2(r.temp),
+    projectIds: r.projectIds,
+  }));
+}
+
+export interface ReconciliationWorkerRow {
+  workerRef: string;
+  kind: string;
+  name: string | null;
+  day: string | null;
+  customer: number;
+  travel: number;
+  warehouse: number;
+  unallocated: number;
+  total: number | null;
+}
+
+/** Per worker × day: the attributed labor split across buckets (the RECONCILIATION view — the dollar is
+ *  conserved end-to-end; any non-zero unallocated is a surfaced signal, not hidden). */
+export function getLaborReconciliation(start: string, end: string): ReconciliationWorkerRow[] {
+  const rows = laborLeavesInRange(start, end);
+  const by = new Map<string, ReconciliationWorkerRow & { _known: boolean }>();
+  for (const r of rows) {
+    const key = `${r.worker_ref ?? "?"}|${r.day ?? "?"}`;
+    const row = by.get(key) ?? { workerRef: r.worker_ref ?? "?", kind: r.worker_kind ?? "other", name: r.note ?? null, day: r.day, customer: 0, travel: 0, warehouse: 0, unallocated: 0, total: 0, _known: false };
+    if (KNOWN(r)) {
+      row._known = true;
+      const amt = r.amount as number;
+      const b = bucketOf(r) as "customer" | "travel" | "warehouse" | "unallocated";
+      row[b] += amt;
+      (row.total as number) += amt;
+    }
+    by.set(key, row);
+  }
+  return [...by.values()].map((r) => ({
+    workerRef: r.workerRef,
+    kind: r.kind,
+    name: r.name,
+    day: r.day,
+    customer: round2(r.customer),
+    travel: round2(r.travel),
+    warehouse: round2(r.warehouse),
+    unallocated: round2(r.unallocated),
+    total: r._known ? round2(r.total as number) : null,
+  }));
+}
+
+export interface InstaworkLedgerRow {
+  workerRef: string;
+  name: string | null;
+  cost: number | null;
+  hours: number | null;
+  rate: number | null;
+  routeIds: string[];
+  projectIds: string[];
+}
+
+/** Temp (Instawork) labor leaves grouped by worker/gig — the INSTAWORK view. */
+export function getInstaworkLedger(start: string, end: string): InstaworkLedgerRow[] {
+  const rows = laborLeavesInRange(start, end).filter((r) => r.worker_kind === "instawork");
+  const by = new Map<string, InstaworkLedgerRow & { _known: boolean }>();
+  for (const r of rows) {
+    const key = r.worker_ref ?? "?";
+    const row = by.get(key) ?? { workerRef: key, name: r.note ?? null, cost: 0, hours: 0, rate: r.rate ?? null, routeIds: [], projectIds: [], _known: false };
+    if (KNOWN(r)) {
+      row._known = true;
+      (row.cost as number) += r.amount as number;
+      (row.hours as number) += r.hours ?? 0;
+      if (r.rate != null) row.rate = r.rate;
+    }
+    if (r.route_id && !row.routeIds.includes(r.route_id)) row.routeIds.push(r.route_id);
+    if (r.event_id && !row.projectIds.includes(r.event_id)) row.projectIds.push(r.event_id);
+    by.set(key, row);
+  }
+  return [...by.values()].map((r) => ({
+    workerRef: r.workerRef,
+    name: r.name,
+    cost: r._known ? round2(r.cost as number) : null,
+    hours: r._known ? round2(r.hours as number) : null,
+    rate: r.rate,
+    routeIds: r.routeIds,
+    projectIds: r.projectIds,
+  }));
+}
+
+export interface LaborLeaf {
+  day: string | null;
+  routeId: string | null;
+  eventId: string | null;
+  amount: number | null;
+  amountStatus: string;
+  hours: number | null;
+  rate: number | null;
+  workerKind: string | null;
+  workerRef: string | null;
+  bucket: string | null;
+  method: string | null;
+  confidence: string | null;
+  note: string | null;
+}
+
+/** The raw leaves funding ONE project's labor — the per-number DATA LINEAGE panel (a pure read, not a
+ *  recomputation: worker → shift → route → rate → hours → method → this project's share). */
+export function getProjectLaborLineage(eventId: string): LaborLeaf[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT day, route_id, event_id, amount, amount_status, hours, rate, worker_kind, worker_ref, shift_id, bucket, method, confidence, note
+       FROM cost_entries WHERE type='labor' AND event_id = ? ORDER BY day, route_id`,
+    )
+    .all(eventId) as LaborLeafRow[];
+  return rows.map((r) => ({
+    day: r.day,
+    routeId: r.route_id,
+    eventId: r.event_id,
+    amount: r.amount,
+    amountStatus: r.amount_status,
+    hours: r.hours,
+    rate: r.rate,
+    workerKind: r.worker_kind,
+    workerRef: r.worker_ref,
+    bucket: r.bucket,
+    method: r.method,
+    confidence: r.confidence,
+    note: r.note,
+  }));
 }
 
 // ── Inventory demand (booked line items) ─────────────────────────────────────

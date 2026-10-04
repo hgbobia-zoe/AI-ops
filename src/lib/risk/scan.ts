@@ -4,10 +4,16 @@
 // ONLY meaningful changes (new HIGH/CRITICAL, escalations, resolutions, regressions).
 
 import { getActiveVehicles } from "@/lib/vehicles";
-import { getRoutesForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity, saveCostEntries } from "@/lib/db/repo";
+import { getRoutesForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity, saveDerivedLabor } from "@/lib/db/repo";
 import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/history/store";
 import { getCrewForDateSafe, connecteamConfigured, getPayRates, rateForUserOn, type CrewShift, type CrewRole } from "@/lib/connecteam";
-import { allocateDriverLabor, type CostEntryInput } from "@/lib/finance/allocation";
+import { type CostEntryInput } from "@/lib/finance/allocation";
+import { attributeLabor, type AttribRoute, type WorkerShiftCost } from "@/lib/finance/laborAttribution";
+import { laborAttributionConfig } from "@/lib/finance/config";
+import { readInstaworkSnapshot } from "@/lib/instawork/store";
+import { instaworkGigsForRoute, instaworkLocalDate, type RouteWindowMatch } from "@/lib/instawork/reconcile";
+import { gigWindowHours } from "@/lib/scheduling/cost";
+import type { ShiftRole } from "@/lib/scheduling/types";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { slackNotify } from "@/lib/notify/slack";
 import { recordPull, logImport } from "@/lib/pull/state";
@@ -17,6 +23,7 @@ import { DEFAULT_RISK_CONFIG, SEVERITY_RANK } from "./types";
 import { reconcileRisks, expirePastRisks, getRiskQueue, type RiskChanges } from "./store";
 import { computeReadiness } from "./readiness";
 import type { EngineRoute, EngineShift, RiskFinding } from "./types";
+import type { Stop } from "@/lib/types";
 
 function shiftsForRole(crew: CrewShift[], role: CrewRole): EngineShift[] {
   const out: EngineShift[] = [];
@@ -40,6 +47,37 @@ function latestStopUnix(routes: EngineRoute[]): number | null {
       if (!Number.isNaN(t)) best = Math.max(best, t);
     }
   return best === -Infinity ? null : Math.floor(best / 1000);
+}
+
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+/** Build the finance AttribRoute (window/raw/buffer hours from routeWindow) + the Instawork match window.
+ *  `eng` drives the window (plannedWindow/eta); `rawStops` carry the grain the attributor needs
+ *  (txId/kind/arrived→completed/item-count). */
+function toAttribRoute(eng: EngineRoute, rawStops: Stop[]): { attrib: AttribRoute; match: RouteWindowMatch } {
+  const w = routeWindow(eng, DEFAULT_RISK_CONFIG);
+  const windowHours = w ? round2((w.endUnix - w.startUnix) / 3600) : null;
+  const rawHours = w ? round2((w.rawEnd - w.rawStart) / 3600) : null;
+  const bufferHours = windowHours != null && rawHours != null ? round2(Math.max(0, windowHours - rawHours)) : null;
+  const attrib: AttribRoute = {
+    routeId: eng.routeId,
+    date: eng.date,
+    windowHours,
+    rawHours,
+    bufferHours,
+    stops: rawStops.map((s) => ({
+      txId: s.txId,
+      sequence: s.sequence,
+      kind: s.kind,
+      arrivedAt: s.arrivedAt,
+      completedAt: s.completedAt,
+      itemCount: s.items?.length ?? 0,
+    })),
+  };
+  // A route staffs a driver and (potentially) field crew; both Driver and General Labor gigs can match.
+  const roles: ShiftRole[] = ["driver", "field"];
+  const match: RouteWindowMatch = { date: eng.date, startMs: w ? w.startUnix * 1000 : null, endMs: w ? w.endUnix * 1000 : null, roles };
+  return { attrib, match };
 }
 
 export interface ScanResult {
@@ -101,6 +139,9 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   const ctOn = connecteamConfigured();
   // Pay rates for the horizon — for event-level driver-labor cost allocation.
   const payRates = ctOn ? await getPayRates(dates[0] ?? today, dates[dates.length - 1] ?? today) : new Map();
+  // FI labor attribution inputs: the temp (Instawork) snapshot + the carve-off config (both read-only).
+  const instaworkGigs = readInstaworkSnapshot()?.shifts ?? [];
+  const laborCfg = laborAttributionConfig();
 
   const allFindings: RiskFinding[] = [];
   const costEntries: CostEntryInput[] = [];
@@ -186,20 +227,74 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
       }),
     );
 
-    // Event-level driver-labor cost (only when Connecteam is verified — else rates/shifts are unknown).
+    // FI labor attribution (supersedes allocateDriverLabor): internal driver-day (when Connecteam is
+    // verified) + temp Instawork gigs matched to the day's routes → ONE deterministic cascade (worker→
+    // route by duration share → carve warehouse/travel → stop/project split), every leaf honestly
+    // labeled bucket/method/confidence. Internal is driver-grain today; field/prep via shift_assignments
+    // is the FI-Phase 4 upgrade seam (degrades gracefully to this driver source when absent).
+    const attribRoutes: AttribRoute[] = [];
+    const matches = new Map<string, RouteWindowMatch>();
+    for (const eng of routes) {
+      const raw = rawRoutes.find((rr) => rr.routeId === eng.routeId);
+      const { attrib, match } = toAttribRoute(eng, raw?.stops ?? []);
+      attribRoutes.push(attrib);
+      matches.set(eng.routeId, match);
+    }
+
+    const workerShiftCosts: WorkerShiftCost[] = [];
     if (staffingVerified) {
-      costEntries.push(
-        ...allocateDriverLabor(
-          rawRoutes.map((r) => ({ routeId: r.routeId, date: r.date, driverId: r.driverId, driverName: r.driverName, stops: r.stops.map((s) => ({ txId: s.txId })) })),
-          driverShifts.map((s) => ({ userId: String(s.userId), startUnix: s.startUnix, endUnix: s.endUnix })),
-          (uid) => rateForUserOn(payRates, Number(uid), date),
-          date,
-        ),
-      );
+      const byDriver = new Map<string, EngineRoute[]>();
+      for (const r of routes) if (r.driverId) byDriver.set(r.driverId, [...(byDriver.get(r.driverId) ?? []), r]);
+      for (const [driverId, drRoutes] of byDriver) {
+        const rate = rateForUserOn(payRates, Number(driverId), date);
+        const shiftHours = driverShifts.filter((s) => String(s.userId) === driverId).reduce((h, s) => h + Math.max(0, s.endUnix - s.startUnix) / 3600, 0);
+        const cost = rate != null && shiftHours > 0 ? round2(shiftHours * rate) : null;
+        workerShiftCosts.push({
+          workerKey: `ct:${driverId}`,
+          kind: "internal",
+          displayName: drRoutes[0].driverName,
+          role: "driver",
+          routesServed: drRoutes.map((r) => r.routeId),
+          hours: shiftHours > 0 ? round2(shiftHours) : null,
+          rate,
+          cost,
+          status: "ACTUAL",
+        });
+      }
+    }
+    // Temp Instawork gigs on this day: each filled seat is one temp worker; basePrice is the captured
+    // seat cost. A gig matched to several routes is single-counted (routesServed → duration partition).
+    for (const gig of instaworkGigs.filter((g) => instaworkLocalDate(g) === date)) {
+      const servedRouteIds = [...matches].filter(([, m]) => instaworkGigsForRoute([gig], m).length > 0).map(([routeId]) => routeId);
+      if (servedRouteIds.length === 0) continue; // unmatched temp cost isn't fabricated onto a route
+      const seats = gig.filled > 0 ? gig.filled : 0;
+      const hrs = gigWindowHours(gig);
+      const seatRate = gig.basePrice != null && hrs != null && hrs > 0 ? round2(gig.basePrice / hrs) : null;
+      const role: WorkerShiftCost["role"] = gig.position.toLowerCase().includes("driver") ? "driver" : "field";
+      for (let i = 0; i < seats; i++) {
+        workerShiftCosts.push({
+          workerKey: `iw:${gig.id}:${i}`,
+          kind: "instawork",
+          displayName: gig.workers[i] ?? gig.name ?? "Instawork",
+          shiftId: gig.id,
+          role,
+          routesServed: servedRouteIds,
+          hours: hrs,
+          rate: seatRate,
+          cost: gig.basePrice ?? null,
+          status: "PLANNED",
+        });
+      }
+    }
+
+    if (workerShiftCosts.length > 0) {
+      const res = attributeLabor({ date, routes: attribRoutes, workerShiftCosts, cfg: laborCfg });
+      costEntries.push(...res.entries);
     }
   }
   saveDayCapacity(capacityResults);
-  if (costEntries.length > 0) saveCostEntries(costEntries);
+  // Clean-rewrite the derived labor ledger for every scanned day (clears stale/legacy leaves too).
+  saveDerivedLabor(dates, costEntries);
 
   // Persist lifecycle + readiness.
   const changes = reconcileRisks(allFindings, dates, now, unverifiedStaffingDates);

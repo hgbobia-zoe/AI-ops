@@ -347,13 +347,21 @@ CREATE TABLE IF NOT EXISTS cost_entries (
   amount_status TEXT NOT NULL,   -- ACTUAL | ESTIMATED | UNAVAILABLE
   hours         REAL,            -- labor rows: lets cost recompute if a rate is backfilled
   rate          REAL,
-  source        TEXT,            -- connecteam | goodshuffle | manual | derived
+  source        TEXT,            -- connecteam | goodshuffle | manual | derived | instawork
   source_ref    TEXT UNIQUE,     -- idempotency key
   note          TEXT,
+  -- Labor-attribution (FI-Phase 1): how a labor leaf was attributed + which bucket it is. All nullable.
+  worker_kind   TEXT,            -- internal | instawork | other (null on legacy / non-labor rows)
+  worker_ref    TEXT,            -- connecteam userId or instawork worker/gig label (lineage link)
+  shift_id      TEXT,            -- staff_shifts / shift_assignments / gig id when known
+  bucket        TEXT,            -- customer | travel | warehouse | prep | unallocated
+  method        TEXT,            -- ACTUAL_STOP | DERIVED_STOP | PLANNED | ESTIMATED | UNALLOCATED
+  confidence    TEXT,            -- HIGH | MEDIUM | LOW
   captured_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cost_entries_event ON cost_entries(event_id);
 CREATE INDEX IF NOT EXISTS idx_cost_entries_day ON cost_entries(day);
+CREATE INDEX IF NOT EXISTS idx_cost_entries_route ON cost_entries(route_id);
 
 -- Per-day capacity verdict (can we execute the day?) — recomputed each scan.
 CREATE TABLE IF NOT EXISTS day_capacity (
@@ -1665,6 +1673,15 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "staff_shifts", column: "equipment", type: "TEXT" }, // JSON string[] derived from route items / crew rules
   { table: "staff_shifts", column: "instructions", type: "TEXT" }, // free-text event instructions for the crew
   { table: "staff_shifts", column: "readiness_json", type: "TEXT" }, // cached last computed readiness (derived)
+  // Financial Intelligence labor attribution (FI-Phase 1): a labor leaf declares its pool + bucket +
+  // attribution method + confidence, so an estimate is never shown as an actual and non-customer labor
+  // (travel/warehouse/unallocated) is never dumped onto a project. All additive + nullable.
+  { table: "cost_entries", column: "worker_kind", type: "TEXT" }, // internal | instawork | other
+  { table: "cost_entries", column: "worker_ref", type: "TEXT" }, // connecteam userId / instawork worker-gig label
+  { table: "cost_entries", column: "shift_id", type: "TEXT" }, // staff_shifts / shift_assignments / gig id
+  { table: "cost_entries", column: "bucket", type: "TEXT" }, // customer | travel | warehouse | prep | unallocated
+  { table: "cost_entries", column: "method", type: "TEXT" }, // ACTUAL_STOP | DERIVED_STOP | PLANNED | ESTIMATED | UNALLOCATED
+  { table: "cost_entries", column: "confidence", type: "TEXT" }, // HIGH | MEDIUM | LOW
 ];
 
 function migrate(db: DB): void {

@@ -9,6 +9,16 @@ export type CostType = "labor" | "vehicle" | "fuel" | "subcontractor" | "sub_ren
 export type CostClass = "DIRECT" | "OVERHEAD";
 export type AmountStatus = "ACTUAL" | "ESTIMATED" | "UNAVAILABLE";
 
+// Labor-attribution taxonomy (FI-Phase 1). A labor leaf declares WHICH bucket it is and HOW it was
+// attributed — so an estimate is never shown as an actual, and non-customer labor never lands on a project.
+/** Which cost pool a labor leaf belongs to. Only `customer` attaches to a project (event_id). */
+export type CostBucket = "customer" | "travel" | "warehouse" | "prep" | "unallocated";
+/** The attribution LEVEL for a customer leaf (§4): the real stop-level methods degrade to PLANNED today. */
+export type AttribMethod = "ACTUAL_STOP" | "DERIVED_STOP" | "PLANNED" | "ESTIMATED" | "UNALLOCATED";
+export type AttribConfidence = "HIGH" | "MEDIUM" | "LOW";
+/** Which labor pool funded the leaf. `other` = unknown source kept honest, excluded from internal/temp. */
+export type LaborWorkerKind = "internal" | "instawork" | "other";
+
 export interface CostEntryInput {
   type: CostType;
   class: CostClass;
@@ -22,6 +32,19 @@ export interface CostEntryInput {
   source: string;
   sourceRef: string;
   note?: string;
+  // ── Labor-attribution fields (all nullable; legacy/non-labor rows leave them undefined) ──
+  /** 'internal' | 'instawork' | 'other' — the labor pool. */
+  workerKind?: LaborWorkerKind;
+  /** Connecteam userId or Instawork worker/gig label — a LINK for lineage, not a new system of record. */
+  workerRef?: string;
+  /** staff_shifts.id / shift_assignments.id / gig id when available — lineage to the shift. */
+  shiftId?: string;
+  /** customer | travel | warehouse | prep | unallocated. */
+  bucket?: CostBucket;
+  /** The attribution method (how the customer split was derived). */
+  method?: AttribMethod;
+  /** HIGH | MEDIUM | LOW — confidence in the attribution (NOT in the dollars; that is amount_status). */
+  confidence?: AttribConfidence;
 }
 
 export interface AllocStop {

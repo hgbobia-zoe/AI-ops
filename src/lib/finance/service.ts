@@ -3,7 +3,7 @@
 // executive scorecard. RULES CALCULATE — every figure is deterministic or explicitly UNAVAILABLE.
 
 import { getPlannedHours, getActualHours, getPayRates, rateForUserOn } from "@/lib/connecteam";
-import { getBookingsRevenueInRange, getBookingsInRange, getEventDirectCosts } from "@/lib/db/repo";
+import { getBookingsRevenueInRange, getBookingsInRange, getEventDirectCosts, getLaborLedgerSummary, type LaborLedgerSummary } from "@/lib/db/repo";
 import { saveLaborSnapshot, getLaborTrajectory, type LaborSnapshotRow } from "./laborHistory";
 import { financeConfig } from "./config";
 import { computeVariance, laborPctOfRevenue, contribution, contributionMargin, type Variance, type MoneyStatus } from "./calc";
@@ -41,6 +41,10 @@ export interface FinanceSummary {
   events: EventEconomics[];
   /** planned→revised→actual labor over time for this week (empty for non-week periods). */
   laborTrajectory: LaborSnapshotRow[];
+  /** Attributed/REALIZED labor from the cost_entries ledger (buckets, internal/temp split, measured
+   *  temp premium). Distinct from the planned Connecteam scorecard above; the ledger is what the
+   *  deterministic worker→route→stop→project cascade actually attributed for the period. */
+  laborLedger: LaborLedgerSummary;
 }
 
 /** Per-event economics: revenue − direct cost (labor today). Contribution UNAVAILABLE unless the
@@ -51,10 +55,15 @@ export interface EventEconomics {
   label: string;
   revenue: number | null;
   revenueStatus: string; // SIGNED | QUOTE
-  labor: number | null; // direct labor $ (ACTUAL only)
-  laborStatus: "ACTUAL" | "UNAVAILABLE" | "NONE";
+  labor: number | null; // direct labor $ (ACTUAL or ESTIMATED — never a fake ACTUAL)
+  laborStatus: "ACTUAL" | "ESTIMATED" | "UNAVAILABLE" | "NONE";
+  internalLabor: number | null;
+  tempLabor: number | null;
+  /** How this project's labor was attributed (badge): PLANNED/DERIVED_STOP/ACTUAL_STOP + confidence. */
+  method: "ACTUAL_STOP" | "DERIVED_STOP" | "PLANNED" | "ESTIMATED" | "UNALLOCATED" | null;
+  confidence: "HIGH" | "MEDIUM" | "LOW" | null;
   contribution: number | null;
-  contribStatus: "ACTUAL" | "UNAVAILABLE";
+  contribStatus: "ACTUAL" | "ESTIMATED" | "UNAVAILABLE";
 }
 
 function sumHoursCost(hours: Map<number, number>, rateAt: (uid: number) => number | null): { cost: number | null; missing: number; anyRate: boolean } {
@@ -143,6 +152,7 @@ export async function financeForPeriod(period: Period): Promise<FinanceSummary> 
     },
     events: eventsEconomics(start, end),
     laborTrajectory,
+    laborLedger: getLaborLedgerSummary(start, end),
   };
 }
 
@@ -151,7 +161,9 @@ function eventsEconomics(start: string, end: string): EventEconomics[] {
   const costs = getEventDirectCosts(bookings.map((b) => b.bookingId));
   return bookings.map((b) => {
     const c = costs.get(b.bookingId);
-    const labor = c?.laborStatus === "ACTUAL" ? c.labor : null;
+    // Labor is shown whether ACTUAL or ESTIMATED (planned/derived split) — but the status travels with it
+    // so the UI never presents an estimate as an actual. Contribution inherits the labor's status.
+    const labor = c && (c.laborStatus === "ACTUAL" || c.laborStatus === "ESTIMATED") ? c.labor : null;
     const contribution = b.grandTotal != null && labor != null ? Math.round((b.grandTotal - labor) * 100) / 100 : null;
     return {
       eventId: b.bookingId,
@@ -161,8 +173,12 @@ function eventsEconomics(start: string, end: string): EventEconomics[] {
       revenueStatus: b.signed ? "SIGNED" : "QUOTE",
       labor,
       laborStatus: c?.laborStatus ?? "NONE",
+      internalLabor: c?.internal ?? null,
+      tempLabor: c?.temp ?? null,
+      method: c?.method ?? null,
+      confidence: c?.confidence ?? null,
       contribution,
-      contribStatus: contribution != null ? "ACTUAL" : "UNAVAILABLE",
+      contribStatus: contribution == null ? "UNAVAILABLE" : c?.laborStatus === "ACTUAL" ? "ACTUAL" : "ESTIMATED",
     };
   });
 }
