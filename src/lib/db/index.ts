@@ -560,6 +560,75 @@ CREATE TABLE IF NOT EXISTS staff_shifts (
 );
 CREATE INDEX IF NOT EXISTS idx_staff_shifts_date ON staff_shifts(date, status);
 
+-- ── Shift Lifecycle + Readiness engine (per-worker entity) ────────────────────────────────────────
+-- The KEYSTONE new entity: one row per (shift x worker). staff_shifts is a crew-DEMAND line; this is
+-- the per-worker operational assignment that carries acceptance, packet-received, confirmation,
+-- clock-in/out linkage, per-worker exceptions, and the staffing-economics snapshot (temp reason, cost).
+-- Internal and Instawork workers are genuinely different rows (worker_kind): internal links a
+-- Connecteam userId (Connecteam OWNS the person + timekeeping, we only mirror clock_*); Instawork's
+-- only stable captured handle is the worker NAME (no phone/id/clock in the captured surface). Design
+-- law: FACTS ONLY. An unknown stays null (clock_source "unavailable" for Instawork), never fabricated.
+-- Dual-write: the engine keeps staff_shifts.assignees in sync (internal userIds projection) so the
+-- existing board/coverage code is unchanged. The cost columns (est_*, temp_reason, route_reason,
+-- overridden) are the optimizer's economics snapshot (a MIRROR for display/audit; rate SoR stays
+-- Connecteam/Instawork). est_cost null when hours or rate unknown, never 0.
+CREATE TABLE IF NOT EXISTS shift_assignments (
+  id                 TEXT PRIMARY KEY,          -- "SA-"+uuid
+  shift_id           TEXT NOT NULL,             -- staff_shifts.id
+  worker_kind        TEXT NOT NULL,             -- internal | instawork
+  connecteam_user_id INTEGER,                   -- internal: Connecteam userId (SoR for person + timekeeping)
+  instawork_worker   TEXT,                      -- instawork: the only stable handle captured today = worker NAME
+  instawork_gig_id   TEXT,                      -- the matched gig group id (reconcile)
+  display_name       TEXT,                      -- cached name at time of assignment (display/audit)
+  role               TEXT NOT NULL,             -- driver | field | prep (copied from the shift at assign time)
+  state              TEXT NOT NULL,             -- assignment lifecycle (PROPOSED..CLOCKED_OUT / DECLINED / NO_SHOW / CANCELLED / REPLACED)
+  packet_version     TEXT,                      -- the shift_packets.version this worker last received (null = none)
+  packet_sent_at     TEXT,
+  confirmed_at       TEXT,                      -- explicit worker acknowledgement (null = not confirmed)
+  confirm_method     TEXT,                      -- sms_reply | link_open | dispatcher | connecteam
+  clock_in_at        TEXT,                      -- internal: MIRRORED from Connecteam timesheet; instawork: unknown
+  clock_out_at       TEXT,
+  clock_source       TEXT,                      -- connecteam | unavailable (NEVER our own timekeeping for internal)
+  no_show            INTEGER DEFAULT 0,         -- deterministic flag set by the exception scan
+  temp_reason        TEXT,                      -- why a temp at all: no_internal_qualified | internal_exhausted | internal_cancellation | dispatcher_override
+  route_reason       TEXT,                      -- why THIS route: shortest_eligible_route | only_matching_window | dispatcher_choice
+  est_hours          REAL,                      -- shift hours used for cost (null if window unknown)
+  est_rate           REAL,                      -- $/h used (internal: rateForUserOn; temp: basePrice-derived); null = unknown
+  est_cost           REAL,                      -- est_hours * est_rate (null if either unknown, never 0)
+  overridden         INTEGER DEFAULT 0,         -- dispatcher overrode the optimizer recommendation
+  override_reason    TEXT,                      -- required when overridden=1
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  UNIQUE(shift_id, worker_kind, connecteam_user_id, instawork_worker)  -- idempotent assignment (dup prevention)
+);
+CREATE INDEX IF NOT EXISTS idx_shift_assignments_shift ON shift_assignments(shift_id);
+
+-- Versioned shift PACKET (everything a worker needs, assembled from structured data only). A new row is
+-- written only when the content hash (version) changes, so a resend with no change is the same version.
+CREATE TABLE IF NOT EXISTS shift_packets (
+  id            TEXT PRIMARY KEY,   -- "SP-"+uuid
+  shift_id      TEXT NOT NULL,
+  version       TEXT NOT NULL,      -- content hash of the structured packet
+  packet_json   TEXT NOT NULL,      -- the full structured ShiftPacket
+  created_at    TEXT NOT NULL,
+  UNIQUE(shift_id, version)
+);
+
+-- Immutable operational history for a shift/assignment (mirrors history_changes + its change_key dedup).
+CREATE TABLE IF NOT EXISTS shift_assignment_events (
+  id            TEXT PRIMARY KEY,   -- "SE-"+uuid
+  ts            TEXT NOT NULL,
+  shift_id      TEXT,
+  assignment_id TEXT,
+  actor         TEXT,               -- currentActor (human) OR a named system actor
+  kind          TEXT NOT NULL,      -- assigned | packet_sent | confirmed | clock_in | clock_out | reassigned | override | cancelled | exception_opened | exception_resolved | state_change
+  field         TEXT,
+  from_value    TEXT,
+  to_value      TEXT,
+  change_key    TEXT UNIQUE         -- idempotency: same transition logged once
+);
+CREATE INDEX IF NOT EXISTS idx_shift_assignment_events_shift ON shift_assignment_events(shift_id, ts DESC);
+
 -- ── Event Radar (early-demand intelligence) ──────────────────────────────────────────────────────
 -- Event Radar detects FUTURE events in the DMV that could create rental demand, well before the
 -- planner is shopping vendors, and hands qualified opportunities to Sales OS. Design law:
@@ -1530,6 +1599,16 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // priority breakdown JSON. Both additive on the Phase-1 seo_opportunities table.
   { table: "seo_opportunities", column: "stage", type: "TEXT" },
   { table: "seo_opportunities", column: "priority_breakdown", type: "TEXT" },
+  // Shift Lifecycle engine: lifecycle + logistics columns on the demand line (all nullable; lifecycle_state
+  // is authoritative going forward, derived from the legacy status when null). readiness_json is a derived
+  // cache, never a source of truth.
+  { table: "staff_shifts", column: "lifecycle_state", type: "TEXT" }, // DRAFT..COMPLETE / EXCEPTION / CANCELLED
+  { table: "staff_shifts", column: "supervisor_user_id", type: "INTEGER" }, // Connecteam userId of the on-shift lead
+  { table: "staff_shifts", column: "report_location", type: "TEXT" }, // explicit report-to (defaults to location)
+  { table: "staff_shifts", column: "report_time", type: "TEXT" }, // ISO report/arrival time (may precede start_time)
+  { table: "staff_shifts", column: "equipment", type: "TEXT" }, // JSON string[] derived from route items / crew rules
+  { table: "staff_shifts", column: "instructions", type: "TEXT" }, // free-text event instructions for the crew
+  { table: "staff_shifts", column: "readiness_json", type: "TEXT" }, // cached last computed readiness (derived)
 ];
 
 function migrate(db: DB): void {

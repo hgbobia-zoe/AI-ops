@@ -73,3 +73,71 @@ export interface StaffShift {
 export function shiftGap(s: Pick<StaffShift, "headcount" | "assignees">): number {
   return Math.max(0, s.headcount - s.assignees.length);
 }
+
+// ── Shift Lifecycle engine (per-worker entity + lifecycle state) ──────────────────────────────────
+// The lifecycle evolves the flat ShiftStatus into a real state machine (see scheduling/lifecycle.ts).
+// lifecycle_state is authoritative going forward; the legacy `status` is derived both ways during
+// migration so neither the old board nor the engine breaks. FACTS ONLY: states are a deterministic
+// roll-up of the assignments + coverage, never set by an LLM.
+
+/** The shift-level lifecycle state (D.4 of the design). A deterministic roll-up, not hand-edited. */
+export type ShiftLifecycleState =
+  | "DRAFT" // demand line exists (derived or manual)
+  | "STAFFED" // headcount met (gap 0) and window known
+  | "PROVISIONED" // published to Connecteam and/or gig posted; packets built
+  | "NOTIFIED" // packet delivered to every assignment
+  | "CONFIRMED" // every assignment acknowledged (or dispatcher-confirmed)
+  | "READY" // readiness == GREEN (all five components)
+  | "IN_PROGRESS" // first clock-in (internal mirror) or shift start passed
+  | "COMPLETE" // shift end passed and no open blocking exception
+  | "EXCEPTION" // a RED exception is open against the shift
+  | "CANCELLED"; // shift called off
+
+/** Which labor pool a per-worker assignment draws from. Internal and Instawork are genuinely different
+ *  rows: different identity handles, different timekeeping semantics (D.2). */
+export type WorkerKind = "internal" | "instawork";
+
+/** The per-worker (inner) assignment lifecycle (D.5). The shift state rolls up from these. */
+export type AssignmentState =
+  | "PROPOSED" // the optimizer/dispatcher suggested this worker, not yet committed
+  | "ASSIGNED" // committed to the shift (internal publish target / booked gig seat)
+  | "NOTIFIED" // packet delivered to the worker
+  | "CONFIRMED" // worker acknowledged
+  | "CLOCKED_IN" // clock-in seen (internal: Connecteam mirror; instawork: unavailable today)
+  | "CLOCKED_OUT" // clock-out seen
+  | "DECLINED" // worker declined
+  | "NO_SHOW" // deterministic no-show flag
+  | "CANCELLED" // assignment called off
+  | "REPLACED"; // superseded by a reassignment
+
+/** The keystone per-worker entity: one row per (shift x worker). Carries acceptance, packet, clock
+ *  linkage, per-worker exceptions, and the optimizer's economics snapshot. */
+export interface ShiftAssignment {
+  id: string;
+  shiftId: string;
+  workerKind: WorkerKind;
+  connecteamUserId: number | null; // internal: SoR for the person + timekeeping
+  instaworkWorker: string | null; // instawork: worker NAME (the only stable handle captured)
+  instaworkGigId: string | null;
+  displayName: string | null;
+  role: ShiftRole;
+  state: AssignmentState;
+  packetVersion: string | null;
+  packetSentAt: string | null;
+  confirmedAt: string | null;
+  confirmMethod: string | null;
+  clockInAt: string | null;
+  clockOutAt: string | null;
+  clockSource: string | null; // 'connecteam' | 'unavailable'
+  noShow: boolean;
+  // Staffing-economics snapshot (a MIRROR for display/audit; rate SoR stays Connecteam/Instawork).
+  tempReason: string | null;
+  routeReason: string | null;
+  estHours: number | null;
+  estRate: number | null;
+  estCost: number | null;
+  overridden: boolean;
+  overrideReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
