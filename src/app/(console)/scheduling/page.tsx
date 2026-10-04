@@ -23,7 +23,8 @@ import { getShiftsForDate } from "@/lib/scheduling/store";
 import { computeCoverage } from "@/lib/scheduling/coverage";
 import { recommendCrew, type CrewRecommendation } from "@/lib/scheduling/availability";
 import { shiftWindowHours, gigWindowHours, internalRateFor, internalSeat, tempSeat, computeTempExposure, type LaborSeat } from "@/lib/scheduling/cost";
-import { optimizeStaffing } from "@/lib/scheduling/optimize";
+import { optimizeStaffing, type PlannedAssignment } from "@/lib/scheduling/optimize";
+import { summarizePlan, computeStaffingHealth } from "@/lib/scheduling/planView";
 import { StaffingPlanPreview } from "@/components/scheduling/StaffingPlanPreview";
 import { computeShiftReadiness } from "@/lib/scheduling/readiness";
 import { scanShiftExceptions } from "@/lib/scheduling/exceptions";
@@ -188,38 +189,6 @@ export default async function SchedulingPage({
   const truckName = (id: string): string => trucks.find((t) => t.truckId === id)?.name ?? id;
   const routeIds = new Set(routes.map((r) => r.routeId));
 
-  const routeCards: RouteCardData[] = routes.map((route) => {
-    const rs = shifts.filter((s) => s.routeId === route.routeId);
-    const win = windowFor(route, rs);
-    const roles = (() => {
-      const present = ROLE_ORDER.filter((role) => rs.some((s) => s.role === role));
-      return present.length > 0 ? present : (["driver", "field"] as ShiftRole[]);
-    })();
-    const startMs = win.start ? Date.parse(win.start) : null;
-    const endMs = win.end ? Date.parse(win.end) : null;
-    const gigs: MatchedGig[] = instaworkGigsForRoute(iwDayShifts, { date, startMs, endMs, roles }).map((g) => ({
-      id: g.id,
-      position: g.position,
-      workers: g.workers,
-      filled: g.filled,
-      total: g.total,
-      pending: Math.max(0, g.total - g.filled),
-    }));
-    return {
-      routeId: route.routeId,
-      truckId: route.truckId,
-      truckName: truckName(route.truckId),
-      stopCount: route.stops.length,
-      driverName: route.driverName ?? null,
-      eventLabel: rs.find((s) => s.eventLabel)?.eventLabel ?? null,
-      startTime: win.start,
-      endTime: win.end,
-      windowKnown: win.known,
-      roles,
-      gigs,
-    };
-  });
-
   // Per route+role availability for the Add-worker flow: who's FREE for the route window + role (excludes
   // office/admin via recommendCrew). Computed for every role so a role with no shift yet still shows crew.
   const routeRecs: RouteRecs = {};
@@ -318,6 +287,79 @@ export default async function SchedulingPage({
     return { shiftId: s.id, routeId: s.routeId, roleLabel: ROLE_LABEL[s.role], level: r.level, score: r.score, blockers: r.blockers };
   });
   const shiftExceptions = scanShiftExceptions({ shifts, coverage: cov, now: nowMs(), staffingVerified: coverage.ok, assignmentsByShift, commsWired });
+
+  // Worst per-route readiness level, for the route-card status chip (read over the rows already computed).
+  const READINESS_RANK: Record<ReadinessRow["level"], number> = { BLOCKED: 0, UNVERIFIED: 1, READY: 2 };
+  const readinessByRoute: Record<string, ReadinessRow["level"]> = {};
+  for (const r of readinessRows) {
+    if (!r.routeId) continue;
+    const cur = readinessByRoute[r.routeId];
+    if (cur == null || READINESS_RANK[r.level] < READINESS_RANK[cur]) readinessByRoute[r.routeId] = r.level;
+  }
+
+  // ── Route-centric board data ──────────────────────────────────────────────
+  // Group the day's shifts by route. Each active route becomes a card; shifts not tied to a route (the
+  // day-before prep shift, manual shifts) fall into "other". Instawork gigs are matched to each route by
+  // day + role + time-overlap (a gig can match several routes — it isn't truck-specific).
+  const routeCards: RouteCardData[] = routes.map((route) => {
+    const rs = shifts.filter((s) => s.routeId === route.routeId);
+    const win = windowFor(route, rs);
+    const roles = (() => {
+      const present = ROLE_ORDER.filter((role) => rs.some((s) => s.role === role));
+      return present.length > 0 ? present : (["driver", "field"] as ShiftRole[]);
+    })();
+    const startMs = win.start ? Date.parse(win.start) : null;
+    const endMs = win.end ? Date.parse(win.end) : null;
+    const gigs: MatchedGig[] = instaworkGigsForRoute(iwDayShifts, { date, startMs, endMs, roles }).map((g) => ({
+      id: g.id,
+      position: g.position,
+      workers: g.workers,
+      filled: g.filled,
+      total: g.total,
+      pending: Math.max(0, g.total - g.filled),
+    }));
+    return {
+      routeId: route.routeId,
+      truckId: route.truckId,
+      truckName: truckName(route.truckId),
+      stopCount: route.stops.length,
+      driverName: route.driverName ?? null,
+      eventLabel: rs.find((s) => s.eventLabel)?.eventLabel ?? null,
+      startTime: win.start,
+      endTime: win.end,
+      windowKnown: win.known,
+      roles,
+      gigs,
+      stops: route.stops.map((s) => ({ custName: s.custName, kind: s.kind ?? "delivery", address: s.address ?? null })),
+      readiness: readinessByRoute[route.routeId] ?? null,
+    };
+  });
+
+  // Proposed optimizer assignments grouped by route (overlaid on each route card: internal placed / open).
+  const proposedByRoute: Record<string, PlannedAssignment[]> = {};
+  for (const a of staffingPlan.assignments) {
+    if (!a.routeId) continue;
+    (proposedByRoute[a.routeId] ??= []).push(a);
+  }
+
+  // Plan summary + day-level staffing health (deterministic rollups over coverage/optimize/cost/readiness).
+  const redExceptionCount = shiftExceptions.filter((e) => e.severity === "RED").length;
+  const planSummary = summarizePlan({
+    routes: routes.length,
+    peopleNeeded,
+    coverage: cov,
+    plan: staffingPlan,
+    estInstaworkCost: economics.tempCost,
+    readinessScores: readinessRows.map((r) => r.score),
+  });
+  const staffingHealth = computeStaffingHealth({
+    hasShifts: shifts.length > 0,
+    redExceptions: redExceptionCount,
+    planTempCount: staffingPlan.planTempCount,
+    currentGapTotal: cov.gapTotal,
+    readinessLevels: readinessRows.map((r) => r.level),
+  });
+
   const money = (n: number | null): string => (n == null ? "n/a" : `$${Math.round(n).toLocaleString()}`);
   const hrs = (n: number | null): string | number => (n == null ? "n/a" : n);
   const pct = (n: number | null): string => (n == null ? "n/a" : `${Math.round(n * 100)}%`);
@@ -381,7 +423,7 @@ export default async function SchedulingPage({
 
       <ShiftReadinessExceptions rows={readinessRows} exceptions={shiftExceptions} routeLabel={routeLabelFor} />
 
-      <StaffingPlanPreview plan={staffingPlan} date={date} routeLabel={routeLabelFor} />
+      <StaffingPlanPreview plan={staffingPlan} date={date} routeLabel={routeLabelFor} summary={planSummary} health={staffingHealth} />
 
       <RouteStaffBoard
         date={date}
@@ -396,6 +438,7 @@ export default async function SchedulingPage({
         prepCrewToday={prepCrewToday}
         prepNeed={prepNeed}
         routeFieldNeed={routeFieldNeed}
+        proposedByRoute={proposedByRoute}
         instawork={iwByRole}
         iwConfigured={iwOn}
         hasRoutes={routes.length > 0}

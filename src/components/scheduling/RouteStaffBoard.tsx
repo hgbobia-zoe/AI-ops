@@ -13,7 +13,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Plus, Truck as TruckIcon, UserPlus, Users, ArrowRight } from "lucide-react";
+import { Loader2, RefreshCw, Plus, Truck as TruckIcon, UserPlus, Users, ArrowRight, Wand2, MapPin } from "lucide-react";
 import { SidePanelOverlay } from "@/components/SidePanelOverlay";
 import { ShiftEditor } from "@/components/scheduling/ShiftEditor";
 import { AddWorkerPanel } from "@/components/scheduling/AddWorkerPanel";
@@ -22,10 +22,21 @@ import { formatClockTime } from "@/lib/dates";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
 import type { ShiftCoverage } from "@/lib/scheduling/coverage";
 import type { CrewRecommendation } from "@/lib/scheduling/availability";
+import type { PlannedAssignment } from "@/lib/scheduling/optimize";
+import type { ShiftReadinessLevel } from "@/lib/scheduling/readiness";
 import type { InstaworkRoleSummary } from "@/lib/instawork/reconcile";
 
 const BTN =
   "inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50 disabled:pointer-events-none";
+const PRIMARY =
+  "inline-flex items-center gap-1.5 rounded border border-foreground bg-foreground/[0.08] px-3.5 py-1.5 text-[12.5px] font-medium text-foreground transition-colors hover:bg-foreground/[0.14] disabled:opacity-50 disabled:pointer-events-none";
+
+/** A compact stop descriptor surfaced on the route card (from the Route already in hand — no new fetch). */
+export interface RouteStopBrief {
+  custName: string;
+  kind: "delivery" | "pickup";
+  address: string | null;
+}
 
 export const ROLE_LABEL: Record<ShiftRole, string> = { driver: "Driver", field: "Field", prep: "Prep" };
 const ROLE_ORDER: ShiftRole[] = ["driver", "field", "prep"];
@@ -53,6 +64,8 @@ export interface RouteCardData {
   windowKnown: boolean;
   roles: ShiftRole[]; // roles this route staffs (drives Instawork gig matching)
   gigs: MatchedGig[];
+  stops: RouteStopBrief[]; // the route's stops (customer/kind/address) for a richer card
+  readiness: ShiftReadinessLevel | null; // worst readiness across the route's shifts (day-of chip)
 }
 
 export type RouteRecs = Record<string, Partial<Record<ShiftRole, CrewRecommendation[]>>>;
@@ -85,6 +98,7 @@ export function RouteStaffBoard({
   prepCrewToday,
   prepNeed,
   routeFieldNeed,
+  proposedByRoute,
   instawork,
   iwConfigured,
   hasRoutes,
@@ -101,6 +115,7 @@ export function RouteStaffBoard({
   prepCrewToday: PrepPerson[];
   prepNeed: number;
   routeFieldNeed: Record<string, number>;
+  proposedByRoute: Record<string, PlannedAssignment[]>;
   instawork: Record<ShiftRole, InstaworkRoleSummary> | null;
   iwConfigured: boolean;
   hasRoutes: boolean;
@@ -113,7 +128,9 @@ export function RouteStaffBoard({
 
   const nameOf = (userId: number): CrewMember | undefined => roster.find((m) => m.userId === userId);
 
-  async function generate(): Promise<void> {
+  // AUTO STAFF (propose): refresh demand from routes, then let the server recompute + render the proposed
+  // optimizer plan. This PROPOSES only; committing is the dispatcher's explicit Approve in the plan card.
+  async function autoStaff(): Promise<void> {
     setGenerating(true);
     setNote(null);
     try {
@@ -123,12 +140,14 @@ export function RouteStaffBoard({
         body: JSON.stringify({ date }),
       });
       const j = (await res.json()) as { shifts?: StaffShift[]; note?: string };
-      if (!res.ok) setNote("Couldn't build from routes.");
+      if (!res.ok) setNote("Couldn't build the plan from routes.");
       else if (j.note === "no routes") setNote("No routes for this day — nothing to build.");
-      else setNote(`Built ${j.shifts?.length ?? 0} shift${(j.shifts?.length ?? 0) === 1 ? "" : "s"} from routes.`);
+      else setNote(`Proposed a plan over ${j.shifts?.length ?? 0} shift${(j.shifts?.length ?? 0) === 1 ? "" : "s"}. Review and approve below.`);
       router.refresh();
+      // Scroll to the proposed plan once it has rendered (it sits above the board).
+      setTimeout(() => document.getElementById("staffing-plan")?.scrollIntoView({ behavior: "smooth", block: "start" }), 350);
     } catch {
-      setNote("Couldn't build from routes.");
+      setNote("Couldn't build the plan from routes.");
     } finally {
       setGenerating(false);
     }
@@ -136,16 +155,22 @@ export function RouteStaffBoard({
 
   return (
     <>
-      {/* Toolbar */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <button onClick={generate} disabled={generating} className={BTN + " border-foreground text-foreground"}>
-          {generating ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Build / refresh from routes
+      {/* Toolbar — AUTO STAFF is the headline action (propose the best internal-first plan). */}
+      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+        <button onClick={autoStaff} disabled={generating} className={PRIMARY} title="Build the day's demand from routes and propose the best internal-first plan. Review and approve to commit.">
+          {generating ? <Loader2 className="size-3.5 animate-spin" /> : <Wand2 className="size-3.5" />} Auto staff
+        </button>
+        <button onClick={autoStaff} disabled={generating} className={BTN} title="Rebuild demand from the latest routes.">
+          <RefreshCw className="size-3.5" /> Refresh from routes
         </button>
         <button onClick={() => setEditing("new")} className={BTN}>
           <Plus className="size-3.5" /> Add shift
         </button>
         {note && <span className="text-[12px] text-meta">{note}</span>}
       </div>
+      <p className="mb-4 text-[11.5px] text-meta">
+        Auto staff proposes an internal-first plan for the day. It never commits on its own — you approve it in the proposed-plan card.
+      </p>
 
       {!hasRoutes && (
         <p className="mb-4 rounded border border-border bg-[var(--row-hover)]/40 px-3 py-2.5 text-[12.5px] text-tertiary-text">
@@ -166,6 +191,7 @@ export function RouteStaffBoard({
                   card={rc}
                   shifts={shifts.filter((s) => s.routeId === rc.routeId)}
                   coverage={coverage}
+                  proposed={proposedByRoute[rc.routeId] ?? []}
                   nameOf={nameOf}
                   iwConfigured={iwConfigured}
                   onEdit={(s) => setEditing(s)}
@@ -385,11 +411,18 @@ function WarehousePrepSection({
   );
 }
 
+const READINESS_CHIP: Record<ShiftReadinessLevel, { label: string; cls: string }> = {
+  READY: { label: "Ready", cls: "border-positive/40 text-positive" },
+  BLOCKED: { label: "Blocked", cls: "border-critical/50 text-critical" },
+  UNVERIFIED: { label: "Unverified", cls: "border-attention/40 text-attention" },
+};
+
 // ── Route card ────────────────────────────────────────────────────────────────
 function RouteCard({
   card,
   shifts,
   coverage,
+  proposed,
   nameOf,
   iwConfigured,
   onEdit,
@@ -398,12 +431,16 @@ function RouteCard({
   card: RouteCardData;
   shifts: StaffShift[];
   coverage: Record<string, ShiftCoverage>;
+  proposed: PlannedAssignment[];
   nameOf: (userId: number) => CrewMember | undefined;
   iwConfigured: boolean;
   onEdit: (s: StaffShift) => void;
   onAdd: () => void;
 }): React.JSX.Element {
   const win = windowLabel(card.startTime, card.endTime, card.windowKnown);
+  const deliveries = card.stops.filter((s) => s.kind === "delivery").length;
+  const pickups = card.stops.filter((s) => s.kind === "pickup").length;
+  const firstVenue = card.stops.find((s) => s.address || s.custName) ?? null;
 
   // People on the route: explicit internal assignees (deduped by userId), plus the Connecteam crew the
   // coverage engine auto-credits (scheduled that day, not explicitly assigned), plus the actual Instawork
@@ -445,18 +482,38 @@ function RouteCard({
     <div className="surface space-y-3 border border-border p-5">
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <span className="flex size-9 items-center justify-center rounded border border-border text-tertiary-text">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded border border-border text-tertiary-text">
             <TruckIcon className="size-4" />
           </span>
-          <div>
-            <div className="text-[14px] font-medium">{card.truckName}</div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-[14px] font-medium">{card.truckName}</span>
+              {card.readiness && (
+                <span className={`rounded border px-1.5 py-px text-[10px] font-medium uppercase tracking-[0.06em] ${READINESS_CHIP[card.readiness].cls}`}>
+                  {READINESS_CHIP[card.readiness].label}
+                </span>
+              )}
+            </div>
             <div className="text-xs text-muted-foreground">
               {card.stopCount} stop{card.stopCount === 1 ? "" : "s"}
+              {(deliveries > 0 || pickups > 0) && (
+                <span>
+                  {" "}({deliveries > 0 ? `${deliveries} delivery` : ""}
+                  {deliveries > 0 && pickups > 0 ? ", " : ""}
+                  {pickups > 0 ? `${pickups} pickup` : ""})
+                </span>
+              )}
               {win ? ` · ${win}` : " · "}
               {!win && <span className="text-attention">Set time</span>}
             </div>
-            {card.eventLabel && <div className="mt-0.5 text-[11.5px] text-meta">{card.eventLabel}</div>}
+            {card.eventLabel && <div className="mt-0.5 truncate text-[11.5px] text-meta">{card.eventLabel}</div>}
+            {firstVenue && (firstVenue.address || firstVenue.custName) && (
+              <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-meta">
+                <MapPin className="size-3 shrink-0" />
+                <span className="truncate">{firstVenue.address || firstVenue.custName}</span>
+              </div>
+            )}
           </div>
         </div>
         <button onClick={onAdd} className={BTN + " shrink-0"}>
@@ -502,6 +559,42 @@ function RouteCard({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Proposed plan overlay — what Auto staff would place on this route (internal ✓ / open ○). */}
+      {proposed.length > 0 && (
+        <div className="border-t border-[var(--row-rule)] pt-2.5">
+          <div className="mb-1 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.08em] text-meta">
+            <Wand2 className="size-3" /> Proposed
+            <span className="font-normal normal-case">
+              {proposed.filter((p) => p.kind === "internal").length} internal / {proposed.length} seat{proposed.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <ul className="space-y-0.5">
+            {proposed.map((p, i) => (
+              <li
+                key={`${p.shiftId}-${i}`}
+                title={p.kind === "temp" ? p.whyTemp ?? "" : p.whyThisRoute}
+                className="flex items-center gap-1.5 text-[12px]"
+              >
+                {p.kind === "internal" ? (
+                  <>
+                    <span className="text-positive">&#10003;</span>
+                    <span className="truncate text-foreground">{p.name}</span>
+                    <span className="text-[10.5px] uppercase tracking-[0.05em] text-meta">{ROLE_LABEL[p.role]}</span>
+                    {p.moved && <span className="text-[10.5px] text-attention">moved here</span>}
+                  </>
+                ) : (
+                  <>
+                    <span className="text-attention">&#9675;</span>
+                    <span className="text-meta">Open seat</span>
+                    <span className="text-[10.5px] uppercase tracking-[0.05em] text-attention">{ROLE_LABEL[p.role]} · Instawork</span>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* Remaining need per role + Instawork gap */}
