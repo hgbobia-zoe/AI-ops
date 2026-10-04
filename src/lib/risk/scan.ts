@@ -9,7 +9,10 @@ import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/h
 import { getCrewForDateSafe, connecteamConfigured, getPayRates, rateForUserOn, type CrewShift, type CrewRole } from "@/lib/connecteam";
 import { type CostEntryInput } from "@/lib/finance/allocation";
 import { attributeLabor, type AttribRoute, type WorkerShiftCost } from "@/lib/finance/laborAttribution";
+import { internalShiftCostsFromAssignments } from "@/lib/finance/internalLabor";
 import { laborAttributionConfig } from "@/lib/finance/config";
+import { getShiftsForDate } from "@/lib/scheduling/store";
+import { getAssignmentsForDate } from "@/lib/scheduling/assignments";
 import { readInstaworkSnapshot } from "@/lib/instawork/store";
 import { instaworkGigsForRoute, instaworkLocalDate, type RouteWindowMatch } from "@/lib/instawork/reconcile";
 import { gigWindowHours } from "@/lib/scheduling/cost";
@@ -227,11 +230,10 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
       }),
     );
 
-    // FI labor attribution (supersedes allocateDriverLabor): internal driver-day (when Connecteam is
-    // verified) + temp Instawork gigs matched to the day's routes → ONE deterministic cascade (worker→
-    // route by duration share → carve warehouse/travel → stop/project split), every leaf honestly
-    // labeled bucket/method/confidence. Internal is driver-grain today; field/prep via shift_assignments
-    // is the FI-Phase 4 upgrade seam (degrades gracefully to this driver source when absent).
+    // FI labor attribution (supersedes allocateDriverLabor): internal labor (per-worker shift_assignments
+    // for drivers + field + prep when present, else the legacy driver-day source) + temp Instawork gigs
+    // matched to the day's routes → ONE deterministic cascade (worker→route by duration share → carve
+    // warehouse/travel → stop/project split), every leaf honestly labeled bucket/method/confidence.
     const attribRoutes: AttribRoute[] = [];
     const matches = new Map<string, RouteWindowMatch>();
     for (const eng of routes) {
@@ -242,7 +244,19 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
     }
 
     const workerShiftCosts: WorkerShiftCost[] = [];
-    if (staffingVerified) {
+    // INTERNAL labor source (FI-Phase 4): prefer the per-worker shift_assignments entity (drivers + FIELD
+    // + PREP), each at its Connecteam rate, when the day has them; else FALL BACK to the legacy driver-day
+    // source so days without assignments behave exactly as before. Dedup by (worker, day): exactly ONE
+    // internal source per day — never both — so no worker/day is double-counted and the reconciliation
+    // invariant holds. (Temp Instawork labor is added separately below, unchanged.)
+    const dayAssignments = getAssignmentsForDate(date);
+    const internalFromAssignments =
+      dayAssignments.size > 0
+        ? internalShiftCostsFromAssignments(date, getShiftsForDate(date), dayAssignments, (uid) => rateForUserOn(payRates, uid, date))
+        : [];
+    if (internalFromAssignments.length > 0) {
+      workerShiftCosts.push(...internalFromAssignments);
+    } else if (staffingVerified) {
       const byDriver = new Map<string, EngineRoute[]>();
       for (const r of routes) if (r.driverId) byDriver.set(r.driverId, [...(byDriver.get(r.driverId) ?? []), r]);
       for (const [driverId, drRoutes] of byDriver) {

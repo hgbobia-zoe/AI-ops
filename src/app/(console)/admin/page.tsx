@@ -6,11 +6,12 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange } from "lucide-react";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
 import { SeoCredentialSettings } from "@/components/SeoCredentialSettings";
 import { InstaworkCredentialSettings } from "@/components/InstaworkCredentialSettings";
+import { OpsCycleSettings } from "@/components/OpsCycleSettings";
 import { RuntimeStatus } from "@/components/RuntimeStatus";
 
 const ADMIN_PIN = process.env.NEXT_PUBLIC_ADMIN_PIN || "0000";
@@ -256,6 +257,10 @@ export default function AdminPage() {
 
           <Section icon={<Search className="size-4" />} title="Instawork (temp labor)">
             <InstaworkCredentialSettings />
+          </Section>
+
+          <Section icon={<CalendarRange className="size-4" />} title="Operational cycle (Financial Intelligence)">
+            <OpsCycleSettings />
           </Section>
 
           <Section icon={<PlugZap className="size-4" />} title="Cloud runtime">
