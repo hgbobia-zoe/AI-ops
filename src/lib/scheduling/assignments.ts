@@ -9,6 +9,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+import { isLiveAssignment } from "./lifecycle";
 import type { AssignmentState, ShiftAssignment, ShiftLifecycleState, StaffShift, WorkerKind } from "./types";
 
 interface Row {
@@ -292,6 +293,104 @@ export function writeShiftLifecycle(shiftId: string, state: ShiftLifecycleState,
   getDb()
     .prepare("UPDATE staff_shifts SET lifecycle_state = ?, readiness_json = ?, updated_at = ? WHERE id = ?")
     .run(state, readinessJson, new Date().toISOString(), shiftId);
+}
+
+/**
+ * Reconcile the internal shift_assignments for a shift to EXACTLY the given set of Connecteam userIds
+ * (the staff_shifts.assignees projection — the SoR the board still reads). This is the LIVE dual-write
+ * path: when the dispatcher adds/removes an internal worker (AddWorkerPanel / ShiftEditor → PATCH), the
+ * per-worker rows are kept in lock-step. Idempotent: live rows for still-wanted workers are left as-is,
+ * a worker dropped from the set is marked REPLACED, and a previously-REPLACED worker who returns is
+ * revived to ASSIGNED. Records a shift_assignment_event per change. All in one transaction.
+ */
+export function syncInternalAssignments(
+  shift: Pick<StaffShift, "id" | "role">,
+  assignees: number[],
+  nameOf: (userId: number) => string | null,
+  actor: string = "system",
+  now: Date = new Date(),
+): { created: number; removed: number } {
+  const db = getDb();
+  let created = 0;
+  let removed = 0;
+  const want = new Set(assignees);
+  const tx = db.transaction(() => {
+    const existing = getAssignmentsForShift(shift.id).filter((a) => a.workerKind === "internal");
+    const byUid = new Map<number, ShiftAssignment>();
+    for (const a of existing) if (a.connecteamUserId != null) byUid.set(a.connecteamUserId, a);
+
+    // Drop live rows whose worker is no longer wanted.
+    for (const a of existing) {
+      if (a.connecteamUserId == null || want.has(a.connecteamUserId) || !isLiveAssignment(a.state)) continue;
+      updateAssignment(a.id, { state: "REPLACED" });
+      removed += 1;
+      logShiftEvent(
+        { shiftId: shift.id, assignmentId: a.id, actor, kind: "reassigned", field: "state", fromValue: a.state, toValue: "REPLACED", changeKey: `${a.id}:replaced:${now.toISOString()}` },
+        now,
+      );
+    }
+
+    // Add new rows, or revive a worker who was previously REPLACED/terminal.
+    for (const uid of assignees) {
+      const row = byUid.get(uid);
+      if (row && isLiveAssignment(row.state)) continue; // already live — no-op
+      if (row) {
+        updateAssignment(row.id, { state: "ASSIGNED" });
+        created += 1;
+        logShiftEvent({ shiftId: shift.id, assignmentId: row.id, actor, kind: "assigned", field: "state", fromValue: row.state, toValue: "ASSIGNED", changeKey: `${row.id}:revived:${now.toISOString()}` }, now);
+        continue;
+      }
+      const id = upsertAssignment({ shiftId: shift.id, workerKind: "internal", connecteamUserId: uid, displayName: nameOf(uid), role: shift.role, state: "ASSIGNED" });
+      created += 1;
+      logShiftEvent({ shiftId: shift.id, assignmentId: id, actor, kind: "assigned", field: "worker", toValue: String(uid), changeKey: `${shift.id}:assigned:internal:${uid}` }, now);
+    }
+  });
+  tx();
+  return { created, removed };
+}
+
+/**
+ * Reconcile the INSTAWORK shift_assignments for a shift to the booked worker NAMES in a FRESH gig
+ * snapshot. The caller MUST pass only workers from a verified, fresh snapshot (a stale/unreachable
+ * snapshot must never call this — it would fabricate or wrongly drop a booked worker; the house rule).
+ * Idempotent, same discipline as the internal sync: new names create rows, a name that left the booked
+ * set is marked REPLACED (a possible drop — the exception scan / monitor surface the replacement need).
+ */
+export function syncInstaworkAssignments(
+  shift: Pick<StaffShift, "id" | "role">,
+  gig: { gigId: string | null; workers: string[] },
+  actor: string = "system",
+  now: Date = new Date(),
+): { created: number; removed: number } {
+  const db = getDb();
+  let created = 0;
+  let removed = 0;
+  const want = new Set(gig.workers);
+  const tx = db.transaction(() => {
+    const existing = getAssignmentsForShift(shift.id).filter((a) => a.workerKind === "instawork");
+    const byName = new Map<string, ShiftAssignment>();
+    for (const a of existing) if (a.instaworkWorker != null) byName.set(a.instaworkWorker, a);
+
+    for (const a of existing) {
+      if (a.instaworkWorker == null || want.has(a.instaworkWorker) || !isLiveAssignment(a.state)) continue;
+      updateAssignment(a.id, { state: "REPLACED" });
+      removed += 1;
+      logShiftEvent({ shiftId: shift.id, assignmentId: a.id, actor, kind: "reassigned", field: "state", fromValue: a.state, toValue: "REPLACED", changeKey: `${a.id}:iw_dropped:${now.toISOString()}` }, now);
+    }
+
+    for (const name of gig.workers) {
+      const row = byName.get(name);
+      if (row && isLiveAssignment(row.state)) {
+        if (gig.gigId && row.instaworkGigId !== gig.gigId) upsertAssignment({ shiftId: shift.id, workerKind: "instawork", instaworkWorker: name, instaworkGigId: gig.gigId, displayName: name, role: shift.role });
+        continue;
+      }
+      const id = upsertAssignment({ shiftId: shift.id, workerKind: "instawork", instaworkWorker: name, instaworkGigId: gig.gigId, displayName: name, role: shift.role, state: "ASSIGNED" });
+      created += 1;
+      logShiftEvent({ shiftId: shift.id, assignmentId: id, actor, kind: "assigned", field: "worker", toValue: name, changeKey: `${shift.id}:assigned:instawork:${name}` }, now);
+    }
+  });
+  tx();
+  return { created, removed };
 }
 
 /**

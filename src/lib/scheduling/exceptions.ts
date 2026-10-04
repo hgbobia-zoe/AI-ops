@@ -35,6 +35,10 @@ export interface ScanInput {
   /** Connecteam/Instawork reachable this scan. When false, coverage-based exceptions are suppressed
    *  (UNVERIFIED is an UNKNOWN, never a fabricated understaffed alert). */
   staffingVerified?: boolean;
+  /** The worker-facing comms loop is live (SHIFT_COMMS_ENABLED). Until it is, "packet not delivered" /
+   *  "unconfirmed" are not actionable (we don't attempt a send), so they are suppressed — never a
+   *  fabricated alert for a loop that isn't running yet. Defaults to true (preserves pure-test behavior). */
+  commsWired?: boolean;
 }
 
 function startMsOf(s: StaffShift): number | null {
@@ -81,9 +85,9 @@ export function scanShiftExceptions(input: ScanInput): ShiftException[] {
       out.push(ex(s, "supervisor_missing", "YELLOW", "No supervisor", "Multi-person shift has no lead assigned", "Assign lead"));
     }
 
-    // Assignment-grained checks (only when assignments are provided).
+    // Assignment-grained checks (only when assignments are provided AND the comms loop is live).
     const assignments = input.assignmentsByShift?.get(s.id);
-    if (assignments && assignments.length > 0) {
+    if ((input.commsWired ?? true) && assignments && assignments.length > 0) {
       // #5 Packet not delivered to every assignment — YELLOW.
       if (assignments.some((a) => a.packetSentAt == null)) {
         out.push(ex(s, "packet_undelivered", "YELLOW", "Packet not delivered", "A worker has not received the shift packet", "Send packet"));

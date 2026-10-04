@@ -27,6 +27,9 @@ import { optimizeStaffing } from "@/lib/scheduling/optimize";
 import { StaffingPlanPreview } from "@/components/scheduling/StaffingPlanPreview";
 import { computeShiftReadiness } from "@/lib/scheduling/readiness";
 import { scanShiftExceptions } from "@/lib/scheduling/exceptions";
+import { getAssignmentsForDate } from "@/lib/scheduling/assignments";
+import { isLiveAssignment } from "@/lib/scheduling/lifecycle";
+import { shiftCommsEnabled } from "@/lib/scheduling/commsFlag";
 import { ShiftReadinessExceptions, type ReadinessRow } from "@/components/scheduling/ShiftReadinessExceptions";
 import { ROLE_LABEL } from "@/components/scheduling/RouteStaffBoard";
 import {
@@ -126,6 +129,10 @@ export default async function SchedulingPage({
     .filter((r) => r.status !== "done");
 
   const shifts = getShiftsForDate(date);
+  // Per-worker assignment rows (the lifecycle keystone), kept in lock-step with assignees by the live
+  // assign path. Readiness + exceptions compute over these real rows instead of a hardcoded 0.
+  const assignmentsByShift = getAssignmentsForDate(date);
+  const commsWired = shiftCommsEnabled();
 
   const configured = connecteamConfigured();
   const [coverage, roster, rates] = configured
@@ -281,6 +288,14 @@ export default async function SchedulingPage({
   // than fabricated red. Report time/location default to the shift start/location until explicitly set.
   const readinessRows: ReadinessRow[] = shifts.map((s) => {
     const gap = cov.byShift[s.id]?.gap ?? shiftGap(s);
+    const live = (assignmentsByShift.get(s.id) ?? []).filter((a) => isLiveAssignment(a.state));
+    const assignmentCount = live.length;
+    // TIMEKEEPING is a LINK (not owned): an internal worker is linked once the shift is published to
+    // Connecteam (its timesheet of record); a temp seat is linked once it is a booked gig. Honest red
+    // ("Not linked to a timesheet") when not yet linked, so publishing visibly closes it.
+    const timekeepingLinked =
+      assignmentCount > 0 &&
+      live.every((a) => (a.workerKind === "internal" ? Boolean(s.connecteamShiftId) : Boolean(a.instaworkGigId)));
     const r = computeShiftReadiness({
       gap,
       staffingUnverified: !coverage.ok,
@@ -289,17 +304,19 @@ export default async function SchedulingPage({
       windowKnown: s.windowKnown,
       reportTimeSet: Boolean(s.reportTime) || (s.windowKnown && Boolean(s.startTime)),
       reportLocationSet: Boolean(s.reportLocation || s.location),
-      assignmentCount: 0,
-      allPacketsSent: false,
-      commsUnverified: true,
-      timekeepingLinked: false,
-      timekeepingUnverified: true,
-      allConfirmed: false,
-      confirmationUnverified: true,
+      assignmentCount,
+      allPacketsSent: assignmentCount > 0 && live.every((a) => a.packetSentAt != null),
+      // COMMUNICATION + CONFIRMATION are only honestly assessable once the comms loop is live
+      // (SHIFT_COMMS_ENABLED); until then they are UNVERIFIED, never a fabricated red.
+      commsUnverified: !commsWired,
+      timekeepingLinked,
+      timekeepingUnverified: false,
+      allConfirmed: assignmentCount > 0 && live.every((a) => a.confirmedAt != null),
+      confirmationUnverified: !commsWired,
     });
     return { shiftId: s.id, routeId: s.routeId, roleLabel: ROLE_LABEL[s.role], level: r.level, score: r.score, blockers: r.blockers };
   });
-  const shiftExceptions = scanShiftExceptions({ shifts, coverage: cov, now: nowMs(), staffingVerified: coverage.ok });
+  const shiftExceptions = scanShiftExceptions({ shifts, coverage: cov, now: nowMs(), staffingVerified: coverage.ok, assignmentsByShift, commsWired });
   const money = (n: number | null): string => (n == null ? "n/a" : `$${Math.round(n).toLocaleString()}`);
   const hrs = (n: number | null): string | number => (n == null ? "n/a" : n);
   const pct = (n: number | null): string => (n == null ? "n/a" : `${Math.round(n * 100)}%`);
