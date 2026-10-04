@@ -93,6 +93,13 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
           immediate sync (prompting a Goodshuffle sign-in only if needed). Everyone else just uses the app; only this one
           machine needs it.
         </p>
+        <p className="border-l-2 border-indigo-400/40 pl-3 text-[13px] text-muted-foreground">
+          <b>Install only on the office machine(s)</b> that stay signed in, not on everyone&apos;s computer. Sign into
+          both <b>Goodshuffle</b> and <b>Instawork</b> there (Instawork powers the temp-labor sync). Once it&apos;s
+          published to the Chrome Web Store, install from the store link (open it in Chrome, Add to Chrome) and it
+          <b> auto-updates</b> with no more manual reloads. Until then, use the download below and re-load it after an
+          update.
+        </p>
 
         {/* Live status from the extension's heartbeat */}
         <div className={`flex items-center gap-2 border px-3 py-2 text-sm ${agentLive && agent?.status === "ok" ? "border-emerald-500/30 bg-emerald-500/[0.06] text-emerald-200" : agentLive ? "border-amber-500/40 bg-amber-500/10 text-amber-200" : "border-white/10 bg-white/[0.03] text-muted-foreground"}`}>
