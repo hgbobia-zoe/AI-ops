@@ -63,6 +63,21 @@ describe("pruneStaleRoutes", () => {
     expect(getRouteById(`R-${DAY}-E450`)).not.toBeNull(); // kept
   });
 
+  it("prunes a cancelled route on a gap date INSIDE the swept span (its date dropped out of the sweep)", async () => {
+    const { writeRoute, getRouteById, pruneStaleRoutes } = await repo();
+    // Sweep found routes on Fri and Sun; Sat's only route was cancelled in GS, so Sat isn't in `dates`.
+    const FRI = "2026-10-23", SAT = "2026-10-24", SUN = "2026-10-25";
+    writeRoute(route("E450", FRI));
+    writeRoute(route("E450", SUN));
+    writeRoute(route("NPR-1", SAT)); // cancelled — the old bug left this lingering forever
+    await ageAllRoutes();
+    const { deleted } = pruneStaleRoutes([FRI, SUN], [`R-${FRI}-E450`, `R-${SUN}-E450`]);
+    expect(deleted).toContain(`R-${SAT}-NPR-1`);
+    expect(getRouteById(`R-${SAT}-NPR-1`)).toBeNull();
+    expect(getRouteById(`R-${FRI}-E450`)).not.toBeNull();
+    expect(getRouteById(`R-${SUN}-E450`)).not.toBeNull();
+  });
+
   it("never prunes a route written in the last few minutes (just-imported this cycle)", async () => {
     const { writeRoute, getRouteById, pruneStaleRoutes } = await repo();
     const D = "2026-10-20";

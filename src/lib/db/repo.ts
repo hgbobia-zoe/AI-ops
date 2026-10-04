@@ -1641,8 +1641,12 @@ export function writeRoute(route: Route): void {
  * reassigned to another truck) and is removed here — the import itself is additive and never did this.
  *
  * SAFETY, so a bad/partial pull can never wipe real data:
- *   - Only dates the sweep POSITIVELY found a route on are touched (`dates` = distinct dates in the
- *     keep set). A date with zero found routes is left alone — an empty/failed listRoutes prunes nothing.
+ *   - Prune is confined to the CONTIGUOUS span the sweep actually covered: [earliest … latest] swept
+ *     date. The office pull sweeps a continuous horizon window, so every date in that span was checked;
+ *     a date inside it with zero routes means its routes were genuinely cancelled (prune it) — this is
+ *     what lets a route that was the ONLY one on its day get removed when it's cancelled, instead of the
+ *     date dropping out of the sweep and the stale route lingering. An empty/failed sweep sends no dates
+ *     and prunes nothing.
  *   - Only `ready` routes are removed. An `active`/`done` route (in progress or historical) is never
  *     pruned, even if absent from the sweep.
  *   - A route WRITTEN in the last few minutes is never pruned — it was almost certainly just imported
@@ -1662,13 +1666,18 @@ export function pruneStaleRoutes(dates: string[], keepRouteIds: string[]): { del
   const keep = new Set(keepRouteIds);
   const freshCutoff = new Date(Date.now() - PRUNE_MIN_AGE_MS).toISOString();
 
+  // Prune the CONTIGUOUS span the sweep covered, so a date that lost its only route (which therefore
+  // isn't in `dates`) is still cleaned, while a date beyond the swept span is never touched.
+  const sorted = [...keepDates].sort();
+  const minDate = sorted[0];
+  const maxDate = sorted[sorted.length - 1];
+
   const deleted: string[] = [];
   const tx = db.transaction(() => {
-    const datePh = keepDates.map(() => "?").join(",");
-    // updated_at is ISO-8601, so a string comparison is a chronological one.
+    // date and updated_at are ISO-8601, so string comparisons are chronological.
     const candidates = db
-      .prepare(`SELECT route_id FROM routes WHERE date IN (${datePh}) AND status = 'ready' AND updated_at < ?`)
-      .all(...keepDates, freshCutoff) as { route_id: string }[];
+      .prepare(`SELECT route_id FROM routes WHERE date >= ? AND date <= ? AND status = 'ready' AND updated_at < ?`)
+      .all(minDate, maxDate, freshCutoff) as { route_id: string }[];
     for (const { route_id } of candidates) {
       if (keep.has(route_id)) continue; // GS still has this one
       db.prepare("DELETE FROM stops WHERE route_id = ?").run(route_id);
