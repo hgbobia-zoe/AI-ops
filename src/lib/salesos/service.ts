@@ -3,10 +3,13 @@
 // Everything is a fact-derived recommendation for a HUMAN to act on — the system never contacts a
 // customer on its own (approval-based comms is a later phase).
 //
-// Phase-1 honesty: hasCommsIntegration is FALSE — we can't see replies or calls yet, so every "went
-// quiet" read is an inference from elapsed time. The UI shows that caveat.
+// Honesty: hasCommsIntegration reflects whether OpenPhone/Quo is actually wired (the same gate the
+// Connections health uses). When it is OFF we can't see replies or calls, so a "went quiet" read is an
+// inference from elapsed time, and the UI shows that caveat; when it is ON, inbound SMS/calls are
+// matched to bookings and the caveat drops.
 
 import { todayInOpsTz } from "@/lib/dates";
+import { openphoneApiKey } from "@/lib/comms/openphone";
 import { getOpenLeads, getBookingById, type BookingView } from "@/lib/db/repo";
 import {
   deriveSalesState,
@@ -95,7 +98,7 @@ export interface SalesLeadsOverview {
   totalOpen: number;
   totalPotential: number | null; // sum of known potential $
   actNowCount: number; // leads whose action urgency is "now"
-  hasCommsIntegration: boolean; // Phase 1: false — no inbound/reply visibility yet
+  hasCommsIntegration: boolean; // true when OpenPhone/Quo is configured (inbound/reply visibility)
 }
 
 const EMPTY_COUNTS = (): Record<SalesStage, number> => ({ unsent: 0, awaiting: 0, follow_up: 0, cold: 0, closing: 0 });
@@ -123,7 +126,7 @@ export function salesLeads(): SalesLeadsOverview {
     totalOpen: leads.length,
     totalPotential,
     actNowCount,
-    hasCommsIntegration: false,
+    hasCommsIntegration: !!openphoneApiKey(),
   };
 }
 

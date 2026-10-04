@@ -21,6 +21,7 @@ import {
   Aperture, Plus, Dna,
   Headset, PhoneCall, FlaskConical,
   Search, FileText, Rocket,
+  BrainCircuit,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -45,6 +46,20 @@ interface Group {
 const HUB: Blade = { href: "/dashboard", label: "Command Center", icon: Gauge };
 
 const GROUPS: Group[] = [
+  {
+    // AI Org — the control plane over Zoe's AI workforce. A leadership/governance surface (owner/admin
+    // only, so every sub-blade carries `manage`): it SURFACES what the other blades already compute and
+    // governs the AI employees. Minimal, additive — it disturbs no existing routes.
+    label: "AI Org",
+    icon: BrainCircuit,
+    blades: [
+      { href: "/ai-org", label: "AI Org", icon: Gauge, exact: true, manage: true },
+      { href: "/ai-org/employees", label: "AI Employees", icon: UsersRound, manage: true },
+      { href: "/ai-org/approvals", label: "Approvals", icon: ClipboardCheck, manage: true },
+      { href: "/ai-org/runs", label: "Runs", icon: RefreshCw, manage: true },
+      { href: "/ai-org/exceptions", label: "Exceptions", icon: AlertTriangle, manage: true },
+    ],
+  },
   {
     // Opportunity Radar — the opportunity intelligence + bid-pursuit house. A big blade in its own right
     // (it detects future demand; Sales OS converts it), with its working views as sub-blades. The
