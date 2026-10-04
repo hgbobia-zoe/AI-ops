@@ -14,7 +14,9 @@ function shift(role: StaffShift["role"], startIso: string | null, endIso: string
     id: "s1", date: "2026-10-01", role, headcount: 1, startTime: startIso, endTime: endIso, windowKnown: startIso != null,
     location: null, routeId: null, truckId: null, eventLabel: null, reasons: [], notes: null, source: "derived", status: "draft",
     assignees, instaworkHeadcount: 0, payRate: null, connecteamShiftId: null, connecteamSchedulerId: null,
-    connecteamPublishedAt: null, instaworkGigId: null, instaworkPostedAt: null, createdAt: "", updatedAt: "",
+    connecteamPublishedAt: null, instaworkGigId: null, instaworkPostedAt: null,
+    lifecycleState: null, supervisorUserId: null, reportLocation: null, reportTime: null, equipment: [], instructions: null,
+    createdAt: "", updatedAt: "",
   };
 }
 

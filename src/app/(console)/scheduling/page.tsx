@@ -25,6 +25,10 @@ import { recommendCrew, type CrewRecommendation } from "@/lib/scheduling/availab
 import { shiftWindowHours, gigWindowHours, internalRateFor, internalSeat, tempSeat, computeTempExposure, type LaborSeat } from "@/lib/scheduling/cost";
 import { optimizeStaffing } from "@/lib/scheduling/optimize";
 import { StaffingPlanPreview } from "@/components/scheduling/StaffingPlanPreview";
+import { computeShiftReadiness } from "@/lib/scheduling/readiness";
+import { scanShiftExceptions } from "@/lib/scheduling/exceptions";
+import { ShiftReadinessExceptions, type ReadinessRow } from "@/components/scheduling/ShiftReadinessExceptions";
+import { ROLE_LABEL } from "@/components/scheduling/RouteStaffBoard";
 import {
   getCrewForDateSafe,
   getUsersList,
@@ -44,6 +48,11 @@ import { DEFAULT_RISK_CONFIG, type EngineRoute } from "@/lib/risk/types";
 import type { Route } from "@/lib/types";
 
 const ROLE_ORDER: ShiftRole[] = ["driver", "field", "prep"];
+
+// Clock read lives outside render (the react-hooks/purity rule forbids Date.now() in a component body).
+function nowMs(): number {
+  return Date.now();
+}
 
 /** A route's operational window, taken from its shifts' own known windows (never fabricated). */
 function windowFromShifts(rs: StaffShift[]): { start: string | null; end: string | null; known: boolean } {
@@ -93,7 +102,9 @@ function syntheticShift(date: string, role: ShiftRole, win: { start: string | nu
     location: null, routeId: null, truckId: null, eventLabel: null, reasons: [], notes: null,
     source: "derived", status: "draft", assignees, instaworkHeadcount: 0, payRate: null,
     connecteamShiftId: null, connecteamSchedulerId: null, connecteamPublishedAt: null,
-    instaworkGigId: null, instaworkPostedAt: null, createdAt: "", updatedAt: "",
+    instaworkGigId: null, instaworkPostedAt: null,
+    lifecycleState: null, supervisorUserId: null, reportLocation: null, reportTime: null, equipment: [], instructions: null,
+    createdAt: "", updatedAt: "",
   } satisfies StaffShift;
 }
 
@@ -263,6 +274,32 @@ export default async function SchedulingPage({
     const r = routes.find((x) => x.routeId === routeId);
     return r ? truckName(r.truckId) : routeId;
   };
+
+  // ── Readiness roll-up + exception queue (read-only, deterministic) ───────────────────────────────
+  // STAFFING + LOGISTICS are computable now; the worker-facing loop (COMMUNICATION / TIMEKEEPING /
+  // CONFIRMATION) is not wired yet (later phases), so those components are honestly UNVERIFIED rather
+  // than fabricated red. Report time/location default to the shift start/location until explicitly set.
+  const readinessRows: ReadinessRow[] = shifts.map((s) => {
+    const gap = cov.byShift[s.id]?.gap ?? shiftGap(s);
+    const r = computeShiftReadiness({
+      gap,
+      staffingUnverified: !coverage.ok,
+      hasRoute: Boolean(s.routeId),
+      truckSet: Boolean(s.truckId),
+      windowKnown: s.windowKnown,
+      reportTimeSet: Boolean(s.reportTime) || (s.windowKnown && Boolean(s.startTime)),
+      reportLocationSet: Boolean(s.reportLocation || s.location),
+      assignmentCount: 0,
+      allPacketsSent: false,
+      commsUnverified: true,
+      timekeepingLinked: false,
+      timekeepingUnverified: true,
+      allConfirmed: false,
+      confirmationUnverified: true,
+    });
+    return { shiftId: s.id, routeId: s.routeId, roleLabel: ROLE_LABEL[s.role], level: r.level, score: r.score, blockers: r.blockers };
+  });
+  const shiftExceptions = scanShiftExceptions({ shifts, coverage: cov, now: nowMs(), staffingVerified: coverage.ok });
   const money = (n: number | null): string => (n == null ? "n/a" : `$${Math.round(n).toLocaleString()}`);
   const hrs = (n: number | null): string | number => (n == null ? "n/a" : n);
   const pct = (n: number | null): string => (n == null ? "n/a" : `${Math.round(n * 100)}%`);
@@ -321,6 +358,8 @@ export default async function SchedulingPage({
           `Instawork today: ${iwDayShifts.reduce((n, s) => n + s.filled, 0)} booked, ${iwDayShifts.reduce((n, s) => n + Math.max(0, s.total - s.filled), 0)} pending across ${iwDayShifts.length} gig${iwDayShifts.length === 1 ? "" : "s"}.`
         )}
       </p>
+
+      <ShiftReadinessExceptions rows={readinessRows} exceptions={shiftExceptions} routeLabel={routeLabelFor} />
 
       <StaffingPlanPreview plan={staffingPlan} routeLabel={routeLabelFor} />
 

@@ -65,6 +65,13 @@ export interface StaffShift {
   connecteamPublishedAt: string | null;
   instaworkGigId: string | null;
   instaworkPostedAt: string | null;
+  // Lifecycle + logistics (additive; lifecycleState authoritative going forward, derived from status when null).
+  lifecycleState: ShiftLifecycleState | null;
+  supervisorUserId: number | null;
+  reportLocation: string | null;
+  reportTime: string | null;
+  equipment: string[];
+  instructions: string | null;
   createdAt: string;
   updatedAt: string;
 }

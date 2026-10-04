@@ -30,6 +30,12 @@ interface Row {
   connecteam_published_at: string | null;
   instawork_gig_id: string | null;
   instawork_posted_at: string | null;
+  lifecycle_state: string | null;
+  supervisor_user_id: number | null;
+  report_location: string | null;
+  report_time: string | null;
+  equipment: string | null;
+  instructions: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -69,6 +75,12 @@ function toStaffShift(r: Row): StaffShift {
     connecteamPublishedAt: r.connecteam_published_at,
     instaworkGigId: r.instawork_gig_id,
     instaworkPostedAt: r.instawork_posted_at,
+    lifecycleState: (r.lifecycle_state as StaffShift["lifecycleState"]) ?? null,
+    supervisorUserId: r.supervisor_user_id,
+    reportLocation: r.report_location,
+    reportTime: r.report_time,
+    equipment: parseArr<string>(r.equipment),
+    instructions: r.instructions,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
