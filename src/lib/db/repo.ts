@@ -276,6 +276,29 @@ export function setRouteStatus(routeId: string, status: RouteStatus): void {
 }
 
 /**
+ * Delete a route entirely: its row, its stops, and its auto-derived (untouched) draft shift(s). For a
+ * route CANCELLED in Goodshuffle that the pull can't prune on its own — e.g. the cancelled route was the
+ * only one on its date, so that date drops out of the sweep and prune never covers it. Unlike closeRoute
+ * (marks done, keeps the record) this removes it. It will not come back unless Goodshuffle still has it
+ * (the next pull would re-import). A human-touched shift (someone assigned crew) is left for them to
+ * resolve, mirroring pruneStaleRoutes.
+ */
+export function deleteRoute(routeId: string): { ok: boolean; deleted: boolean } {
+  const db = getDb();
+  const row = db.prepare("SELECT route_id FROM routes WHERE route_id = ?").get(routeId) as { route_id: string } | undefined;
+  if (!row) return { ok: true, deleted: false };
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM stops WHERE route_id = ?").run(routeId);
+    db.prepare("DELETE FROM routes WHERE route_id = ?").run(routeId);
+    db.prepare(
+      "DELETE FROM staff_shifts WHERE route_id = ? AND source = 'derived' AND status = 'draft' AND (assignees IS NULL OR assignees = '[]')",
+    ).run(routeId);
+  });
+  tx();
+  return { ok: true, deleted: true };
+}
+
+/**
  * Force-close a truck's current route from the office. For when the driver couldn't
  * finish it on the tablet (dead battery, tablet down): sets the route status to "done"
  * so it drops off the active board and the tablet re-prompts to load today's route.
