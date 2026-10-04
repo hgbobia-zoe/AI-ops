@@ -24,6 +24,7 @@ export interface ShiftCoverage {
   assigned: number; // explicit app assignees
   scheduledCredit: number; // Connecteam-scheduled crew credited to this shift
   scheduledNames: string[]; // their names, for display ("via Connecteam: Michael")
+  scheduledUserIds: number[]; // their Connecteam userIds, for exact rate lookup (cost economics)
   covered: number; // assigned + scheduledCredit, capped at headcount
   gap: number; // headcount − covered → still needs Instawork
 }
@@ -61,15 +62,17 @@ export function computeCoverage(shifts: StaffShift[], scheduled: CrewMember[]): 
       const assigned = s.assignees.length;
       let residual = Math.max(0, s.headcount - assigned);
       const names: string[] = [];
+      const userIds: number[] = [];
       while (residual > 0 && pi < pool.length) {
         names.push(pool[pi].name);
+        userIds.push(pool[pi].userId);
         pi += 1;
         residual -= 1;
       }
       const scheduledCredit = names.length;
       const covered = Math.min(s.headcount, assigned + scheduledCredit);
       const gap = Math.max(0, s.headcount - covered);
-      byShift[s.id] = { headcount: s.headcount, assigned, scheduledCredit, scheduledNames: names, covered, gap };
+      byShift[s.id] = { headcount: s.headcount, assigned, scheduledCredit, scheduledNames: names, scheduledUserIds: userIds, covered, gap };
       internalTotal += covered;
       gapTotal += gap;
     }

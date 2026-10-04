@@ -22,13 +22,16 @@ import { getRoutesForDate } from "@/lib/db/repo";
 import { getShiftsForDate } from "@/lib/scheduling/store";
 import { computeCoverage } from "@/lib/scheduling/coverage";
 import { recommendCrew, type CrewRecommendation } from "@/lib/scheduling/availability";
+import { shiftWindowHours, gigWindowHours, internalRateFor, internalSeat, tempSeat, computeTempExposure, type LaborSeat } from "@/lib/scheduling/cost";
 import {
   getCrewForDateSafe,
   getUsersList,
+  getPayRates,
   connecteamConfigured,
   shiftClock,
   type CrewMember,
   type CrewShift,
+  type PayRate,
 } from "@/lib/connecteam";
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
 import { summarizeInstaworkByRole, instaworkShiftsForDate, instaworkGigsForRoute } from "@/lib/instawork/reconcile";
@@ -112,9 +115,9 @@ export default async function SchedulingPage({
   const shifts = getShiftsForDate(date);
 
   const configured = connecteamConfigured();
-  const [coverage, roster] = configured
-    ? await Promise.all([getCrewForDateSafe(date), getUsersList()])
-    : [{ ok: false, shifts: [] as CrewShift[] }, [] as CrewMember[]];
+  const [coverage, roster, rates] = configured
+    ? await Promise.all([getCrewForDateSafe(date), getUsersList(), getPayRates(date, date)])
+    : [{ ok: false, shifts: [] as CrewShift[] }, [] as CrewMember[], new Map<number, PayRate[]>()];
 
   // Distinct crew already on the Connecteam schedule this day (dedup by userId).
   const scheduledCrew = dedupCrew(coverage.shifts.flatMap((s) => s.assignees));
@@ -226,11 +229,35 @@ export default async function SchedulingPage({
 
   const peopleNeeded = shifts.reduce((n, s) => n + s.headcount, 0);
 
+  // ── Day economics (read-only) — the deterministic temp-exposure metric. Internal seats are the covered
+  // internal people per shift (explicit assignees + Connecteam-credited crew), costed at their pay rate;
+  // temp seats are the day's BOOKED Instawork workers, costed at the gig base price. Hours come from the
+  // window; an unknown rate/window stays null and is excluded from totals (never fabricated to 0).
+  const laborSeats: LaborSeat[] = [];
+  for (const s of shifts) {
+    const hours = shiftWindowHours(s);
+    const covShift = cov.byShift[s.id];
+    const internalIds = [...s.assignees, ...(covShift?.scheduledUserIds ?? [])];
+    for (const uid of internalIds) laborSeats.push(internalSeat(hours, internalRateFor(rates, uid, date)));
+  }
+  for (const gig of iwDayShifts) {
+    const h = gigWindowHours(gig);
+    for (let i = 0; i < gig.filled; i++) laborSeats.push(tempSeat(h, gig.basePrice));
+  }
+  const economics = computeTempExposure(laborSeats);
+  const money = (n: number | null): string => (n == null ? "n/a" : `$${Math.round(n).toLocaleString()}`);
+  const hrs = (n: number | null): string | number => (n == null ? "n/a" : n);
+  const pct = (n: number | null): string => (n == null ? "n/a" : `${Math.round(n * 100)}%`);
+
   const figures: Figure[] = [
     { label: "Shifts", value: shifts.length },
     { label: "People needed", value: peopleNeeded },
     { label: "Internal", value: cov.internalTotal, tone: "positive" },
     { label: "Gap → Instawork", value: cov.gapTotal, tone: cov.gapTotal > 0 ? "attention" : "default", sep: true },
+    { label: "Temp hrs", value: hrs(economics.tempHours), tone: economics.tempCount > 0 ? "attention" : "default", sep: true },
+    { label: "Temp cost", value: money(economics.tempCost), tone: economics.tempCount > 0 ? "attention" : "default" },
+    { label: "Premium vs internal", value: money(economics.incrementalTempCost) },
+    { label: "Temp % hrs", value: pct(economics.tempHourShare) },
   ];
 
   return (
