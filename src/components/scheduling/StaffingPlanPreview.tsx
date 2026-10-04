@@ -7,6 +7,7 @@
 // Comms style: no em-dashes, no emoji.
 
 import type { StaffingPlan, PlannedAssignment } from "@/lib/scheduling/optimize";
+import { ApplyPlanButton } from "@/components/scheduling/ApplyPlanButton";
 
 function hours(n: number | null): string {
   return n == null ? "n/a" : `${n}h`;
@@ -14,9 +15,11 @@ function hours(n: number | null): string {
 
 export function StaffingPlanPreview({
   plan,
+  date,
   routeLabel,
 }: {
   plan: StaffingPlan;
+  date: string;
   routeLabel: (routeId: string | null) => string;
 }): React.JSX.Element | null {
   if (plan.assignments.length === 0) return null; // nothing with a known window to optimize yet
@@ -42,14 +45,7 @@ export function StaffingPlanPreview({
         <div className="flex items-center gap-5">
           <Figure label="Temp seats" now={plan.currentTempCount} then={plan.planTempCount} />
           <Figure label="Temp hours" now={plan.currentTempHours} then={plan.planTempHours} unit="h" />
-          <button
-            type="button"
-            disabled
-            title="Applying a plan arrives with the assignment write path (a later phase)."
-            className="cursor-not-allowed rounded border border-border px-3 py-1.5 text-[12px] text-meta opacity-60"
-          >
-            Apply (coming)
-          </button>
+          <ApplyPlanButton date={date} enabled={plan.betterThanCurrent} />
         </div>
       </div>
 

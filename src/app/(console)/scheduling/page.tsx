@@ -378,7 +378,7 @@ export default async function SchedulingPage({
 
       <ShiftReadinessExceptions rows={readinessRows} exceptions={shiftExceptions} routeLabel={routeLabelFor} />
 
-      <StaffingPlanPreview plan={staffingPlan} routeLabel={routeLabelFor} />
+      <StaffingPlanPreview plan={staffingPlan} date={date} routeLabel={routeLabelFor} />
 
       <RouteStaffBoard
         date={date}
