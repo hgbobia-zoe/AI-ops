@@ -116,6 +116,37 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
         {/* Version query busts the browser cache when the zip is rebuilt — keep in sync with
             extension/manifest.json "version" (rebuild with scripts/build-extension-zip.ps1). */}
         <PullExtensionInstall downloadHref="/zoe-autopull-extension.zip?v=1.5.1" />
+
+        {/* Setup checklist for the dedicated always-on machine that runs the pull. */}
+        <details className="group border border-white/10 bg-white/[0.02]">
+          <summary className="cursor-pointer select-none px-4 py-2.5 text-sm font-medium text-foreground hover:bg-white/[0.03]">
+            Always-on puller machine — setup checklist
+          </summary>
+          <div className="space-y-3 px-4 pb-4 text-[13px] text-muted-foreground">
+            <p>The pull runs in a real browser on this one machine, so it stays on an ordinary (non-datacenter) connection that Goodshuffle does not block. Set it up once so it runs unattended:</p>
+            <div>
+              <div className="font-medium text-foreground">Power &amp; boot</div>
+              <ul className="ml-4 list-disc space-y-1">
+                <li>Set it to <b>never sleep or hibernate</b> (plugged in). The schedule will not fire reliably if it sleeps.</li>
+                <li><b>Auto-login the Windows user on boot</b> and add <b>Chrome to startup</b>, set to <b>Continue where you left off</b>, so after a reboot or update it comes back running on its own.</li>
+              </ul>
+            </div>
+            <div>
+              <div className="font-medium text-foreground">Chrome</div>
+              <ul className="ml-4 list-disc space-y-1">
+                <li>Turn off <b>Memory Saver / tab discarding</b> (or exclude pro.goodshuffle.com and app.instawork.com) so the background pull tab is never frozen.</li>
+                <li>Stay <b>signed into Goodshuffle and Instawork</b> here, with remember-me checked.</li>
+              </ul>
+            </div>
+            <div>
+              <div className="font-medium text-foreground">Sessions</div>
+              <ul className="ml-4 list-disc space-y-1">
+                <li>The pull hits Goodshuffle every 10 minutes, which keeps the session alive on its own. It should only drop on an absolute timeout or if cookies are cleared.</li>
+                <li>When it does drop, the extension opens a login tab and this page (plus the top status dot and a Slack alert) shows it, so someone just re-signs-in when prompted.</li>
+              </ul>
+            </div>
+          </div>
+        </details>
       </section>
 
       {/* Routes inspector — what the pull actually wrote to the DB (today onward). */}
