@@ -2,8 +2,9 @@
 // a venue (address to geocode, or manual miles when geocoding fails) + the event date + the pre-discount
 // subtotal + the leg mode, it:
 //   1. geocodes the venue and computes the one-way warehouse→venue driving distance (cached, bounded),
-//   2. gathers the day's SIGNED jobs that have a delivery component — both routed stops (precise address +
-//      window + truck) and signed-but-unrouted bookings (city-level location, window unknown),
+//   2. gathers the day's CONFIRMED scheduled deliveries — ONLY jobs already on a route (real stops with a
+//      precise address + window + truck). A signed-but-unrouted booking is NEVER used: we do not assume a
+//      booking has a delivery (guessing wrong mis-prices a real quote and costs money),
 //   3. runs the DETERMINISTIC route optimizer (STANDARD / ROUTE_OPTIMIZED / DEDICATED) to pick the
 //      billable distance, and
 //   4. prices the leg(s) with the team-editable pricing config.
@@ -17,7 +18,7 @@ import { pricingConfig } from "@/lib/pricing/config";
 import { deliveryQuote, metersToMiles, type LegMode } from "@/lib/pricing/delivery";
 import { buildDistanceFn, haversineMiles } from "@/lib/pricing/routeDistance";
 import { routeOptimize, type RouteAnchor } from "@/lib/pricing/routeOptimize";
-import { getStopsOnDate, getSignedBookingsOnDate } from "@/lib/db/repo";
+import { getStopsOnDate } from "@/lib/db/repo";
 
 export const dynamic = "force-dynamic";
 
@@ -122,9 +123,9 @@ export async function POST(req: Request): Promise<NextResponse> {
         optimize.reasons.push(`${failures} driving distance(s) could not be verified (routing service) and were estimated as the crow flies.`);
       }
     } else {
-      // Keep the STANDARD result but surface how many signed jobs existed (0 shareable).
+      // Keep the STANDARD result but surface that nothing was shareable.
       optimize.reasons = [
-        note ?? "No other signed jobs with a delivery component on this date — priced as a standalone trip from the warehouse.",
+        note ?? "No other confirmed scheduled deliveries on this date — priced as a standalone trip from the warehouse.",
       ];
     }
   } else if (venue && !eventDate) {
@@ -159,11 +160,12 @@ export async function POST(req: Request): Promise<NextResponse> {
 }
 
 /**
- * Gather the day's signed delivery jobs as anchors. Routed stops give a precise street address + window +
- * truck; signed-but-unrouted bookings give a city-level location with an unknown window. Each is geocoded
- * (cached). A straight-line prefilter drops anchors beyond the radius (air distance ≤ road, so this is
- * safe), and we keep at most ANCHOR_CAP nearest to bound geocodes + OSRM pairs. The quote's own project is
- * excluded so it never anchors to itself.
+ * Gather the day's CONFIRMED scheduled deliveries as anchors — ONLY jobs already on a route (their stops are
+ * real deliveries/pickups with a precise address, a known window, and a truck). A signed-but-unrouted
+ * booking is NOT used: we never assume it has a delivery (mis-pricing that costs real money). Each anchor is
+ * geocoded (cached); a straight-line prefilter drops anchors beyond the radius (air ≤ road, so safe), and we
+ * keep at most ANCHOR_CAP nearest to bound geocodes + OSRM pairs. The quote's own project is excluded so it
+ * never anchors to itself.
  */
 async function gatherAnchors(
   eventDate: string,
@@ -173,14 +175,13 @@ async function gatherAnchors(
 ): Promise<{ anchors: RouteAnchor[]; note: string | null }> {
   const self = (selfId ?? "").trim();
   const stops = getStopsOnDate(eventDate);
-  const bookings = getSignedBookingsOnDate(eventDate);
-
-  // Dedupe: a signed booking that's already on a route is represented by its (precise) routed stop.
-  const routedTxIds = new Set(stops.map((s) => s.txId).filter((x): x is string => !!x));
 
   type Raw = { id: string; label: string; addr: string; truckId: string | null; order?: number; windowKnown: boolean; source: "route" | "booking"; kind?: "delivery" | "pickup" };
   const raw: Raw[] = [];
 
+  // ONLY routed stops: a stop on a route is a CONFIRMED delivery/pickup (precise address, window, truck).
+  // We deliberately do NOT use signed-but-unrouted bookings — assuming a booking has a delivery would
+  // mis-price real money. A signed job that genuinely has delivery appears here once it is on a route.
   for (const s of stops) {
     if (self && s.txId === self) continue;
     if (!s.address.trim()) continue;
@@ -193,20 +194,6 @@ async function gatherAnchors(
       windowKnown: !!(s.plannedWindow || s.eta),
       source: "route",
       kind: s.kind,
-    });
-  }
-  for (const b of bookings) {
-    if (self && b.bookingId === self) continue;
-    if (routedTxIds.has(b.bookingId)) continue; // already covered by its routed stop
-    const loc = (b.location || b.venue || "").trim();
-    if (!loc) continue;
-    raw.push({
-      id: b.bookingId,
-      label: b.eventName || b.clientName || loc,
-      addr: loc,
-      truckId: null,
-      windowKnown: false,
-      source: "booking",
     });
   }
 
@@ -235,10 +222,10 @@ async function gatherAnchors(
     source: r.source,
   }));
 
-  const signedCount = raw.length;
+  const confirmedCount = raw.length;
   const note =
-    anchors.length < signedCount
-      ? `${signedCount} signed job(s) on this date; ${anchors.length} within ${radiusMiles} mi and geocodable were considered.`
+    anchors.length < confirmedCount
+      ? `${confirmedCount} confirmed scheduled stop(s) on this date; ${anchors.length} within ${radiusMiles} mi and geocodable were considered.`
       : null;
   return { anchors, note };
 }
