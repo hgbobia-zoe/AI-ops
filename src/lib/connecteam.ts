@@ -130,6 +130,9 @@ function ttlCache<T>(ttlMs: number, cacheable: (v: T) => boolean) {
 const _usersCache = ttlCache<Map<number, CrewMember>>(5 * 60_000, (m) => m.size > 0);
 const _schedCache = ttlCache<Scheduler[]>(5 * 60_000, (l) => l.length > 0);
 const _crewCache = ttlCache<CrewDayResult>(60_000, (r) => r.ok);
+const _ratesCache = ttlCache<Map<number, PayRate[]>>(5 * 60_000, (m) => m.size > 0);
+const _plannedCache = ttlCache<PlannedHoursResult>(5 * 60_000, (r) => r.ok);
+const _actualCache = ttlCache<ActualHoursResult>(5 * 60_000, (r) => r.ok);
 
 /** Fetch ALL pages of a Connecteam list endpoint (they cap at a page size, so a single call
  *  silently truncates). Dedup-terminated: stops on a short page OR when a page adds nothing new —
@@ -478,6 +481,10 @@ export interface PayRate {
 
 /** Hourly pay rates (with effective dates) for a date range. Empty when unconfigured/unavailable. */
 export async function getPayRates(startDate: string, endDate: string): Promise<Map<number, PayRate[]>> {
+  if (!connecteamConfigured()) return new Map();
+  return _ratesCache(`rates:${startDate}:${endDate}`, () => getPayRatesUncached(startDate, endDate));
+}
+async function getPayRatesUncached(startDate: string, endDate: string): Promise<Map<number, PayRate[]>> {
   const map = new Map<number, PayRate[]>();
   if (!connecteamConfigured()) return map;
   // Confirmed shape (live probe): data.payRatesByUsers = [{ userId, payRate }], where payRate is
@@ -539,6 +546,10 @@ export interface PlannedHoursResult {
 /** Planned hours per user from SCHEDULED shifts whose local day is in [startYmd,endYmd]. One
  *  range fetch per scheduler (efficient for weeks/months). ok:false when Connecteam is unreachable. */
 export async function getPlannedHours(startYmd: string, endYmd: string): Promise<PlannedHoursResult> {
+  if (!connecteamConfigured()) return { ok: false, hours: new Map() };
+  return _plannedCache(`planned:${startYmd}:${endYmd}`, () => getPlannedHoursUncached(startYmd, endYmd));
+}
+async function getPlannedHoursUncached(startYmd: string, endYmd: string): Promise<PlannedHoursResult> {
   const hours = new Map<number, number>();
   if (!connecteamConfigured()) return { ok: false, hours };
   const [sy, sm, sd] = startYmd.split("-").map(Number);
@@ -565,6 +576,10 @@ export async function getPlannedHours(startYmd: string, endYmd: string): Promise
 
 /** Actual paid hours per user for [startDate,endDate] (ISO YYYY-MM-DD, ≤45 days). */
 export async function getActualHours(startDate: string, endDate: string): Promise<ActualHoursResult> {
+  if (!connecteamConfigured()) return { ok: false, hours: new Map() };
+  return _actualCache(`actual:${startDate}:${endDate}`, () => getActualHoursUncached(startDate, endDate));
+}
+async function getActualHoursUncached(startDate: string, endDate: string): Promise<ActualHoursResult> {
   const hours = new Map<number, number>();
   if (!connecteamConfigured()) return { ok: false, hours };
   const clocks = await getTimeClocks();
