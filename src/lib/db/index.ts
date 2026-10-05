@@ -143,6 +143,33 @@ CREATE TABLE IF NOT EXISTS gs_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_gs_outbox_status ON gs_outbox(status, created_at);
 
+-- Ignition etaLink mint queue + result store (office-machine path). On departure we enqueue a 'pending'
+-- row; the Auto-Pull extension's Ignition content script (on a logged-in ignition.zonarsystems.com tab)
+-- drains it, replays Zonar's createEtaLink, and posts back the minted code/url (→ 'minted') or an error
+-- (→ 'error'). The customer SMS prefers the minted Ignition live-map URL; /track is the only fallback.
+CREATE TABLE IF NOT EXISTS eta_links (
+  id          TEXT PRIMARY KEY,
+  stop_id     TEXT,
+  route_id    TEXT,
+  truck_id    TEXT,
+  truck_label TEXT,
+  address     TEXT,
+  latitude    REAL,
+  longitude   REAL,
+  eta_hours   TEXT,
+  start_iso   TEXT,
+  end_iso     TEXT,
+  status      TEXT NOT NULL,   -- 'pending' | 'minted' | 'error'
+  code        TEXT,            -- Zonar etaLink code (→ public URL)
+  url         TEXT,            -- https://ignition.zonarsystems.com/etaLink/<code>
+  error       TEXT,
+  attempts    INTEGER DEFAULT 0,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_eta_links_status ON eta_links(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_eta_links_stop ON eta_links(stop_id, created_at);
+
 -- AI Org v2 — Approvals over the outbox. One row per AI-prepared action awaiting a human OK. An AI
 -- employee PROPOSES (from a real, already-computed draft/signal); this row carries the six-field
 -- approval card (what/why/data_used/expected_outcome/risk/what_if_approved) built DETERMINISTICALLY

@@ -3,7 +3,8 @@
 // When Zonar is configured, the ETA is REAL — computed from the truck's live GPS
 // position (see computeLiveEta); otherwise it shows the planned ETA from Goodshuffle.
 
-import { getTracking } from "@/lib/db/repo";
+import { redirect } from "next/navigation";
+import { getTracking, getMintedEtaLinkForStop } from "@/lib/db/repo";
 import { computeLiveEta, type LiveEta } from "@/lib/eta/liveEta";
 import { presentEta } from "@/lib/eta/etaView";
 import { STATE_VISUAL } from "@/lib/stateVisual";
@@ -24,6 +25,14 @@ export default async function TrackPage({
     !link.active ||
     (link.expiresAt ? new Date(link.expiresAt) < new Date() : false) ||
     !link.stop;
+
+  // Upgrade: if this stop's Ignition etaLink has since been minted (the office-machine mint landed after
+  // we sent this /track fallback), hand the customer straight to Zonar's own live moving map. So a
+  // fallback link always upgrades to the real live map once it's available.
+  if (!expired && link!.stop) {
+    const minted = getMintedEtaLinkForStop(link!.stop.stopId);
+    if (minted?.url) redirect(minted.url);
+  }
 
   // Real ETA from the truck's live location — only while the truck is en route.
   let live: LiveEta | null = null;

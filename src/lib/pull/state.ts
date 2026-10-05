@@ -34,6 +34,12 @@ export interface PullState {
   // Legacy single-value fields (kept so the existing freshness banner keeps working).
   lastPullAt?: string;
   lastStops?: number;
+  // Ignition etaLink mint poller (office-machine). Stamped when the extension's Ignition content script
+  // polls for pending mints: `seenAt` = a tab is polling at all; `readyAt` = that tab is SIGNED IN (has
+  // an IdToken, so a mint can actually succeed). The departure bounded-wait keys off `readyAt` so an
+  // unconfigured/signed-out office never stalls the "on the way" text.
+  ignitionMintSeenAt?: string;
+  ignitionMintReadyAt?: string;
 }
 
 export function getPullState(): PullState {
@@ -63,6 +69,25 @@ export function recordPull(source: string, count: number, now: Date = new Date()
   s.lastPullAt = now.toISOString();
   s.lastStops = count;
   save(s);
+}
+
+/** Record that the Ignition etaLink-mint poller checked in. `ready` = the Ignition tab is signed in
+ *  (an IdToken is present, so a mint can succeed). Called from GET /api/etalink/pending. */
+export function markEtaLinkPoller(ready: boolean, now: Date = new Date()): void {
+  const s = getPullState();
+  s.ignitionMintSeenAt = now.toISOString();
+  if (ready) s.ignitionMintReadyAt = now.toISOString();
+  save(s);
+}
+
+/** True when a SIGNED-IN Ignition tab has polled recently (default 20m). The departure flow only does
+ *  the bounded wait for a minted link when this holds — otherwise it sends the /track link immediately
+ *  (the mint still enqueues; /track upgrades itself if a link lands later). */
+export function etaLinkPollerReady(withinMin = 20, now: number = Date.now()): boolean {
+  const at = getPullState().ignitionMintReadyAt;
+  if (!at) return false;
+  const ageMin = (now - Date.parse(at)) / 60000;
+  return Number.isFinite(ageMin) && ageMin <= withinMin;
 }
 
 export function markStaleAlerted(now: Date = new Date()): void {

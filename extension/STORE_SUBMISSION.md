@@ -6,7 +6,7 @@ prompts is when a new *host permission* is added (rare) — a one-time "accept" 
 
 ## What's already prepped (in `extension/`)
 - `icon-16.png`, `icon-48.png`, `icon-128.png` (rendered from `public/icon.svg`) and wired into `manifest.json`.
-- Manifest at **v1.5.1** (the store rejects an upload whose version isn't higher than the live one, so each
+- Manifest at **v1.6.0** (the store rejects an upload whose version isn't higher than the live one, so each
   resubmission must bump `version`).
 - A store-ready zip is at `public/zoe-autopull-extension.zip` (same file the `/admin/pull` download serves).
   You can upload exactly that.
@@ -34,7 +34,7 @@ prompts is when a new *host permission* is added (rare) — a one-time "accept" 
      > company's Zoe Ops app.
    - **Single purpose:** Sync the operator's own Goodshuffle and Instawork business data into their Zoe Ops dashboard.
 4. **Privacy practices** — declare data use honestly:
-   - Reads **website content** of pro.goodshuffle.com and app.instawork.com (the business's own operational data).
+   - Reads **website content** of pro.goodshuffle.com, app.instawork.com and ignition.zonarsystems.com (the business's own operational data).
    - Does **not** collect personal browsing history, does **not** sell or share data, sends data **only** to the business's own Zoe Ops instance.
    - **Permission justifications** (paste each):
      - `scripting` — injects the read-only sync into the already-signed-in Goodshuffle/Instawork tab.
@@ -44,7 +44,9 @@ prompts is when a new *host permission* is added (rare) — a one-time "accept" 
      - `alarms` — schedules the periodic sync.
      - Host `pro.goodshuffle.com` — read the company's own routes and bookings to sync.
      - Host `app.instawork.com` — read the company's own temp-labor shifts to sync.
-     - Host `zoe-dispatch.fly.dev` — send the synced data to the company's own Zoe Ops app.
+     - Host `ignition.zonarsystems.com` — using the operator's own signed-in Zonar Ignition session, create Zonar's own live-tracking ETA links for the company's deliveries (so the customer gets a real live map), reading the session's own auth token from that page only.
+     - Host `wrfalckup5gc3flo7bizcsfmiq.appsync-api.us-east-1.amazonaws.com` — Zonar Ignition's own GraphQL API endpoint, called exactly as the Ignition web app does to create those ETA links.
+     - Host `zoe-dispatch.fly.dev` — send the synced data (and minted ETA links) to the company's own Zoe Ops app.
 5. Submit for review. Unlisted review is usually a few days.
 
 ## After it's approved — one coordination step

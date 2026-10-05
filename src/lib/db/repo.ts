@@ -10,6 +10,12 @@ import { slackNotify } from "@/lib/notify/slack";
 import type { Route, RouteStatus, Stop, StopState } from "@/lib/types";
 import type { CallRecap } from "@/lib/coach/recap";
 import { computeCallMetrics } from "@/lib/coach/metrics";
+import {
+  buildEtaLinkMintRequest,
+  etaLinkUrl,
+  type EtaLinkMintInput,
+  type EtaLinkMintRequest,
+} from "@/lib/eta/etaLinkMint";
 
 interface StopRow {
   stop_id: string;
@@ -1948,6 +1954,156 @@ export function ackGsOp(id: string, ok: boolean, error?: string): void {
         last_error = ?, updated_at = ? WHERE id = ?`,
     )
     .run(ok ? "done" : "failed", ok ? null : (error ?? "unknown"), new Date().toISOString(), id);
+}
+
+// ── Ignition etaLink mint (office-machine path) ─────────────────────────────────────────────────────
+// Enqueue on departure, drained by the Auto-Pull extension's Ignition content script (logged-in
+// ignition.zonarsystems.com tab), result posted back here. See src/lib/eta/etaLinkMint.ts (pure pieces)
+// and extension/ignition.js. The customer SMS prefers the minted Ignition live-map URL; /track is the
+// only fallback and upgrades itself to the Ignition map once a mint lands.
+
+interface EtaLinkRow {
+  id: string;
+  stop_id: string | null;
+  route_id: string | null;
+  truck_id: string | null;
+  truck_label: string | null;
+  address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  eta_hours: string | null;
+  start_iso: string | null;
+  end_iso: string | null;
+  status: string;
+  code: string | null;
+  url: string | null;
+  error: string | null;
+  attempts: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EtaLinkMintState {
+  id: string;
+  stopId: string;
+  status: "pending" | "minted" | "error";
+  url?: string;
+  code?: string;
+  error?: string;
+}
+
+/**
+ * Enqueue (or reuse) an Ignition etaLink mint for a stop. Idempotent within a 12h window: a live
+ * pending or already-minted row for the same stop is returned instead of creating a duplicate (so a
+ * re-tap / HEADING_NEXT retry never double-mints). Returns the current state.
+ */
+export function enqueueEtaLinkMint(input: EtaLinkMintInput & { routeId?: string }): EtaLinkMintState {
+  const db = getDb();
+  const cutoff = new Date(Date.now() - 12 * 3600 * 1000).toISOString();
+  const existing = db
+    .prepare(
+      "SELECT * FROM eta_links WHERE stop_id = ? AND status IN ('pending','minted') AND created_at > ? ORDER BY created_at DESC LIMIT 1",
+    )
+    .get(input.stopId, cutoff) as EtaLinkRow | undefined;
+  if (existing) {
+    return {
+      id: existing.id,
+      stopId: input.stopId,
+      status: existing.status as EtaLinkMintState["status"],
+      url: existing.url ?? undefined,
+      code: existing.code ?? undefined,
+    };
+  }
+  const now = new Date().toISOString();
+  const id = `EL-${randomUUID()}`;
+  db.prepare(
+    `INSERT INTO eta_links (id, stop_id, route_id, truck_id, truck_label, address, latitude, longitude,
+       eta_hours, start_iso, end_iso, status, attempts, created_at, updated_at)
+     VALUES (@id, @stopId, @routeId, @truckId, @truckLabel, @address, @lat, @lng, @etaHours, @startISO,
+       @endISO, 'pending', 0, @now, @now)`,
+  ).run({
+    id,
+    stopId: input.stopId,
+    routeId: input.routeId ?? null,
+    truckId: input.truckId,
+    truckLabel: input.truckLabel,
+    address: input.address,
+    lat: input.lat,
+    lng: input.lng,
+    etaHours: input.etaHours != null && Number.isFinite(input.etaHours) ? Number(input.etaHours).toFixed(2) : null,
+    startISO: input.startISO,
+    endISO: input.endISO,
+    now,
+  });
+  return { id, stopId: input.stopId, status: "pending" };
+}
+
+/** Pending mint requests for the extension to replay (oldest first), normalized to the wire shape. */
+export function listPendingEtaLinkMints(limit = 20): EtaLinkMintRequest[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM eta_links WHERE status = 'pending' ORDER BY created_at LIMIT ?")
+    .all(limit) as EtaLinkRow[];
+  return rows.map((r) =>
+    buildEtaLinkMintRequest(r.id, {
+      stopId: r.stop_id ?? "",
+      truckId: r.truck_id ?? "",
+      truckLabel: r.truck_label ?? "",
+      address: r.address ?? "",
+      lat: r.latitude ?? 0,
+      lng: r.longitude ?? 0,
+      etaHours: r.eta_hours != null ? Number(r.eta_hours) : null,
+      startISO: r.start_iso ?? "",
+      endISO: r.end_iso ?? "",
+    }),
+  );
+}
+
+/** Record the extension's mint result: a code (→ minted + public URL) or an error. Idempotent: a row
+ *  already minted is not downgraded by a late error. */
+export function recordEtaLinkResult(id: string, result: { code?: string; url?: string; error?: string }): void {
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM eta_links WHERE id = ?").get(id) as EtaLinkRow | undefined;
+  if (!row) return;
+  const now = new Date().toISOString();
+  if (result.code || result.url) {
+    if (row.status === "minted") return; // already have it — never re-churn
+    const code = result.code ?? null;
+    const url = result.url ?? (code ? etaLinkUrl(code) : null);
+    db.prepare(
+      "UPDATE eta_links SET status = 'minted', code = ?, url = ?, error = NULL, attempts = attempts + 1, updated_at = ? WHERE id = ?",
+    ).run(code, url, now, id);
+    return;
+  }
+  if (row.status === "minted") return; // don't clobber a good link with a trailing error
+  db.prepare(
+    "UPDATE eta_links SET status = 'error', error = ?, attempts = attempts + 1, updated_at = ? WHERE id = ?",
+  ).run((result.error ?? "mint_failed").slice(0, 300), now, id);
+}
+
+/** The latest minted Ignition live-map URL for a stop (if any) — drives the /track upgrade + the
+ *  departure bounded-wait. Returns null when nothing is minted yet. */
+export function getMintedEtaLinkForStop(stopId: string): { url: string; code: string | null } | null {
+  const row = getDb()
+    .prepare("SELECT * FROM eta_links WHERE stop_id = ? AND status = 'minted' AND url IS NOT NULL ORDER BY created_at DESC LIMIT 1")
+    .get(stopId) as EtaLinkRow | undefined;
+  return row && row.url ? { url: row.url, code: row.code ?? null } : null;
+}
+
+/** Current state of a stop's latest mint row (any status) — used by the bounded wait to stop early on
+ *  an error instead of blocking the full timeout. */
+export function getEtaLinkStateForStop(stopId: string): EtaLinkMintState | null {
+  const row = getDb()
+    .prepare("SELECT * FROM eta_links WHERE stop_id = ? ORDER BY created_at DESC LIMIT 1")
+    .get(stopId) as EtaLinkRow | undefined;
+  if (!row) return null;
+  return {
+    id: row.id,
+    stopId,
+    status: row.status as EtaLinkMintState["status"],
+    url: row.url ?? undefined,
+    code: row.code ?? undefined,
+    error: row.error ?? undefined,
+  };
 }
 
 /** Write a fully-scraped route: upsert the route row and replace its stops. */

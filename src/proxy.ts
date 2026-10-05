@@ -46,6 +46,7 @@ const PUBLIC: string[] = [
   "/api/gs/emails", // Auto-Pull captures the client email thread; own token (fail-open), CORS-locked — must not bounce to auth
   "/api/gs/outbox",
   "/api/gs/intake-result", // Auto-Pull reports the created project id back here; own token (fail-open), CORS-locked — must not bounce to auth
+  "/api/etalink", // Ignition etaLink mint pending/result; GS_INGEST_TOKEN (fail-open), CORS-locked to ignition.zonarsystems.com — the office-machine Ignition tab reads/posts here, NOT a session (distinct from the /api/eta GPS prefix)
   "/api/pull/heartbeat", // Auto-Pull extension status ping; own token (fail-open), CORS-open
   "/api/runtime/tick", // Cloud runtime heartbeat; RUNTIME_TOKEN-gated (503 until set), hit by GitHub Actions (not a session)
   "/api/openphone/webhook", // OpenPhone → us; authenticates by HMAC signature, not a session

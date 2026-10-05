@@ -10,6 +10,8 @@ import { alertOps } from "./alert";
 import { createTracking, expireTracking, insertMessage, insertException, insertAudit } from "@/lib/db/repo";
 import { getSettings, renderTemplate, templateForKind, type AppSettings } from "@/lib/settings";
 import { formatClockTime } from "@/lib/dates";
+import { mintEtaLinkForStop } from "@/lib/eta/mint";
+import { selectTrackingLink } from "@/lib/eta/etaLinkMint";
 
 export interface FanoutCtx {
   action: ActionType;
@@ -34,25 +36,40 @@ const CLOSEOUT_LABELS: [keyof CloseoutResult, string][] = [
   ["notesSubmitted", "Submit route notes"],
 ];
 
-// The customer tracking link. We now ALWAYS send our own /track link — it renders real server-side
-// live GPS + ETA, so it is "the real link, not a fallback," and we never hand Zonar the customer's
-// number (so the notify-line rule is moot). The Zoe main line (301-291-5296) stays the only notify
-// number on any residual Zonar link.
+// The customer tracking link, in priority order:
+//   1. The REAL Ignition live-tracking map (etaLink/<code>), minted from the OFFICE MACHINE's logged-in
+//      ignition.zonarsystems.com session via the Auto-Pull extension (see src/lib/eta/mint.ts). This is
+//      Zonar's own recomputing live map and is PRIMARY when available.
+//   2. Our own /track link — real server-side live GPS + a clearly-labeled ETA. The ONLY fallback, and
+//      a guaranteed-working link: /track upgrades itself to the Ignition map if the mint lands later
+//      (so even a fallback send becomes the live map). We never hand Zonar the customer's number — the
+//      mint forces Zonar's notify SMS to the Zoe main line (+13012915296, ETA_NOTIFY_PHONE_E164).
+//
+// Timing: we always create the /track fallback first, then mintEtaLinkForStop does a bounded wait ONLY
+// when a signed-in Ignition tab is actively minting; otherwise the text goes out immediately with /track
+// and upgrades later. See the design note atop src/lib/eta/mint.ts.
 //
 // TODO(remove next release): the tablet-minted Zonar `payload.etaLink` and the static per-truck
-// `ignitionEtaLinks` are the retired device-login path. Kept DORMANT one release as a rollback:
-// set GS_ETALINK_LEGACY=1 to restore their old priority over /track. Delete this branch (and the
-// setting / kioskBridge minting) next release.
-function trackingLink(
+// `ignitionEtaLinks` are the RETIRED device-login path, now SUPERSEDED by the office-machine mint above.
+// Kept DORMANT one release as a rollback: set GS_ETALINK_LEGACY=1 to restore their old priority. Delete
+// this branch (and the setting / kioskBridge minting) next release.
+async function trackingLink(
   ctx: FanoutCtx,
   stop: Stop,
   settings: AppSettings,
-): string {
+): Promise<string> {
   if (process.env.GS_ETALINK_LEGACY === "1") {
     const legacy = (ctx.payload?.etaLink as string | undefined) || settings.ignitionEtaLinks[ctx.truckId];
     if (legacy) return legacy;
   }
-  return createTracking(stop.stopId, stop.routeId, ctx.baseUrl).url;
+  // Always have the working /track fallback (and the stop's token) ready; it also upgrades to Ignition.
+  const fallback = createTracking(stop.stopId, stop.routeId, ctx.baseUrl).url;
+  try {
+    const ignition = await mintEtaLinkForStop(stop, ctx.truckId, truckLabel(ctx.truckId));
+    return selectTrackingLink({ ignitionUrl: ignition, fallbackUrl: fallback }).url;
+  } catch {
+    return fallback; // never let a mint hiccup drop the customer's link
+  }
 }
 
 function truckLabel(truckId: string): string {
@@ -171,8 +188,8 @@ export async function runFanout(ctx: FanoutCtx): Promise<void> {
     switch (ctx.action) {
       case "LEAVING_WAREHOUSE": {
         if (!cur) break;
-        // Our own /track link — real server-side live GPS + ETA (see trackingLink).
-        const link = trackingLink(ctx, cur, s);
+        // Real Ignition live-map link (office-machine mint) if available, else our /track link (see trackingLink).
+        const link = await trackingLink(ctx, cur, s);
         await sms(cur, onWayText(s, cur, truck, link));
         await smsCoordinator(cur, coordinatorOnWayText(s, cur, truck, link));
         await slack(`🚚 ${truck} departed → ${cur.custName}${cur.dayOfName ? ` (day-of: ${cur.dayOfName})` : ""}`);
@@ -191,7 +208,7 @@ export async function runFanout(ctx: FanoutCtx): Promise<void> {
           await slack(`✅ ${truck} completed ${cur.custName}`);
         }
         if (ctx.nextStop) {
-          const link = trackingLink(ctx, ctx.nextStop, s);
+          const link = await trackingLink(ctx, ctx.nextStop, s);
           await sms(ctx.nextStop, onWayText(s, ctx.nextStop, truck, link));
           await smsCoordinator(ctx.nextStop, coordinatorOnWayText(s, ctx.nextStop, truck, link));
           await slack(`🚚 ${truck} heading to ${ctx.nextStop.custName}${ctx.nextStop.dayOfName ? ` (day-of: ${ctx.nextStop.dayOfName})` : ""}`);

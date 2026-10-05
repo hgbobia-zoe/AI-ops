@@ -27,6 +27,8 @@ const GS_CREATE = "https://pro.goodshuffle.com/app/project/createNewProject";
 const GS_LOGIN = "https://pro.goodshuffle.com/app/login";
 const IW_MATCH = "https://app.instawork.com/*";
 const IW_HOME = "https://app.instawork.com/";
+const IGN_MATCH = "https://ignition.zonarsystems.com/*";
+const IGN_HOME = "https://ignition.zonarsystems.com/";
 const CREATE_TIMEOUT_MS = 90_000; // reap an unclaimed/stuck create tab after this
 
 // ── Badge ─────────────────────────────────────────────────────────────────────
@@ -119,6 +121,27 @@ async function ensureInstaworkTab() {
   }
 }
 
+/** Return a live ignition.zonarsystems.com tab, creating a single pinned background one if none exists.
+ *  Same find-or-create logic as the GS/Instawork tabs: the Ignition content script (ignition.js) mints
+ *  Zonar ETA links from this office-machine session, polling our server on its own short timer. We never
+ *  close it. `justOpened` says we created it (its content script auto-runs on load). */
+async function ensureIgnitionTab() {
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: IGN_MATCH });
+  } catch (e) {
+    tabs = [];
+  }
+  const live = tabs.find((t) => t.id != null);
+  if (live) return { tab: live, justOpened: false };
+  try {
+    const tab = await chrome.tabs.create({ url: IGN_HOME, pinned: true, active: false });
+    return { tab, justOpened: true };
+  } catch (e) {
+    return { tab: null, justOpened: false };
+  }
+}
+
 /** Nudge the content script in existing GS tab(s) to run a pull now. The content script watches
  *  storage.pullNow and also accepts a direct message; storage is the reliable cross-tab trigger. The
  *  Instawork content script watches the SAME storage.pullNow, so this one nudge pulls both. */
@@ -140,13 +163,16 @@ async function runPullCycle(reason) {
   // script does the fetch + POST; a freshly-opened tab auto-runs on load, an existing one gets the same
   // storage.pullNow nudge below. Best-effort — never let it block or break the GS read-pull.
   const iw = await ensureInstaworkTab().catch(() => ({ justOpened: false }));
+  // Keep a signed-in Ignition tab alive too, so Zonar ETA links can be minted from this office machine.
+  // Its content script polls our server on its own short timer; the shared pullNow nudge also pokes it.
+  const ign = await ensureIgnitionTab().catch(() => ({ justOpened: false }));
   if (!tab) {
     badgeFor("no_tab");
     return { ok: false, reason: "no_tab" };
   }
   // A newly created tab's content script auto-runs on load; an existing one needs a nudge. One
-  // storage.pullNow nudges BOTH content scripts, so fire it if either tab was already open.
-  if (!justOpened || !iw.justOpened) await triggerPull();
+  // storage.pullNow nudges ALL content scripts, so fire it if any tab was already open.
+  if (!justOpened || !iw.justOpened || !ign.justOpened) await triggerPull();
   // Best-effort, opt-in create drain (never blocks or breaks the read-pull).
   drainCreates(reason).catch(() => {});
   return { ok: true, tabId: tab.id, justOpened };
