@@ -44,6 +44,9 @@ export interface SmsProviderDef {
   id: string;
   name: string;
   fields: ProviderField[];
+  /** Config keys that MUST be present for this provider to send (mirrors the `need()` check in send()).
+   *  Lets a caller tell "configured?" without attempting a send (used by the dry-run notify preview). */
+  requiredKeys: string[];
   send(to: string, body: string, cfg: Record<string, string>): Promise<SmsResult>;
   test(cfg: Record<string, string>): Promise<TestResult>;
 }
@@ -87,6 +90,7 @@ function need(cfg: Record<string, string>, keys: string[]): string | null {
 const openphone: SmsProviderDef = {
   id: "openphone",
   name: "OpenPhone",
+  requiredKeys: ["apiKey", "fromNumber"],
   fields: [
     { key: "apiKey", label: "API key", secret: true },
     { key: "fromNumber", label: "From number (E.164)", secret: false, placeholder: "+13012915296" },
@@ -139,6 +143,7 @@ async function ringcentralToken(
 const ringcentral: SmsProviderDef = {
   id: "ringcentral",
   name: "RingCentral",
+  requiredKeys: ["clientId", "clientSecret", "jwt", "fromNumber"],
   fields: [
     { key: "serverUrl", label: "Server URL", secret: false, placeholder: "https://platform.ringcentral.com", help: "Sandbox: https://platform.devtest.ringcentral.com" },
     { key: "clientId", label: "Client ID", secret: true },
@@ -172,6 +177,7 @@ const ringcentral: SmsProviderDef = {
 const dialpad: SmsProviderDef = {
   id: "dialpad",
   name: "Dialpad",
+  requiredKeys: ["apiKey", "fromNumber"],
   fields: [
     { key: "apiKey", label: "API key", secret: true },
     { key: "fromNumber", label: "From number (E.164)", secret: false, placeholder: "+13012915296" },

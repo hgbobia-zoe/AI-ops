@@ -19,6 +19,8 @@ import type { CrewMember } from "@/lib/connecteam";
 import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import { moveEligibility, type MoveFit } from "@/lib/scheduling/planView";
 import { type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
+import { NotifyConfirm } from "@/components/scheduling/NotifyConfirm";
+import type { NotifyNotice } from "@/lib/scheduling/assignNotify";
 import { ROLE_LABEL, type RouteCardData } from "@/components/scheduling/RouteStaffBoard";
 
 const BTN =
@@ -64,6 +66,8 @@ export function OverridePanel({
   const [error, setError] = useState<string | null>(null);
   const [panel, setPanel] = useState<{ kind: "replace" | "move"; entry: CrewEntry } | null>(null);
   const [assignRole, setAssignRole] = useState<ShiftRole>("field");
+  // Pending notices to confirm + send after an override (removed worker → "removed"; any added → "assigned").
+  const [notices, setNotices] = useState<NotifyNotice[] | null>(null);
 
   const reasonOk = reason.trim().length > 0;
   const nameOf = (uid: number): string => roster.find((m) => m.userId === uid)?.name ?? `#${uid}`;
@@ -108,7 +112,7 @@ export function OverridePanel({
     return ((await res.json()) as { shift?: StaffShift }).shift ?? null;
   }
 
-  async function run(fn: () => Promise<boolean>, successMsg: string): Promise<void> {
+  async function run(fn: () => Promise<boolean>, successMsg: string, noticesFor?: () => NotifyNotice[]): Promise<void> {
     if (!reasonOk) { setError("Enter a reason first (required for an override)."); return; }
     setWorking(true);
     setError(null);
@@ -117,6 +121,11 @@ export function OverridePanel({
       if (!ok) { setError("Couldn't apply the override. Try again."); return; }
       toast.success(successMsg);
       setPanel(null);
+      // The override already committed; texting the affected worker(s) is the dispatcher's explicit confirm.
+      if (noticesFor) {
+        const n = noticesFor();
+        if (n.length) setNotices(n);
+      }
       router.refresh();
     } catch {
       setError("Couldn't apply the override. Try again.");
@@ -129,6 +138,7 @@ export function OverridePanel({
     void run(
       () => patchShift(e.shift.id, { assignees: e.shift.assignees.filter((u) => u !== e.uid) }),
       `${e.name} removed; seat left open.`,
+      () => [{ shiftId: e.shift.id, userId: e.uid, kind: "removed" }],
     );
   }
 
@@ -138,27 +148,47 @@ export function OverridePanel({
     void run(
       () => patchShift(e.shift.id, { assignees: deduped, headcount: Math.max(e.shift.headcount, deduped.length) }),
       `${e.name} replaced with ${nameOf(newUid)}.`,
+      () => [
+        { shiftId: e.shift.id, userId: e.uid, kind: "removed" },
+        { shiftId: e.shift.id, userId: newUid, kind: "assigned" },
+      ],
     );
   }
 
   function move(e: CrewEntry, toRoute: RouteCardData): void {
-    void run(async () => {
-      const removed = await patchShift(e.shift.id, { assignees: e.shift.assignees.filter((u) => u !== e.uid) });
-      if (!removed) return false;
-      const target = await ensureShift(toRoute, e.role, shifts);
-      if (!target) return false;
-      const nextAssignees = target.assignees.includes(e.uid) ? target.assignees : [...target.assignees, e.uid];
-      return patchShift(target.id, { assignees: nextAssignees, headcount: Math.max(target.headcount, nextAssignees.length) });
-    }, `${e.name} moved to ${toRoute.truckName}.`);
+    let targetShiftId: string | null = null;
+    void run(
+      async () => {
+        const removed = await patchShift(e.shift.id, { assignees: e.shift.assignees.filter((u) => u !== e.uid) });
+        if (!removed) return false;
+        const target = await ensureShift(toRoute, e.role, shifts);
+        if (!target) return false;
+        targetShiftId = target.id;
+        const nextAssignees = target.assignees.includes(e.uid) ? target.assignees : [...target.assignees, e.uid];
+        return patchShift(target.id, { assignees: nextAssignees, headcount: Math.max(target.headcount, nextAssignees.length) });
+      },
+      `${e.name} moved to ${toRoute.truckName}.`,
+      () => {
+        const n: NotifyNotice[] = [{ shiftId: e.shift.id, userId: e.uid, kind: "removed" }];
+        if (targetShiftId) n.push({ shiftId: targetShiftId, userId: e.uid, kind: "assigned" });
+        return n;
+      },
+    );
   }
 
   function assignSpecific(uid: number): void {
-    void run(async () => {
-      const target = await ensureShift(card, assignRole, shifts);
-      if (!target) return false;
-      const nextAssignees = target.assignees.includes(uid) ? target.assignees : [...target.assignees, uid];
-      return patchShift(target.id, { assignees: nextAssignees, headcount: Math.max(target.headcount, nextAssignees.length) });
-    }, `${nameOf(uid)} assigned to ${card.truckName}.`);
+    let targetShiftId: string | null = null;
+    void run(
+      async () => {
+        const target = await ensureShift(card, assignRole, shifts);
+        if (!target) return false;
+        targetShiftId = target.id;
+        const nextAssignees = target.assignees.includes(uid) ? target.assignees : [...target.assignees, uid];
+        return patchShift(target.id, { assignees: nextAssignees, headcount: Math.max(target.headcount, nextAssignees.length) });
+      },
+      `${nameOf(uid)} assigned to ${card.truckName}.`,
+      () => (targetShiftId ? [{ shiftId: targetShiftId, userId: uid, kind: "assigned" }] : []),
+    );
   }
 
   // Candidates for replace/assign: free crew for the role (recommendCrew), then the role roster, minus
@@ -173,6 +203,7 @@ export function OverridePanel({
   }
 
   return (
+    <>
     <div className="flex h-full flex-col bg-background">
       <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
         <div className="min-w-0">
@@ -312,5 +343,7 @@ export function OverridePanel({
         <p className="mt-1.5 text-[11px] text-meta">Manual overrides always win. Each action is recorded with your reason on the audit trail.</p>
       </div>
     </div>
+    {notices && <NotifyConfirm notices={notices} title="Notify affected crew" onClose={() => setNotices(null)} />}
+    </>
   );
 }

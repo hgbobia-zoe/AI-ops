@@ -36,6 +36,19 @@ function withEnvFallback(providerId: string, cfg: Record<string, string>): Recor
   return cfg;
 }
 
+/**
+ * Is the active SMS provider actually configured to send? Mirrors the per-provider `need()` check in
+ * providers.ts (including the OpenPhone env fallback) WITHOUT attempting a send — so the notify dry-run can
+ * honestly tell a dispatcher "provider off" before anyone taps Send. This is the same gate the customer
+ * "on the way" SMS relies on: there is no separate master switch for that path, it simply sends when the
+ * active provider has its credentials and reports `skipped` when it does not.
+ */
+export function smsConfigured(): boolean {
+  const provider = smsProviderById(getSettings().smsProvider);
+  const cfg = withEnvFallback(provider.id, loadSmsConfig(provider.id));
+  return provider.requiredKeys.every((k) => Boolean(cfg[k]));
+}
+
 export async function sendSms(to: string, body: string, opts: { userId?: string } = {}): Promise<SmsResult> {
   const provider = smsProviderById(getSettings().smsProvider);
   const cfg = withEnvFallback(provider.id, loadSmsConfig(provider.id));

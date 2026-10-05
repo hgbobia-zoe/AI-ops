@@ -87,6 +87,17 @@ export async function POST(req: Request): Promise<NextResponse> {
   const nameOf = (uid: number): string | null => nameMap.get(uid)?.name ?? null;
   const shiftById = new Map(shifts.map((s) => [s.id, s]));
 
+  // Deltas for the batch notify confirm: internal workers newly ASSIGNED on a shift, and any dropped
+  // (removed/replaced), by comparing each touched shift's PRIOR assignees (read pre-apply) to the plan's
+  // new internal set. The confirm modal batches these; the apply itself still commits exactly as before.
+  const notifications: Array<{ shiftId: string; userId: number; kind: "assigned" | "removed" }> = [];
+  for (const w of writes) {
+    const prior = shiftById.get(w.shiftId)?.assignees ?? [];
+    const next = w.internalUserIds;
+    for (const uid of next) if (!prior.includes(uid)) notifications.push({ shiftId: w.shiftId, userId: uid, kind: "assigned" });
+    for (const uid of prior) if (!next.includes(uid)) notifications.push({ shiftId: w.shiftId, userId: uid, kind: "removed" });
+  }
+
   let internalPlaced = 0;
   let tempRecorded = 0;
   const tx = getDb().transaction(() => {
@@ -163,5 +174,6 @@ export async function POST(req: Request): Promise<NextResponse> {
     tempHoursSaved: plan.tempHoursSaved,
     tempCountSaved: plan.tempCountSaved,
     note: plan.note,
+    notifications,
   });
 }

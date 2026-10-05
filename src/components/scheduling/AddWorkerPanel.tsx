@@ -26,6 +26,8 @@ import {
   type WorkerDayEligibilityData,
 } from "@/lib/scheduling/eligibilityLabel";
 import { instaworkCoversRole, type InstaworkRoleSummary } from "@/lib/instawork/reconcile";
+import { NotifyConfirm } from "@/components/scheduling/NotifyConfirm";
+import type { NotifyNotice } from "@/lib/scheduling/assignNotify";
 import { ROLE_LABEL, type MatchedGig, type RouteCardData } from "@/components/scheduling/RouteStaffBoard";
 
 /** Tone → badge classes, shared by the eligibility labels. */
@@ -93,6 +95,8 @@ export function AddWorkerPanel({
   // The shift we just assigned to (so we can offer a publish). Null until an assign happens.
   const [assignedShiftId, setAssignedShiftId] = useState<string | null>(null);
   const [justAdded, setJustAdded] = useState<string[]>([]); // names added this session
+  // Pending assignment notice to confirm + send (the panel stays open so more workers can be added).
+  const [notices, setNotices] = useState<NotifyNotice[] | null>(null);
 
   const roleShifts = shifts.filter((s) => s.role === role);
   const existingAssignees = new Set<number>(roleShifts.flatMap((s) => s.assignees));
@@ -150,6 +154,8 @@ export function AddWorkerPanel({
       }
       setAssignedShiftId(shift.id);
       setJustAdded((a) => (a.includes(name) ? a : [...a, name]));
+      // Offer the confirm step: the assignment is done; texting the worker is the dispatcher's explicit tap.
+      setNotices([{ shiftId: shift.id, userId, kind: "assigned" }]);
       router.refresh();
     } catch {
       setError("Couldn't assign — try again.");
@@ -237,6 +243,7 @@ export function AddWorkerPanel({
   }
 
   return (
+    <>
     <div className="flex h-full flex-col bg-background">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
@@ -435,5 +442,7 @@ export function AddWorkerPanel({
         {error && <p className="mt-3 text-[12.5px] text-critical">{error}</p>}
       </div>
     </div>
+    {notices && <NotifyConfirm notices={notices} title="Notify the worker" onClose={() => setNotices(null)} />}
+    </>
   );
 }
