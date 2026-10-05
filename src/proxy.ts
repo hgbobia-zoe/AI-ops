@@ -21,6 +21,12 @@ const PUBLIC: string[] = [
   "/pass-expired", // dead-end for an ended/invalid pass (no session)
   "/api/auth",
   "/track",
+  // Live truck position + ETA by truckId+stopId. Driver tablets (device-bound, no session), shift-pass
+  // guest links, and the customer /track page all need this with no login. Low sensitivity: it returns the
+  // same live-GPS data already texted to customers as a tracking link, and never writes. NOTE: the admin
+  // fleet-discovery sub-path /api/eta/units is EXCLUDED from this (it lists every vehicle id) and is gated
+  // to owner/admin in proxy() below — adding /api/eta here does NOT make /api/eta/units public.
+  "/api/eta",
   // Driver tablets are bound to a TRUCK, not a person (device binding, no login), so the whole
   // driver surface must stay open when per-person auth is enabled — otherwise the field is locked out.
   "/kiosk",
@@ -96,7 +102,11 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
   if (!secret) return NextResponse.next(); // gate disabled until provisioned
 
   const { pathname } = req.nextUrl;
-  if (isPublicPath(pathname)) return NextResponse.next();
+  // /api/eta/units lists the whole fleet's vehicle ids — owner/admin only. It sits under the /api/eta
+  // prefix (which is PUBLIC for position/ETA by id), so exclude it from the public match here and let the
+  // explicit owner/admin gate below enforce it (deny-by-default, even for shift-pass guests).
+  const isEtaUnits = pathname === "/api/eta/units" || pathname.startsWith("/api/eta/units/");
+  if (!isEtaUnits && isPublicPath(pathname)) return NextResponse.next();
   if (pathname.startsWith("/api/pod") && req.method === "GET") return NextResponse.next(); // public tracking images
   // Creative source/reference images for the off-box n8n workflow: admit a GET ONLY when it carries a valid,
   // unexpired signature (minted per-image at handoff). No session is needed, but images are NOT public — an
@@ -113,6 +123,10 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
 
   const session = await verifySession(req.cookies.get(SESSION_COOKIE)?.value, secret);
   if (!session) return deny(req, "auth");
+
+  // Fleet vehicle-id discovery (/api/eta/units) → owner/admin only. Checked before the guest + role
+  // branches so a shift-pass guest (whose GUEST_ALLOW includes the /api/eta prefix) can't reach it.
+  if (isEtaUnits) return canManageSettings(session.role) ? NextResponse.next() : deny(req, "forbidden");
 
   // Shift Pass holders are scoped hard, before any staff role gate — deny-by-default outside the board
   // + driver surface. (Revocation is checked server-side in the console layout; expiry is in the cookie.)

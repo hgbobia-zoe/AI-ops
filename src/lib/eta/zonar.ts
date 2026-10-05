@@ -22,8 +22,9 @@ export function zonarConfigured(): boolean {
 }
 
 // Map our truckId → the GPS TrackIt unit id. Configured via GPSTRACKIT_UNITS_JSON,
-// e.g. {"NPR-1":"1","NPR-2":"2"}. Falls back to the truckId itself.
-function unitId(truckId: string): string {
+// e.g. {"NPR-1":"1","NPR-2":"2"}. Falls back to the truckId itself. Exported for tests
+// (unit-mapping parse) and so other server code can resolve the same id.
+export function unitId(truckId: string): string {
   try {
     const map = JSON.parse(process.env.GPSTRACKIT_UNITS_JSON || "{}") as Record<string, string>;
     return map[truckId] || truckId;

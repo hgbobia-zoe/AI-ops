@@ -456,11 +456,15 @@ export function useRouteMachine(truckId: string): RouteMachine {
           return;
         }
 
-        // In the Android kiosk, mint a Zonar ETA link for the customer this action's
-        // "on the way" SMS will reach, and pass it on the payload (fanout prefers it
-        // over the self-hosted /track link). No-op — and instant — outside the kiosk.
+        // TODO(remove next release): on-device Zonar etaLink minting is the retired device-login path.
+        // The "on the way" SMS now carries our own /track link (real server-side GPS), so we no longer
+        // mint an Ignition link in the kiosk's logged-in WebView. Kept DORMANT one release as a rollback:
+        // NEXT_PUBLIC_GS_ETALINK_LEGACY=1 restores minting (fanout also needs GS_ETALINK_LEGACY=1 to use it).
         let payloadOut = payload;
-        if (action === "LEAVING_WAREHOUSE" || action === "HEADING_NEXT") {
+        if (
+          process.env.NEXT_PUBLIC_GS_ETALINK_LEGACY === "1" &&
+          (action === "LEAVING_WAREHOUSE" || action === "HEADING_NEXT")
+        ) {
           const target = action === "HEADING_NEXT" ? route.stops[idx + 1] : stop;
           const link = await createEtaLinkViaKiosk(truckId, target?.address);
           if (link) payloadOut = { ...(payload ?? {}), etaLink: link };

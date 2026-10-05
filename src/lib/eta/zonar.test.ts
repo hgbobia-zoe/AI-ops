@@ -1,5 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parsePosition, getTruckPosition, rateLimitedUntil } from "./zonar";
+import { parsePosition, getTruckPosition, rateLimitedUntil, unitId } from "./zonar";
+
+describe("unitId — GPSTRACKIT_UNITS_JSON mapping", () => {
+  afterEach(() => {
+    delete process.env.GPSTRACKIT_UNITS_JSON;
+  });
+
+  it("maps a truckId to its GPS TrackIt unit id", () => {
+    process.env.GPSTRACKIT_UNITS_JSON = JSON.stringify({ "NPR-1": "1", E450: "2" });
+    expect(unitId("NPR-1")).toBe("1");
+    expect(unitId("E450")).toBe("2");
+  });
+
+  it("falls back to the truckId when it is not in the map", () => {
+    process.env.GPSTRACKIT_UNITS_JSON = JSON.stringify({ "NPR-1": "1" });
+    expect(unitId("E450")).toBe("E450");
+  });
+
+  it("falls back to the truckId when the map is unset or malformed", () => {
+    delete process.env.GPSTRACKIT_UNITS_JSON;
+    expect(unitId("NPR-1")).toBe("NPR-1");
+    process.env.GPSTRACKIT_UNITS_JSON = "{not valid json";
+    expect(unitId("NPR-1")).toBe("NPR-1");
+  });
+});
 
 describe("parsePosition", () => {
   it("finds lat/long in a nested Zonar response", () => {

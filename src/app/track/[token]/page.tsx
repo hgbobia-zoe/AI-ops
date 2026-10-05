@@ -5,6 +5,7 @@
 
 import { getTracking } from "@/lib/db/repo";
 import { computeLiveEta, type LiveEta } from "@/lib/eta/liveEta";
+import { presentEta } from "@/lib/eta/etaView";
 import { STATE_VISUAL } from "@/lib/stateVisual";
 import type { Stop } from "@/lib/types";
 
@@ -62,8 +63,14 @@ function TrackCard({ stop, live }: { stop: Stop; live: LiveEta | null }) {
           ? "Your delivery team is on the way"
           : "Delivery scheduled";
 
-  // Prefer the real, live ETA from the truck's location; fall back to the plan.
-  const etaText = live?.etaText ?? stop.eta;
+  // Real live ETA is primary; a planned ETA is a clearly-labeled fallback (never a silent swap).
+  const pres = presentEta({
+    enRoute: stop.state === "EnRoute",
+    hasLiveFix: !!live,
+    hasPlannedEta: !!stop.eta,
+    completed: stop.state === "Completed",
+  });
+  // A map pin is drawn ONLY with a real coordinate — never fabricated.
   const mapHref = live?.truck
     ? `https://maps.google.com/?q=${live.truck.lat},${live.truck.lng}`
     : null;
@@ -80,7 +87,8 @@ function TrackCard({ stop, live }: { stop: Stop; live: LiveEta | null }) {
         </div>
       </div>
 
-      {live && stop.state === "EnRoute" && (
+      {/* Live treatment — only with a genuine live fix (never fabricated). */}
+      {pres.mode === "live" && live && (
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-center">
           {live.minutesAway > 0 ? (
             <>
@@ -93,7 +101,7 @@ function TrackCard({ stop, live }: { stop: Stop; live: LiveEta | null }) {
           ) : (
             <>
               <div className="text-3xl font-bold tracking-tight">{live.etaText}</div>
-              <div className="mt-1 text-sm text-muted-foreground">Estimated arrival</div>
+              <div className="mt-1 text-sm text-muted-foreground">Live arrival estimate</div>
             </>
           )}
           {mapHref && (
@@ -109,14 +117,22 @@ function TrackCard({ stop, live }: { stop: Stop; live: LiveEta | null }) {
         </div>
       )}
 
+      {/* Labeled planned fallback — the planned ETA is still real schedule info, but we say so plainly
+          so a momentary GPS gap never reads as a live fix. */}
+      {pres.mode === "scheduled" && stop.eta && (
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-center">
+          <div className="text-3xl font-bold tracking-tight">{stop.eta}</div>
+          <div className="mt-1 text-sm text-muted-foreground">
+            {pres.liveUnavailable
+              ? "Estimated from schedule · live GPS unavailable"
+              : "Estimated arrival"}
+          </div>
+        </div>
+      )}
+
       <div className="space-y-2 text-sm">
         {stop.custName && <Row label="Delivery to">{stop.custName}</Row>}
         {stop.address && <Row label="Address">{stop.address}</Row>}
-        {etaText && stop.state !== "Completed" && !(live && stop.state === "EnRoute") && (
-          <Row label="Estimated arrival">
-            <span className="font-semibold text-foreground">{etaText}</span>
-          </Row>
-        )}
       </div>
 
       <p className="text-xs text-muted-foreground">

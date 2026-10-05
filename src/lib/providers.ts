@@ -1,14 +1,16 @@
 // Pluggable integration providers — the "switch your GPS / phone system" module.
 //
 // Two provider kinds, each with a small interface so the rest of the app is provider-
-// agnostic: SMS (OpenPhone / RingCentral / Dialpad) and GPS telematics (Zonar-on-tablet
-// / Samsara / Motive). The active provider is chosen in /admin; its credentials live in
-// the secrets store. Every call is defensive: unconfigured → `skipped`, never throws.
+// agnostic: SMS (OpenPhone / RingCentral / Dialpad) and GPS telematics (Zonar/Ignition via
+// GPS TrackIt / Samsara / Motive) — all server-side REST. The active provider is chosen in
+// /admin; its credentials live in the secrets store (Zonar's live in the GPSTRACKIT_* Fly
+// secrets). Every call is defensive: unconfigured → `skipped`, never throws.
 //
 // Server-only (uses fetch + the secrets store). API request shapes follow each vendor's
 // public REST API; verify against live credentials when first connecting one.
 
 import { getProviderConfig } from "@/lib/secrets";
+import { getTruckPosition, zonarConfigured } from "@/lib/eta/zonar";
 
 export interface ProviderField {
   key: string;
@@ -54,7 +56,8 @@ export interface SmsProviderDef {
 export interface GpsProviderDef {
   id: string;
   name: string;
-  /** false = credentials/location handled on the tablet (Zonar), not server-side. */
+  /** true = location is fetched server-side via a key-authed REST API (all current providers).
+   *  false would mean a device-handled source with nothing to fetch server-side. */
   serverSide: boolean;
   fields: ProviderField[];
   getLocation(vehicleId: string, cfg: Record<string, string>): Promise<GpsLocation>;
@@ -210,18 +213,26 @@ export const SMS_PROVIDERS: SmsProviderDef[] = [openphone, ringcentral, dialpad]
 
 // ── GPS providers ─────────────────────────────────────────────────────────────
 
-// Zonar/Ignition: the live session + ETA-link mint live on the TABLET (native), so
-// there's nothing to configure or fetch server-side here. Kept as the default.
+// Zonar / Ignition = the GPS TrackIt REST API (cloud-api.gpstrackit.com), the API behind the
+// Ignition portal. SERVER-SIDE: truck position comes from a plain key-authed REST call (not the
+// device's Ignition login), so live location + ETA work from anywhere. Delegates to the shared
+// low-level client in lib/eta/zonar.ts (which also powers liveEta.ts) — one code path, one 429
+// backoff, one unit-id map. Its credentials live in Fly secrets (GPSTRACKIT_API_KEY +
+// GPSTRACKIT_UNITS_JSON), not the per-provider secrets store, so `fields` is empty. Kept as the default.
 const zonar: GpsProviderDef = {
   id: "zonar",
-  name: "Zonar (Ignition, on tablet)",
-  serverSide: false,
+  name: "Zonar / Ignition (GPS TrackIt)",
+  serverSide: true,
   fields: [],
-  async getLocation() {
-    return { ok: false, skipped: true, error: "handled on the tablet's Ignition session" };
+  async getLocation(vehicleId) {
+    if (!zonarConfigured()) return { ok: false, skipped: true, error: "GPSTRACKIT_API_KEY not set" };
+    const pos = await getTruckPosition(vehicleId);
+    // Never fabricate a position: null = offline / rate-limited / no fix. Report it honestly.
+    if (!pos) return { ok: false, error: "no live position (truck offline, rate-limited, or no fix)" };
+    return { ok: true, lat: pos.lat, lng: pos.lng, ts: pos.ts };
   },
   async test() {
-    return { ok: true };
+    return zonarConfigured() ? { ok: true } : { ok: false, error: "GPSTRACKIT_API_KEY not set" };
   },
 };
 

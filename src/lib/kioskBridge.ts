@@ -203,6 +203,11 @@ export function switchIgnitionLoginViaKiosk(): boolean {
   return openAdminPanelViaKiosk();
 }
 
+// TODO(remove next release): everything below (DEFAULT_UNITS, ignitionUnitId, createEtaLinkViaKiosk)
+// is the retired tablet-minted Zonar etaLink path. It is now DORMANT — the "on the way" SMS sends our
+// own /track link (real server-side GPS) and useRouteMachine only calls createEtaLinkViaKiosk when the
+// NEXT_PUBLIC_GS_ETALINK_LEGACY rollback flag is set. Delete once /track has soaked one release.
+//
 // truckId → Ignition unit id. Captured from Zonar's searchUnits (see
 // android/IGNITION_ETALINK.md). Override via NEXT_PUBLIC_IGNITION_UNITS_JSON.
 const DEFAULT_UNITS: Record<string, number> = {

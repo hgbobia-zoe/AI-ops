@@ -38,7 +38,9 @@ describe("unconfigured providers skip, never throw or call out", () => {
     }
   });
 
-  it("server-side GPS getLocation with empty config is skipped", async () => {
+  it("server-side GPS getLocation when unconfigured is skipped", async () => {
+    // Zonar reads GPSTRACKIT_API_KEY (not per-provider cfg); keep it unset so it, like the others, skips.
+    delete process.env.GPSTRACKIT_API_KEY;
     for (const p of GPS_PROVIDERS.filter((g) => g.serverSide)) {
       const r = await p.getLocation("v1", {});
       expect(r.ok).toBe(false);
@@ -46,10 +48,12 @@ describe("unconfigured providers skip, never throw or call out", () => {
     }
   });
 
-  it("Zonar GPS is not server-side and skips server location", async () => {
+  it("Zonar GPS is now server-side (GPS TrackIt), skipping only when unconfigured", async () => {
+    delete process.env.GPSTRACKIT_API_KEY;
     const zonar = gpsProviderById("zonar");
-    expect(zonar.serverSide).toBe(false);
+    expect(zonar.serverSide).toBe(true);
     const r = await zonar.getLocation("v1", {});
+    expect(r.ok).toBe(false);
     expect(r.skipped).toBe(true);
   });
 });

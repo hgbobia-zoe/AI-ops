@@ -21,6 +21,7 @@ import { DispatchDialog } from "@/components/DispatchDialog";
 import { NotificationStatus } from "@/components/NotificationStatus";
 import { ACTION_ICON, STATE_VISUAL } from "@/lib/stateVisual";
 import { useLiveEta } from "@/lib/eta/useLiveEta";
+import { presentEta } from "@/lib/eta/etaView";
 import { formatClockTime } from "@/lib/dates";
 import type { AvailableAction } from "@/lib/stateMachine";
 import type { ActionType, ChecklistResult, CloseoutResult, ExceptionType, Stop } from "@/lib/types";
@@ -223,17 +224,35 @@ export function CurrentStopView({
             {activeStop.plannedWindow && (
               <InfoTile label="Window" value={formatClockTime(activeStop.plannedWindow)} />
             )}
-            {live ? (
-              <InfoTile
-                label={live.minutesAway > 0 ? `ETA · live · ${live.minutesAway} min` : "ETA · live"}
-                value={live.etaText}
-                emphasize
-              />
-            ) : (
-              activeStop.eta && (
-                <InfoTile label="ETA" value={formatClockTime(activeStop.eta)} emphasize />
-              )
-            )}
+            {/* Real live ETA is primary; the planned ETA is a clearly-labeled fallback, never a
+                silent "ETA" that hides whether it is live or scheduled. */}
+            {(() => {
+              const pres = presentEta({
+                enRoute: activeStop.state === "EnRoute",
+                hasLiveFix: !!live,
+                hasPlannedEta: !!activeStop.eta,
+                completed: activeStop.state === "Completed",
+              });
+              if (pres.mode === "live" && live) {
+                return (
+                  <InfoTile
+                    label={live.minutesAway > 0 ? `ETA · live · ${live.minutesAway} min` : "ETA · live"}
+                    value={live.etaText}
+                    emphasize
+                  />
+                );
+              }
+              if (pres.mode === "scheduled" && activeStop.eta) {
+                return (
+                  <InfoTile
+                    label={pres.liveUnavailable ? "ETA · scheduled (live GPS off)" : "ETA · scheduled"}
+                    value={formatClockTime(activeStop.eta)}
+                    emphasize
+                  />
+                );
+              }
+              return null;
+            })()}
           </div>
         </CardContent>
       </Card>
