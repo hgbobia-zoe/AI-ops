@@ -1260,6 +1260,33 @@ export function getRecentBookings(limit = 40): BookingView[] {
   ).map(toBookingView);
 }
 
+/** Search bookings for the delivery-calculator project picker. Matches a free-text query against the
+ *  Goodshuffle project id (the "project number"), the event name, and the client name — case-insensitive
+ *  substring on all three (a numeric query also matches the id). Open/active bookings rank ahead of
+ *  cancelled/lost/dead, then most recently created. Capped. Used only by the staff-gated search endpoint. */
+export function searchBookings(query: string, limit = 25): BookingView[] {
+  const q = query.trim();
+  if (!q) return [];
+  const like = `%${q.toLowerCase()}%`;
+  const lim = Math.max(1, Math.min(100, Math.floor(limit) || 25));
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM bookings
+         WHERE LOWER(booking_id) LIKE @like
+            OR LOWER(COALESCE(event_name,'')) LIKE @like
+            OR LOWER(COALESCE(client_name,'')) LIKE @like
+         ORDER BY
+           CASE WHEN LOWER(COALESCE(status_label,'')) LIKE '%cancel%'
+                  OR LOWER(COALESCE(status_label,'')) LIKE '%lost%'
+                  OR LOWER(COALESCE(status_label,'')) LIKE '%dead%' THEN 1 ELSE 0 END ASC,
+           COALESCE(date_created,'0000-00-00') DESC, updated_at DESC
+         LIMIT @lim`,
+      )
+      .all({ like, lim }) as Record<string, unknown>[]
+  ).map(toBookingView);
+}
+
 /** SIGNED, non-cancelled/lost bookings whose event is on `date` — the candidate route anchors for the
  *  route-aware delivery pricing engine. A signed job on the same date is treated as having a delivery
  *  (logistics) component even when it isn't on a route yet; its location is city-level and its window is

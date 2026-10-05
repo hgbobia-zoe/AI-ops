@@ -37,7 +37,7 @@ prompts is when a new *host permission* is added (rare) — a one-time "accept" 
    - Reads **website content** of pro.goodshuffle.com, app.instawork.com and ignition.zonarsystems.com (the business's own operational data).
    - Does **not** collect personal browsing history, does **not** sell or share data, sends data **only** to the business's own Zoe Ops instance.
    - **Permission justifications** (paste each):
-     - `scripting` — injects the read-only sync into the already-signed-in Goodshuffle/Instawork tab.
+     - `scripting` — injects the read-only sync into the already-signed-in Goodshuffle/Instawork tab, and runs an on-demand read-only lookup of a single project's current subtotal when the operator's Zoe Ops tab requests it.
      - `tabs` — opens and manages a background tab to run the scheduled sync without the operator babysitting one.
      - `storage` — stores the sync settings (which Zoe Ops URL, interval) and the last-sync status for the badge.
      - `activeTab` — acts on the current tab when the operator clicks the toolbar button to sync now.
@@ -46,7 +46,7 @@ prompts is when a new *host permission* is added (rare) — a one-time "accept" 
      - Host `app.instawork.com` — read the company's own temp-labor shifts to sync.
      - Host `ignition.zonarsystems.com` — using the operator's own signed-in Zonar Ignition session, create Zonar's own live-tracking ETA links for the company's deliveries (so the customer gets a real live map), reading the session's own auth token from that page only.
      - Host `wrfalckup5gc3flo7bizcsfmiq.appsync-api.us-east-1.amazonaws.com` — Zonar Ignition's own GraphQL API endpoint, called exactly as the Ignition web app does to create those ETA links.
-     - Host `zoe-dispatch.fly.dev` — send the synced data (and minted ETA links) to the company's own Zoe Ops app.
+     - Host `zoe-dispatch.fly.dev` — send the synced data (and minted ETA links) to the company's own Zoe Ops app, and receive its on-demand requests (e.g. the delivery-pricing calculator asking for a project's current subtotal).
 5. Submit for review. Unlisted review is usually a few days.
 
 ## After it's approved — one coordination step

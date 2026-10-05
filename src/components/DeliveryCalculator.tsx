@@ -13,9 +13,10 @@
 // sees only the final price; the route internals are labelled rep-only. No cost/margin is ever shown.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Calculator, Check, FolderOpen, Loader2, MapPin, Route as RouteIcon, Send, Truck, Wrench } from "lucide-react";
+import { Calculator, Check, FolderOpen, Loader2, MapPin, Route as RouteIcon, Search, Send, Truck, Wrench } from "lucide-react";
 import { deliveryQuote, type LegMode, type LegBreakdown, type MileageTier, type DeliveryQuote } from "@/lib/pricing/delivery";
 import { readinessTier } from "@/lib/pricing/eventReadiness";
+import { EXTENSION_ID } from "@/lib/extensionId";
 
 const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -36,10 +37,60 @@ const MODE_BADGE: Record<PricingMode, { label: string; cls: string }> = {
 interface ProjectOpt {
   id: string;
   name: string;
+  clientName: string;
   subtotal: number | null;
   location: string | null;
-  dateCreated: string | null;
   eventDate: string | null;
+}
+
+// Result of asking the Auto-Pull extension for the project's CURRENT pre-discount subtotal, live from a
+// logged-in Goodshuffle session. We only ever trust a live number the extension actually returned.
+interface LiveSubtotalResp {
+  ok: boolean;
+  subtotal?: number; // dollars (pre-discount contract_subtotal)
+  pulledAt?: string; // ISO
+  reason?: string;
+}
+
+// How the subtotal field's value was sourced, for an HONEST label under the field.
+type SubtotalInfo = { state: "loading" | "live" | "stored"; text: string } | null;
+
+/** Ask the installed Auto-Pull extension to read the project's current pre-discount subtotal from a
+ *  logged-in Goodshuffle session. Resolves (never rejects) with ok:false when the extension isn't
+ *  installed / not on this machine / signed out / slow — the page then keeps the stored value and labels
+ *  it honestly. ~8s timeout; guards for a missing chrome.runtime. */
+function requestLiveSubtotal(projectId: string): Promise<LiveSubtotalResp> {
+  return new Promise((resolve) => {
+    try {
+      const rt = (globalThis as unknown as { chrome?: { runtime?: { sendMessage?: (id: string, msg: unknown, cb: (r: unknown) => void) => void; lastError?: unknown } } }).chrome?.runtime;
+      if (!rt?.sendMessage) {
+        resolve({ ok: false, reason: "no_extension" });
+        return;
+      }
+      let done = false;
+      const timer = setTimeout(() => {
+        if (!done) {
+          done = true;
+          resolve({ ok: false, reason: "timeout" });
+        }
+      }, 8000);
+      rt.sendMessage(EXTENSION_ID, { type: "zoe-fetch-subtotal", projectId }, (resp: unknown) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        // Reading lastError clears Chrome's "Unchecked runtime.lastError" console noise when the
+        // extension isn't there / didn't answer.
+        const hadError = Boolean(rt.lastError);
+        if (hadError || !resp || typeof resp !== "object") {
+          resolve({ ok: false, reason: "unreachable" });
+          return;
+        }
+        resolve(resp as LiveSubtotalResp);
+      });
+    } catch {
+      resolve({ ok: false, reason: "error" });
+    }
+  });
 }
 
 interface RouteQuoteResp {
@@ -70,28 +121,84 @@ export function DeliveryCalculator(): React.JSX.Element {
   const [loading, setLoading] = useState(false); // "Get miles" lookup
   const [pricing, setPricing] = useState(false); // route-quote in flight
   const [distNote, setDistNote] = useState<string | null>(null);
-  const [projects, setProjects] = useState<ProjectOpt[]>([]);
   const [projectId, setProjectId] = useState<string>("");
   const [pushing, setPushing] = useState(false);
   const [pushMsg, setPushMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [rq, setRq] = useState<RouteQuoteResp | null>(null);
+  // Searchable project picker.
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<ProjectOpt[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+  // Live-subtotal freshness label (honest provenance of the subtotal field).
+  const [subtotalInfo, setSubtotalInfo] = useState<SubtotalInfo>(null);
+  const pickedLabelRef = useRef<string>(""); // skip re-searching for the label we just filled in
+  const liveReqRef = useRef(0); // ignore a stale live-subtotal reply if the user picked another project
 
+  // Debounced type-to-search against the staff-gated search endpoint (project #, name, or customer).
   useEffect(() => {
-    fetch("/api/pricing/projects")
-      .then((r) => r.json())
-      .then((j: { projects: ProjectOpt[] }) => setProjects(j.projects ?? []))
-      .catch(() => setProjects([]));
-  }, []);
+    const term = query.trim();
+    if (term.length < 2 || term === pickedLabelRef.current) {
+      setResults([]);
+      setSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(() => {
+      fetch(`/api/pricing/projects/search?q=${encodeURIComponent(term)}`)
+        .then((r) => r.json())
+        .then((j: { projects: ProjectOpt[] }) => {
+          if (cancelled) return;
+          setResults(j.projects ?? []);
+          setActiveIdx(0);
+          setShowResults(true);
+        })
+        .catch(() => {
+          if (!cancelled) setResults([]);
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query]);
 
-  function pickProject(id: string) {
-    setProjectId(id);
+  const pickProject = useCallback((p: ProjectOpt) => {
+    setProjectId(p.id);
     setPushMsg(null);
-    const p = projects.find((x) => x.id === id);
-    if (!p) return;
     if (p.location) setAddress(p.location);
     setSubtotal(p.subtotal != null ? String(p.subtotal) : "");
     if (p.eventDate) setEventDate(p.eventDate);
-  }
+    const label = p.name + (p.clientName && p.clientName !== p.name ? ` · ${p.clientName}` : "") + ` · #${p.id}`;
+    pickedLabelRef.current = label;
+    setQuery(label);
+    setResults([]);
+    setShowResults(false);
+
+    // Prefill with the STORED subtotal immediately (never blank), then ask the extension for the LIVE one.
+    const reqId = ++liveReqRef.current;
+    setSubtotalInfo({ state: "loading", text: "Checking Goodshuffle for the current subtotal…" });
+    void requestLiveSubtotal(p.id).then((resp) => {
+      if (reqId !== liveReqRef.current) return; // a newer selection superseded this one
+      if (resp.ok && typeof resp.subtotal === "number" && Number.isFinite(resp.subtotal)) {
+        setSubtotal(String(resp.subtotal));
+        setSubtotalInfo({ state: "live", text: "live from Goodshuffle just now" });
+      } else {
+        setSubtotalInfo({
+          state: "stored",
+          text:
+            p.subtotal != null
+              ? "subtotal as of the last pull — couldn't reach Goodshuffle live"
+              : "no stored subtotal on this project — enter it by hand",
+        });
+      }
+    });
+  }, []);
 
   const subtotalNum = Number(subtotal) || 0;
 
@@ -211,28 +318,90 @@ export function DeliveryCalculator(): React.JSX.Element {
       </header>
 
       <section className="surface space-y-4 rounded-2xl border border-white/5 p-5">
-        {projects.length > 0 && (
-          <div className="space-y-1.5">
-            <label className="flex items-center gap-1.5 text-sm font-medium">
-              <FolderOpen className="size-4 text-primary" /> Prefill from a recent project
-            </label>
-            <select
-              defaultValue=""
-              onChange={(e) => pickProject(e.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="">Choose a project (newest first)…</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                  {p.subtotal != null ? ` — ${money(p.subtotal)}` : ""}
-                  {p.dateCreated ? ` · ${p.dateCreated}` : ""}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-muted-foreground">Pulls the project&apos;s subtotal, location and event date. Location is city-level — refine the street address for exact miles.</p>
+        <div className="relative space-y-1.5">
+          <label htmlFor="project-search" className="flex items-center gap-1.5 text-sm font-medium">
+            <FolderOpen className="size-4 text-primary" /> Find a project
+          </label>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              id="project-search"
+              type="text"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                pickedLabelRef.current = "";
+                setShowResults(true);
+              }}
+              onFocus={() => {
+                if (results.length > 0) setShowResults(true);
+              }}
+              onBlur={() => setTimeout(() => setShowResults(false), 120)}
+              onKeyDown={(e) => {
+                if (!showResults || results.length === 0) return;
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setActiveIdx((i) => Math.min(i + 1, results.length - 1));
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setActiveIdx((i) => Math.max(i - 1, 0));
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  const p = results[activeIdx];
+                  if (p) pickProject(p);
+                } else if (e.key === "Escape") {
+                  setShowResults(false);
+                }
+              }}
+              role="combobox"
+              aria-expanded={showResults}
+              aria-controls="project-results"
+              aria-autocomplete="list"
+              autoComplete="off"
+              placeholder="search by project #, name, or customer…"
+              className="w-full rounded-xl border border-white/10 bg-background py-2 pl-9 pr-9 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            {searching && <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />}
           </div>
-        )}
+          {showResults && results.length > 0 && (
+            <ul
+              id="project-results"
+              role="listbox"
+              className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-xl border border-white/10 bg-background py-1 shadow-xl"
+            >
+              {results.map((p, i) => (
+                <li key={p.id} role="option" aria-selected={i === activeIdx}>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      pickProject(p);
+                    }}
+                    onMouseEnter={() => setActiveIdx(i)}
+                    className={`flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm ${i === activeIdx ? "bg-accent" : "hover:bg-accent/60"}`}
+                  >
+                    <span className="font-medium">{p.name}</span>
+                    <span className="flex flex-wrap gap-x-2 text-xs text-muted-foreground tabular-nums">
+                      <span className="font-mono">#{p.id}</span>
+                      {p.clientName && p.clientName !== p.name && <span>· {p.clientName}</span>}
+                      {p.subtotal != null && <span>· {money(p.subtotal)}</span>}
+                      {p.eventDate && <span>· {p.eventDate}</span>}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {showResults && !searching && query.trim().length >= 2 && results.length === 0 && (
+            <div className="absolute z-20 mt-1 w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-xs text-muted-foreground shadow-xl">
+              No matching projects.
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Type a project number, event name, or customer. On select it pulls the project&apos;s subtotal, location and event date. Location
+            is city-level — refine the street address for exact miles.
+          </p>
+        </div>
         <div className="space-y-1.5">
           <label className="text-sm font-medium">Event address</label>
           <div className="flex gap-2">
@@ -281,11 +450,21 @@ export function DeliveryCalculator(): React.JSX.Element {
           <label className="text-sm font-medium">Quote subtotal (before discount)</label>
           <input
             value={subtotal}
-            onChange={(e) => setSubtotal(e.target.value.replace(/[^\d.]/g, ""))}
+            onChange={(e) => {
+              setSubtotal(e.target.value.replace(/[^\d.]/g, ""));
+              setSubtotalInfo(null); // a hand-edited subtotal is neither live nor the stored pull value
+            }}
             inputMode="decimal"
             placeholder="e.g. 2000"
             className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
+          {subtotalInfo && (
+            <p className={`flex items-center gap-1 text-xs ${subtotalInfo.state === "live" ? "text-emerald-400" : subtotalInfo.state === "stored" ? "text-amber-300" : "text-muted-foreground"}`}>
+              {subtotalInfo.state === "loading" && <Loader2 className="size-3 animate-spin" />}
+              {subtotalInfo.state === "live" && <Check className="size-3" />}
+              {subtotalInfo.text}
+            </p>
+          )}
         </div>
 
         <div className="inline-flex rounded-xl border border-white/10 bg-white/[0.03] p-1 text-sm">

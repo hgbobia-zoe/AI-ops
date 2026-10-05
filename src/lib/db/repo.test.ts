@@ -3,6 +3,8 @@ import {
   advanceNextStop,
   getRoute,
   insertEventIfNew,
+  saveBookings,
+  searchBookings,
   writeRoute,
 } from "./repo";
 import type { Route } from "@/lib/types";
@@ -78,6 +80,42 @@ describe("insertEventIfNew", () => {
     };
     expect(insertEventIfNew(e)).toBe(true);
     expect(insertEventIfNew({ ...e, eventId: "E2" })).toBe(false);
+  });
+});
+
+describe("searchBookings", () => {
+  const seed = () =>
+    saveBookings([
+      { bookingId: "90001", eventName: "Garden Wedding", clientName: "Alice Nguyen", statusLabel: "Quote", contractTotal: 2000, dateCreated: "2026-09-01" },
+      { bookingId: "90002", eventName: "Corporate Gala", clientName: "Bob Smith", statusLabel: "Signed", signed: true, contractTotal: 5000, dateCreated: "2026-09-05" },
+      { bookingId: "90003", eventName: "Beach Party", clientName: "Carol Wedding-Planner", statusLabel: "Lost", contractTotal: 1000, dateCreated: "2026-09-10" },
+    ]);
+
+  it("matches by event name (case-insensitive)", () => {
+    seed();
+    const ids = searchBookings("wedding").map((b) => b.bookingId);
+    expect(ids).toContain("90001"); // "Garden Wedding"
+    expect(ids).toContain("90003"); // client "Carol Wedding-Planner"
+    expect(ids).not.toContain("90002");
+  });
+
+  it("matches by project number (id substring)", () => {
+    seed();
+    const ids = searchBookings("90002").map((b) => b.bookingId);
+    expect(ids).toEqual(["90002"]);
+  });
+
+  it("matches by customer name and ranks cancelled/lost last", () => {
+    seed();
+    const res = searchBookings("a"); // matches all three names
+    const ids = res.map((b) => b.bookingId);
+    expect(ids).toContain("90001");
+    // The lost booking (90003) must sort after the open/signed ones.
+    expect(ids.indexOf("90003")).toBe(ids.length - 1);
+  });
+
+  it("returns nothing for a blank query", () => {
+    expect(searchBookings("   ")).toEqual([]);
   });
 });
 

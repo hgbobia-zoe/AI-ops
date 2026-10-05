@@ -257,6 +257,81 @@ async function openLoginTab() {
   }
 }
 
+// ── Live subtotal (on-demand, for the Delivery Pricing calculator) ──────────────────
+// The Zoe app page asks (externally_connectable) for a project's CURRENT pre-discount subtotal. We run a
+// same-origin fetch IN the signed-in GS tab via chrome.scripting.executeScript (the tab carries the
+// operator's GS cookies) and return the live value. Reads the SAME field the pull captures —
+// searchProjects results' `contract_subtotal` (CENTS) — and returns it in DOLLARS so it matches the
+// calculator's expectation. Never server-side (GS is Cloudflare-blocked there).
+
+/** Resolve once the given tab reports status "complete", or after timeoutMs. */
+function waitForTabComplete(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      try { chrome.tabs.onUpdated.removeListener(listener); } catch (e) { /* no-op */ }
+      resolve(v);
+    };
+    const listener = (id, info) => { if (id === tabId && info.status === "complete") finish(true); };
+    try { chrome.tabs.onUpdated.addListener(listener); } catch (e) { finish(false); return; }
+    chrome.tabs.get(tabId).then((t) => { if (t && t.status === "complete") finish(true); }).catch(() => {});
+    setTimeout(() => finish(false), timeoutMs);
+  });
+}
+
+/** Injected INTO the GS tab (runs in its page origin). Pages searchProjects (newest-logistics first, all
+ *  statuses incl. archived) with early-exit on the matching project id, and returns its pre-discount
+ *  contract_subtotal in dollars. Fully self-contained — executeScript serializes this function. */
+async function gsReadSubtotal(projectId) {
+  const H = { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" };
+  const AUTH_RE = /\/(ui\/auth|app\/login|login|signin|auth)\b/i;
+  const target = String(projectId);
+  try {
+    for (let pg = 0; pg < 12; pg++) {
+      const r = await fetch(
+        "/app/project/searchProjects?page=" + pg + "&pageSize=500&allProjects=true&sortColumn=logistics_start_date&sortDirection=desc&useV2DateHandling=true",
+        H,
+      );
+      if (r.redirected && AUTH_RE.test(r.url)) return { ok: false, reason: "signed_out" };
+      if (!r.ok) return { ok: false, reason: "http_" + r.status };
+      const b = await r.json();
+      const ps = b && b.projectSearch;
+      if (!ps) return { ok: false, reason: "no_search" };
+      const results = ps.results || [];
+      const hit = results.find((p) => p && String(p.id) === target);
+      if (hit) {
+        const cents = hit.contract_subtotal;
+        if (cents == null || isNaN(Number(cents))) return { ok: false, reason: "no_subtotal" };
+        return { ok: true, subtotal: Math.round(Number(cents)) / 100, pulledAt: new Date().toISOString() };
+      }
+      if (results.length < 500) break; // last page reached without a match
+    }
+    return { ok: false, reason: "not_found" };
+  } catch (e) {
+    return { ok: false, reason: "fetch_error" };
+  }
+}
+
+async function fetchLiveSubtotal(projectId) {
+  const pid = String(projectId || "").trim();
+  if (!pid) return { ok: false, reason: "no_project" };
+  const { tab, justOpened } = await ensureGsTab();
+  if (!tab || tab.id == null) return { ok: false, reason: "no_tab" };
+  if (justOpened) {
+    const ready = await waitForTabComplete(tab.id, 6000);
+    if (!ready) return { ok: false, reason: "tab_loading" };
+  }
+  try {
+    const out = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: gsReadSubtotal, args: [pid] });
+    const res = out && out[0] && out[0].result;
+    return res || { ok: false, reason: "no_result" };
+  } catch (e) {
+    return { ok: false, reason: "inject_failed" };
+  }
+}
+
 // ── Wiring ────────────────────────────────────────────────────────────────────────
 async function boot() {
   await seedDefaults();
@@ -342,19 +417,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return false;
 });
 
-// External handshake from Zoe Ops: {type:"zoe-sync-now"}. Ensure the GS tab + pull immediately; if GS
-// looks signed out, open a login tab so the user can sign in. Reply with the last known status.
+// External messages from Zoe Ops (externally_connectable zoe-dispatch.fly.dev):
+//   • {type:"zoe-sync-now"}        — handshake: ensure the GS tab + pull immediately; if GS looks signed
+//                                    out, open a login tab. Reply with the last known status.
+//   • {type:"zoe-fetch-subtotal", projectId} — on-demand: read the project's CURRENT pre-discount subtotal
+//                                    live from the signed-in GS tab. Reply {ok, subtotal, pulledAt} | {ok:false, reason}.
 chrome.runtime.onMessageExternal.addListener((msg, _sender, sendResponse) => {
-  if (!msg || msg.type !== "zoe-sync-now") {
+  if (!msg || !msg.type) {
     sendResponse({ ok: false, error: "unknown_message" });
     return true;
   }
-  (async () => {
-    const r = await runPullCycle("handshake");
-    const ls = await lastRunStatus();
-    // Only nudge a login when we have a RECENT, authoritative signed-out reading — never on unknown.
-    if (ls.status === "not_logged_in" && ls.ageMs < 60 * 60 * 1000) await openLoginTab();
-    sendResponse({ ok: true, pull: r, last: ls });
-  })();
+
+  if (msg.type === "zoe-fetch-subtotal") {
+    (async () => {
+      const r = await fetchLiveSubtotal(msg.projectId).catch(() => ({ ok: false, reason: "error" }));
+      sendResponse(r);
+    })();
+    return true; // keep the channel open for the async fetch
+  }
+
+  if (msg.type === "zoe-sync-now") {
+    (async () => {
+      const r = await runPullCycle("handshake");
+      const ls = await lastRunStatus();
+      // Only nudge a login when we have a RECENT, authoritative signed-out reading — never on unknown.
+      if (ls.status === "not_logged_in" && ls.ageMs < 60 * 60 * 1000) await openLoginTab();
+      sendResponse({ ok: true, pull: r, last: ls });
+    })();
+    return true;
+  }
+
+  sendResponse({ ok: false, error: "unknown_message" });
   return true;
 });
