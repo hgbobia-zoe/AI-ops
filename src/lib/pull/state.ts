@@ -4,6 +4,12 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+import {
+  shouldAlertIgnitionStale,
+  IGNITION_STALE_ALERT,
+  IGNITION_RECOVERED_ALERT,
+  type IgnitionHealth,
+} from "@/lib/eta/ignitionStatus";
 
 const KEY = "pull_state";
 
@@ -40,6 +46,10 @@ export interface PullState {
   // unconfigured/signed-out office never stalls the "on the way" text.
   ignitionMintSeenAt?: string;
   ignitionMintReadyAt?: string;
+  // Ignition "signed out" alert bookkeeping (mirrors the Instawork probe dedup): the last time we
+  // Slack-alerted a lapsed office Ignition session (2h cool-off), cleared on recovery.
+  ignitionStaleSince?: string;
+  ignitionAlertedAt?: string;
 }
 
 export function getPullState(): PullState {
@@ -88,6 +98,55 @@ export function etaLinkPollerReady(withinMin = 20, now: number = Date.now()): bo
   if (!at) return false;
   const ageMin = (now - Date.parse(at)) / 60000;
   return Number.isFinite(ageMin) && ageMin <= withinMin;
+}
+
+/** Server-inferred Ignition session health from the mint poller's heartbeat. `ok` = a signed-in tab
+ *  polled within `freshMin` (default 20m, matching etaLinkPollerReady); `configured` = the poller has
+ *  EVER checked in here (the feature is in use). Honest: no heartbeat → not ok; never faked. */
+export function ignitionHealth(freshMin = 20, now: number = Date.now()): IgnitionHealth {
+  const s = getPullState();
+  const ok = etaLinkPollerReady(freshMin, now);
+  const configured = !!s.ignitionMintSeenAt;
+  const lastReadyAt = s.ignitionMintReadyAt ?? null;
+  const lastSeenAt = s.ignitionMintSeenAt ?? null;
+  const detail = ok
+    ? "Signed in and polling on the office machine."
+    : configured
+      ? `Not polling${lastReadyAt ? ` (last signed-in ${lastReadyAt})` : ""} — office Ignition session may have lapsed.`
+      : "Ignition live-tracking has not been set up on the office machine.";
+  return { ok, configured, lastReadyAt, lastSeenAt, detail };
+}
+
+/** Decide whether to Slack about a lapsed Ignition session, and record the dedup bookkeeping. Mirrors
+ *  recordInstaworkProbe: alert once when the poller goes STALE **and it matters** (there are deliveries
+ *  to track today), 2h-deduped; one "recovered" message when it comes back (only if we had alerted).
+ *  `hasDeliveriesToday` is the gate — we never nag when there's nothing to mint. Returns the message or null. */
+export function recordIgnitionProbe(
+  pollerFresh: boolean,
+  hasDeliveriesToday: boolean,
+  configured: boolean,
+  now: Date = new Date(),
+): { alert: string | null } {
+  const s = getPullState();
+  let alert: string | null = null;
+
+  if (pollerFresh) {
+    // Recovered: only announce if we had alerted a lapse; clear the bookkeeping.
+    if (s.ignitionAlertedAt) alert = IGNITION_RECOVERED_ALERT;
+    s.ignitionStaleSince = undefined;
+    s.ignitionAlertedAt = undefined;
+  } else if (configured && hasDeliveriesToday) {
+    if (!s.ignitionStaleSince) s.ignitionStaleSince = now.toISOString();
+    const alertedAgoMs = s.ignitionAlertedAt ? now.getTime() - Date.parse(s.ignitionAlertedAt) : Infinity;
+    if (shouldAlertIgnitionStale({ pollerFresh, hasDeliveriesToday, configured, alertedAgoMs, cooloffMs: ALERT_COOLOFF_MS })) {
+      alert = IGNITION_STALE_ALERT;
+      s.ignitionAlertedAt = now.toISOString();
+    }
+  }
+  // Stale-but-nothing-to-track: leave the bookkeeping as-is (no alert, no false recovery).
+
+  save(s);
+  return { alert };
 }
 
 export function markStaleAlerted(now: Date = new Date()): void {

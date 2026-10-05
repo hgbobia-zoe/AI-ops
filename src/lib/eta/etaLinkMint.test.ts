@@ -7,6 +7,8 @@ import {
   etaLinkUrl,
   buildEtaLinkMintRequest,
   selectTrackingLink,
+  chooseDepartureLink,
+  isEtaLinkCurrent,
   type EtaLinkMintInput,
 } from "./etaLinkMint";
 
@@ -90,6 +92,45 @@ describe("etaLinkMint — primary vs fallback selection", () => {
   it("treats an empty-string Ignition url as absent (never a dead link)", () => {
     const r = selectTrackingLink({ ignitionUrl: "", fallbackUrl: "https://zoe/track/t" });
     expect(r.source).toBe("track");
+  });
+});
+
+describe("chooseDepartureLink — pre-minted link preferred", () => {
+  const fallbackUrl = "https://zoe/track/t";
+  it("a PRE-MINTED link wins over everything (used immediately, no wait)", () => {
+    const r = chooseDepartureLink({ preMintedUrl: "https://ignition.zonarsystems.com/etaLink/pre", ignitionUrl: "https://ignition.zonarsystems.com/etaLink/jit", fallbackUrl });
+    expect(r.source).toBe("ignition-premint");
+    expect(r.url).toBe("https://ignition.zonarsystems.com/etaLink/pre");
+  });
+
+  it("no pre-mint but a just-in-time mint → that Ignition link", () => {
+    const r = chooseDepartureLink({ preMintedUrl: null, ignitionUrl: "https://ignition.zonarsystems.com/etaLink/jit", fallbackUrl });
+    expect(r.source).toBe("ignition");
+  });
+
+  it("nothing minted → the /track fallback (never a dead link)", () => {
+    const r = chooseDepartureLink({ preMintedUrl: null, ignitionUrl: null, fallbackUrl });
+    expect(r.source).toBe("track");
+    expect(r.url).toBe(fallbackUrl);
+  });
+
+  it("an empty-string pre-mint url is treated as absent", () => {
+    const r = chooseDepartureLink({ preMintedUrl: "", ignitionUrl: null, fallbackUrl });
+    expect(r.source).toBe("track");
+  });
+});
+
+describe("isEtaLinkCurrent — expiry guard (never a dead link)", () => {
+  const now = Date.parse("2026-10-05T14:00:00.000Z");
+  it("a future window end is current", () => {
+    expect(isEtaLinkCurrent("2026-10-05T20:00:00.000Z", now)).toBe(true);
+  });
+  it("a past window end is NOT current (dead link)", () => {
+    expect(isEtaLinkCurrent("2026-10-05T10:00:00.000Z", now)).toBe(false);
+  });
+  it("a null/blank end is treated as current (legacy rows carry no window)", () => {
+    expect(isEtaLinkCurrent(null, now)).toBe(true);
+    expect(isEtaLinkCurrent(undefined, now)).toBe(true);
   });
 });
 

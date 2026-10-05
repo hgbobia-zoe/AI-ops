@@ -133,3 +133,29 @@ export function shiftWindowHours(): number {
   const n = Number(process.env.ETA_LINK_SHIFT_WINDOW_H || 8);
   return Number.isFinite(n) && n > 0 ? n : 8;
 }
+
+/** True when a minted etaLink's validity window (endISO) is still in the future at `now` — i.e. the link
+ *  is a LIVE map, not a dead one. A null/blank end is treated as current (legacy rows carry no window). */
+export function isEtaLinkCurrent(endISO: string | null | undefined, now: number = Date.now()): boolean {
+  if (!endISO) return true;
+  const end = Date.parse(endISO);
+  return !Number.isFinite(end) || end > now;
+}
+
+/**
+ * The customer tracking link chosen AT DEPARTURE, in strict priority:
+ *   1. a link PRE-MINTED earlier in the day (already live, no wait, no dependency on the office session
+ *      being up right now) — the whole point of pre-minting;
+ *   2. a link minted just-in-time at departure (the existing bounded-wait path);
+ *   3. our /track page — the always-working fallback, which itself upgrades to the Ignition map if a
+ *      mint lands later. Never a dead or fabricated link.
+ */
+export function chooseDepartureLink(opts: {
+  preMintedUrl?: string | null;
+  ignitionUrl?: string | null;
+  fallbackUrl: string;
+}): { url: string; source: "ignition-premint" | "ignition" | "track" } {
+  if (opts.preMintedUrl) return { url: opts.preMintedUrl, source: "ignition-premint" };
+  if (opts.ignitionUrl) return { url: opts.ignitionUrl, source: "ignition" };
+  return { url: opts.fallbackUrl, source: "track" };
+}

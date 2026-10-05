@@ -17,6 +17,7 @@ import { discover } from "@/lib/seo/discovery";
 import { configured as ubersuggestConfigured } from "@/lib/seo/ubersuggest";
 import { connecteamConfigured, refreshConnecteamHealth } from "@/lib/connecteam";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
+import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { logImport, getLatestImportBySource, recordInstaworkProbe, type ImportRow } from "@/lib/pull/state";
 
 export type RuntimeBucket = "server" | "browser";
@@ -91,6 +92,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     note: "Recomputes shift readiness, advances lifecycle states, mirrors Connecteam timesheets (read-only), reconciles Instawork fills, and persists the exception queue. No sends, no external writes.",
     run: async () => {
       const r = await runShiftLifecycleTick();
+      return { ok: r.ok, detail: r.detail };
+    },
+  },
+  {
+    key: "etalink-premint",
+    label: "Live-tracking link pre-mint (Ignition)",
+    bucket: "server",
+    configured: () => true, // app-owned; a no-op when there's nothing to mint or minting is disabled
+    note: "Mints Ignition customer-tracking links for upcoming stops ahead of departure (while the office Ignition session is fresh), and alerts if that session has lapsed. The extension drains the queued mints — no extension change.",
+    run: async () => {
+      const r = await runEtaPreMintTick();
       return { ok: r.ok, detail: r.detail };
     },
   },

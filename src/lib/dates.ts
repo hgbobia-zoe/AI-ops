@@ -78,3 +78,32 @@ export function formatClockTime(value?: string | null): string {
     minute: "2-digit",
   }).format(d);
 }
+
+/** Minutes to add to a UTC instant to get the wall-clock time in `tz` at that instant (e.g. -240 for
+ *  America/New_York in summer). Used to resolve a local wall time to a real UTC instant. */
+function tzOffsetMinutes(tz: string, date: Date): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const parts = Object.fromEntries(dtf.formatToParts(date).map((p) => [p.type, p.value]));
+  const asUTC = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour === 24 ? 0 : +parts.hour, +parts.minute, +parts.second);
+  return (asUTC - date.getTime()) / 60000;
+}
+
+/** The last instant (23:59:59.999 local) of calendar day `ymd` in the operating timezone, as a UTC ISO
+ *  string. A safe end-of-day window bound when a stop has no scheduled time (never fabricates a time). */
+export function endOfOpsDayISO(ymd: string): string {
+  const tz = process.env.ETA_TIMEZONE || DEFAULT_TZ;
+  const [y, m, d] = ymd.split("-").map(Number);
+  // Guess the instant as if 23:59:59.999 were UTC, then correct by the tz offset at that instant.
+  const guess = Date.UTC(y, m - 1, d, 23, 59, 59, 999);
+  const offsetMin = tzOffsetMinutes(tz, new Date(guess));
+  return new Date(guess - offsetMin * 60000).toISOString();
+}

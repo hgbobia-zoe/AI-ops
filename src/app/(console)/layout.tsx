@@ -54,7 +54,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
       if (!c) return null;
       return { name, tone: TONE[c.status], note: c.status === "ok" ? undefined : c.headline.toLowerCase() };
     };
-    integrations = [pick("routes", "Goodshuffle"), pick("openphone", "Quo"), pick("connecteam", "Connecteam"), pick("instawork", "Instawork"), pick("gps", "GPS")].filter((x): x is StatusIntegration => x !== null);
+    integrations = [pick("routes", "Goodshuffle"), pick("openphone", "Quo"), pick("connecteam", "Connecteam"), pick("instawork", "Instawork"), pick("gps", "GPS"), pick("ignition", "Ignition")].filter((x): x is StatusIntegration => x !== null);
   }
 
   return (

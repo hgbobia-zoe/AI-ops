@@ -15,6 +15,12 @@ import { getSettings } from "@/lib/settings";
 import { loadGpsConfig, gpsProviderById } from "@/lib/providers";
 import { zonarConfigured, rateLimitedUntil } from "@/lib/eta/zonar";
 import { getHealth as seoHealth } from "@/lib/seo/ubersuggest";
+import { ignitionHealth } from "@/lib/pull/state";
+import { ignitionDotStatus } from "@/lib/eta/ignitionStatus";
+import { hasUpcomingDeliveries } from "@/lib/eta/preMint";
+import { getActiveVehicles } from "@/lib/vehicles";
+import { getRoutesForDate } from "@/lib/db/repo";
+import { todayInOpsTz } from "@/lib/dates";
 
 export type ConnStatus = "ok" | "attention" | "off";
 export type ConnCategory = "Data pull" | "Communications" | "Staffing" | "AI" | "GPS" | "SEO";
@@ -298,6 +304,31 @@ export function computeConnections(now: number = Date.now()): Connection[] {
       test: { kind: "gps", provider: gpsId },
     });
   }
+
+  // ── Ignition live tracking (office-machine etaLink mint) ──
+  // OK when the signed-in mint poller is fresh; ATTENTION "needs sign-in" only when it's stale AND there
+  // are deliveries to track today (so a signed-out office is visible instead of silently falling back to
+  // /track); OFF when nothing to mint or the feature was never used here. Never a false green.
+  let deliveriesToday = false;
+  try {
+    const today = todayInOpsTz(new Date(now));
+    deliveriesToday = hasUpcomingDeliveries(getActiveVehicles().flatMap((v) => getRoutesForDate(v.truckId, today)));
+  } catch {
+    deliveriesToday = false; // DB hiccup → treat as nothing to track (don't fabricate an alarm)
+  }
+  const ign = ignitionHealth(20, now);
+  const ignDot = ignitionDotStatus({ health: ign, hasDeliveriesToday: deliveriesToday });
+  out.push({
+    key: "ignition",
+    label: "Ignition live tracking",
+    category: "GPS",
+    status: ignDot.status,
+    headline: ignDot.headline,
+    detail: ignDot.detail,
+    lastAt: ign.lastReadyAt,
+    fixHref: ignDot.status === "attention" ? "https://ignition.zonarsystems.com" : null,
+    fixLabel: ignDot.status === "attention" ? "Sign in" : null,
+  });
 
   // ── Ubersuggest (SEO Growth keyword research) ──
   const seo = seoHealth();

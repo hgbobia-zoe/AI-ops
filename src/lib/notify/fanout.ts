@@ -7,11 +7,11 @@ import type { ActionType, CloseoutResult, Stop, Vehicle } from "@/lib/types";
 import { sendSms } from "./sms";
 import { slackNotify } from "./slack";
 import { alertOps } from "./alert";
-import { createTracking, expireTracking, insertMessage, insertException, insertAudit } from "@/lib/db/repo";
+import { createTracking, expireTracking, insertMessage, insertException, insertAudit, getMintedEtaLinkForStop } from "@/lib/db/repo";
 import { getSettings, renderTemplate, templateForKind, type AppSettings } from "@/lib/settings";
 import { formatClockTime } from "@/lib/dates";
 import { mintEtaLinkForStop } from "@/lib/eta/mint";
-import { selectTrackingLink } from "@/lib/eta/etaLinkMint";
+import { chooseDepartureLink } from "@/lib/eta/etaLinkMint";
 
 export interface FanoutCtx {
   action: ActionType;
@@ -65,8 +65,12 @@ async function trackingLink(
   // Always have the working /track fallback (and the stop's token) ready; it also upgrades to Ignition.
   const fallback = createTracking(stop.stopId, stop.routeId, ctx.baseUrl).url;
   try {
-    const ignition = await mintEtaLinkForStop(stop, ctx.truckId, truckLabel(ctx.truckId));
-    return selectTrackingLink({ ignitionUrl: ignition, fallbackUrl: fallback }).url;
+    // FAST PATH: a link pre-minted earlier in the day (runtime pre-mint tick) is already waiting — use the
+    // real Ignition live map IMMEDIATELY, no wait, no dependency on the office session being live right now.
+    // The `??` short-circuits the departure mint entirely when a pre-minted link exists.
+    const preMinted = getMintedEtaLinkForStop(stop.stopId)?.url ?? null;
+    const ignition = preMinted ?? (await mintEtaLinkForStop(stop, ctx.truckId, truckLabel(ctx.truckId)));
+    return chooseDepartureLink({ preMintedUrl: preMinted, ignitionUrl: ignition, fallbackUrl: fallback }).url;
   } catch {
     return fallback; // never let a mint hiccup drop the customer's link
   }

@@ -2096,12 +2096,16 @@ export interface EtaLinkMintState {
  */
 export function enqueueEtaLinkMint(input: EtaLinkMintInput & { routeId?: string }): EtaLinkMintState {
   const db = getDb();
+  const nowISO = new Date().toISOString();
   const cutoff = new Date(Date.now() - 12 * 3600 * 1000).toISOString();
+  // Reuse only a CURRENT row (created within 12h AND whose validity window hasn't expired). A link whose
+  // window already ended is a dead link — don't reuse it; a fresh pending row is enqueued instead. This
+  // keeps pre-minted long-window links idempotent while never handing back an expired one.
   const existing = db
     .prepare(
-      "SELECT * FROM eta_links WHERE stop_id = ? AND status IN ('pending','minted') AND created_at > ? ORDER BY created_at DESC LIMIT 1",
+      "SELECT * FROM eta_links WHERE stop_id = ? AND status IN ('pending','minted') AND created_at > ? AND (end_iso IS NULL OR end_iso > ?) ORDER BY created_at DESC LIMIT 1",
     )
-    .get(input.stopId, cutoff) as EtaLinkRow | undefined;
+    .get(input.stopId, cutoff, nowISO) as EtaLinkRow | undefined;
   if (existing) {
     return {
       id: existing.id,
@@ -2179,11 +2183,32 @@ export function recordEtaLinkResult(id: string, result: { code?: string; url?: s
 
 /** The latest minted Ignition live-map URL for a stop (if any) — drives the /track upgrade + the
  *  departure bounded-wait. Returns null when nothing is minted yet. */
-export function getMintedEtaLinkForStop(stopId: string): { url: string; code: string | null } | null {
+export function getMintedEtaLinkForStop(
+  stopId: string,
+  now: number = Date.now(),
+): { url: string; code: string | null } | null {
+  // A minted row whose window has already ended is a DEAD link (Ignition stops serving it) — exclude it,
+  // so /track never redirects to a dead map and departure never hands out an expired link.
+  const nowISO = new Date(now).toISOString();
   const row = getDb()
-    .prepare("SELECT * FROM eta_links WHERE stop_id = ? AND status = 'minted' AND url IS NOT NULL ORDER BY created_at DESC LIMIT 1")
-    .get(stopId) as EtaLinkRow | undefined;
+    .prepare(
+      "SELECT * FROM eta_links WHERE stop_id = ? AND status = 'minted' AND url IS NOT NULL AND (end_iso IS NULL OR end_iso > ?) ORDER BY created_at DESC LIMIT 1",
+    )
+    .get(stopId, nowISO) as EtaLinkRow | undefined;
   return row && row.url ? { url: row.url, code: row.code ?? null } : null;
+}
+
+/** True when a stop already has a CURRENT (non-expired) minted link OR a live pending mint request — the
+ *  pre-mint tick's guard to skip re-geocoding / re-enqueuing a stop that's already covered. */
+export function hasCurrentEtaLinkForStop(stopId: string, now: number = Date.now()): boolean {
+  const nowISO = new Date(now).toISOString();
+  const cutoff = new Date(now - 12 * 3600 * 1000).toISOString();
+  const row = getDb()
+    .prepare(
+      "SELECT id FROM eta_links WHERE stop_id = ? AND status IN ('pending','minted') AND created_at > ? AND (end_iso IS NULL OR end_iso > ?) ORDER BY created_at DESC LIMIT 1",
+    )
+    .get(stopId, cutoff, nowISO) as { id: string } | undefined;
+  return !!row;
 }
 
 /** Current state of a stop's latest mint row (any status) — used by the bounded wait to stop early on
