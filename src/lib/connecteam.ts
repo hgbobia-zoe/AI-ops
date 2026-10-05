@@ -301,6 +301,130 @@ export async function getCrewForDate(date: string): Promise<CrewShift[]> {
   return (await getCrewForDateSafe(date)).shifts;
 }
 
+// ── Availability: the REAL "is this worker free?" signal ──────────────────────────────────────────
+// Connecteam exposes a per-user endpoint that returns the worker's own time-off + unavailability (what
+// they marked in their Connecteam app) AND their existing shifts, in one call:
+//   GET /scheduler/v1/schedulers/user-unavailability?userId=&startTime=&endTime=   (Unix SECONDS)
+// Entries carry type "timeOff" (approved time off, with policyName) or "unavailability" (worker-set,
+// with note); each has startTime/endTime as {unix/ts + timezone}. This is the signal we were blind to —
+// without it the scheduler could propose someone who marked themselves off. Same /scheduler/v1 scope as
+// the shift reads, so it rides the same API access. Never throws; ok:false when unreachable (so an outage
+// is NEVER mistaken for "freely available" — that would be the exact bug we're trying to kill).
+
+export type UnavailabilityKind = "unavailability" | "timeOff";
+
+export interface UnavailabilityBlock {
+  userId: number;
+  kind: UnavailabilityKind;
+  startUnix: number;
+  endUnix: number;
+  /** Worker's note (unavailability) or the time-off policy name (timeOff). */
+  reason?: string;
+}
+
+export interface UnavailabilityResult {
+  /** True only when Connecteam actually answered. When false, availability is UNKNOWN — callers must
+   *  NOT treat an empty block list as "available". */
+  ok: boolean;
+  blocks: UnavailabilityBlock[];
+}
+
+/** Coerce a timestamp that may be a bare Unix number or an object ({unix}/{timestamp}/{seconds}/{time}). */
+function unixOf(v: unknown): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    return num(o.unix ?? o.timestamp ?? o.seconds ?? o.time ?? o.epoch);
+  }
+  return null;
+}
+
+/**
+ * A user's time-off + unavailability blocks over [startUnix,endUnix]. Shape-tolerant: it walks the
+ * response for any entry carrying type "timeOff"/"unavailability" (shift assignments have no such type,
+ * so they're skipped), so a minor nesting change in Connecteam's payload can't silently drop blocks.
+ */
+export async function getUserUnavailability(userId: number, startUnix: number, endUnix: number): Promise<UnavailabilityResult> {
+  if (!connecteamConfigured()) return { ok: false, blocks: [] };
+  const j = await ctGet(`/scheduler/v1/schedulers/user-unavailability?userId=${userId}&startTime=${startUnix}&endTime=${endUnix}`);
+  if (j == null) return { ok: false, blocks: [] };
+  const blocks: UnavailabilityBlock[] = [];
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const it of node) visit(it);
+      return;
+    }
+    if (node && typeof node === "object") {
+      const o = node as Record<string, unknown>;
+      const t = String(o.type ?? "").trim();
+      if (t === "timeOff" || t === "unavailability") {
+        const s = unixOf(o.startTime ?? o.start);
+        const e = unixOf(o.endTime ?? o.end);
+        if (s && e) {
+          const reason = typeof o.note === "string" ? o.note : typeof o.policyName === "string" ? o.policyName : undefined;
+          blocks.push({ userId, kind: t, startUnix: s, endUnix: e, reason });
+        }
+        return; // don't descend into a block we've captured
+      }
+      for (const v of Object.values(o)) visit(v);
+    }
+  };
+  visit(j);
+  return { ok: true, blocks };
+}
+
+/**
+ * Unavailability for a set of users on a calendar day (pads ±1 day for tz spread). One call per user
+ * (the endpoint is per-user). ok is true if ANY user resolved — so a single user's blip doesn't void the
+ * whole day — and byUser only holds users who actually have blocks. Intended for the candidate pool, not
+ * the whole company.
+ */
+export async function getUnavailabilityForDate(
+  date: string,
+  userIds: number[],
+): Promise<{ ok: boolean; byUser: Map<number, UnavailabilityBlock[]> }> {
+  const byUser = new Map<number, UnavailabilityBlock[]>();
+  if (!connecteamConfigured() || userIds.length === 0) return { ok: false, byUser };
+  const [y, m, d] = date.split("-").map(Number);
+  if (!y || !m || !d) return { ok: false, byUser };
+  const base = Date.UTC(y, m - 1, d) / 1000;
+  const from = base - 86400;
+  const to = base + 2 * 86400;
+  let anyOk = false;
+  for (const uid of userIds) {
+    const r = await getUserUnavailability(uid, from, to);
+    if (r.ok) {
+      anyOk = true;
+      if (r.blocks.length) byUser.set(uid, r.blocks);
+    }
+  }
+  return { ok: anyOk, byUser };
+}
+
+/** DEBUG (admin probe only): raw status + body of the unavailability endpoint for one user, so we can
+ *  confirm our key reaches it and see the exact JSON shape. Never throws. */
+export async function rawUserUnavailability(
+  userId: number,
+  startUnix: number,
+  endUnix: number,
+): Promise<{ status: number; json: unknown }> {
+  if (!connecteamConfigured()) return { status: 0, json: null };
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const res = await fetch(
+      `${BASE}/scheduler/v1/schedulers/user-unavailability?userId=${userId}&startTime=${startUnix}&endTime=${endUnix}`,
+      { headers: { "X-API-KEY": process.env.CONNECTEAM_API_KEY!, accept: "application/json" }, cache: "no-store", signal: ctrl.signal },
+    );
+    const json = await res.json().catch(() => null);
+    return { status: res.status, json };
+  } catch (e) {
+    return { status: 0, json: String(e) };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // ── Financial: pay rates + timesheets (labor cost, MVP3) ─────────────────────
 // Confirmed shapes (Connecteam API docs): pay rates GET /pay_rates/v1/pay_rates
 // (data array of {userId, effectiveDate, rateType, <amount>}); time clocks GET
