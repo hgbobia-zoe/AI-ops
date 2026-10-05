@@ -96,6 +96,41 @@ export async function refreshConnecteamHealth(now: number = Date.now()): Promise
   return _ctInflight;
 }
 
+// ── TTL + single-flight read cache ────────────────────────────────────────────────────────────────
+// Every SSR page (dashboard, scheduling, dispatch, risk) re-reads users/schedulers/crew on each render,
+// and getCrewForDateSafe re-reads users+schedulers internally — so ONE page load fired a dozen Connecteam
+// round-trips and took seconds (measured: /dashboard ~4s, /scheduling ~3s TTFB, all server-side). These
+// caches dedupe identical reads for a short TTL. Single Fly machine (per fly.toml) → a module-level cache
+// is shared across requests. Staleness is bounded and matches the app's existing freshness posture (health
+// 90s, runtime tick 15m). A failed/empty result is NOT cached (via `cacheable`), so a transient outage is
+// never pinned as "nobody scheduled". Single-flight collapses concurrent identical reads into one call.
+function ttlCache<T>(ttlMs: number, cacheable: (v: T) => boolean) {
+  const store = new Map<string, { at: number; value: T }>();
+  const inflight = new Map<string, Promise<T>>();
+  return (key: string, fetchFn: () => Promise<T>): Promise<T> => {
+    const hit = store.get(key);
+    if (hit && Date.now() - hit.at < ttlMs) return Promise.resolve(hit.value);
+    const flying = inflight.get(key);
+    if (flying) return flying;
+    const p = fetchFn()
+      .then((value) => {
+        if (cacheable(value)) store.set(key, { at: Date.now(), value });
+        inflight.delete(key);
+        return value;
+      })
+      .catch((e) => {
+        inflight.delete(key);
+        throw e;
+      });
+    inflight.set(key, p);
+    return p;
+  };
+}
+
+const _usersCache = ttlCache<Map<number, CrewMember>>(5 * 60_000, (m) => m.size > 0);
+const _schedCache = ttlCache<Scheduler[]>(5 * 60_000, (l) => l.length > 0);
+const _crewCache = ttlCache<CrewDayResult>(60_000, (r) => r.ok);
+
 /** Fetch ALL pages of a Connecteam list endpoint (they cap at a page size, so a single call
  *  silently truncates). Dedup-terminated: stops on a short page OR when a page adds nothing new —
  *  so it can't loop even if the endpoint ignores `offset` (worst case = today's single-page behavior). */
@@ -178,8 +213,13 @@ type UsersResp = { data?: { users?: Array<Record<string, unknown>> } };
 type SchedResp = { data?: { schedulers?: Array<Record<string, unknown>> } };
 type ShiftsResp = { data?: { shifts?: Array<Record<string, unknown>> } };
 
-/** The team, keyed by userId (name resolved from first/last). */
+/** The team, keyed by userId (name resolved from first/last). TTL-cached (5m) — the roster barely changes
+ *  and it's re-read on every page + inside every getCrewForDateSafe. */
 export async function getUsers(): Promise<Map<number, CrewMember>> {
+  if (!connecteamConfigured()) return new Map();
+  return _usersCache("users", getUsersUncached);
+}
+async function getUsersUncached(): Promise<Map<number, CrewMember>> {
   const users = await ctGetAllPages<Record<string, unknown>>(
     "/users/v1/users",
     (j) => ((j as UsersResp)?.data?.users ?? []) as Record<string, unknown>[],
@@ -213,6 +253,10 @@ export async function getUsersList(): Promise<CrewMember[]> {
 }
 
 export async function getSchedulers(): Promise<Scheduler[]> {
+  if (!connecteamConfigured()) return [];
+  return _schedCache("schedulers", getSchedulersUncached);
+}
+async function getSchedulersUncached(): Promise<Scheduler[]> {
   const j = (await ctGet("/scheduler/v1/schedulers")) as SchedResp | null;
   return (j?.data?.schedulers ?? [])
     .filter((s) => !s.isArchived)
@@ -256,6 +300,9 @@ export interface CrewDayResult {
  */
 export async function getCrewForDateSafe(date: string): Promise<CrewDayResult> {
   if (!connecteamConfigured()) return { ok: false, shifts: [] };
+  return _crewCache(`crew:${date}`, () => getCrewForDateSafeUncached(date));
+}
+async function getCrewForDateSafeUncached(date: string): Promise<CrewDayResult> {
   const [y, m, d] = date.split("-").map(Number);
   if (!y || !m || !d) return { ok: false, shifts: [] };
   const dayStartUtc = Date.UTC(y, m - 1, d) / 1000;
