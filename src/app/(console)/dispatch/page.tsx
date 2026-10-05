@@ -349,7 +349,7 @@ function TimeBoard({ fleet, isToday }: { fleet: { truck: { name: string; truckId
                   const finished = s.state === "Completed" || s.state === "Returned";
                   const exception = s.state === "Exception";
                   const pickup = s.kind === "pickup";
-                  const fill = finished ? "bg-[#262834] text-meta" : exception ? "bg-[#4a2a2e] text-[#e9e9ed] ring-1 ring-inset ring-critical" : "bg-[#3f424d] text-[#e9e9ed]";
+                  const fill = finished ? "bg-[#244a35] text-[#e9e9ed] ring-1 ring-inset ring-positive/70" : exception ? "bg-[#4a2a2e] text-[#e9e9ed] ring-1 ring-inset ring-critical" : "bg-[#3f424d] text-[#e9e9ed]";
                   const ring = !finished && !exception && pickup ? "ring-1 ring-inset ring-attention/60" : "";
                   return (
                     <div
@@ -373,7 +373,7 @@ function TimeBoard({ fleet, isToday }: { fleet: { truck: { name: string; truckId
       <div className="flex flex-wrap items-center gap-4 border-t border-[var(--row-rule)] px-3 py-2 text-[11.5px] text-meta">
         <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#3f424d]" /> Scheduled</span>
         <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#3f424d] ring-1 ring-inset ring-attention/60" /> Pickup (P)</span>
-        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#262834]" /> Done</span>
+        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#244a35] ring-1 ring-inset ring-positive/70" /> Done</span>
         <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#4a2a2e] ring-1 ring-inset ring-critical" /> Exception</span>
         <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] border border-dashed border-meta/60" /> No scheduled time</span>
         {isToday && <span className="flex items-center gap-1.5"><span className="h-3 w-px bg-[#cfd3e5]/70" /> Now</span>}
