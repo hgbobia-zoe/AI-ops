@@ -312,7 +312,7 @@ export default async function SchedulingPage({
     });
     return { shiftId: s.id, routeId: s.routeId, roleLabel: ROLE_LABEL[s.role], level: r.level, score: r.score, blockers: r.blockers };
   });
-  const shiftExceptions = scanShiftExceptions({ shifts, coverage: cov, now: nowMs(), staffingVerified: coverage.ok, assignmentsByShift, commsWired });
+  const shiftExceptions = scanShiftExceptions({ shifts, coverage: cov, now: nowMs(), staffingVerified: coverage.ok, assignmentsByShift, commsWired, unavailabilityByUser: dayAvailability.byUser, availabilityVerified: dayAvailability.ok });
 
   // Worst per-route readiness level, for the route-card status chip (read over the rows already computed).
   const READINESS_RANK: Record<ReadinessRow["level"], number> = { BLOCKED: 0, UNVERIFIED: 1, READY: 2 };

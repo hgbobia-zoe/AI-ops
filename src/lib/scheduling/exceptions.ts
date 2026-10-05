@@ -8,6 +8,8 @@
 
 import type { DayCoverage } from "./coverage";
 import type { ShiftAssignment, StaffShift } from "./types";
+import type { UnavailabilityBlock } from "@/lib/connecteam";
+import { isLiveAssignment } from "./lifecycle";
 
 export type ExceptionSeverity = "RED" | "YELLOW";
 
@@ -15,7 +17,7 @@ export interface ShiftException {
   signature: string; // stable identity for idempotent persistence (same discipline as risk_items)
   shiftId: string;
   routeId: string | null;
-  code: "understaffed" | "no_truck" | "no_window" | "not_published" | "supervisor_missing" | "packet_undelivered" | "unconfirmed" | "replacement_needed";
+  code: "understaffed" | "no_truck" | "no_window" | "not_published" | "supervisor_missing" | "packet_undelivered" | "unconfirmed" | "replacement_needed" | "assignee_unavailable";
   severity: ExceptionSeverity;
   title: string;
   detail: string;
@@ -39,7 +41,15 @@ export interface ScanInput {
    *  "unconfirmed" are not actionable (we don't attempt a send), so they are suppressed — never a
    *  fabricated alert for a loop that isn't running yet. Defaults to true (preserves pure-test behavior). */
   commsWired?: boolean;
+  /** The REAL Connecteam availability feed for the day's assignees (userId → time-off/unavailability blocks).
+   *  Enables the "assignee marked off after being assigned" reconciliation (Case C). */
+  unavailabilityByUser?: Map<number, UnavailabilityBlock[]>;
+  /** The availability feed actually answered this scan. false/undefined → UNKNOWN, so assignee-unavailable
+   *  conflicts are SUPPRESSED (never fabricated from an outage — same honesty rule as understaffed). */
+  availabilityVerified?: boolean;
 }
+
+const overlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number): boolean => aStart < bEnd && bStart < aEnd;
 
 function startMsOf(s: StaffShift): number | null {
   if (!s.windowKnown || !s.startTime) return null;
@@ -47,15 +57,23 @@ function startMsOf(s: StaffShift): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
+function endMsOf(s: StaffShift): number | null {
+  if (!s.windowKnown || !s.endTime) return null;
+  const t = Date.parse(s.endTime);
+  return Number.isNaN(t) ? null : t;
+}
+
 /** Scan a day's shifts into the actionable exception queue, sorted RED first. Pure + deterministic. */
 export function scanShiftExceptions(input: ScanInput): ShiftException[] {
-  const { shifts, coverage, now } = input;
+  const { shifts, coverage, now, unavailabilityByUser } = input;
   const staffingVerified = input.staffingVerified ?? true;
+  const availabilityVerified = input.availabilityVerified ?? false; // default UNKNOWN — never fabricate a conflict
   const out: ShiftException[] = [];
 
   for (const s of shifts) {
     if (s.status === "cancelled") continue;
     const startMs = startMsOf(s);
+    const endMs = endMsOf(s);
     const gap = coverage.byShift[s.id]?.gap ?? Math.max(0, s.headcount - s.assignees.length);
     const nearStart = startMs != null && startMs - now < DAY_MS;
 
@@ -93,6 +111,33 @@ export function scanShiftExceptions(input: ScanInput): ShiftException[] {
     if (allAssignments && allAssignments.some((a) => a.noShow || a.state === "NO_SHOW")) {
       const red = startMs == null || startMs - now < 2 * HOUR_MS;
       out.push(ex(s, "replacement_needed", red ? "RED" : "YELLOW", "Replacement needed", "A worker is a no-show. Fill from other internal first, then Instawork.", "Reassign or post gig"));
+    }
+
+    // #12 Assignee marked UNAVAILABLE after being assigned — a Connecteam time-off / unavailability block
+    // now overlaps a live internal assignee's shift window (Case-C reconciliation: assigned in Zoe, but the
+    // person has since marked themselves off). Honesty-gated: only when the availability feed was VERIFIED
+    // this scan (an outage is UNKNOWN, never a fabricated conflict). One exception per affected worker.
+    if (availabilityVerified && startMs != null && endMs != null && allAssignments) {
+      for (const a of allAssignments) {
+        if (a.workerKind !== "internal" || a.connecteamUserId == null || !isLiveAssignment(a.state)) continue;
+        const clash = unavailabilityByUser?.get(a.connecteamUserId)?.find((b) => overlaps(startMs, endMs, b.startUnix * 1000, b.endUnix * 1000));
+        if (!clash) continue;
+        const who = a.displayName ?? `#${a.connecteamUserId}`;
+        const kind = clash.kind === "timeOff" ? "time off" : "unavailable";
+        const because = clash.reason ? ` (${clash.reason})` : "";
+        const red = startMs - now < DAY_MS; // escalate inside T-1d
+        out.push({
+          signature: `${s.id}:assignee_unavailable:${a.connecteamUserId}`,
+          shiftId: s.id,
+          routeId: s.routeId,
+          code: "assignee_unavailable",
+          severity: red ? "RED" : "YELLOW",
+          title: "Assignee unavailable",
+          detail: `${who} is assigned here but is marked ${kind}${because} and can no longer cover this window.`,
+          fixLabel: "Reassign",
+          rank: red ? 0 : 1,
+        });
+      }
     }
 
     // Assignment-grained checks (only when assignments are provided AND the comms loop is live).

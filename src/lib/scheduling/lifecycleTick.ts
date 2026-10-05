@@ -38,8 +38,10 @@ import {
   getCrewForDateSafe,
   getUsers,
   getActualHours,
+  getUnavailabilityForDate,
   connecteamConfigured,
   type CrewMember,
+  type UnavailabilityBlock,
 } from "@/lib/connecteam";
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
 import { INSTAWORK_STALE_MIN } from "@/lib/instawork/store";
@@ -163,7 +165,30 @@ export async function runShiftLifecycleTick(now: Date = new Date()): Promise<Tic
 
     // 5. Scan exceptions for the day and enrich replacement-needed with the est. additional temp cost.
     const assignmentsByShift = new Map(shifts.map((s) => [s.id, getAssignmentsForShift(s.id)]));
-    const scanned = scanShiftExceptions({ shifts, coverage, now: now.getTime(), staffingVerified: coverageOk, assignmentsByShift, commsWired });
+    // The REAL availability feed for the day's internal assignees → enables the "assigned, then marked off"
+    // reconciliation (Case C). ok:false → UNKNOWN, so no conflict is fabricated on an outage.
+    const assignedUserIds = [
+      ...new Set(
+        [...assignmentsByShift.values()]
+          .flat()
+          .filter((a) => a.workerKind === "internal" && a.connecteamUserId != null && isLiveAssignment(a.state))
+          .map((a) => a.connecteamUserId as number),
+      ),
+    ];
+    const avail =
+      ctOk && assignedUserIds.length > 0
+        ? await getUnavailabilityForDate(date, assignedUserIds).catch(() => ({ ok: false, byUser: new Map<number, UnavailabilityBlock[]>() }))
+        : { ok: false, byUser: new Map<number, UnavailabilityBlock[]>() };
+    const scanned = scanShiftExceptions({
+      shifts,
+      coverage,
+      now: now.getTime(),
+      staffingVerified: coverageOk,
+      assignmentsByShift,
+      commsWired,
+      unavailabilityByUser: avail.byUser,
+      availabilityVerified: avail.ok,
+    });
     for (const e of scanned) {
       let detail = e.detail;
       if (e.code === "replacement_needed") {

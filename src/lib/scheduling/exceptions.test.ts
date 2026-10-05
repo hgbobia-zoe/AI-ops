@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { scanShiftExceptions } from "./exceptions";
 import type { DayCoverage, ShiftCoverage } from "./coverage";
-import type { StaffShift, ShiftRole } from "./types";
+import type { StaffShift, ShiftRole, ShiftAssignment } from "./types";
+import type { UnavailabilityBlock } from "@/lib/connecteam";
 
 const NOW = Date.parse("2026-10-01T00:00:00Z");
 const FAR = "2026-10-20T14:00:00Z"; // > 1 day out
@@ -100,5 +101,113 @@ describe("scanShiftExceptions", () => {
   it("skips cancelled shifts", () => {
     const out = scanShiftExceptions({ shifts: [shift({ id: "a", role: "driver", routeId: "a", truckId: null, status: "cancelled" })], coverage: cov({ a: 1 }), now: NOW });
     expect(out).toHaveLength(0);
+  });
+
+  // ── Case-C reconciliation: an assigned worker who has since marked themselves off ──────────────────
+  const toUnix = (iso: string): number => Date.parse(iso) / 1000;
+  const block = (userId: number, sIso: string, eIso: string, kind: UnavailabilityBlock["kind"] = "unavailability", reason?: string): UnavailabilityBlock => ({
+    userId,
+    kind,
+    startUnix: toUnix(sIso),
+    endUnix: toUnix(eIso),
+    reason,
+  });
+  function asg(p: Partial<ShiftAssignment> & { connecteamUserId: number }): ShiftAssignment {
+    return {
+      id: `as-${p.connecteamUserId}`,
+      shiftId: "a",
+      workerKind: "internal",
+      connecteamUserId: p.connecteamUserId,
+      instaworkWorker: null,
+      instaworkGigId: null,
+      displayName: `W${p.connecteamUserId}`,
+      role: "driver",
+      state: "ASSIGNED",
+      packetVersion: null,
+      packetSentAt: null,
+      confirmedAt: null,
+      confirmMethod: null,
+      clockInAt: null,
+      clockOutAt: null,
+      clockSource: null,
+      noShow: false,
+      tempReason: null,
+      routeReason: null,
+      estHours: null,
+      estRate: null,
+      estCost: null,
+      overridden: false,
+      overrideReason: null,
+      createdAt: "",
+      updatedAt: "",
+      ...p,
+    };
+  }
+  // A route shift 10:00–14:00 on 2026-10-20 with worker #1 assigned.
+  const assignedShift = () => shift({ id: "a", role: "driver", routeId: "a", truckId: "T1", startTime: "2026-10-20T10:00:00Z", endTime: "2026-10-20T14:00:00Z" });
+  const withWorker1 = new Map([["a", [asg({ connecteamUserId: 1 })]]]);
+
+  it("flags assignee_unavailable when a live internal assignee is marked off over the window", () => {
+    const out = scanShiftExceptions({
+      shifts: [assignedShift()],
+      coverage: cov({ a: 0 }),
+      now: NOW,
+      assignmentsByShift: withWorker1,
+      unavailabilityByUser: new Map([[1, [block(1, "2026-10-20T09:00:00Z", "2026-10-20T15:00:00Z", "timeOff", "PTO")]]]),
+      availabilityVerified: true,
+    });
+    const e = out.find((x) => x.code === "assignee_unavailable")!;
+    expect(e).toBeTruthy();
+    expect(e.detail).toContain("time off");
+    expect(e.detail).toContain("PTO");
+    expect(e.severity).toBe("YELLOW"); // > 1 day out
+  });
+
+  it("escalates assignee_unavailable to RED within T-1d", () => {
+    const out = scanShiftExceptions({
+      shifts: [shift({ id: "a", role: "driver", routeId: "a", truckId: "T1", startTime: "2026-10-01T12:00:00Z", endTime: "2026-10-01T16:00:00Z" })],
+      coverage: cov({ a: 0 }),
+      now: NOW,
+      assignmentsByShift: withWorker1,
+      unavailabilityByUser: new Map([[1, [block(1, "2026-10-01T09:00:00Z", "2026-10-01T15:00:00Z")]]]),
+      availabilityVerified: true,
+    });
+    expect(out.find((x) => x.code === "assignee_unavailable")!.severity).toBe("RED");
+  });
+
+  it("does NOT flag assignee_unavailable when the feed is unverified (UNKNOWN, never fabricated)", () => {
+    const out = scanShiftExceptions({
+      shifts: [assignedShift()],
+      coverage: cov({ a: 0 }),
+      now: NOW,
+      assignmentsByShift: withWorker1,
+      unavailabilityByUser: new Map([[1, [block(1, "2026-10-20T09:00:00Z", "2026-10-20T15:00:00Z")]]]),
+      availabilityVerified: false,
+    });
+    expect(out.find((x) => x.code === "assignee_unavailable")).toBeUndefined();
+  });
+
+  it("does NOT flag assignee_unavailable when the block does not overlap the window", () => {
+    const out = scanShiftExceptions({
+      shifts: [assignedShift()],
+      coverage: cov({ a: 0 }),
+      now: NOW,
+      assignmentsByShift: withWorker1,
+      unavailabilityByUser: new Map([[1, [block(1, "2026-10-20T15:00:00Z", "2026-10-20T18:00:00Z")]]]), // after the shift
+      availabilityVerified: true,
+    });
+    expect(out.find((x) => x.code === "assignee_unavailable")).toBeUndefined();
+  });
+
+  it("does NOT flag a non-live or instawork assignment", () => {
+    const out = scanShiftExceptions({
+      shifts: [assignedShift()],
+      coverage: cov({ a: 0 }),
+      now: NOW,
+      assignmentsByShift: new Map([["a", [asg({ connecteamUserId: 1, state: "REPLACED" }), { ...asg({ connecteamUserId: 2 }), workerKind: "instawork", connecteamUserId: null }]]]),
+      unavailabilityByUser: new Map([[1, [block(1, "2026-10-20T09:00:00Z", "2026-10-20T15:00:00Z")]]]),
+      availabilityVerified: true,
+    });
+    expect(out.find((x) => x.code === "assignee_unavailable")).toBeUndefined();
   });
 });
