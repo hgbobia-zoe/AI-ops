@@ -10,6 +10,7 @@ import Link from "next/link";
 import { RefreshCw, CheckCircle2, AlertTriangle, MinusCircle, Activity, Loader2, Plug } from "lucide-react";
 import type { Connection, ConnectionsSummary, ConnStatus } from "@/lib/health/connections";
 import type { ImportRow } from "@/lib/pull/state";
+import { ConnectInstaworkButton } from "@/components/ConnectInstaworkButton";
 
 const POLL_MS = 30_000;
 
@@ -148,8 +149,9 @@ export function ConnectionsDashboard({
                       {t?.busy ? <Loader2 className="size-3 animate-spin" /> : <Activity className="size-3" />} Test
                     </button>
                   )}
+                  {c.key === "instawork" && c.status !== "ok" && <ConnectInstaworkButton onSynced={refresh} />}
                   {c.fixHref && c.fixLabel && (
-                    <Link href={c.fixHref} className="rounded border border-white/15 px-2 py-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground">{c.fixLabel} →</Link>
+                    <Link href={c.fixHref} className="rounded border border-white/15 px-2 py-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground">{c.key === "instawork" ? "How to connect" : c.fixLabel} →</Link>
                   )}
                 </div>
               </div>

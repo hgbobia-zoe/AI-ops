@@ -47,6 +47,7 @@ import {
 import { openShiftsWithSuggestions } from "@/lib/staffing/openShifts";
 import { StaffingRosterSections } from "@/components/scheduling/StaffingRosterSections";
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
+import { ConnectInstaworkButton } from "@/components/ConnectInstaworkButton";
 import { summarizeInstaworkByRole, instaworkShiftsForDate, instaworkGigsForRoute } from "@/lib/instawork/reconcile";
 import { todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
@@ -437,13 +438,13 @@ export default async function SchedulingPage({
       <p className="mb-5 text-[12.5px] text-meta">
         {!iwOn ? (
           <>
-            {"Instawork isn't connected. Add the session cookie to reconcile booked temp labor. "}
-            <Link href="/admin" className="underline underline-offset-2 hover:text-foreground">Fix in settings →</Link>
+            {"Instawork isn't connected. Log in once in the office browser to reconcile booked temp labor. "}
+            <ConnectInstaworkButton variant="link" />
           </>
         ) : iw && !iw.ok ? (
           <>
             {"Instawork unverified: couldn't reach it, so this is not “nothing booked.” "}
-            <Link href="/admin" className="underline underline-offset-2 hover:text-foreground">Fix in settings →</Link>
+            <ConnectInstaworkButton variant="link" />
           </>
         ) : iwDayShifts.length === 0 ? (
           "Instawork today: nothing booked for this day."
