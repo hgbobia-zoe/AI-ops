@@ -219,6 +219,58 @@ export function getRoutesForDate(truckId: string, date: string): Route[] {
   return rows.map(buildRoute).sort((a, b) => earliestStopMs(a) - earliestStopMs(b));
 }
 
+/** A stop on a route scheduled for a given calendar day — a precise delivery/pickup anchor for the
+ *  route-aware delivery pricing engine (street address + planned window + truck). Only routes that are
+ *  still live (not closed/done) are included; a closed route is history, not a shareable future trip. */
+export interface DatedStop {
+  stopId: string;
+  txId: string | null;
+  routeId: string;
+  truckId: string;
+  sequence: number;
+  custName: string;
+  address: string;
+  kind: "delivery" | "pickup" | undefined;
+  plannedWindow: string | null;
+  eta: string | null;
+}
+
+/** Every live-route stop scheduled on `date` (any truck), for route-aware delivery pricing. */
+export function getStopsOnDate(date: string): DatedStop[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT s.stop_id, s.tx_id, s.route_id, r.truck_id, s.sequence, s.cust_name, s.address, s.kind,
+              s.planned_window, s.eta
+         FROM stops s JOIN routes r ON s.route_id = r.route_id
+        WHERE r.date = ? AND LOWER(COALESCE(r.status,'')) != 'done'
+        ORDER BY r.truck_id, s.sequence`,
+    )
+    .all(date) as Array<{
+    stop_id: string;
+    tx_id: string | null;
+    route_id: string;
+    truck_id: string;
+    sequence: number;
+    cust_name: string | null;
+    address: string | null;
+    kind: string | null;
+    planned_window: string | null;
+    eta: string | null;
+  }>;
+  return rows.map((r) => ({
+    stopId: r.stop_id,
+    txId: r.tx_id,
+    routeId: r.route_id,
+    truckId: r.truck_id,
+    sequence: r.sequence,
+    custName: r.cust_name ?? "",
+    address: r.address ?? "",
+    kind: r.kind === "pickup" ? "pickup" : r.kind === "delivery" ? "delivery" : undefined,
+    plannedWindow: r.planned_window,
+    eta: r.eta,
+  }));
+}
+
 /** Distinct route dates, newest first — for the dispatch history picker. */
 export function getRouteDates(): string[] {
   return (
@@ -1205,6 +1257,24 @@ export function getRecentBookings(limit = 40): BookingView[] {
     getDb()
       .prepare("SELECT * FROM bookings ORDER BY COALESCE(date_created,'0000-00-00') DESC, updated_at DESC LIMIT ?")
       .all(limit) as Record<string, unknown>[]
+  ).map(toBookingView);
+}
+
+/** SIGNED, non-cancelled/lost bookings whose event is on `date` — the candidate route anchors for the
+ *  route-aware delivery pricing engine. A signed job on the same date is treated as having a delivery
+ *  (logistics) component even when it isn't on a route yet; its location is city-level and its window is
+ *  unknown (the engine flags the share's timing as unverified). Never returns unsigned/tentative quotes. */
+export function getSignedBookingsOnDate(date: string): BookingView[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM bookings
+         WHERE event_date = ? AND signed = 1
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%dead%'`,
+      )
+      .all(date) as Record<string, unknown>[]
   ).map(toBookingView);
 }
 

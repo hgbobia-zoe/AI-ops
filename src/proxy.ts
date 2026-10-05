@@ -70,6 +70,7 @@ const isSettings = (p: string): boolean =>
   p.startsWith("/api/integrations") ||
   p.startsWith("/api/auth/users") ||
   p.startsWith("/api/passes") || // generating / listing / revoking / texting Shift Passes — owner/admin only
+  p.startsWith("/api/pricing/config") || // delivery pricing config editor — owner/admin only (the quote endpoints stay staff-gated)
   p.startsWith("/api/pursuit"); // capability profile + bid pre-staging — owner/admin only
 
 // SEO Growth — keyword research + content pipeline. Settings-ish (it manages an integration + is

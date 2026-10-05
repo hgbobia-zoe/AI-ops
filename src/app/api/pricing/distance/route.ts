@@ -6,14 +6,11 @@
 import { NextResponse } from "next/server";
 import { geocode, driveTime } from "@/lib/eta/geo";
 import { metersToMiles } from "@/lib/pricing/delivery";
+import { WAREHOUSE_ADDRESS, WAREHOUSE_COORDS } from "@/lib/pricing/warehouse";
 
 export const dynamic = "force-dynamic";
 
-// Fixed origin: Zoe Event Rentals warehouse (North Bethesda, MD). Coordinates are hardcoded because the
-// origin never moves and a suite-numbered address ("#4A") trips keyless geocoders — so only the venue
-// needs geocoding, and the warehouse leg can't silently fail.
-export const WAREHOUSE_ADDRESS = "12712 Rock Creek Mill Rd #4A, North Bethesda, MD 20852";
-const WAREHOUSE_COORDS = { lat: 39.0638628, lng: -77.1127462 };
+// Fixed origin: the Zoe warehouse (see src/lib/pricing/warehouse.ts). Only the venue needs geocoding.
 
 export async function GET(req: Request): Promise<NextResponse> {
   const address = (new URL(req.url).searchParams.get("address") ?? "").trim();
