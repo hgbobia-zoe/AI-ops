@@ -2127,9 +2127,21 @@ export function writeRoute(route: Route): void {
         @custFirstName, @custLastName, @kind, @custPhone, @address, @dayOfName, @dayOfPhone,
         @plannedWindow, @eta, @items, @txId, @contactId, @arrivedAt, @completedAt, @trackingToken)`,
     );
+    // Self-heal a corrupt route whose stored stops share a stop_id: two stops with the same id would
+    // violate the UNIQUE(stop_id) constraint and abort the whole import (seen live — route 62232's
+    // stored stops had a duplicate id, which failed every pull). Keep the first occurrence's id; give any
+    // later duplicate a fresh, route-scoped id so the write always succeeds.
+    const seenStopIds = new Set<string>();
     for (const s of rt.stops) {
+      let stopId = s.stopId;
+      if (seenStopIds.has(stopId)) {
+        let n = 2;
+        while (seenStopIds.has(`${s.stopId}-d${n}`)) n++;
+        stopId = `${s.stopId}-d${n}`;
+      }
+      seenStopIds.add(stopId);
       ins.run({
-        stopId: s.stopId,
+        stopId,
         routeId: rt.routeId,
         customerId: s.customerId ?? null,
         sequence: s.sequence,
