@@ -44,17 +44,39 @@ function zoePull(apiBase) {
       const todayY = new Date().toISOString().slice(0, 10);
       const openIds = Object.keys(all).filter((id) => { const p = all[id]; if (p.signed) return false; const s = (p.statusLabel || "").toLowerCase(); if (s.indexOf("lost") >= 0 || s.indexOf("cancel") >= 0 || s.indexOf("dead") >= 0) return false; const d = d2(p.logistics_start_date); return !d || d >= todayY; }).slice(0, 80);
       function titlesFrom(lists) { const t = []; function w(o, d) { if (!o || typeof o !== "object" || d > 7) return; if (Object.prototype.toString.call(o) === "[object Array]") { for (let k = 0; k < o.length; k++) w(o[k], d + 1); return; } if (o.itemTitle) t.push(o.itemTitle); for (const kk in o) w(o[kk], d + 1); } (lists || []).forEach((gj) => { w(gj, 0); }); return t; }
+      // Quote sent/opened from the client email thread (getMessagesForTransaction). sent = earliest
+      // outbound quote email; opened = latest client open. Prefer emails whose subject mentions "quote",
+      // else any outbound email with client recipients. PARITY with the bookmarklet (gsPull.ts): without
+      // this the Pipeline Status shows every open lead as "never contacted / not opened".
+      function quoteTimes(mv) {
+        const msgs = (mv && mv.client && mv.client.messages) || [];
+        let qs = null, qo = null;
+        function consider(m) {
+          if (m.medium !== "EMAIL") return;
+          const recips = m.clientRecipients || [];
+          if (!recips.length) return;
+          if (m.date && (!qs || m.date < qs)) qs = m.date;
+          recips.forEach((rp) => { if (rp.messageOpenedDate && (!qo || rp.messageOpenedDate > qo)) qo = rp.messageOpenedDate; });
+        }
+        const quoteMsgs = msgs.filter((m) => m.medium === "EMAIL" && (m.clientRecipients || []).length && /quote/i.test(m.subject || ""));
+        (quoteMsgs.length ? quoteMsgs : msgs).forEach(consider);
+        return { sent: qs, opened: qo };
+      }
       function pullNotes() {
         const notes = [];
         function one(i) {
           if (i >= openIds.length) return Promise.resolve();
           const id = openIds[i];
-          return fetch("/app/vendorTransaction/initContractView?transactionID=" + id, H).then((r) => { if (!r.ok) return; return r.json().then((j) => {
-            const g = (j && j.lineItemGroupsToLoad) || [];
+          const pCV = fetch("/app/vendorTransaction/initContractView?transactionID=" + id, H).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+          const pMsg = fetch("/app/conversation/getMessagesForTransaction?transactionID=" + id, H).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+          return Promise.all([pCV, pMsg]).then((res) => {
+            const j = res[0], qt = quoteTimes(res[1]);
+            if (!j) return; // no contract view → skip (don't blank stored notes with a partial record)
+            const g = (j.lineItemGroupsToLoad) || [];
             return Promise.all(g.map((x) => fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID=" + x.id + "&transactionID=" + id, H).then((r2) => r2.json()).catch(() => null))).then((lists) => {
-              notes.push({ bookingId: String(id), internalNotes: (j.internalNotes || "").trim(), clientNotes: (j.clientVisibleNotes || "").trim(), lastSentDate: null, lineItems: titlesFrom(lists) });
+              notes.push({ bookingId: String(id), internalNotes: (j.internalNotes || "").trim(), clientNotes: (j.clientVisibleNotes || "").trim(), lastSentDate: null, lineItems: titlesFrom(lists), quoteSentAt: qt.sent, quoteOpenedAt: qt.opened });
             });
-          }); }).catch(() => {}).then(() => one(i + 1));
+          }).catch(() => {}).then(() => one(i + 1));
         }
         return one(0).then(() => { if (!notes.length) return { updated: 0 }; return fetch(API + "/api/gs/notes", { method: "POST", headers: POSTH, body: JSON.stringify({ notes }) }).then((r) => r.json()).catch(() => ({ updated: 0 })); });
       }

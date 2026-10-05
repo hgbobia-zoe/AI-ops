@@ -154,9 +154,13 @@ export function buildLeadTimeline(bookingId: string): TimelineEntry[] {
 
   // 4) Quote milestones from the booking. "Quote emailed" is suppressed when an outbound email_event
   //    lands within a minute of it (the richer email entry already represents that send).
-  const sentT = ms(b.quoteSentAt);
-  if (b.quoteSentAt && !(sentT != null && emailOutTimes.some((x) => Math.abs(x - sentT) < 60_000))) {
-    entries.push({ at: b.quoteSentAt, channel: "quote", direction: "out", actor: null, title: "Quote emailed", source: "bookings" });
+  // Quote send is an OUTBOUND rep touch (a sent quote means we reached the client). Prefer the precise
+  // captured send time; fall back to the quote-sent DATE when the precise time wasn't captured — so a
+  // quoted lead is never miscounted as "never contacted" just because only the date is on file.
+  const sentIso = b.quoteSentAt ?? (b.quoteSentDate ? `${b.quoteSentDate}T00:00:00Z` : null);
+  const sentT = ms(sentIso);
+  if (sentIso && !(sentT != null && emailOutTimes.some((x) => Math.abs(x - sentT) < 60_000))) {
+    entries.push({ at: sentIso, channel: "quote", direction: "out", actor: null, title: "Quote emailed", source: "bookings" });
   }
   if (b.quoteOpenedAt) {
     entries.push({ at: b.quoteOpenedAt, channel: "quote", direction: "in", actor: null, title: "Client opened the quote", source: "bookings" });
