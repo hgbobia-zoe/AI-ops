@@ -13,9 +13,22 @@ import { scheduleScanSoon } from "@/lib/risk/scan";
 import { recordPull, logImport } from "@/lib/pull/state";
 import { reconcileStops, forceReconcileStops } from "@/lib/ingest/reconcile";
 import { consumeForceResync } from "@/lib/ingest/forceResync";
+import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import type { Stop } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+
+// The eta-link pre-mint + Ignition health check normally ride the runtime tick (RUNTIME_JOBS), but the
+// runtime clock (RUNTIME_TOKEN) may be unset — so also run them off the OFFICE PULL, which fires exactly
+// when the office machine is active (the only time a mint can actually happen). Throttled so a burst of
+// per-(truck,date) imports in one pull triggers at most one pass. Fire-and-forget; never blocks the import.
+let _lastPreMintAt = 0;
+function maybePreMintEtaLinks(): void {
+  const now = Date.now();
+  if (now - _lastPreMintAt < 4 * 60_000) return;
+  _lastPreMintAt = now;
+  void runEtaPreMintTick().catch(() => {});
+}
 
 // CORS: allow the "Pull Zoe Routes" bookmarklet — which runs INSIDE a logged-in
 // Goodshuffle tab — to POST the extracted route here. Restricted to the Goodshuffle
@@ -131,6 +144,10 @@ export async function POST(req: Request): Promise<NextResponse> {
     } catch (e) {
       console.error("[route/import] scheduleScanSoon threw", e);
     }
+
+    // Pre-mint Ignition tracking links for upcoming stops + check Ignition health — off the office pull,
+    // so it runs even when the runtime clock (RUNTIME_TOKEN) isn't set. Throttled, non-blocking.
+    maybePreMintEtaLinks();
 
     return json({ ok: true, routeId, stops: stops.length, kept: keptCount, firstStopId: stops[0]?.stopId });
   } catch (e) {
