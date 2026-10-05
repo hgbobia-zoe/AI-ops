@@ -32,6 +32,8 @@ const PUBLIC: string[] = [
   "/api/vehicles", // driver truck-picker (/select) reads the truck list; GET-only, not sensitive
   "/api/finance/revenue", // own token; hit by the pull, not a person
   "/api/route/import",
+  "/api/instawork/import", // Auto-Pull Instawork browser pull POST (from a logged-in app.instawork.com tab); own token (fail-open), CORS-locked to app.instawork.com — must not bounce to auth
+
   "/api/route/prune", // Auto-Pull sanitize: drop routes GS no longer has; own token (fail-open), CORS-locked
   "/api/gs/projects",
   "/api/gs/notes",
