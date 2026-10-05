@@ -401,30 +401,6 @@ export async function getUnavailabilityForDate(
   return { ok: anyOk, byUser };
 }
 
-/** DEBUG (admin probe only): raw status + body of the unavailability endpoint for one user, so we can
- *  confirm our key reaches it and see the exact JSON shape. Never throws. */
-export async function rawUserUnavailability(
-  userId: number,
-  startUnix: number,
-  endUnix: number,
-): Promise<{ status: number; json: unknown }> {
-  if (!connecteamConfigured()) return { status: 0, json: null };
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 12000);
-  try {
-    const res = await fetch(
-      `${BASE}/scheduler/v1/schedulers/user-unavailability?userId=${userId}&startTime=${startUnix}&endTime=${endUnix}`,
-      { headers: { "X-API-KEY": process.env.CONNECTEAM_API_KEY!, accept: "application/json" }, cache: "no-store", signal: ctrl.signal },
-    );
-    const json = await res.json().catch(() => null);
-    return { status: res.status, json };
-  } catch (e) {
-    return { status: 0, json: String(e) };
-  } finally {
-    clearTimeout(t);
-  }
-}
-
 // ── Financial: pay rates + timesheets (labor cost, MVP3) ─────────────────────
 // Confirmed shapes (Connecteam API docs): pay rates GET /pay_rates/v1/pay_rates
 // (data array of {userId, effectiveDate, rateType, <amount>}); time clocks GET

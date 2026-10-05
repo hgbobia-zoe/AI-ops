@@ -16,9 +16,10 @@
 // Determinism: tiny input (a day of route-shifts), a transparent heuristic (internal longest-routes-first
 // + a bounded feasible-swap improvement pass), ties broken by id/name. RULES CALCULATE; no LLM here.
 
-import type { CrewMember, CrewShift, PayRate } from "@/lib/connecteam";
+import type { CrewMember, CrewShift, PayRate, UnavailabilityBlock } from "@/lib/connecteam";
 import type { InstaworkShift } from "@/lib/instawork/types";
 import { candidateRoles } from "./availability";
+import { eligibilityFor, type AssignmentWindow } from "./eligibility";
 import { shiftWindowHours } from "./cost";
 import type { DayCoverage } from "./coverage";
 import type { ShiftRole, StaffShift } from "./types";
@@ -27,6 +28,9 @@ export interface StaffingWeights {
   qual: number; // qualification match — dominant (a mis-qualified pick never outranks a qualified one)
   intern: number; // internal-first preference (below qualification)
   tempHr: number; // temp-hours avoided — the lever that beats naive internal-first (internal → long routes)
+  scheduledUnassigned: number; // prefer a worker already on the Connecteam schedule (sunk commitment) —
+  // below the internal-vs-temp preference, above load/continuity, so a scheduled-unassigned worker beats
+  // a fully-unscheduled AVAILABLE one (and far beats a temp, which is only ever a last resort).
   load: number; // least-loaded-first (workload balance), reusing bookedHours
   simple: number; // continuity: a small bonus to keep an existing feasible assignment
 }
@@ -40,7 +44,7 @@ export interface StaffingCostConfig {
 
 export const DEFAULT_STAFFING_CONFIG: StaffingCostConfig = {
   tempPremiumFallback: 2.0,
-  weights: { qual: 100, intern: 40, tempHr: 35, load: 15, simple: 5 },
+  weights: { qual: 100, intern: 40, tempHr: 35, scheduledUnassigned: 25, load: 15, simple: 5 },
 };
 
 export interface PlannedAssignment {
@@ -82,6 +86,13 @@ export interface OptimizeInput {
   dayShifts: CrewShift[];
   rates: Map<number, PayRate[]>;
   instawork: { ok: boolean; gigs: InstaworkShift[] };
+  /** The day's Zoe route assignments (staff_shifts.assignees → windows) — so a worker already ASSIGNED to
+   *  another route in the seat's window is not double-offered. In-plan overlaps are handled separately
+   *  (the live plan), so this is only consulted for routes NOT on the optimization surface. */
+  assignments?: AssignmentWindow[];
+  /** The day's Connecteam time-off / unavailability feed. A worker on a block overlapping a seat is
+   *  UNAVAILABLE (hard-excluded). ok:false → availability unverified, never read as "nobody off". */
+  unavailability?: { ok: boolean; byUser: Map<number, UnavailabilityBlock[]> };
   cfg?: StaffingCostConfig;
   /** Reserved for future proximity-based reasoning; the pre-start placement does not depend on it. */
   now?: number;
@@ -103,19 +114,6 @@ interface Seat {
 
 const overlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number): boolean => aStart < bEnd && bStart < aEnd;
 
-/** A worker's Connecteam-busy windows that day (they cannot be placed on an overlapping seat). */
-function busyWindows(dayShifts: CrewShift[]): Map<number, Array<[number, number]>> {
-  const m = new Map<number, Array<[number, number]>>();
-  for (const s of dayShifts) {
-    for (const a of s.assignees) {
-      const list = m.get(a.userId) ?? [];
-      list.push([s.startUnix * 1000, s.endUnix * 1000]);
-      m.set(a.userId, list);
-    }
-  }
-  return m;
-}
-
 function bookedHoursByUser(dayShifts: CrewShift[]): Map<number, number> {
   const m = new Map<number, number>();
   for (const s of dayShifts) {
@@ -133,7 +131,7 @@ function bookedHoursByUser(dayShifts: CrewShift[]): Map<number, number> {
 export function scoreAssignment(
   worker: CrewMember,
   seat: { role: ShiftRole; hours: number },
-  ctx: { bookedHours: number; maxSeatHours: number; isContinuity: boolean },
+  ctx: { bookedHours: number; maxSeatHours: number; isContinuity: boolean; scheduledUnassigned?: boolean },
   cfg: StaffingCostConfig,
 ): number {
   if (!candidateRoles(seat.role).includes(worker.role)) return -Infinity;
@@ -144,6 +142,7 @@ export function scoreAssignment(
     w.qual * 1 + // qualified (gate passed)
     w.intern * 1 + // internal preference
     w.tempHr * tempHourSaving +
+    w.scheduledUnassigned * (ctx.scheduledUnassigned ? 1 : 0) + // sunk Connecteam commitment → turn into coverage
     w.load * loadBalance +
     w.simple * (ctx.isContinuity ? 1 : 0)
   );
@@ -187,10 +186,18 @@ export function optimizeStaffing(input: OptimizeInput): StaffingPlan {
     }
   }
 
-  const busy = busyWindows(dayShifts);
   const booked = bookedHoursByUser(dayShifts);
   const maxSeatHours = seats.reduce((m, s) => Math.max(m, s.hours), 0);
   const nameOf = (uid: number): string => roster.find((r) => r.userId === uid)?.name ?? `#${uid}`;
+
+  // External constraints for the classifier: Zoe assignments on routes NOT in this plan (an in-plan
+  // overlap is handled by the live-plan check below, so excluding plan shifts here keeps the swap pass
+  // able to free a seat and re-place a worker). A Connecteam WORK shift is NOT a constraint — it makes a
+  // worker SCHEDULED_UNASSIGNED (eligible, preferred), which is exactly the bug this refinement kills.
+  const planShiftIds = new Set(planShifts.map((s) => s.id));
+  const externalAssignments = (input.assignments ?? []).filter((a) => !planShiftIds.has(a.shiftId));
+  const availByUser = input.unavailability?.byUser ?? new Map<number, UnavailabilityBlock[]>();
+  const availabilityKnown = input.unavailability?.ok ?? false;
 
   // Which seats is a worker currently occupying in the plan (to prevent overlap when we move them).
   function workerBusyInPlan(userId: number, exceptSeatId: string | null): Array<[number, number]> {
@@ -198,25 +205,40 @@ export function optimizeStaffing(input: OptimizeInput): StaffingPlan {
     for (const s of seats) {
       if (s.assignedUserId === userId && s.seatId !== exceptSeatId) out.push([s.startMs, s.endMs]);
     }
-    for (const [bs, be] of busy.get(userId) ?? []) out.push([bs, be]);
     return out;
   }
 
-  /** Can this worker take this seat? Role-qualified, and no overlap with their other plan seats or
-   *  Connecteam shifts. (No max-hours check — a confirmed decision.) */
-  function feasible(userId: number, seat: Seat): boolean {
+  /** Classify (worker, seat) through the shared eligibility classifier + the live plan. Infeasible only
+   *  when the classifier says NOT eligible (UNAVAILABLE, or ASSIGNED to an overlapping off-plan route) or
+   *  the worker already holds an overlapping plan seat. Also reports whether the pick is SCHEDULED_UNASSIGNED
+   *  (a sunk Connecteam commitment), which the score prefers. (No max-hours check — a confirmed decision.) */
+  function seatFit(userId: number, seat: Seat): { feasible: boolean; scheduledUnassigned: boolean } {
     const worker = roster.find((r) => r.userId === userId);
-    if (!worker || !roleEligible(worker, seat.role)) return false;
+    if (!worker || !roleEligible(worker, seat.role)) return { feasible: false, scheduledUnassigned: false };
+    const elig = eligibilityFor({
+      userId,
+      routeWindow: { start: Math.floor(seat.startMs / 1000), end: Math.floor(seat.endMs / 1000) },
+      dayShifts,
+      assignments: externalAssignments,
+      unavailability: availByUser.get(userId) ?? [],
+      availabilityKnown,
+      thisShiftId: seat.shiftId,
+    });
+    if (!elig.eligible) return { feasible: false, scheduledUnassigned: false };
     for (const [ws, we] of workerBusyInPlan(userId, seat.seatId)) {
-      if (overlaps(seat.startMs, seat.endMs, ws, we)) return false;
+      if (overlaps(seat.startMs, seat.endMs, ws, we)) return { feasible: false, scheduledUnassigned: false };
     }
-    return true;
+    return { feasible: true, scheduledUnassigned: elig.preferred };
   }
+
+  const feasible = (userId: number, seat: Seat): boolean => seatFit(userId, seat).feasible;
 
   const assignedSomewhere = (): Set<number> => new Set(seats.filter((s) => s.assignedUserId != null).map((s) => s.assignedUserId!));
 
-  // Stage 1+3 fill: walk the still-empty seats LONGEST-first and assign the best free internal worker,
-  // so internal crew land on the longest routes and temps fall to the shortest by construction.
+  // Stage 1+3 fill: walk the still-empty seats LONGEST-first and assign the best eligible internal worker,
+  // so internal crew land on the longest routes and temps fall to the shortest by construction. A
+  // scheduled-unassigned worker is eligible and preferred, so an idle worker already on the clock is
+  // picked over a temp.
   const emptySeats = (): Seat[] => seats.filter((s) => s.assignedUserId == null).sort((a, b) => b.hours - a.hours || a.seatId.localeCompare(b.seatId));
 
   for (const seat of emptySeats()) {
@@ -225,8 +247,14 @@ export function optimizeStaffing(input: OptimizeInput): StaffingPlan {
     let best: { userId: number; score: number } | null = null;
     for (const w of roster) {
       if (taken.has(w.userId)) continue;
-      if (!feasible(w.userId, seat)) continue;
-      const sc = scoreAssignment(w, seat, { bookedHours: booked.get(w.userId) ?? 0, maxSeatHours, isContinuity: false }, cfg);
+      const fit = seatFit(w.userId, seat);
+      if (!fit.feasible) continue;
+      const sc = scoreAssignment(
+        w,
+        seat,
+        { bookedHours: booked.get(w.userId) ?? 0, maxSeatHours, isContinuity: false, scheduledUnassigned: fit.scheduledUnassigned },
+        cfg,
+      );
       if (sc === -Infinity) continue;
       if (!best || sc > best.score || (sc === best.score && w.userId < best.userId)) best = { userId: w.userId, score: sc };
     }

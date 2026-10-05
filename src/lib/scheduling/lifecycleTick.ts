@@ -114,8 +114,8 @@ export async function runShiftLifecycleTick(now: Date = new Date()): Promise<Tic
     const cov = ctOk ? await getCrewForDateSafe(date) : { ok: false, shifts: [] as Awaited<ReturnType<typeof getCrewForDateSafe>>["shifts"] };
     const coverageOk = cov.ok;
     if (!coverageOk) unverifiedDates.add(date);
-    const scheduled = dedup(cov.shifts.flatMap((s) => s.assignees));
-    const coverage = computeCoverage(shifts, scheduled);
+    // Coverage from explicit route assignments only (doc §2.2) — cov.ok still gates reachability honesty.
+    const coverage = computeCoverage(shifts);
 
     const iwDay = iwFresh ? instaworkShiftsForDate(iwGigs, date) : [];
 
@@ -187,10 +187,4 @@ export async function runShiftLifecycleTick(now: Date = new Date()): Promise<Tic
   if (mirrored) parts.push(`${mirrored} clock mirror`);
   if (!iwFresh && instaworkConfigured()) parts.push("IW stale");
   return { ok: true, detail: parts.join(", ") };
-}
-
-function dedup(crew: CrewMember[]): CrewMember[] {
-  const m = new Map<number, CrewMember>();
-  for (const a of crew) m.set(a.userId, a);
-  return [...m.values()];
 }

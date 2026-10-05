@@ -18,8 +18,25 @@ import { Loader2, Check, X, ChevronLeft, Send } from "lucide-react";
 import type { CrewMember } from "@/lib/connecteam";
 import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
+import {
+  classifyWorkerFor,
+  eligibilityView,
+  dayTz,
+  type EligibilityTone,
+  type WorkerDayEligibilityData,
+} from "@/lib/scheduling/eligibilityLabel";
 import { instaworkCoversRole, type InstaworkRoleSummary } from "@/lib/instawork/reconcile";
 import { ROLE_LABEL, type MatchedGig, type RouteCardData } from "@/components/scheduling/RouteStaffBoard";
+
+/** Tone → badge classes, shared by the eligibility labels. */
+export const ELIG_BADGE: Record<EligibilityTone, string> = {
+  preferred: "border-positive/40 text-positive",
+  available: "border-border text-meta",
+  conflict: "border-attention/40 text-attention",
+  assigned: "border-border text-meta",
+  unavailable: "border-critical/50 text-critical",
+  unknown: "border-attention/40 text-attention",
+};
 
 const BTN =
   "inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50 disabled:pointer-events-none";
@@ -38,7 +55,7 @@ export function AddWorkerPanel({
   card,
   shifts,
   roster,
-  busyUserIds,
+  eligibilityData,
   recsByRole,
   instawork,
   iwConfigured,
@@ -48,14 +65,20 @@ export function AddWorkerPanel({
   card: RouteCardData;
   shifts: StaffShift[]; // this route's existing shifts
   roster: CrewMember[];
-  busyUserIds: number[];
+  eligibilityData: WorkerDayEligibilityData;
   recsByRole: Partial<Record<ShiftRole, CrewRecommendation[]>>;
   instawork: Record<ShiftRole, InstaworkRoleSummary> | null;
   iwConfigured: boolean;
   onClose: () => void;
 }): React.JSX.Element {
   const router = useRouter();
-  const busy = useMemo(() => new Set(busyUserIds), [busyUserIds]);
+  // The route window (Unix seconds) the eligibility classifier reasons about for THIS card.
+  const routeWindow = useMemo(() => {
+    const s = card.windowKnown && card.startTime ? Math.floor(Date.parse(card.startTime) / 1000) : null;
+    const e = card.windowKnown && card.endTime ? Math.floor(Date.parse(card.endTime) / 1000) : null;
+    return s != null && e != null && !Number.isNaN(s) && !Number.isNaN(e) ? { start: s, end: e } : null;
+  }, [card.windowKnown, card.startTime, card.endTime]);
+  const tz = useMemo(() => dayTz(eligibilityData), [eligibilityData]);
   // Default to the first role on the route that still has a gap, else driver.
   const defaultRole: ShiftRole =
     ROLES.find((r) => {
@@ -307,18 +330,24 @@ export function AddWorkerPanel({
               <div className="mt-1 max-h-60 space-y-1 overflow-y-auto rounded border border-border p-1.5">
                 {rosterForRole.map((m) => {
                   const added = justAdded.includes(m.name) || existingAssignees.has(m.userId);
+                  const roleShiftId = roleShifts[0]?.id;
+                  const view = eligibilityView(classifyWorkerFor(eligibilityData, m.userId, routeWindow, roleShiftId), tz);
                   return (
                     <button
                       key={m.userId}
                       type="button"
                       disabled={working || added}
                       onClick={() => assignConnecteam(m.userId, m.name)}
+                      title={view.text}
                       className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-[13px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] disabled:opacity-60"
                     >
-                      <span className="truncate">{m.name}</span>
-                      <span className="flex items-center gap-2 text-[10.5px] uppercase tracking-[0.06em] text-meta">
+                      <span className="min-w-0 truncate">
+                        <span>{m.name}</span>
+                        {!added && <span className="ml-1.5 text-[11px] normal-case text-meta">{view.text}</span>}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-2 text-[10.5px] uppercase tracking-[0.06em] text-meta">
                         {m.role}
-                        {busy.has(m.userId) && !added && <span className="rounded border border-attention/40 px-1 py-px text-attention">busy</span>}
+                        {!added && <span className={`rounded border px-1 py-px normal-case ${ELIG_BADGE[view.tone]}`}>{view.state.replace("_", " ").toLowerCase()}</span>}
                         {added && <span className="text-positive">added ✓</span>}
                       </span>
                     </button>

@@ -26,7 +26,10 @@ import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import type { PlannedAssignment } from "@/lib/scheduling/optimize";
 import type { ShiftReadinessLevel } from "@/lib/scheduling/readiness";
 import type { MoveEligibility, MoveFit } from "@/lib/scheduling/planView";
+import type { WorkerDayEligibilityData } from "@/lib/scheduling/eligibilityLabel";
 import type { InstaworkRoleSummary } from "@/lib/instawork/reconcile";
+
+export type { WorkerDayEligibilityData } from "@/lib/scheduling/eligibilityLabel";
 
 const BTN =
   "inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50 disabled:pointer-events-none";
@@ -93,7 +96,7 @@ export function RouteStaffBoard({
   shifts,
   otherShifts,
   roster,
-  busyUserIds,
+  eligibilityData,
   coverage,
   recommendations,
   routeRecs,
@@ -111,7 +114,7 @@ export function RouteStaffBoard({
   shifts: StaffShift[];
   otherShifts: StaffShift[];
   roster: CrewMember[];
-  busyUserIds: number[];
+  eligibilityData: WorkerDayEligibilityData;
   coverage: Record<string, ShiftCoverage>;
   recommendations: Record<string, CrewRecommendation[]>;
   routeRecs: RouteRecs;
@@ -243,7 +246,7 @@ export function RouteStaffBoard({
             shift={editing === "new" ? null : editing}
             date={date}
             roster={roster}
-            busyUserIds={busyUserIds}
+            eligibilityData={eligibilityData}
             recommendations={editing !== "new" && editing ? recommendations[editing.id] ?? [] : []}
             onClose={() => setEditing(null)}
           />
@@ -257,7 +260,7 @@ export function RouteStaffBoard({
             card={adding}
             shifts={shifts.filter((s) => s.routeId === adding.routeId)}
             roster={roster}
-            busyUserIds={busyUserIds}
+            eligibilityData={eligibilityData}
             recsByRole={routeRecs[adding.routeId] ?? {}}
             instawork={instawork}
             iwConfigured={iwConfigured}

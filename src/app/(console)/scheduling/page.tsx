@@ -21,7 +21,9 @@ import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate } from "@/lib/db/repo";
 import { getShiftsForDate } from "@/lib/scheduling/store";
 import { computeCoverage } from "@/lib/scheduling/coverage";
-import { recommendCrew, type CrewRecommendation } from "@/lib/scheduling/availability";
+import { recommendCrew, type CrewRecommendation, type RecommendContext } from "@/lib/scheduling/availability";
+import { assignmentWindowsFromShifts, getDayAvailabilityCached } from "@/lib/scheduling/eligibilityInputs";
+import type { WorkerDayEligibilityData } from "@/components/scheduling/RouteStaffBoard";
 import { shiftWindowHours, gigWindowHours, internalRateFor, internalSeat, tempSeat, computeTempExposure, type LaborSeat } from "@/lib/scheduling/cost";
 import { optimizeStaffing, type PlannedAssignment } from "@/lib/scheduling/optimize";
 import { summarizePlan, computeStaffingHealth, moveEligibility, type MoveEligibility } from "@/lib/scheduling/planView";
@@ -43,6 +45,7 @@ import {
   type CrewMember,
   type CrewShift,
   type PayRate,
+  type UnavailabilityBlock,
 } from "@/lib/connecteam";
 import { openShiftsWithSuggestions } from "@/lib/staffing/openShifts";
 import { StaffingRosterSections } from "@/components/scheduling/StaffingRosterSections";
@@ -149,9 +152,23 @@ export default async function SchedulingPage({
 
   // Distinct crew already on the Connecteam schedule this day (dedup by userId).
   const scheduledCrew = dedupCrew(coverage.shifts.flatMap((s) => s.assignees));
-  const busyUserIds = [...new Set(scheduledCrew.map((a) => a.userId))];
   const driverScheduled = scheduledCrew.filter((a) => a.role === "driver");
   const prepScheduled = scheduledCrew.filter((a) => a.role === "prep");
+
+  // The REAL availability feed (Connecteam time-off / unavailability), pulled once for the roster and
+  // TTL-cached so a render doesn't fire one call per worker. ok:false → availability UNVERIFIED for the
+  // day (never read as "nobody off"). Feeds the eligibility classifier that recommend/optimize/labels read.
+  const dayAvailability = configured
+    ? await getDayAvailabilityCached(date, roster.map((m) => m.userId))
+    : { ok: false, byUser: new Map<number, UnavailabilityBlock[]>() };
+
+  // The day's Zoe route assignments (staff_shifts.assignees → windows) + the ctx the classifier reads.
+  const assignmentWindows = assignmentWindowsFromShifts(shifts);
+  const recommendCtx: RecommendContext = {
+    assignments: assignmentWindows,
+    unavailabilityByUser: dayAvailability.byUser,
+    availabilityKnown: dayAvailability.ok,
+  };
 
   // Warehouse/prep crew scheduled in Connecteam THIS day, with their shift windows. Prep isn't tied to a
   // route (it's day-level work — on the ground the delivery day), so without this the "N prep scheduled"
@@ -172,14 +189,15 @@ export default async function SchedulingPage({
     }
   }
 
-  // Net the scheduled crew against demand so a shift someone's already on doesn't read as a gap.
-  const cov = computeCoverage(shifts, scheduledCrew);
+  // Coverage from EXPLICIT route assignments only — the honest gap. The scheduled-unassigned pool is no
+  // longer silently credited here (doc §2.2); it surfaces as eligible candidates in recommend/optimize.
+  const cov = computeCoverage(shifts);
 
-  // Per-shift recommendations: who's actually FREE for this window + role (excludes office/admin). The
-  // human picks from these (or posts to Instawork) — grounded in the Connecteam schedule, not a guess.
+  // Per-shift recommendations: who's actually ELIGIBLE for this window + role (excludes office/admin, the
+  // marked-off, and anyone already on an overlapping route). Scheduled-but-unassigned ranks first.
   const recommendations: Record<string, CrewRecommendation[]> = {};
   if (configured && coverage.ok) {
-    for (const s of shifts) recommendations[s.id] = recommendCrew(s, coverage.shifts, roster);
+    for (const s of shifts) recommendations[s.id] = recommendCrew(s, coverage.shifts, roster, recommendCtx);
   }
 
   // Instawork (temp labor): what's already booked/pending for this day, to reconcile against the gap.
@@ -205,7 +223,7 @@ export default async function SchedulingPage({
       const byRole: Partial<Record<ShiftRole, CrewRecommendation[]>> = {};
       for (const role of ROLE_ORDER) {
         const assignees = rs.filter((s) => s.role === role).flatMap((s) => s.assignees);
-        byRole[role] = recommendCrew(syntheticShift(date, role, win, assignees), coverage.shifts, roster);
+        byRole[role] = recommendCrew(syntheticShift(date, role, win, assignees), coverage.shifts, roster, recommendCtx);
       }
       routeRecs[route.routeId] = byRole;
     }
@@ -251,6 +269,8 @@ export default async function SchedulingPage({
     dayShifts: coverage.shifts,
     rates,
     instawork: { ok: Boolean(iw?.ok), gigs: iw?.ok ? iw.shifts : [] },
+    assignments: assignmentWindows,
+    unavailability: dayAvailability,
   });
   const routeLabelFor = (routeId: string | null): string => {
     if (!routeId) return "Other";
@@ -392,6 +412,15 @@ export default async function SchedulingPage({
   // Open (unassigned) Connecteam shifts + who's free to take them (folded in from the former Staffing blade).
   const openShifts = configured && coverage.ok ? openShiftsWithSuggestions(coverage.shifts, roster) : [];
 
+  // Eligibility ingredients for the board labels — the raw feeds the pure classifier reads, computed once
+  // and passed down so each panel can label a worker for ITS own window (route card / shift) client-side.
+  const eligibilityData: WorkerDayEligibilityData = {
+    dayShifts: coverage.shifts,
+    assignments: assignmentWindows,
+    unavailability: [...dayAvailability.byUser.values()].flat(),
+    availabilityKnown: dayAvailability.ok,
+  };
+
   const money = (n: number | null): string => (n == null ? "n/a" : `$${Math.round(n).toLocaleString()}`);
   const hrs = (n: number | null): string | number => (n == null ? "n/a" : n);
   const pct = (n: number | null): string => (n == null ? "n/a" : `${Math.round(n * 100)}%`);
@@ -463,7 +492,7 @@ export default async function SchedulingPage({
         shifts={shifts}
         otherShifts={otherShifts}
         roster={roster}
-        busyUserIds={busyUserIds}
+        eligibilityData={eligibilityData}
         coverage={cov.byShift}
         recommendations={recommendations}
         routeRecs={routeRecs}

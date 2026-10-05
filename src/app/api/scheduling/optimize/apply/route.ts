@@ -15,6 +15,7 @@ import { getDb } from "@/lib/db";
 import { getShiftsForDate, updateShift } from "@/lib/scheduling/store";
 import { computeCoverage } from "@/lib/scheduling/coverage";
 import { optimizeStaffing } from "@/lib/scheduling/optimize";
+import { assignmentWindowsFromShifts, getDayAvailabilityCached } from "@/lib/scheduling/eligibilityInputs";
 import { derivePlanWrites } from "@/lib/scheduling/applyPlan";
 import { syncInternalAssignments, upsertAssignment, logShiftEvent } from "@/lib/scheduling/assignments";
 import { shiftWindowHours, internalRateFor } from "@/lib/scheduling/cost";
@@ -27,6 +28,7 @@ import {
   type CrewMember,
   type CrewShift,
   type PayRate,
+  type UnavailabilityBlock,
 } from "@/lib/connecteam";
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
 
@@ -55,9 +57,13 @@ export async function POST(req: Request): Promise<NextResponse> {
   const [coverage, roster, rates] = configured
     ? await Promise.all([getCrewForDateSafe(date), getUsersList(), getPayRates(date, date)])
     : [{ ok: false, shifts: [] as CrewShift[] }, [] as CrewMember[], new Map<number, PayRate[]>()];
-  const scheduledCrew = dedup(coverage.shifts.flatMap((s) => s.assignees));
-  const cov = computeCoverage(shifts, scheduledCrew);
+  const cov = computeCoverage(shifts);
   const iw = instaworkConfigured() ? await getInstaworkShifts() : null;
+  // Same availability inputs the board uses, so apply places the scheduled-unassigned pool and excludes
+  // the marked-off exactly as the preview did (recompute from live DB state — overrides always win).
+  const dayAvailability = configured
+    ? await getDayAvailabilityCached(date, roster.map((m) => m.userId))
+    : { ok: false, byUser: new Map<number, UnavailabilityBlock[]>() };
 
   const plan = optimizeStaffing({
     date,
@@ -67,6 +73,8 @@ export async function POST(req: Request): Promise<NextResponse> {
     dayShifts: coverage.shifts,
     rates,
     instawork: { ok: Boolean(iw?.ok), gigs: iw?.ok ? iw.shifts : [] },
+    assignments: assignmentWindowsFromShifts(shifts),
+    unavailability: dayAvailability,
   });
 
   if (!plan.betterThanCurrent) {
@@ -156,10 +164,4 @@ export async function POST(req: Request): Promise<NextResponse> {
     tempCountSaved: plan.tempCountSaved,
     note: plan.note,
   });
-}
-
-function dedup(crew: CrewMember[]): CrewMember[] {
-  const m = new Map<number, CrewMember>();
-  for (const a of crew) m.set(a.userId, a);
-  return [...m.values()];
 }

@@ -1,46 +1,45 @@
-// Coverage netting — reconcile who's ALREADY scheduled in Connecteam against the day's demand, so a
-// shift a scheduled crew member covers doesn't falsely read as an Instawork gap. Pure + deterministic.
+// Coverage netting — reconcile the day's demand against the people ACTUALLY committed to each route
+// (staff_shifts.assignees). Pure + deterministic.
 //
-// Connecteam is the internal schedule of record. If Michael is on today as a driver, a driver shift is
-// covered — the human doesn't have to re-assign him in the app for the board to reflect reality, and the
-// Instawork gap drops accordingly. Explicit app assignees still count first; scheduled crew fill the
-// remaining need, and are never double-counted with an explicit assignee of the same person.
+// IMPORTANT (the refinement in docs/work-schedule-vs-route-assignment.md §2.2): a Connecteam WORK SHIFT is
+// NOT a route assignment. This function used to silently credit a scheduled-but-unassigned driver/prep as
+// "covering" a seat — the inverse bug: it shrank the gap for a decision that was never made (no assignment,
+// no packet, no publish, no readiness). We no longer do that. Coverage now counts ONLY explicit route
+// assignments, so the gap is HONEST. The scheduled-unassigned crew are not lost: they surface as the
+// PREFERRED candidates in recommendCrew / the optimizer (both read eligibilityFor), which turns a sunk
+// Connecteam commitment into a real assignment instead of a fake coverage credit.
 //
-// Role mapping: the app's field crew maps to Connecteam's "other" title bucket (driver→driver,
-// prep→prep, field→other), per roleFromTitle in connecteam.ts.
+// Field was already never auto-credited (it maps to Connecteam's catch-all "other" bucket, which also
+// holds admins) — so this change brings driver + prep in line with how field already behaved. Reachability
+// honesty is unchanged: this function makes no claim about who is off; an outage is handled upstream
+// (getCrewForDateSafe.ok) and never read here as coverage.
 
-import type { CrewMember } from "@/lib/connecteam";
 import type { ShiftRole, StaffShift } from "./types";
 
-const CREW_ROLE: Record<ShiftRole, CrewMember["role"]> = {
-  driver: "driver",
-  prep: "prep",
-  field: "other",
-};
-
-/** Per-shift coverage after crediting scheduled Connecteam crew. */
+/** Per-shift coverage. Counted from explicit route assignments only (no Connecteam-schedule credit). */
 export interface ShiftCoverage {
   headcount: number;
-  assigned: number; // explicit app assignees
-  scheduledCredit: number; // Connecteam-scheduled crew credited to this shift
-  scheduledNames: string[]; // their names, for display ("via Connecteam: Michael")
-  scheduledUserIds: number[]; // their Connecteam userIds, for exact rate lookup (cost economics)
-  covered: number; // assigned + scheduledCredit, capped at headcount
-  gap: number; // headcount − covered → still needs Instawork
+  assigned: number; // explicit app assignees (the only thing that covers a seat)
+  scheduledCredit: number; // DEPRECATED — always 0 now (kept for the server→client shape; see note above)
+  scheduledNames: string[]; // always [] now
+  scheduledUserIds: number[]; // always [] now
+  covered: number; // = assigned, capped at headcount
+  gap: number; // headcount − covered → still needs a decision (internal pick or Instawork)
 }
 
 export interface DayCoverage {
   /** shift id → coverage. Plain object so it crosses the server→client boundary. */
   byShift: Record<string, ShiftCoverage>;
-  internalTotal: number; // people covered internally (explicit + scheduled)
-  gapTotal: number; // total still needing Instawork
+  internalTotal: number; // people covered by an explicit route assignment
+  gapTotal: number; // total still needing a staffing decision
 }
 
 /**
- * Credit scheduled Connecteam crew against the day's shifts, per role. `scheduled` is the distinct
- * crew already on the Connecteam schedule for the day (from getCrewForDateSafe → shift assignees).
+ * Coverage for the day's shifts from explicit route assignments only. A Connecteam work shift never
+ * credits coverage here (see the file header + doc §2.2) — the scheduled-unassigned pool is surfaced as
+ * eligible candidates by recommendCrew / optimize, not counted as covered.
  */
-export function computeCoverage(shifts: StaffShift[], scheduled: CrewMember[]): DayCoverage {
+export function computeCoverage(shifts: StaffShift[]): DayCoverage {
   const byShift: Record<string, ShiftCoverage> = {};
   let internalTotal = 0;
   let gapTotal = 0;
@@ -49,30 +48,11 @@ export function computeCoverage(shifts: StaffShift[], scheduled: CrewMember[]): 
   for (const role of roles) {
     const roleShifts = shifts.filter((s) => s.role === role);
     if (roleShifts.length === 0) continue;
-    // People already explicitly assigned to ANY of this role's shifts — don't credit them twice.
-    const assignedIds = new Set<number>(roleShifts.flatMap((s) => s.assignees));
-    // Only auto-credit roles Connecteam tags CLEANLY: driver (title "Driver") and prep (Warehouse/Asset).
-    // "field" maps to Connecteam's catch-all "other" bucket, which also contains admins/office staff — so
-    // auto-crediting it is wrong (e.g. an admin shown as field crew). Field needs real availability + an
-    // explicit pick (the recommendation engine), so it's NEVER auto-credited here — explicit assignees only.
-    const pool = role === "field" ? [] : scheduled.filter((c) => c.role === CREW_ROLE[role] && !assignedIds.has(c.userId));
-    let pi = 0; // walk the scheduled pool across this role's shifts
-
     for (const s of roleShifts) {
       const assigned = s.assignees.length;
-      let residual = Math.max(0, s.headcount - assigned);
-      const names: string[] = [];
-      const userIds: number[] = [];
-      while (residual > 0 && pi < pool.length) {
-        names.push(pool[pi].name);
-        userIds.push(pool[pi].userId);
-        pi += 1;
-        residual -= 1;
-      }
-      const scheduledCredit = names.length;
-      const covered = Math.min(s.headcount, assigned + scheduledCredit);
+      const covered = Math.min(s.headcount, assigned);
       const gap = Math.max(0, s.headcount - covered);
-      byShift[s.id] = { headcount: s.headcount, assigned, scheduledCredit, scheduledNames: names, scheduledUserIds: userIds, covered, gap };
+      byShift[s.id] = { headcount: s.headcount, assigned, scheduledCredit: 0, scheduledNames: [], scheduledUserIds: [], covered, gap };
       internalTotal += covered;
       gapTotal += gap;
     }

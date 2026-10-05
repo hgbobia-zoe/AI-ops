@@ -164,23 +164,58 @@ describe("optimizeStaffing", () => {
     expect(plan.assignments[0].whyTemp).toMatch(/no internal crew qualified/i);
   });
 
-  it("does not place a worker who is on an overlapping Connecteam shift", () => {
-    const s = shift({ id: "L", role: "driver", startTime: L_START, endTime: L_END });
-    const busyShift: CrewShift = {
-      id: "cs1",
+  function ctShift(startIso: string, endIso: string, assignees: CrewMember[]): CrewShift {
+    return {
+      id: `cs-${startIso}`,
       schedulerId: 1,
       schedulerName: "Job",
-      startUnix: Date.parse(L_START) / 1000,
-      endUnix: Date.parse(L_END) / 1000,
+      startUnix: Date.parse(startIso) / 1000,
+      endUnix: Date.parse(endIso) / 1000,
       timezone: "America/New_York",
       isOpen: false,
       title: "Driver",
-      assignees: [crew(1, "Driver A", "driver")],
+      assignees,
     };
+  }
+
+  it("PLACES a scheduled-unassigned worker internally (a Connecteam shift no longer blocks them)", () => {
+    const s = shift({ id: "L", role: "driver", startTime: L_START, endTime: L_END });
+    const scheduled = ctShift(L_START, L_END, [crew(1, "Driver A", "driver")]); // on the schedule, no Zoe route
     const plan = optimizeStaffing(
-      input({ shifts: [s], coverage: cov({ L: { gap: 1 } }), roster: [crew(1, "Driver A", "driver")], dayShifts: [busyShift] }),
+      input({ shifts: [s], coverage: cov({ L: { gap: 1 } }), roster: [crew(1, "Driver A", "driver")], dayShifts: [scheduled] }),
     );
-    expect(plan.assignments[0].kind).toBe("temp"); // the only driver is busy → cannot be placed
+    expect(plan.assignments[0].kind).toBe("internal"); // the idle scheduled driver is used instead of a temp
+    expect(plan.assignments[0].userId).toBe(1);
+    expect(plan.planTempCount).toBe(0);
+  });
+
+  it("EXCLUDES a worker on a real time-off block → the seat falls to a temp", () => {
+    const s = shift({ id: "L", role: "driver", startTime: L_START, endTime: L_END });
+    const byUser = new Map([[1, [{ userId: 1, kind: "timeOff" as const, startUnix: Date.parse(L_START) / 1000, endUnix: Date.parse(L_END) / 1000, reason: "PTO" }]]]);
+    const plan = optimizeStaffing(
+      input({
+        shifts: [s],
+        coverage: cov({ L: { gap: 1 } }),
+        roster: [crew(1, "Driver A", "driver")],
+        unavailability: { ok: true, byUser },
+      }),
+    );
+    expect(plan.assignments[0].kind).toBe("temp"); // marked off → not placeable
+  });
+
+  it("prefers a scheduled-unassigned worker over a fully-unscheduled one for the same seat", () => {
+    const s = shift({ id: "L", role: "driver", startTime: L_START, endTime: L_END });
+    const scheduled = ctShift(L_START, L_END, [crew(1, "Scheduled", "driver")]); // driver 1 is on the schedule
+    const plan = optimizeStaffing(
+      input({
+        shifts: [s],
+        coverage: cov({ L: { gap: 1 } }),
+        roster: [crew(1, "Scheduled", "driver"), crew(2, "Unscheduled", "driver")],
+        dayShifts: [scheduled],
+      }),
+    );
+    expect(plan.assignments[0].kind).toBe("internal");
+    expect(plan.assignments[0].userId).toBe(1); // the scheduled-unassigned worker wins over the idle one
   });
 
   it("ignores shifts with an unknown window (never force-fit)", () => {

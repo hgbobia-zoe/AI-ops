@@ -15,6 +15,8 @@ import { Loader2, Check, Trash2, X, Send, FileText } from "lucide-react";
 import type { CrewMember } from "@/lib/connecteam";
 import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import { shiftGap, type ShiftRole, type ShiftStatus, type StaffShift } from "@/lib/scheduling/types";
+import { classifyWorkerFor, eligibilityView, dayTz, type WorkerDayEligibilityData } from "@/lib/scheduling/eligibilityLabel";
+import { ELIG_BADGE } from "@/components/scheduling/AddWorkerPanel";
 
 const INPUT = "w-full rounded border border-border bg-background px-2.5 py-1.5 text-[13px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 const BTN = "inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50 disabled:pointer-events-none";
@@ -85,14 +87,14 @@ export function ShiftEditor({
   shift,
   date,
   roster,
-  busyUserIds,
+  eligibilityData,
   recommendations,
   onClose,
 }: {
   shift: StaffShift | null;
   date: string; // the day being edited (for a new shift)
   roster: CrewMember[];
-  busyUserIds: number[];
+  eligibilityData: WorkerDayEligibilityData;
   recommendations: CrewRecommendation[];
   onClose: () => void;
 }): React.JSX.Element {
@@ -102,7 +104,7 @@ export function ShiftEditor({
   const [instaTouched, setInstaTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const busy = useMemo(() => new Set(busyUserIds), [busyUserIds]);
+  const tz = useMemo(() => dayTz(eligibilityData), [eligibilityData]);
 
   // Packet preview (read-only, send-gated). Previews what each assigned worker would receive; when
   // SHIFT_COMMS_ENABLED is off the server records the packet only and sends nothing.
@@ -134,6 +136,16 @@ export function ShiftEditor({
   }
 
   const set = <K extends keyof Draft>(k: K, v: Draft[K]): void => setDraft((d) => ({ ...d, [k]: v }));
+
+  // The shift window (Unix seconds) the eligibility classifier reasons about — from the draft times, so
+  // edits re-label live. Null when no start is set yet (a new/untimed shift): we can't overlap-check.
+  const routeWindow = useMemo(() => {
+    const sIso = localInputToIso(draft.start);
+    const eIso = localInputToIso(draft.end);
+    const s = sIso ? Math.floor(Date.parse(sIso) / 1000) : null;
+    const e = eIso ? Math.floor(Date.parse(eIso) / 1000) : null;
+    return s != null && e != null && !Number.isNaN(s) && !Number.isNaN(e) ? { start: s, end: e } : null;
+  }, [draft.start, draft.end]);
 
   // Live gap = headcount − internal assignees (never below 0). Drives the default Instawork top-up.
   const liveGap = Math.max(0, draft.headcount - draft.assignees.length);
@@ -389,21 +401,22 @@ export function ShiftEditor({
             <div className="max-h-52 space-y-1 overflow-y-auto rounded border border-border p-1.5">
               {roster.map((m) => {
                 const on = draft.assignees.includes(m.userId);
-                const isBusy = busy.has(m.userId);
+                const view = eligibilityView(classifyWorkerFor(eligibilityData, m.userId, routeWindow, shift?.id), tz);
                 return (
                   <button
                     key={m.userId}
                     type="button"
                     onClick={() => toggleAssignee(m.userId)}
+                    title={view.text}
                     className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors ${on ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)]"}`}
                   >
-                    <span className="flex items-center gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
                       <span className={`flex size-4 shrink-0 items-center justify-center rounded-sm border ${on ? "border-foreground bg-foreground text-background" : "border-border"}`}>{on && <Check className="size-3" />}</span>
-                      {m.name}
+                      <span className="truncate">{m.name}</span>
                     </span>
-                    <span className="flex items-center gap-2 text-[10.5px] uppercase tracking-[0.06em] text-meta">
+                    <span className="flex shrink-0 items-center gap-2 text-[10.5px] uppercase tracking-[0.06em] text-meta">
                       {m.role}
-                      {isBusy && <span className="rounded border border-attention/40 px-1 py-px text-attention">busy</span>}
+                      {!on && <span className={`rounded border px-1 py-px normal-case ${ELIG_BADGE[view.tone]}`}>{view.state.replace("_", " ").toLowerCase()}</span>}
                     </span>
                   </button>
                 );

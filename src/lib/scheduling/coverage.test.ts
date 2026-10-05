@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeCoverage } from "./coverage";
 import type { StaffShift } from "./types";
-import type { CrewMember } from "@/lib/connecteam";
 
 function shift(p: Partial<StaffShift> & { id: string; role: StaffShift["role"] }): StaffShift {
   return {
@@ -37,57 +36,45 @@ function shift(p: Partial<StaffShift> & { id: string; role: StaffShift["role"] }
     ...p,
   };
 }
-const crew = (userId: number, name: string, role: CrewMember["role"]): CrewMember => ({ userId, name, role });
 
-describe("computeCoverage", () => {
-  it("credits a scheduled driver against a driver shift → no gap", () => {
-    const cov = computeCoverage([shift({ id: "d1", role: "driver" })], [crew(1, "Michael", "driver")]);
+// The refinement (doc §2.2): coverage counts EXPLICIT route assignments only. A Connecteam work shift is
+// NOT a route assignment, so a scheduled-but-unassigned worker is no longer credited as "covering" a seat
+// — the gap stays honest, and that worker surfaces as a PREFERRED candidate in recommend/optimize instead.
+describe("computeCoverage (explicit assignments only — no Connecteam-schedule credit)", () => {
+  it("counts an explicit route assignee as covered", () => {
+    const cov = computeCoverage([shift({ id: "d1", role: "driver", assignees: [1] })]);
     expect(cov.byShift.d1.covered).toBe(1);
     expect(cov.byShift.d1.gap).toBe(0);
-    expect(cov.byShift.d1.scheduledNames).toEqual(["Michael"]);
+    expect(cov.byShift.d1.assigned).toBe(1);
     expect(cov.gapTotal).toBe(0);
     expect(cov.internalTotal).toBe(1);
   });
 
-  it("one scheduled driver across two driver shifts covers one, leaves the other a gap", () => {
-    const cov = computeCoverage(
-      [shift({ id: "d1", role: "driver" }), shift({ id: "d2", role: "driver" })],
-      [crew(1, "Michael", "driver")],
-    );
-    expect(cov.byShift.d1.gap).toBe(0);
-    expect(cov.byShift.d2.gap).toBe(1);
-    expect(cov.gapTotal).toBe(1); // 2 needed − 1 scheduled
-  });
-
-  it("does not double-count a scheduled person already explicitly assigned", () => {
-    const cov = computeCoverage(
-      [shift({ id: "d1", role: "driver", assignees: [1] }), shift({ id: "d2", role: "driver" })],
-      [crew(1, "Michael", "driver")], // Michael is BOTH explicitly assigned to d1 AND scheduled
-    );
-    expect(cov.byShift.d1.covered).toBe(1); // his explicit assignment
-    expect(cov.byShift.d1.scheduledCredit).toBe(0); // not credited again
-    expect(cov.byShift.d2.gap).toBe(1); // he can't cover d2 too
+  it("an unassigned driver shift is an HONEST gap (scheduled crew are not credited here)", () => {
+    const cov = computeCoverage([shift({ id: "d1", role: "driver" })]);
+    expect(cov.byShift.d1.covered).toBe(0);
+    expect(cov.byShift.d1.gap).toBe(1);
+    expect(cov.byShift.d1.scheduledCredit).toBe(0);
+    expect(cov.byShift.d1.scheduledNames).toEqual([]);
+    expect(cov.byShift.d1.scheduledUserIds).toEqual([]);
     expect(cov.gapTotal).toBe(1);
   });
 
-  it("does NOT auto-credit field from the catch-all 'other' bucket (admins aren't field crew)", () => {
-    const cov = computeCoverage([shift({ id: "f1", role: "field" })], [crew(9, "Admin Person", "other")]);
-    expect(cov.byShift.f1.gap).toBe(1); // stays a gap — field needs an explicit pick
+  it("caps covered at headcount and never reports a negative gap", () => {
+    const cov = computeCoverage([shift({ id: "d1", role: "driver", headcount: 1, assignees: [1, 2] })]);
+    expect(cov.byShift.d1.covered).toBe(1);
+    expect(cov.byShift.d1.gap).toBe(0);
+  });
+
+  it("a multi-headcount prep shift with one explicit assignee leaves the rest a gap", () => {
+    const cov = computeCoverage([shift({ id: "p1", role: "prep", headcount: 3, assignees: [2] })]);
+    expect(cov.byShift.p1.covered).toBe(1);
+    expect(cov.byShift.p1.gap).toBe(2);
+  });
+
+  it("field is counted from explicit assignees only (unchanged)", () => {
+    const cov = computeCoverage([shift({ id: "f1", role: "field" })]);
+    expect(cov.byShift.f1.gap).toBe(1);
     expect(cov.byShift.f1.scheduledCredit).toBe(0);
-  });
-
-  it("credits multiple scheduled prep against a multi-headcount prep shift", () => {
-    const cov = computeCoverage(
-      [shift({ id: "p1", role: "prep", headcount: 3 })],
-      [crew(2, "A", "prep"), crew(3, "B", "prep")],
-    );
-    expect(cov.byShift.p1.covered).toBe(2);
-    expect(cov.byShift.p1.gap).toBe(1); // 3 needed − 2 scheduled
-  });
-
-  it("a scheduled driver does not cover a prep shift (role-scoped)", () => {
-    const cov = computeCoverage([shift({ id: "p1", role: "prep" })], [crew(1, "Michael", "driver")]);
-    expect(cov.byShift.p1.gap).toBe(1);
-    expect(cov.byShift.p1.scheduledCredit).toBe(0);
   });
 });
