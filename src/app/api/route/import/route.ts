@@ -32,79 +32,111 @@ export function OPTIONS(): NextResponse {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  // Cross-origin write from the office bookmarklet — gated by the ingest token (enforced once
-  // GS_INGEST_TOKEN is set; the bookmarklet carries it). CORS is not a security control.
-  const publishToken = process.env.GS_INGEST_TOKEN;
-  if (publishToken && req.headers.get("x-publish-token") !== publishToken) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
-  }
-  let body: {
-    truckId?: string;
-    date?: string;
-    gsRouteId?: string;
-    stops?: Array<Partial<Stop>>;
-  };
+  // Resilience: a single poisoned route row must NEVER fail the whole pull. The extension loops over
+  // every (truck, route) and counts a non-2xx OR a throw as failed, then reports "routes failed to save"
+  // and skips the prune. Worse, an UNHANDLED throw returns a 500 WITHOUT these CORS headers, so the
+  // cross-origin caller sees only "Failed to fetch" and can't tell what went wrong. So: every exit path
+  // (including the catch-all) carries CORS, and the per-route steps that touch prior state are each
+  // guarded so a corrupt existing row self-heals (it gets overwritten by this fresh write) instead of
+  // throwing. Discovered 2026-10-05: one route 500'd here and masked an otherwise-clean pull.
+  const json = (data: unknown, status = 200): NextResponse => NextResponse.json(data, { status, headers: CORS });
   try {
-    body = (await req.json()) as typeof body;
-  } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400, headers: CORS });
+    // Cross-origin write from the office extension — gated by the ingest token (enforced once
+    // GS_INGEST_TOKEN is set; the extension carries it). CORS is not a security control.
+    const publishToken = process.env.GS_INGEST_TOKEN;
+    if (publishToken && req.headers.get("x-publish-token") !== publishToken) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    let body: {
+      truckId?: string;
+      date?: string;
+      gsRouteId?: string;
+      stops?: Array<Partial<Stop>>;
+    };
+    try {
+      body = (await req.json()) as typeof body;
+    } catch {
+      return json({ error: "invalid_json" }, 400);
+    }
+
+    const truckId = body.truckId;
+    const stopsIn = body.stops;
+    if (!truckId || !Array.isArray(stopsIn) || stopsIn.length === 0) {
+      return json({ error: "truckId and non-empty stops[] required" }, 400);
+    }
+
+    const date = body.date || todayInOpsTz();
+    // Identity is PER GOODSHUFFLE ROUTE: a truck can run more than one route a day (a day route and an
+    // evening route), and each must be its own row. The Goodshuffle route id makes them distinct; without
+    // one (a manual/test import) we fall back to the one-per-truck-per-day id.
+    const routeId = body.gsRouteId ? `R-${date}-${truckId}-${body.gsRouteId}` : `R-${date}-${truckId}`;
+
+    // Reconcile the fresh pull against THIS route's own prior stops (by routeId, not the truck/day) —
+    // preserving every acted-on stop, matching by Goodshuffle txId. Each step that reads prior state is
+    // guarded: if the existing row is unreadable/corrupt, we treat it as a FRESH import (overwriting it)
+    // rather than failing — so a bad row heals on the next pull instead of poisoning it forever.
+    let existing: Awaited<ReturnType<typeof getRouteById>> = null;
+    try {
+      existing = getRouteById(routeId);
+    } catch (e) {
+      console.error("[route/import] getRouteById failed; treating as fresh", routeId, e);
+      existing = null;
+    }
+    let force = false;
+    try {
+      force = consumeForceResync(routeId);
+    } catch {
+      force = false;
+    }
+    let stops: Stop[];
+    let keptCount = 0;
+    try {
+      const r = force
+        ? forceReconcileStops(existing?.stops ?? [], stopsIn, routeId)
+        : reconcileStops(existing?.stops ?? [], stopsIn, routeId);
+      stops = r.stops;
+      keptCount = r.keptCount;
+    } catch (e) {
+      // A corrupt prior-stop set must not fail the save: fall back to a clean import of just the fresh
+      // stops (reconcile against an empty prior still assigns stopIds + tracking tokens).
+      console.error("[route/import] reconcile failed; using fresh stops", routeId, e);
+      const r = reconcileStops([], stopsIn, routeId);
+      stops = r.stops;
+      keptCount = r.keptCount;
+    }
+
+    // Safety: a late re-pull must NOT resurrect a route the office/driver already closed. Keep a closed
+    // route closed (reconcileStops still preserves its real stop states); only an open route stays "ready".
+    const status = existing?.status === "done" ? "done" : "ready";
+    writeRoute({ routeId, date, truckId, status, gsRouteId: body.gsRouteId, stops });
+
+    // NOTE: revenue is NOT written here. The single source of truth is the `bookings` feed
+    // (searchProjects), keyed by the same id as the stop's txId — see getBookingRevenueByIds.
+
+    // Mark this truck's routes fresh (per-source) + ledger the import.
+    recordPull(`route:${truckId}`, stops.length);
+    logImport(`route:${truckId}`, true, { rowsIn: stopsIn.length, rowsWritten: stops.length });
+
+    // Proactive Slack heads-up for business/office stops scheduled outside open hours. Fire-and-forget;
+    // guarded so a risk-check throw on one stop can't fail an otherwise-good save.
+    try {
+      void alertRouteRisks({ routeId, date, truckId, status, stops }, truckId);
+    } catch (e) {
+      console.error("[route/import] alertRouteRisks threw", routeId, e);
+    }
+
+    // Route data just changed → refresh the Event Risk queue (debounced + throttled).
+    try {
+      scheduleScanSoon();
+    } catch (e) {
+      console.error("[route/import] scheduleScanSoon threw", e);
+    }
+
+    return json({ ok: true, routeId, stops: stops.length, kept: keptCount, firstStopId: stops[0]?.stopId });
+  } catch (e) {
+    // Last resort: still answer WITH CORS (so the caller sees a real error, never a bare "Failed to
+    // fetch") and include a short detail for debugging.
+    console.error("[route/import] unhandled error", e);
+    return json({ error: "import_failed", detail: String(e).slice(0, 300) }, 500);
   }
-
-  const truckId = body.truckId;
-  const stopsIn = body.stops;
-  if (!truckId || !Array.isArray(stopsIn) || stopsIn.length === 0) {
-    return NextResponse.json({ error: "truckId and non-empty stops[] required" }, { status: 400, headers: CORS });
-  }
-
-  const date = body.date || todayInOpsTz();
-  // Identity is PER GOODSHUFFLE ROUTE: a truck can run more than one route a day (a day route and an
-  // evening route), and each must be its own row. The Goodshuffle route id makes them distinct; without
-  // one (a manual/test import) we fall back to the one-per-truck-per-day id.
-  const routeId = body.gsRouteId ? `R-${date}-${truckId}-${body.gsRouteId}` : `R-${date}-${truckId}`;
-
-  // Reconcile the fresh pull against THIS route's own prior stops (by routeId, not the truck/day) —
-  // preserving every acted-on stop, matching by Goodshuffle txId (never array position), and overlaying
-  // the active EnRoute stop with any corrected address. Pure + tested in src/lib/ingest/reconcile.ts.
-  const existing = getRouteById(routeId);
-  // An explicit "Re-sync from Goodshuffle" arms a one-shot force flag (src/lib/ingest/forceResync.ts).
-  // When set, THIS import applies Goodshuffle's exact order even to in-progress stops (forceReconcileStops),
-  // and consuming it clears the flag so the force applies to exactly one import. Otherwise the normal,
-  // progress-protecting merge runs unchanged.
-  const force = consumeForceResync(routeId);
-  const { stops, keptCount } = force
-    ? forceReconcileStops(existing?.stops ?? [], stopsIn, routeId)
-    : reconcileStops(existing?.stops ?? [], stopsIn, routeId);
-
-  // Safety: a late re-pull must NOT resurrect a route the office/driver already closed. Keep a closed
-  // route closed (reconcileStops still preserves its real stop states); only an open route stays "ready".
-  const status = existing?.status === "done" ? "done" : "ready";
-  writeRoute({ routeId, date, truckId, status, gsRouteId: body.gsRouteId, stops });
-
-  // NOTE: revenue is NOT written here. The single source of truth is the `bookings` feed
-  // (searchProjects), keyed by the same id as the stop's txId — see getBookingRevenueByIds. The
-  // route pull used to ALSO write event_financials, which diverged from bookings; that write was
-  // removed to keep one authoritative revenue number per event.
-
-  // Mark this truck's routes fresh (per-source) + ledger the import.
-  recordPull(`route:${truckId}`, stops.length);
-  logImport(`route:${truckId}`, true, { rowsIn: stopsIn.length, rowsWritten: stops.length });
-
-  // Proactive Slack heads-up for business/office stops scheduled outside open hours
-  // (so a truck doesn't roll up while the place is closed). Fire-and-forget; throttled.
-  void alertRouteRisks({ routeId, date, truckId, status, stops }, truckId);
-
-  // Route data just changed → refresh the Event Risk queue. Debounced so the 3 AM all-trucks
-  // pull (a burst of imports) settles into ONE scan; runScan itself is throttled to 5 min.
-  scheduleScanSoon();
-
-  return NextResponse.json(
-    {
-      ok: true,
-      routeId,
-      stops: stops.length,
-      kept: keptCount,
-      firstStopId: stops[0]?.stopId,
-    },
-    { headers: CORS },
-  );
 }
