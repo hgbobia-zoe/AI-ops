@@ -14,18 +14,20 @@ import { ConnectInstaworkButton } from "@/components/ConnectInstaworkButton";
 
 const POLL_MS = 30_000;
 
-const DOT: Record<ConnStatus, string> = { ok: "text-emerald-400", attention: "text-amber-400", off: "text-muted-foreground" };
+const DOT: Record<ConnStatus, string> = { ok: "text-emerald-400", idle: "text-muted-foreground", attention: "text-amber-400", off: "text-muted-foreground" };
 const CHIP: Record<ConnStatus, string> = {
   ok: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+  idle: "border-white/15 bg-white/5 text-muted-foreground",
   attention: "border-amber-500/50 bg-amber-500/10 text-amber-200",
   off: "border-white/15 bg-white/5 text-muted-foreground",
 };
 const CARD: Record<ConnStatus, string> = {
   ok: "border-white/10",
+  idle: "border-white/10",
   attention: "border-amber-500/30 bg-amber-500/[0.03]",
   off: "border-white/10",
 };
-const STATUS_LABEL: Record<ConnStatus, string> = { ok: "Connected", attention: "Needs attention", off: "Not connected" };
+const STATUS_LABEL: Record<ConnStatus, string> = { ok: "Connected", idle: "Idle", attention: "Needs attention", off: "Not connected" };
 
 function ago(iso: string | null): string {
   if (!iso) return "—";
@@ -114,6 +116,10 @@ export function ConnectionsDashboard({
           <span className="inline-flex items-center gap-1.5"><CheckCircle2 className="size-4 text-emerald-400" /> {summary.ok} connected</span>
           <span className="text-muted-foreground">·</span>
           <span className="inline-flex items-center gap-1.5"><AlertTriangle className="size-4 text-amber-400" /> {summary.attention} need attention</span>
+          {summary.idle > 0 && (<>
+            <span className="text-muted-foreground">·</span>
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground"><MinusCircle className="size-4" /> {summary.idle} idle</span>
+          </>)}
           <span className="text-muted-foreground">·</span>
           <span className="inline-flex items-center gap-1.5 text-muted-foreground"><MinusCircle className="size-4" /> {summary.off} off</span>
         </div>
@@ -149,7 +155,7 @@ export function ConnectionsDashboard({
                       {t?.busy ? <Loader2 className="size-3 animate-spin" /> : <Activity className="size-3" />} Test
                     </button>
                   )}
-                  {c.key === "instawork" && c.status !== "ok" && <ConnectInstaworkButton onSynced={refresh} />}
+                  {c.key === "instawork" && c.status !== "ok" && c.status !== "idle" && <ConnectInstaworkButton onSynced={refresh} />}
                   {c.fixHref && c.fixLabel && (
                     <Link href={c.fixHref} className="rounded border border-white/15 px-2 py-1 text-muted-foreground transition-colors hover:bg-white/5 hover:text-foreground">{c.key === "instawork" ? "How to connect" : c.fixLabel} →</Link>
                   )}

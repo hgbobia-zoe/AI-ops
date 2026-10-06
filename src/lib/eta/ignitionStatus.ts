@@ -10,7 +10,7 @@
 
 // The Connections dot status union (kept inline to avoid a module cycle with connections.ts, which
 // imports this module's helpers). Matches ConnStatus there.
-type DotStatus = "ok" | "attention" | "off";
+type DotStatus = "ok" | "idle" | "attention" | "off";
 
 /** Server-inferred Ignition session health, from the extension's poll heartbeat. */
 export interface IgnitionHealth {
@@ -46,7 +46,8 @@ export const IGNITION_RECOVERED_ALERT = "Ignition is signed back in on the offic
  * Map Ignition health + today's delivery demand into the Connections dot:
  *   • OK (green)        — the poller is fresh (signed in + polling).
  *   • ATTENTION (warn)  — stale AND there are deliveries to track today AND the feature is in use here.
- *   • OFF (idle/n-a)    — nothing to mint today, or Ignition was never used here. Never a false green.
+ *   • IDLE (grey)       — set up and fine, just nothing to track right now. Healthy, not broken.
+ *   • OFF (n-a)         — Ignition was never used here. Never a false green.
  */
 export function ignitionDotStatus(opts: {
   health: Pick<IgnitionHealth, "ok" | "configured" | "lastReadyAt">;
@@ -59,9 +60,9 @@ export function ignitionDotStatus(opts: {
   if (configured && opts.hasDeliveriesToday) {
     return { status: "attention", headline: "Needs sign-in", detail: `Signed out — tracking links are falling back to the basic page. ${IGNITION_SIGNIN_HINT}` };
   }
-  // Configured but nothing to track right now, or never used here.
+  // Configured but nothing to track right now (healthy, idle), or never used here (off).
   return {
-    status: "off",
+    status: configured ? "idle" : "off",
     headline: configured ? "Idle" : "Not set up",
     detail: configured
       ? "No deliveries to track right now; links will mint when the next route needs one."

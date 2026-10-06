@@ -77,8 +77,9 @@ export function MetricRow({ metrics }: { metrics: AiMetric[] }): React.JSX.Eleme
 }
 
 /** Data-source health dot + label (from computeConnections). */
-export function HealthMark({ health }: { health: { status: "ok" | "attention" | "off"; label: string } | null }): React.JSX.Element | null {
+export function HealthMark({ health }: { health: { status: "ok" | "idle" | "attention" | "off"; label: string } | null }): React.JSX.Element | null {
   if (!health) return null;
+  // idle + off both read as neutral grey (connected-but-quiet, or not set up) — only a real problem is amber.
   const tone = health.status === "ok" ? "bg-positive" : health.status === "attention" ? "bg-attention" : "bg-[var(--bar)]";
   return (
     <span className="inline-flex items-center gap-1.5 text-[11px] text-meta">

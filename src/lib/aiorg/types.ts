@@ -119,7 +119,7 @@ export interface AiEmployeeView {
   lastRunAt: string | null;
   lastDetail: string | null;
   /** Data-source health, from computeConnections() when the employee declares a healthKey. */
-  health: { status: "ok" | "attention" | "off"; label: string } | null;
+  health: { status: "ok" | "idle" | "attention" | "off"; label: string } | null;
 }
 
 export interface HumanCard {
@@ -143,7 +143,7 @@ export interface EmployeeSignal {
   /** Null => unresolved (show "—"); otherwise the real metrics. */
   metrics?: AiMetric[] | null;
   /** Resolved health for this employee's data source, or null when it declares none. */
-  health?: { status: "ok" | "attention" | "off"; label: string } | null;
+  health?: { status: "ok" | "idle" | "attention" | "off"; label: string } | null;
   /** When the backing is live/partial/seed: does the source have anything to show right now? Drives
    *  the idle-vs-ok dot. Defaults to true. */
   active?: boolean;
@@ -158,6 +158,7 @@ export function buildEmployeeView(emp: AIEmployee, signal: EmployeeSignal = {}):
   if (coming) state = "coming";
   else if (signal.health && signal.health.status === "off") state = "attention";
   else if (signal.health && signal.health.status === "attention") state = "attention";
+  else if (signal.health && signal.health.status === "idle") state = "idle"; // connected, just nothing to do now
   else if (signal.active === false) state = "idle";
   else state = "ok";
   return {

@@ -16,7 +16,7 @@ import { pullBannerState } from "@/lib/pull/state";
 import { computeConnections, type ConnStatus } from "@/lib/health/connections";
 import { refreshConnecteamHealth } from "@/lib/connecteam";
 
-const TONE: Record<ConnStatus, StatusIntegration["tone"]> = { ok: "ok", attention: "warn", off: "idle" };
+const TONE: Record<ConnStatus, StatusIntegration["tone"]> = { ok: "ok", idle: "idle", attention: "warn", off: "idle" };
 
 export default async function ConsoleLayout({ children }: { children: React.ReactNode }) {
   const role = await viewerRole();

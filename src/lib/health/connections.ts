@@ -22,7 +22,10 @@ import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate } from "@/lib/db/repo";
 import { todayInOpsTz } from "@/lib/dates";
 
-export type ConnStatus = "ok" | "attention" | "off";
+// "idle" = connected and healthy, just nothing to do right now (e.g. Ignition with no deliveries to
+// track today). It must never read as broken — it's a neutral, expected resting state, distinct from
+// "off" (not set up / not connected).
+export type ConnStatus = "ok" | "idle" | "attention" | "off";
 export type ConnCategory = "Data pull" | "Communications" | "Staffing" | "AI" | "GPS" | "SEO";
 
 export interface Connection {
@@ -345,19 +348,22 @@ export function computeConnections(now: number = Date.now()): Connection[] {
     fixLabel: seo.configured ? "Open SEO" : "Configure",
   });
 
-  // Problems first, then not-connected, then healthy — so what needs attention is on top.
-  const rank: Record<ConnStatus, number> = { attention: 0, off: 1, ok: 2 };
+  // Problems first, then not-connected, then idle, then healthy — so what needs attention is on top and a
+  // quiet-but-healthy integration sits above fully-green (but below anything actionable).
+  const rank: Record<ConnStatus, number> = { attention: 0, off: 1, idle: 2, ok: 3 };
   return out.sort((a, b) => rank[a.status] - rank[b.status]);
 }
 
 export interface ConnectionsSummary {
   ok: number;
+  idle: number;
   attention: number;
   off: number;
 }
 export function summarize(conns: Connection[]): ConnectionsSummary {
   return {
     ok: conns.filter((c) => c.status === "ok").length,
+    idle: conns.filter((c) => c.status === "idle").length,
     attention: conns.filter((c) => c.status === "attention").length,
     off: conns.filter((c) => c.status === "off").length,
   };

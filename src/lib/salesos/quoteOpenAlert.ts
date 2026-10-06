@@ -7,10 +7,16 @@
 import { pendingQuoteOpenAlerts, markQuoteOpenAlerted, type QuoteOpenCandidate } from "@/lib/db/repo";
 import { slackNotifyAlert, slackAlertConfigured } from "@/lib/notify/slack";
 
-// On a fresh deploy, leads may carry opens from days ago; alert only for recent ones and silently seed the
-// rest, so we never blast a backlog. After that first pass everything is seeded and every genuine new open
-// is, by definition, recent.
-const RECENT_MS = 72 * 3600 * 1000;
+// We only ping on a FRESH open — the whole value is catching the client while they still have the quote
+// open and us on their mind, not hours later when the moment is cold. The office pull captures opens on a
+// ~10-minute cadence, so a genuine "they're looking right now" open is seen within a cycle or two; anything
+// older than this window (a backlog on first capture, or a pull catching up after the machine was asleep)
+// is silently seeded, never alerted. Tunable without a redeploy via QUOTE_OPEN_ALERT_WINDOW_MIN.
+const DEFAULT_WINDOW_MIN = 30;
+function recentWindowMs(): number {
+  const m = Number(process.env.QUOTE_OPEN_ALERT_WINDOW_MIN);
+  return (Number.isFinite(m) && m > 0 ? m : DEFAULT_WINDOW_MIN) * 60_000;
+}
 
 function humanGap(fromISO: string, toISO: string): string {
   const ms = Date.parse(toISO) - Date.parse(fromISO);
@@ -36,9 +42,10 @@ export async function runQuoteOpenAlerts(): Promise<number> {
   if (candidates.length === 0) return 0;
   const configured = slackAlertConfigured();
   const now = Date.now();
+  const windowMs = recentWindowMs();
   let sent = 0;
   for (const c of candidates) {
-    const recent = now - Date.parse(c.quoteOpenedAt) <= RECENT_MS;
+    const recent = now - Date.parse(c.quoteOpenedAt) <= windowMs;
     if (recent && configured) {
       const res = await slackNotifyAlert(line(c));
       if (res.ok) sent += 1;
