@@ -146,6 +146,9 @@
   --positive: #86c3a2;
   --attention: #d4b36b;
   --critical: #df837a;
+  /* Zoe gold — the primary brand ACCENT (brighter/more saturated than the muted --attention amber, which
+     stays reserved for status warnings). Used for KPI bars, chart marks, active tabs, action buttons. */
+  --gold: #e3b24a;
 }
 
 @layer base {
