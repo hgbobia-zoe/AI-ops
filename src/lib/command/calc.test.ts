@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sevenDayOutlook, dayStatus, pctOfTarget, computeRevenueOutlook } from "./calc";
+import { sevenDayOutlook, dayStatus, pctOfTarget, computeRevenueOutlook, situationHeadline, capacityLevel, pipelineCoverageMultiple } from "./calc";
 
 describe("command center — calc", () => {
   it("builds a 7-day outlook, summing signed revenue and folding in capacity verdicts", () => {
@@ -52,5 +52,33 @@ describe("command center — calc", () => {
     // no target / no data are explicit, never faked
     expect(computeRevenueOutlook({ ...base, target: null, committed: 100, pipeline: 0 }).status).toBe("no-target");
     expect(computeRevenueOutlook({ ...base, target: 300, committed: null, pipeline: 0 }).status).toBe("no-data");
+  });
+
+  it("situation headline reflects revenue + operational state", () => {
+    expect(situationHeadline({ revStatus: "likely", showMoney: true, criticalOrHigh: 1, capacityConstrainedSoon: false })).toBe("Revenue is healthy. Operations are the constraint.");
+    expect(situationHeadline({ revStatus: "met", showMoney: true, criticalOrHigh: 0, capacityConstrainedSoon: false })).toBe("Revenue is on track and operations are clear.");
+    expect(situationHeadline({ revStatus: "at-risk", showMoney: true, criticalOrHigh: 2, capacityConstrainedSoon: false })).toBe("Revenue and operations both need attention.");
+    expect(situationHeadline({ revStatus: "at-risk", showMoney: true, criticalOrHigh: 0, capacityConstrainedSoon: false })).toBe("Operations are steady. Revenue is behind target.");
+    // Members (no money) or no target → ops-only verdict, never a revenue claim
+    expect(situationHeadline({ revStatus: "likely", showMoney: false, criticalOrHigh: 1, capacityConstrainedSoon: false })).toBe("Operations need attention.");
+    expect(situationHeadline({ revStatus: "no-target", showMoney: true, criticalOrHigh: 0, capacityConstrainedSoon: false })).toBe("Operations are on track.");
+    // capacity constraint alone counts as operational trouble
+    expect(situationHeadline({ revStatus: "met", showMoney: true, criticalOrHigh: 0, capacityConstrainedSoon: true })).toBe("Revenue is healthy. Operations are the constraint.");
+  });
+
+  it("maps capacity verdicts to display levels without inventing CRITICAL", () => {
+    expect(capacityLevel("AVAILABLE")).toBe("NORMAL");
+    expect(capacityLevel(null)).toBe("NORMAL");
+    expect(capacityLevel("TIGHT")).toBe("TIGHT");
+    expect(capacityLevel("CONSTRAINED")).toBe("CONSTRAINED");
+    expect(capacityLevel("UNVERIFIED")).toBe("UNVERIFIED");
+  });
+
+  it("computes pipeline coverage of the remaining target gap", () => {
+    expect(pipelineCoverageMultiple(142350, 5697)).toBe(25); // 24.98 -> 25.0
+    expect(pipelineCoverageMultiple(10000, 4000)).toBe(2.5);
+    expect(pipelineCoverageMultiple(10000, 0)).toBeNull(); // gap already closed
+    expect(pipelineCoverageMultiple(null, 4000)).toBeNull();
+    expect(pipelineCoverageMultiple(10000, null)).toBeNull();
   });
 });

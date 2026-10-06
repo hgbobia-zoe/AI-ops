@@ -75,6 +75,48 @@ export interface RevenueOutlook {
   status: RevenueStatus;
 }
 
+// ── Command Center cockpit helpers (pure, for the redesigned homepage) ─────────
+// Deterministic interpretation of statuses ALREADY computed elsewhere. These map/label existing facts;
+// they never invent a number. RULES CALCULATE, the UI renders.
+
+/** One-line situation verdict for the "Today's Situation" header. A label mapping over the revenue
+ *  status + whether operations have a critical/high issue or a near-term capacity constraint. Mirrors the
+ *  intent of revenueSentence: states a conclusion from facts, fabricates nothing. */
+export function situationHeadline(inp: {
+  revStatus: RevenueStatus;
+  showMoney: boolean;
+  criticalOrHigh: number;
+  capacityConstrainedSoon: boolean;
+}): string {
+  const opsTrouble = inp.criticalOrHigh > 0 || inp.capacityConstrainedSoon;
+  const revKnown = inp.showMoney && (inp.revStatus === "met" || inp.revStatus === "likely" || inp.revStatus === "at-risk");
+  if (!revKnown) return opsTrouble ? "Operations need attention." : "Operations are on track.";
+  const revHealthy = inp.revStatus === "met" || inp.revStatus === "likely";
+  if (revHealthy && opsTrouble) return "Revenue is healthy. Operations are the constraint.";
+  if (revHealthy && !opsTrouble) return "Revenue is on track and operations are clear.";
+  if (!revHealthy && opsTrouble) return "Revenue and operations both need attention.";
+  return "Operations are steady. Revenue is behind target.";
+}
+
+// The capacity levels the cockpit's 7-day strip renders. Only the levels the underlying data actually
+// supports — we do NOT invent a "CRITICAL" verdict the capacity engine never emits.
+export type CapacityLevel = "NORMAL" | "TIGHT" | "CONSTRAINED" | "UNVERIFIED";
+
+/** Map a raw capacity verdict (AVAILABLE | TIGHT | CONSTRAINED | UNVERIFIED | null) to a display level. */
+export function capacityLevel(verdict: string | null | undefined): CapacityLevel {
+  if (verdict === "TIGHT") return "TIGHT";
+  if (verdict === "CONSTRAINED") return "CONSTRAINED";
+  if (verdict === "UNVERIFIED") return "UNVERIFIED";
+  return "NORMAL"; // AVAILABLE or unknown-but-no-pressure
+}
+
+/** How many times the open pipeline covers the remaining target gap (one decimal), or null when the gap
+ *  is already closed / unknown. Drives the "open pipeline is X× the remaining target gap" insight. */
+export function pipelineCoverageMultiple(openValue: number | null, remainingGap: number | null): number | null {
+  if (openValue == null || remainingGap == null || remainingGap <= 0) return null;
+  return Math.round((openValue / remainingGap) * 10) / 10;
+}
+
 export function computeRevenueOutlook(inp: {
   periodLabel: string;
   target: number | null;
