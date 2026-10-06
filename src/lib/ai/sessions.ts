@@ -14,14 +14,17 @@ import { getDb } from "@/lib/db";
 import { insertAudit } from "@/lib/db/repo";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-export type SessionStatus = "running" | "awaiting_approval" | "done" | "failed" | "cancelled";
+export type SessionStatus = "running" | "awaiting_approval" | "paused" | "done" | "failed" | "cancelled";
 
 /** The kind of a timeline event. Append-only; every step the session takes is one row. */
 export type SessionEventKind =
   | "started"
+  | "instruction" //      a human gave the session a new instruction / objective
   | "step"
   | "tool_call"
   | "message"
+  | "recommendation" //   the AI surfaced a recommendation (often with a linked approval/action)
+  | "action_available" // an action the human can take (routes through approvals)
   | "state_change"
   | "approval_raised"
   | "finished"
@@ -36,6 +39,8 @@ export interface NewSession {
   owner?: string;
   startedBy?: string;
   title: string;
+  /** The goal the session is working toward (editable later). */
+  objective?: string;
   /** The AIProvider adapter id that backs this run (audit only — never a secret). */
   provider?: string;
   input?: Record<string, unknown>;
@@ -50,7 +55,9 @@ export interface AiSession {
   owner: string | null;
   startedBy: string | null;
   title: string;
+  objective: string | null;
   status: SessionStatus;
+  archived: boolean;
   provider: string | null;
   input: Record<string, unknown>;
   result: Record<string, unknown> | null;
@@ -87,7 +94,7 @@ export interface AiSessionTool {
 
 // ── Pure helpers (no DB — unit-tested) ─────────────────────────────────────────
 
-const LIVE: SessionStatus[] = ["running", "awaiting_approval"];
+const LIVE: SessionStatus[] = ["running", "awaiting_approval", "paused"];
 const TERMINAL: SessionStatus[] = ["done", "failed", "cancelled"];
 
 /** Is this session still open (can take events / be ended)? Terminal states are closed. PURE. */
@@ -129,7 +136,9 @@ interface SessionRow {
   owner: string | null;
   started_by: string | null;
   title: string;
+  objective: string | null;
   status: string;
+  archived: number | null;
   provider: string | null;
   input_json: string | null;
   result_json: string | null;
@@ -148,7 +157,9 @@ function toSession(r: SessionRow): AiSession {
     owner: r.owner,
     startedBy: r.started_by,
     title: r.title,
+    objective: r.objective,
     status: r.status as SessionStatus,
+    archived: r.archived === 1,
     provider: r.provider,
     input: safeObj(r.input_json),
     result: r.result_json ? safeObj(r.result_json) : null,
@@ -227,9 +238,9 @@ export function createSession(input: NewSession): AiSession {
   const now = new Date().toISOString();
   try {
     db.prepare(
-      `INSERT INTO ai_sessions (id, agent_id, blade, owner, started_by, title, status, provider,
+      `INSERT INTO ai_sessions (id, agent_id, blade, owner, started_by, title, objective, status, archived, provider,
         input_json, idempotency_key, created_at, updated_at)
-       VALUES (@id, @agentId, @blade, @owner, @startedBy, @title, 'running', @provider,
+       VALUES (@id, @agentId, @blade, @owner, @startedBy, @title, @objective, 'running', 0, @provider,
         @input, @key, @now, @now)`,
     ).run({
       id,
@@ -238,6 +249,7 @@ export function createSession(input: NewSession): AiSession {
       owner: input.owner ?? null,
       startedBy: input.startedBy ?? null,
       title: input.title,
+      objective: input.objective ?? null,
       provider: input.provider ?? null,
       input: JSON.stringify(input.input ?? {}),
       key: input.idempotencyKey ?? null,
@@ -260,38 +272,43 @@ export function getSession(id: string): AiSession | null {
   return r ? toSession(r) : null;
 }
 
-/** Live sessions (running + awaiting_approval), newest first. */
+/** Live sessions (running + awaiting_approval + paused), newest first. Excludes archived. */
 export function listLiveSessions(limit = 100): AiSession[] {
   return (
     getDb()
-      .prepare(`SELECT * FROM ai_sessions WHERE status IN ('running','awaiting_approval') ORDER BY created_at DESC LIMIT ?`)
+      .prepare(`SELECT * FROM ai_sessions WHERE status IN ('running','awaiting_approval','paused') AND COALESCE(archived,0)=0 ORDER BY updated_at DESC LIMIT ?`)
       .all(limit) as SessionRow[]
   ).map(toSession);
 }
 
-/** Recent sessions regardless of status, newest first (the Command Center feed). */
+/** Recent (non-archived) sessions regardless of status, newest-touched first (the Command Center feed). */
 export function listRecentSessions(limit = 100): AiSession[] {
-  return (getDb().prepare(`SELECT * FROM ai_sessions ORDER BY created_at DESC LIMIT ?`).all(limit) as SessionRow[]).map(toSession);
+  return (getDb().prepare(`SELECT * FROM ai_sessions WHERE COALESCE(archived,0)=0 ORDER BY updated_at DESC LIMIT ?`).all(limit) as SessionRow[]).map(toSession);
 }
 
-/** Sessions for one blade, newest first (the per-blade AI workspace). */
+/** Archived sessions, newest first. */
+export function listArchivedSessions(limit = 100): AiSession[] {
+  return (getDb().prepare(`SELECT * FROM ai_sessions WHERE COALESCE(archived,0)=1 ORDER BY updated_at DESC LIMIT ?`).all(limit) as SessionRow[]).map(toSession);
+}
+
+/** Sessions for one blade, newest first (the per-blade AI workspace). Excludes archived. */
 export function listSessionsForBlade(blade: string, limit = 50): AiSession[] {
   return (
-    getDb().prepare(`SELECT * FROM ai_sessions WHERE blade = ? ORDER BY created_at DESC LIMIT ?`).all(blade, limit) as SessionRow[]
+    getDb().prepare(`SELECT * FROM ai_sessions WHERE blade = ? AND COALESCE(archived,0)=0 ORDER BY updated_at DESC LIMIT ?`).all(blade, limit) as SessionRow[]
   ).map(toSession);
 }
 
-/** Sessions for one agent, newest first. */
+/** Sessions for one agent, newest first. Excludes archived. */
 export function listSessionsForAgent(agentId: string, limit = 50): AiSession[] {
   return (
-    getDb().prepare(`SELECT * FROM ai_sessions WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?`).all(agentId, limit) as SessionRow[]
+    getDb().prepare(`SELECT * FROM ai_sessions WHERE agent_id = ? AND COALESCE(archived,0)=0 ORDER BY updated_at DESC LIMIT ?`).all(agentId, limit) as SessionRow[]
   ).map(toSession);
 }
 
 /** Count of live sessions per blade (for the Command Center / per-blade strip). */
 export function countLiveSessionsByBlade(): Record<string, number> {
   const rows = getDb()
-    .prepare(`SELECT blade, COUNT(*) AS n FROM ai_sessions WHERE status IN ('running','awaiting_approval') AND blade IS NOT NULL GROUP BY blade`)
+    .prepare(`SELECT blade, COUNT(*) AS n FROM ai_sessions WHERE status IN ('running','awaiting_approval','paused') AND COALESCE(archived,0)=0 AND blade IS NOT NULL GROUP BY blade`)
     .all() as { blade: string; n: number }[];
   const out: Record<string, number> = {};
   for (const r of rows) out[r.blade] = r.n;
@@ -301,7 +318,7 @@ export function countLiveSessionsByBlade(): Record<string, number> {
 /** Count of live sessions per agent id. */
 export function countLiveSessionsByAgent(): Record<string, number> {
   const rows = getDb()
-    .prepare(`SELECT agent_id, COUNT(*) AS n FROM ai_sessions WHERE status IN ('running','awaiting_approval') GROUP BY agent_id`)
+    .prepare(`SELECT agent_id, COUNT(*) AS n FROM ai_sessions WHERE status IN ('running','awaiting_approval','paused') AND COALESCE(archived,0)=0 GROUP BY agent_id`)
     .all() as { agent_id: string; n: number }[];
   const out: Record<string, number> = {};
   for (const r of rows) out[r.agent_id] = r.n;
@@ -358,6 +375,85 @@ export function setSessionResult(id: string, result: Record<string, unknown>): A
   if (!cur) return null;
   const now = new Date().toISOString();
   getDb().prepare("UPDATE ai_sessions SET result_json=@result, updated_at=@now WHERE id=@id").run({ id, result: JSON.stringify(result), now });
+  return getSession(id);
+}
+
+// ── Persistence verbs (pause / resume / rename / objective / archive / instruct) ──
+// A session is durable: it can be put down and picked back up, retitled, re-aimed, filed, and handed a
+// new instruction. None of these execute a side effect — they only change the session's own record.
+
+function touch(id: string, fields: string, params: Record<string, unknown>): void {
+  const now = new Date().toISOString();
+  getDb().prepare(`UPDATE ai_sessions SET ${fields}, updated_at=@now WHERE id=@id`).run({ ...params, id, now });
+}
+
+/** Pause a running/awaiting session so it can be resumed later. No-op on a terminal session. */
+export function pauseSession(id: string, actor?: string): AiSession | null {
+  const cur = getSession(id);
+  if (!cur) return null;
+  if (isSessionTerminal(cur.status) || cur.status === "paused") return cur;
+  touch(id, "status='paused'", {});
+  appendEvent(id, { kind: "state_change", actor: actor ?? null, label: "Paused" });
+  recordAudit(id, "AI_SESSION_PAUSED", actor ?? "system", {});
+  return getSession(id);
+}
+
+/** Resume a paused session (back to running). No-op on a terminal session. */
+export function resumeSession(id: string, actor?: string): AiSession | null {
+  const cur = getSession(id);
+  if (!cur) return null;
+  if (isSessionTerminal(cur.status)) return cur;
+  touch(id, "status='running'", {});
+  appendEvent(id, { kind: "state_change", actor: actor ?? null, label: "Resumed" });
+  recordAudit(id, "AI_SESSION_RESUMED", actor ?? "system", {});
+  return getSession(id);
+}
+
+/** Rename a session. */
+export function renameSession(id: string, title: string, actor?: string): AiSession | null {
+  const cur = getSession(id);
+  if (!cur) return null;
+  const clean = title.trim();
+  if (!clean) return cur;
+  touch(id, "title=@title", { title: clean });
+  appendEvent(id, { kind: "state_change", actor: actor ?? null, label: `Renamed to "${clean}"` });
+  return getSession(id);
+}
+
+/** Change the session's objective (the goal it works toward). Records it on the timeline. */
+export function setObjective(id: string, objective: string, actor?: string): AiSession | null {
+  const cur = getSession(id);
+  if (!cur) return null;
+  const clean = objective.trim();
+  touch(id, "objective=@objective", { objective: clean || null });
+  appendEvent(id, { kind: "instruction", actor: actor ?? null, label: clean ? `Objective set: ${clean}` : "Objective cleared", payload: { objective: clean } });
+  return getSession(id);
+}
+
+/** Archive (file) or unarchive a session. Keeps all history; just hides it from the live/recent feeds. */
+export function archiveSession(id: string, archived: boolean, actor?: string): AiSession | null {
+  const cur = getSession(id);
+  if (!cur) return null;
+  touch(id, "archived=@archived", { archived: archived ? 1 : 0 });
+  appendEvent(id, { kind: "state_change", actor: actor ?? null, label: archived ? "Archived" : "Unarchived" });
+  recordAudit(id, archived ? "AI_SESSION_ARCHIVED" : "AI_SESSION_UNARCHIVED", actor ?? "system", {});
+  return getSession(id);
+}
+
+/** Hand the session a new instruction from a human. Records it on the timeline and resumes a paused/
+ *  awaiting session back to running (the human has given it something to do). Never executes anything. */
+export function addInstruction(id: string, text: string, actor?: string): AiSession | null {
+  const cur = getSession(id);
+  if (!cur) return null;
+  const clean = text.trim();
+  if (!clean) return cur;
+  if (isSessionTerminal(cur.status)) {
+    // A closed session can't take new work — record the attempt honestly and refuse the state change.
+    appendEvent(id, { kind: "error", actor: actor ?? null, label: "Instruction refused: session is closed" });
+    return cur;
+  }
+  appendEvent(id, { kind: "instruction", actor: actor ?? null, label: clean });
+  if (cur.status !== "running") touch(id, "status='running'", {});
   return getSession(id);
 }
 

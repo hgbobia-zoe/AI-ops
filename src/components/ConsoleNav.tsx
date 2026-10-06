@@ -44,6 +44,10 @@ interface Group {
 // Command Center is the main hub / 10k-ft view, so it sits on its own at the top of the nav, outside
 // (and above) the expandable sections — not nested inside Operations.
 const HUB: Blade = { href: "/dashboard", label: "Command Center", icon: Gauge };
+// AI Command Center — the operating layer / mission control over every AI session across the platform.
+// A first-class top-level area (distinct from the business Command Center and NOT buried in Admin),
+// pinned right below the hub. Governance (provider, bridge, per-blade AI) lives under Admin → AI Config.
+const AI_HUB: Blade = { href: "/ai-command", label: "AI Command Center", icon: BrainCircuit };
 
 const GROUPS: Group[] = [
   {
@@ -55,11 +59,9 @@ const GROUPS: Group[] = [
     blades: [
       { href: "/ai-org", label: "AI Org", icon: Gauge, exact: true, manage: true },
       { href: "/ai-org/employees", label: "AI Employees", icon: UsersRound, manage: true },
-      { href: "/ai-org/sessions", label: "Command Center", icon: Aperture, manage: true },
       { href: "/ai-org/approvals", label: "Approvals", icon: ClipboardCheck, manage: true },
       { href: "/ai-org/runs", label: "Runs", icon: RefreshCw, manage: true },
       { href: "/ai-org/exceptions", label: "Exceptions", icon: AlertTriangle, manage: true },
-      { href: "/ai-org/control", label: "AI Control", icon: Wrench, manage: true },
     ],
   },
   {
@@ -192,6 +194,9 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
   if (canManageSettings(role)) adminBlades.push({ href: "/admin/pull", label: "Pull Routes", icon: RefreshCw });
   if (canManageSettings(role)) adminBlades.push({ href: "/admin/health", label: "Connections", icon: Plug });
   if (canManageUsers(role)) adminBlades.push({ href: "/admin/users", label: "Team", icon: UsersRound });
+  // AI Configuration — govern the AI system (provider, session bridge, per-blade AI). Operating the AI
+  // lives in the top-level AI Command Center; this is the governance half.
+  if (canManageSettings(role)) adminBlades.push({ href: "/admin/ai", label: "AI Configuration", icon: BrainCircuit });
   // Shift Passes moved to the Operations group (it's an ops task, not a setting).
   if (canManageSettings(role)) adminBlades.push({ href: "/admin", label: "Settings", icon: Settings });
 
@@ -228,6 +233,7 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
       : [...parents].flatMap((g) => g.blades).filter((b) => bladeActive(b)).sort((a, b) => b.href.length - a.href.length)[0]?.label ?? "Zoe Operations";
 
   const HubIcon = HUB.icon;
+  const AiHubIcon = AI_HUB.icon;
 
   // The nav body — shared by the desktop sidebar and the mobile drawer. `withClose` adds the drawer's ✕.
   const panel = (withClose: boolean): React.JSX.Element => (
@@ -255,6 +261,20 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
         >
           <HubIcon className={`size-[17px] shrink-0 ${isActive(HUB.href) ? "text-foreground" : "text-meta"}`} />
           {HUB.label}
+        </Link>
+
+        {/* AI Command Center — second pinned top-level item (mission control over all AI activity) */}
+        <Link
+          href={AI_HUB.href}
+          onClick={close}
+          aria-current={isActive(AI_HUB.href) ? "page" : undefined}
+          className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
+            isActive(AI_HUB.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
+          }`}
+        >
+          <AiHubIcon className={`size-[17px] shrink-0 ${isActive(AI_HUB.href) ? "text-foreground" : "text-meta"}`} />
+          <span className="flex-1">{AI_HUB.label}</span>
+          <span className="rounded border border-attention/40 px-1 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.08em] text-attention">New</span>
         </Link>
 
         {/* Expandable section parents → sub-blades */}

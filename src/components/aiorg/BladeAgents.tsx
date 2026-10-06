@@ -50,13 +50,13 @@ export async function BladeAgents({ blade, className }: { blade: BladeKey; class
             </Link>
           )}
           {liveSessions > 0 && (
-            <Link href="/ai-org/sessions" className="text-[11px] tabular-nums text-positive underline-offset-2 hover:underline">
+            <Link href={`/ai-command?blade=${blade}`} className="text-[11px] tabular-nums text-positive underline-offset-2 hover:underline">
               {liveSessions} live
             </Link>
           )}
         </span>
         <span className="flex items-center gap-3">
-          <Link href="/ai-org/sessions" className="text-[11px] text-meta underline-offset-2 transition-colors hover:text-foreground hover:underline">Sessions →</Link>
+          <Link href={`/ai-command?blade=${blade}`} className="text-[11px] text-meta underline-offset-2 transition-colors hover:text-foreground hover:underline">AI sessions →</Link>
           <span className="text-[11px] text-meta transition-colors group-hover:text-foreground">AI Org →</span>
         </span>
       </summary>

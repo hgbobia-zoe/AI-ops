@@ -13,8 +13,16 @@ import {
   linkSessionApproval,
   listSessionApprovalIds,
   listLiveSessions,
+  listRecentSessions,
+  listArchivedSessions,
   countLiveSessionsByBlade,
   markAwaitingApproval,
+  pauseSession,
+  resumeSession,
+  renameSession,
+  setObjective,
+  archiveSession,
+  addInstruction,
 } from "./sessions";
 
 // Pure helpers — no DB.
@@ -22,9 +30,11 @@ describe("session status helpers", () => {
   it("classifies live vs terminal", () => {
     expect(isSessionLive("running")).toBe(true);
     expect(isSessionLive("awaiting_approval")).toBe(true);
+    expect(isSessionLive("paused")).toBe(true);
     expect(isSessionLive("done")).toBe(false);
     expect(isSessionTerminal("failed")).toBe(true);
     expect(isSessionTerminal("cancelled")).toBe(true);
+    expect(isSessionTerminal("paused")).toBe(false);
     expect(isSessionTerminal("running")).toBe(false);
   });
 
@@ -111,5 +121,47 @@ describe("session store", () => {
     expect(countLiveSessionsByBlade().dispatch).toBeGreaterThanOrEqual(1);
     endSession(s.id, "done", {});
     expect(listLiveSessions().length).toBe(before);
+  });
+
+  it("stores an objective at creation and lets it be changed", () => {
+    const s = createSession({ agentId: "lead-intelligence", blade: "salesos", title: "Obj", objective: "Recover lost quotes" });
+    expect(s.objective).toBe("Recover lost quotes");
+    const after = setObjective(s.id, "Recover quotes within 14 days", "Hermann");
+    expect(after?.objective).toBe("Recover quotes within 14 days");
+    expect(listSessionEvents(s.id).some((e) => e.kind === "instruction")).toBe(true);
+  });
+
+  it("pauses, resumes, and renames; paused counts as live but not terminal", () => {
+    const s = createSession({ agentId: "outreach", blade: "salesos", title: "Lifecycle" });
+    expect(pauseSession(s.id)?.status).toBe("paused");
+    expect(listLiveSessions().some((x) => x.id === s.id)).toBe(true); // paused is still live/resumable
+    expect(resumeSession(s.id)?.status).toBe("running");
+    expect(renameSession(s.id, "Renamed session")?.title).toBe("Renamed session");
+  });
+
+  it("archives a session out of the live/recent feeds and back", () => {
+    const s = createSession({ agentId: "outreach", title: "Archive me" });
+    archiveSession(s.id, true, "Hermann");
+    expect(getSession(s.id)?.archived).toBe(true);
+    expect(listRecentSessions().some((x) => x.id === s.id)).toBe(false);
+    expect(listLiveSessions().some((x) => x.id === s.id)).toBe(false);
+    expect(listArchivedSessions().some((x) => x.id === s.id)).toBe(true);
+    archiveSession(s.id, false);
+    expect(getSession(s.id)?.archived).toBe(false);
+    expect(listRecentSessions().some((x) => x.id === s.id)).toBe(true);
+  });
+
+  it("adds an instruction and resumes a paused session; refuses on a closed one", () => {
+    const s = createSession({ agentId: "outreach", title: "Instruct" });
+    pauseSession(s.id);
+    const after = addInstruction(s.id, "Focus on events within 14 days", "Hermann");
+    expect(after?.status).toBe("running");
+    expect(listSessionEvents(s.id).some((e) => e.kind === "instruction")).toBe(true);
+
+    const closed = createSession({ agentId: "outreach", title: "Closed" });
+    endSession(closed.id, "done", {});
+    const refused = addInstruction(closed.id, "do more", "Hermann");
+    expect(refused?.status).toBe("done"); // unchanged
+    expect(listSessionEvents(closed.id).some((e) => e.kind === "error")).toBe(true);
   });
 });

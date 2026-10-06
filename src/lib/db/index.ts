@@ -1780,6 +1780,10 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "cost_entries", column: "bucket", type: "TEXT" }, // customer | travel | warehouse | prep | unallocated
   { table: "cost_entries", column: "method", type: "TEXT" }, // ACTUAL_STOP | DERIVED_STOP | PLANNED | ESTIMATED | UNALLOCATED
   { table: "cost_entries", column: "confidence", type: "TEXT" }, // HIGH | MEDIUM | LOW
+  // AI Control Plane — persistent sessions: a stated objective the session is working toward, and an
+  // archive flag so a finished session can be filed without deleting its history. Both additive/nullable.
+  { table: "ai_sessions", column: "objective", type: "TEXT" }, // the session's current goal (editable)
+  { table: "ai_sessions", column: "archived", type: "INTEGER" }, // 1 = archived (filed, hidden from live/recent)
 ];
 
 function migrate(db: DB): void {
