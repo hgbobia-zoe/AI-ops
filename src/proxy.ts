@@ -71,7 +71,14 @@ const isSettings = (p: string): boolean =>
   p.startsWith("/api/auth/users") ||
   p.startsWith("/api/passes") || // generating / listing / revoking / texting Shift Passes — owner/admin only
   p.startsWith("/api/pricing/config") || // delivery pricing config editor — owner/admin only (the quote endpoints stay staff-gated)
-  p.startsWith("/api/pursuit"); // capability profile + bid pre-staging — owner/admin only
+  p.startsWith("/api/pursuit") || // capability profile + bid pre-staging — owner/admin only
+  // AI Control Plane management: choosing the provider, connecting the session bridge, per-blade AI config,
+  // and deciding proposed actions are owner/admin only. Viewing + operating sessions (/api/ai/sessions)
+  // stays staff-gated (any signed session) — it is NOT under these manage prefixes.
+  p.startsWith("/api/ai/config") ||
+  p.startsWith("/api/ai/provider") ||
+  p.startsWith("/api/ai/bridge") ||
+  p.startsWith("/api/ai/approvals"); // deciding an AI-proposed action (governance)
 
 // SEO Growth — keyword research + content pipeline. Settings-ish (it manages an integration + is
 // owner/admin-only, mirroring the `manage` nav flag), so it is gated to owner/admin here. Normal

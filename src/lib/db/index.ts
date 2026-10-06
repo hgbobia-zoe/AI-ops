@@ -204,6 +204,77 @@ CREATE TABLE IF NOT EXISTS ai_approvals (
 CREATE INDEX IF NOT EXISTS idx_ai_approvals_status ON ai_approvals(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_approvals_agent ON ai_approvals(agent_id, status);
 
+-- AI Control Plane — a SESSION is one bounded unit of AI work (a run of an agent, or an interactive
+-- workspace turn) scoped to a blade + agent + human owner. It is an observability + governance record,
+-- NOT an execution engine: a session never writes operational data directly. Governing law holds —
+-- RULES CALCULATE, AI INTERPRETS. Any mutation a session proposes goes through ai_approvals (linked via
+-- ai_session_approvals) → decideApproval → gs_outbox, exactly as a human-triggered proposal does.
+-- status: running | awaiting_approval | done | failed | cancelled. provider = the AIProvider adapter id
+-- that backed it (session-bridge | llm | remote-control), recorded for audit, never a secret.
+CREATE TABLE IF NOT EXISTS ai_sessions (
+  id              TEXT PRIMARY KEY,     -- "AS-"+uuid
+  agent_id        TEXT NOT NULL,        -- registry agent id (aiorg/registry.ts)
+  blade           TEXT,                 -- originating BladeKey (salesos | dispatch | ...), null = cross-blade
+  owner           TEXT,                 -- human owner name (HUMANS roster)
+  started_by      TEXT,                 -- actor label who opened the session
+  title           TEXT NOT NULL,        -- short human headline
+  status          TEXT NOT NULL,        -- running | awaiting_approval | done | failed | cancelled
+  provider        TEXT,                 -- AIProvider adapter id that backed the run (audit only)
+  input_json      TEXT,                 -- JSON: the bounded input/context the session was given
+  result_json     TEXT,                 -- JSON: the interpreted result (analysis/draft), null until done
+  error           TEXT,                 -- honest failure reason when status=failed
+  idempotency_key TEXT UNIQUE,          -- re-opening the same logical run is a no-op
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  ended_at        TEXT                  -- set on done | failed | cancelled
+);
+CREATE INDEX IF NOT EXISTS idx_ai_sessions_status ON ai_sessions(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_sessions_agent ON ai_sessions(agent_id, status);
+CREATE INDEX IF NOT EXISTS idx_ai_sessions_blade ON ai_sessions(blade, created_at DESC);
+
+-- Append-only event log for a session (mirrors history_changes / shift_assignment_events). Every step
+-- the session takes is one row, so the detail/workspace timeline is a pure read with no fabrication.
+-- kind: started | step | tool_call | message | state_change | approval_raised | finished | error.
+CREATE TABLE IF NOT EXISTS ai_session_events (
+  id          TEXT PRIMARY KEY,         -- "AE-"+uuid
+  session_id  TEXT NOT NULL,
+  ts          TEXT NOT NULL,
+  actor       TEXT,                     -- human actor OR a named system/provider actor (never anonymous)
+  kind        TEXT NOT NULL,            -- started | step | tool_call | message | state_change | approval_raised | finished | error
+  label       TEXT,                     -- short human line for the timeline
+  payload     TEXT,                     -- JSON detail (bounded)
+  change_key  TEXT UNIQUE               -- idempotency for replayed ingest
+);
+CREATE INDEX IF NOT EXISTS idx_ai_session_events_session ON ai_session_events(session_id, ts DESC);
+
+-- Record of each tool a session invoked (a READ/ANALYZE/DRAFT capability from the agent's toolbox).
+-- status: ok | error. This is observability only — a tool that mutates does so via an approval, not here.
+CREATE TABLE IF NOT EXISTS ai_session_tools (
+  id            TEXT PRIMARY KEY,       -- "AT-"+uuid
+  session_id    TEXT NOT NULL,
+  tool_id       TEXT NOT NULL,          -- Tool.id from the agent toolbox (registry.ts)
+  category      TEXT,                   -- ToolCategory (DATA | ANALYSIS | COMMS_DRAFT | ...)
+  perm          TEXT,                   -- PermLevel the tool ran under (READ | ANALYZE | DRAFT | ...)
+  args_json     TEXT,                   -- JSON
+  result_json   TEXT,                   -- JSON (summary; never raw secrets)
+  status        TEXT NOT NULL,          -- ok | error
+  error         TEXT,
+  started_at    TEXT NOT NULL,
+  finished_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ai_session_tools_session ON ai_session_tools(session_id, started_at);
+
+-- Link table: a session that PROPOSES a mutation creates an ai_approvals row and records the link here.
+-- The approval is the single source of truth for the action's lifecycle; this only ties it to its session.
+CREATE TABLE IF NOT EXISTS ai_session_approvals (
+  id          TEXT PRIMARY KEY,         -- "AX-"+uuid
+  session_id  TEXT NOT NULL,
+  approval_id TEXT NOT NULL,            -- ai_approvals.id
+  created_at  TEXT NOT NULL,
+  UNIQUE(session_id, approval_id)       -- idempotent link
+);
+CREATE INDEX IF NOT EXISTS idx_ai_session_approvals_session ON ai_session_approvals(session_id);
+
 -- Event Risk Engine (MVP2). Persisted risks with a stable signature so re-scans update in
 -- place (never duplicate); lifecycle OPEN→ACKNOWLEDGED→IN_PROGRESS→RESOLVED/DISMISSED.
 CREATE TABLE IF NOT EXISTS risk_items (

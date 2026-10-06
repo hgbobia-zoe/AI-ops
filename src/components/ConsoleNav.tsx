@@ -55,9 +55,11 @@ const GROUPS: Group[] = [
     blades: [
       { href: "/ai-org", label: "AI Org", icon: Gauge, exact: true, manage: true },
       { href: "/ai-org/employees", label: "AI Employees", icon: UsersRound, manage: true },
+      { href: "/ai-org/sessions", label: "Command Center", icon: Aperture, manage: true },
       { href: "/ai-org/approvals", label: "Approvals", icon: ClipboardCheck, manage: true },
       { href: "/ai-org/runs", label: "Runs", icon: RefreshCw, manage: true },
       { href: "/ai-org/exceptions", label: "Exceptions", icon: AlertTriangle, manage: true },
+      { href: "/ai-org/control", label: "AI Control", icon: Wrench, manage: true },
     ],
   },
   {

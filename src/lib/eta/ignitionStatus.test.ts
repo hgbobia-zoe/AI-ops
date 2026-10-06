@@ -15,9 +15,9 @@ describe("ignitionDotStatus — the Connections dot", () => {
     expect(d.detail).toContain("ignition.zonarsystems.com");
   });
 
-  it("stale but NO deliveries today → OFF (idle, nothing to track) — not an alarm", () => {
+  it("stale but NO deliveries today, yet configured → IDLE (grey, nothing to track) — not an alarm", () => {
     const d = ignitionDotStatus({ health: { ok: false, configured: true, lastReadyAt: null }, hasDeliveriesToday: false });
-    expect(d.status).toBe("off");
+    expect(d.status).toBe("idle");
     expect(d.headline).toBe("Idle");
   });
 

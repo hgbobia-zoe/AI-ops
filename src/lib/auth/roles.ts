@@ -60,3 +60,43 @@ export function assignableRoles(actor: Role): Role[] {
   if (actor === "admin") return ["member"];
   return [];
 }
+
+// ── AI Control Plane capabilities ──────────────────────────────────────────────
+// The design names four conceptual levels (VIEWER / OPERATOR / MANAGER / ADMIN). This repo has three
+// staff roles plus guest, so they map on cleanly: VIEWER+OPERATOR → any staff (member+), MANAGER+ADMIN →
+// owner/admin. The AI NEVER holds a permission a human doesn't: these gates are checked the same way the
+// app gates everything else, and an AI-proposed action still passes through the SAME approval + outbox +
+// send-gate path a human would. A guest (Shift Pass) has NO AI access.
+export type AiCapabilityLevel = "none" | "viewer" | "operator" | "manager" | "admin";
+
+/** See AI sessions, the command center and per-blade AI activity (read-only). Any signed staff. */
+export function canViewAi(role: Role): boolean {
+  return role === "owner" || role === "admin" || role === "member";
+}
+
+/** Start AI sessions and let agents run their READ/ANALYZE/DRAFT tools (no external effect). Staff. */
+export function canOperateAi(role: Role): boolean {
+  return role === "owner" || role === "admin" || role === "member";
+}
+
+/** Decide an AI-proposed action (approve / reject / edit). Governance over anything that can reach the
+ *  outbox, so owner/admin — the same bar as settings. Financial cards still honor canSeeFinancials. */
+export function canApproveAi(role: Role): boolean {
+  return role === "owner" || role === "admin";
+}
+
+/** Configure the plane: choose the AI provider, connect the session bridge, toggle per-blade AI. Owner/
+ *  admin (settings-level). */
+export function canManageAi(role: Role): boolean {
+  return role === "owner" || role === "admin";
+}
+
+/** The highest AI capability level a role holds (drives UI labels; never a security boundary on its own —
+ *  the predicates above are). */
+export function aiCapabilityLevel(role: Role): AiCapabilityLevel {
+  if (canManageAi(role)) return "admin";
+  if (canApproveAi(role)) return "manager";
+  if (canOperateAi(role)) return "operator";
+  if (canViewAi(role)) return "viewer";
+  return "none";
+}

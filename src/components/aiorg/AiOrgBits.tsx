@@ -5,19 +5,22 @@ import type React from "react";
 import Link from "next/link";
 import type { AiBacking, AiLiveState, AiMetric } from "@/lib/aiorg/types";
 
-const TABS: { href: string; label: string }[] = [
+const TABS: { href: string; label: string; manage?: boolean }[] = [
   { href: "/ai-org", label: "Command Center" },
   { href: "/ai-org/employees", label: "AI Employees" },
+  { href: "/ai-org/sessions", label: "Sessions" },
   { href: "/ai-org/approvals", label: "Approvals" },
   { href: "/ai-org/runs", label: "Runs" },
   { href: "/ai-org/exceptions", label: "Exceptions" },
+  { href: "/ai-org/control", label: "Control", manage: true },
 ];
 
-/** The sub-nav shared across the AI Org blades. `active` is the href of the current view. */
-export function OrgTabs({ active }: { active: string }): React.JSX.Element {
+/** The sub-nav shared across the AI Org blades. `active` is the href of the current view. The Control tab
+ *  (plane configuration) only shows for owner/admin. */
+export function OrgTabs({ active, canManage = false }: { active: string; canManage?: boolean }): React.JSX.Element {
   return (
     <nav className="mb-5 flex flex-wrap gap-4 border-b border-border pb-2">
-      {TABS.map((t) => (
+      {TABS.filter((t) => !t.manage || canManage).map((t) => (
         <Link
           key={t.href}
           href={t.href}

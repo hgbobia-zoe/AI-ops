@@ -10,6 +10,7 @@ import Link from "next/link";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 import { bladeAgents } from "@/lib/aiorg/service";
+import { countLiveSessionsByBlade } from "@/lib/ai/sessions";
 import type { BladeKey } from "@/lib/aiorg/types";
 import { BackingBadge, StateDot } from "./AiOrgBits";
 
@@ -29,6 +30,12 @@ export async function BladeAgents({ blade, className }: { blade: BladeKey; class
 
   const needingAttention = agents.filter((a) => a.view.state === "attention").length;
   const pending = agents.reduce((n, a) => n + a.pendingApprovals, 0);
+  let liveSessions = 0;
+  try {
+    liveSessions = countLiveSessionsByBlade()[blade] ?? 0;
+  } catch {
+    liveSessions = 0;
+  }
 
   return (
     <details open className={`group border border-border bg-panel ${className ?? ""}`}>
@@ -42,8 +49,16 @@ export async function BladeAgents({ blade, className }: { blade: BladeKey; class
               {pending} to approve
             </Link>
           )}
+          {liveSessions > 0 && (
+            <Link href="/ai-org/sessions" className="text-[11px] tabular-nums text-positive underline-offset-2 hover:underline">
+              {liveSessions} live
+            </Link>
+          )}
         </span>
-        <span className="text-[11px] text-meta transition-colors group-hover:text-foreground">AI Org →</span>
+        <span className="flex items-center gap-3">
+          <Link href="/ai-org/sessions" className="text-[11px] text-meta underline-offset-2 transition-colors hover:text-foreground hover:underline">Sessions →</Link>
+          <span className="text-[11px] text-meta transition-colors group-hover:text-foreground">AI Org →</span>
+        </span>
       </summary>
 
       <div className="flex flex-wrap gap-px border-t border-[var(--row-rule)] bg-border">
