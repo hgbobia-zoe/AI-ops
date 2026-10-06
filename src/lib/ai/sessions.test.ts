@@ -23,6 +23,9 @@ import {
   setObjective,
   archiveSession,
   addInstruction,
+  listRecentSessionCards,
+  countCompletedToday,
+  sessionIdForApproval,
 } from "./sessions";
 
 // Pure helpers — no DB.
@@ -149,6 +152,29 @@ describe("session store", () => {
     archiveSession(s.id, false);
     expect(getSession(s.id)?.archived).toBe(false);
     expect(listRecentSessions().some((x) => x.id === s.id)).toBe(true);
+  });
+
+  it("lists session cards with the latest activity line", () => {
+    const s = createSession({ agentId: "lost-quote", blade: "salesos", title: "Card test" });
+    appendEvent(s.id, { kind: "step", label: "Retrieved 34 lost quotes" });
+    appendEvent(s.id, { kind: "recommendation", label: "6 to contact today" });
+    const card = listRecentSessionCards(50).find((c) => c.id === s.id);
+    expect(card).toBeTruthy();
+    expect(card!.lastActivity).toBe("6 to contact today"); // newest labelled event
+  });
+
+  it("counts sessions completed today and links an approval back to its session", () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const before = countCompletedToday(today); // other tests share the in-memory DB
+    const s = createSession({ agentId: "outreach", title: "Done today" });
+    endSession(s.id, "done", {});
+    expect(countCompletedToday(today)).toBe(before + 1);
+    expect(countCompletedToday("1999-01-01")).toBe(0);
+
+    const s2 = createSession({ agentId: "outreach", title: "Has approval" });
+    linkSessionApproval(s2.id, "AP-link-1");
+    expect(sessionIdForApproval("AP-link-1")).toBe(s2.id);
+    expect(sessionIdForApproval("AP-nope")).toBeNull();
   });
 
   it("adds an instruction and resumes a paused session; refuses on a closed one", () => {

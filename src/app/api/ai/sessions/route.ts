@@ -7,7 +7,7 @@ import { NextResponse } from "next/server";
 import {
   createSession,
   getSession as getAiSession,
-  listRecentSessions,
+  listRecentSessionCards,
   listSessionEvents,
   listSessionTools,
   listSessionApprovalIds,
@@ -31,7 +31,7 @@ export async function GET(req: Request): Promise<NextResponse> {
       approvalIds: listSessionApprovalIds(id),
     });
   }
-  return NextResponse.json({ sessions: listRecentSessions(100) });
+  return NextResponse.json({ sessions: listRecentSessionCards(200) });
 }
 
 export async function POST(req: Request): Promise<NextResponse> {

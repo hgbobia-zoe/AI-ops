@@ -1,21 +1,23 @@
 "use client";
 
-// AI Command Center — mission control over every AI session across the platform. Status-first, dense,
-// Grafana/Jira idiom (not a chat UI). A stat strip, a status filter rail, blade + owner filters, and a
-// dense list of sessions. Renders the server snapshot, then polls /api/ai/sessions so the feed stays live.
+// AI Command Center — the control room for every AI employee and session across Zoe Operations. Answers
+// "what are my AI employees doing right now?" Dominant ACTIVE SESSIONS as operational job cards (never
+// chat bubbles), a five-state summary, and a right control rail (needs attention / pending approvals /
+// recently completed). Renders the server snapshot, then polls /api/ai/sessions so it stays live. No fake
+// sessions: an empty roster shows an intentional empty state.
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Loader2, Cpu, Plug, Radio, ShieldCheck, ChevronRight, CirclePlus, Boxes, Activity } from "lucide-react";
-import type { AiSession, SessionStatus } from "@/lib/ai/sessions";
-import type { AiControlOverview } from "@/lib/ai/control";
+import { Loader2, CirclePlus, Radio, ShieldCheck, CheckCircle2, AlertTriangle, PauseCircle, History, ArrowRight, Bot } from "lucide-react";
+import type { AiSessionCard } from "@/lib/ai/sessions";
+import type { AiCommandOverview } from "@/lib/ai/control";
 import { STATUS_META } from "@/lib/ai/sessionDisplay";
 
-const POLL_MS = 15_000;
+const POLL_MS = 12_000;
 
 type FilterKey = "all" | "active" | "waiting" | "needs_approval" | "completed" | "errors";
-const FILTERS: { key: FilterKey; label: string; match: (s: SessionStatus) => boolean }[] = [
+const FILTERS: { key: FilterKey; label: string; match: (s: AiSessionCard["status"]) => boolean }[] = [
   { key: "all", label: "All", match: () => true },
   { key: "active", label: "Active", match: (s) => s === "running" },
   { key: "waiting", label: "Waiting", match: (s) => s === "paused" },
@@ -26,43 +28,32 @@ const FILTERS: { key: FilterKey; label: string; match: (s: SessionStatus) => boo
 
 function ago(iso: string | null): string {
   if (!iso) return "—";
-  const ms = Date.now() - Date.parse(iso);
-  if (!Number.isFinite(ms)) return "—";
-  const m = Math.round(ms / 60000);
-  if (m < 1) return "just now";
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 48) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
+  const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+  if (!Number.isFinite(m)) return "—";
+  if (m < 1) return "just now"; if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60); return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
 }
 
 interface AgentRef { id: string; name: string; blade: string | null }
-
 interface Playbook { id: string; label: string; endpoint: string; blade: string }
 
 export function AiCommandConsole({
-  initial,
-  sessions: initialSessions,
-  agents,
-  nameById,
-  canOperate,
-  initialBlade,
-  playbooks = [],
+  initial, agents, nameById, canOperate, canApprove, initialBlade, today, playbooks = [],
 }: {
-  initial: AiControlOverview;
-  sessions: AiSession[];
+  initial: AiCommandOverview;
   agents: AgentRef[];
   nameById: Record<string, string>;
   canOperate: boolean;
+  canApprove: boolean;
   initialBlade?: string;
+  today: string;
   playbooks?: Playbook[];
 }): React.JSX.Element {
   const router = useRouter();
-  const [overview, setOverview] = useState(initial);
-  const [sessions, setSessions] = useState(initialSessions);
-  const [filter, setFilter] = useState<FilterKey>("all");
-  const [blade, setBlade] = useState<string>(initialBlade && agents.some((a) => a.blade === initialBlade) ? initialBlade : "");
-  const [owner, setOwner] = useState<string>("");
+  const [cards, setCards] = useState(initial.cards);
+  const [filter, setFilter] = useState<FilterKey>(initialBlade ? "all" : "all");
+  const [blade, setBlade] = useState(initialBlade && agents.some((a) => a.blade === initialBlade) ? initialBlade : "");
+  const [owner, setOwner] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [starting, setStarting] = useState(false);
   const [agentId, setAgentId] = useState(agents[0]?.id ?? "");
@@ -71,172 +62,217 @@ export function AiCommandConsole({
     setRefreshing(true);
     try {
       const r = await fetch("/api/ai/sessions", { cache: "no-store" });
-      if (r.ok) {
-        const j = (await r.json()) as { sessions: AiSession[] };
-        setSessions(j.sessions);
-        setOverview((o) => ({
-          ...o,
-          liveCount: j.sessions.filter((x) => x.status === "running" || x.status === "awaiting_approval" || x.status === "paused").length,
-        }));
-      }
-    } catch {
-      /* keep current */
-    } finally {
-      setRefreshing(false);
-    }
+      if (r.ok) setCards(((await r.json()) as { sessions: AiSessionCard[] }).sessions);
+    } catch { /* keep */ } finally { setRefreshing(false); }
   }, []);
+  useEffect(() => { const id = setInterval(refresh, POLL_MS); return () => clearInterval(id); }, [refresh]);
 
-  useEffect(() => {
-    const id = setInterval(refresh, POLL_MS);
-    return () => clearInterval(id);
-  }, [refresh]);
-
-  const startSession = useCallback(async () => {
-    if (!agentId) return;
+  const startSession = useCallback(async (endpoint?: string) => {
+    if (!endpoint && !agentId) return;
     setStarting(true);
     try {
-      const r = await fetch("/api/ai/sessions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agentId }) });
+      const r = await fetch(endpoint ?? "/api/ai/sessions", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: endpoint ? "{}" : JSON.stringify({ agentId }),
+      });
       if (r.ok) {
-        const j = (await r.json()) as { session?: AiSession };
-        if (j.session) {
-          router.push(`/ai-command/${j.session.id}`);
-          return;
-        }
-        await refresh();
-      }
-    } finally {
-      setStarting(false);
-    }
-  }, [agentId, refresh, router]);
-
-  const runPlaybook = useCallback(async (pb: Playbook) => {
-    setStarting(true);
-    try {
-      const r = await fetch(pb.endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-      if (r.ok) {
-        const j = (await r.json()) as { session?: AiSession };
+        const j = (await r.json()) as { session?: { id: string } };
         if (j.session) { router.push(`/ai-command/${j.session.id}`); return; }
         await refresh();
       }
-    } finally {
-      setStarting(false);
-    }
-  }, [refresh, router]);
+    } finally { setStarting(false); }
+  }, [agentId, refresh, router]);
 
-  const owners = useMemo(() => [...new Set(sessions.map((s) => s.owner).filter((x): x is string => !!x))].sort(), [sessions]);
-  const blades = useMemo(() => [...new Set(sessions.map((s) => s.blade).filter((x): x is string => !!x))].sort(), [sessions]);
-  const counts = useMemo(() => {
-    const out = {} as Record<FilterKey, number>;
-    for (const f of FILTERS) out[f.key] = sessions.filter((s) => f.match(s.status)).length;
-    return out;
-  }, [sessions]);
+  const owners = useMemo(() => [...new Set(cards.map((c) => c.owner).filter((x): x is string => !!x))].sort(), [cards]);
+  const blades = useMemo(() => [...new Set(cards.map((c) => c.blade).filter((x): x is string => !!x))].sort(), [cards]);
+  const counts = useMemo(() => ({
+    active: cards.filter((c) => c.status === "running").length,
+    waiting: cards.filter((c) => c.status === "paused").length,
+    needsApproval: cards.filter((c) => c.status === "awaiting_approval").length,
+    errors: cards.filter((c) => c.status === "failed").length,
+    completedToday: cards.filter((c) => c.status === "done" && (c.endedAt ?? "").slice(0, 10) === today).length,
+  }), [cards, today]);
 
   const matchFn = FILTERS.find((f) => f.key === filter)!.match;
-  const visible = sessions.filter((s) => matchFn(s.status) && (!blade || s.blade === blade) && (!owner || s.owner === owner));
+  const visible = cards.filter((c) => matchFn(c.status) && (!blade || c.blade === blade) && (!owner || c.owner === owner));
+  const recentlyCompleted = cards.filter((c) => c.status === "done").slice(0, 6);
+  const noSessions = cards.length === 0;
 
-  const p = overview.provider;
-  const needsApproval = sessions.filter((s) => s.status === "awaiting_approval").length;
+  // New-session control (shared by the toolbar and the empty state).
+  const newSession = (
+    <div className="flex flex-wrap items-center gap-2">
+      <select value={agentId} onChange={(e) => setAgentId(e.target.value)} className="rounded border border-border bg-[var(--panel)] px-2 py-1 text-[12.5px] text-secondary-text">
+        {agents.map((a) => <option key={a.id} value={a.id}>{a.name}{a.blade ? ` · ${a.blade}` : ""}</option>)}
+      </select>
+      <button onClick={() => startSession()} disabled={starting || !agentId} className="inline-flex items-center gap-1.5 border border-[var(--gold)]/50 px-2.5 py-1 text-[12.5px] font-medium text-[var(--gold)] transition-colors hover:bg-[var(--gold)]/10 disabled:opacity-50">
+        {starting ? <Loader2 className="size-3.5 animate-spin" /> : <CirclePlus className="size-3.5" />} Create session
+      </button>
+      {playbooks.map((pb) => (
+        <button key={pb.id} onClick={() => startSession(pb.endpoint)} disabled={starting} title={`${pb.blade} playbook`} className="inline-flex items-center gap-1.5 border border-border px-2.5 py-1 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50">
+          {starting ? <Loader2 className="size-3.5 animate-spin" /> : <Radio className="size-3.5" />} {pb.label}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div className="space-y-5">
-      {/* Stat strip */}
+      {/* Five-state summary */}
       <div className="grid grid-cols-2 divide-border border border-border bg-panel sm:grid-cols-3 sm:divide-x lg:grid-cols-5 [&>*]:border-t [&>*]:border-border sm:[&>*]:border-t-0 sm:[&>*:nth-child(-n+3)]:border-t-0 lg:[&>*]:border-t-0">
-        <Stat icon={<Radio className="size-3.5" />} label="Live sessions" value={overview.liveCount} tone={overview.liveCount > 0 ? "positive" : "default"} />
-        <Stat icon={<ShieldCheck className="size-3.5" />} label="Needs approval" value={needsApproval} tone={needsApproval > 0 ? "attention" : "default"} />
-        <Stat icon={<ShieldCheck className="size-3.5" />} label="Pending approvals" value={overview.pendingApprovals} tone={overview.pendingApprovals > 0 ? "attention" : "default"} />
-        <Stat icon={<Cpu className="size-3.5" />} label="Provider" value={p.activeName} sub={p.mode === "inline" ? (p.inlineReady ? "inline · ready" : "inline · not keyed") : "deferred"} small />
-        <Stat icon={<Plug className="size-3.5" />} label="Session bridge" value={p.bridgeConnected ? "Connected" : "Not connected"} tone={p.bridgeConnected ? "positive" : "default"} small />
+        <Summary label="Active" value={counts.active} tone={counts.active ? "positive" : "default"} onClick={() => setFilter("active")} active={filter === "active"} />
+        <Summary label="Waiting" value={counts.waiting} tone={counts.waiting ? "tertiary" : "default"} onClick={() => setFilter("waiting")} active={filter === "waiting"} />
+        <Summary label="Needs approval" value={counts.needsApproval} tone={counts.needsApproval ? "attention" : "default"} onClick={() => setFilter("needs_approval")} active={filter === "needs_approval"} />
+        <Summary label="Errors" value={counts.errors} tone={counts.errors ? "critical" : "default"} onClick={() => setFilter("errors")} active={filter === "errors"} />
+        <Summary label="Completed today" value={counts.completedToday} tone="default" onClick={() => setFilter("completed")} active={filter === "completed"} />
       </div>
 
-      {/* Controls: filter rail + blade/owner + new session */}
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-border pb-2.5">
-        <div className="flex flex-wrap items-center gap-4">
-          {FILTERS.map((f) => (
-            <button
-              key={f.key}
-              onClick={() => setFilter(f.key)}
-              className={`inline-flex items-center gap-1.5 text-[13px] transition-colors ${filter === f.key ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              {f.label}
-              <span className={`rounded px-1 py-0.5 text-[10px] tabular-nums ${filter === f.key ? "bg-foreground/10 text-foreground" : "text-meta"}`}>{counts[f.key]}</span>
-            </button>
-          ))}
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+        {/* PRIMARY — active sessions as operational job cards */}
+        <div className="space-y-3 lg:col-span-8">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border pb-2.5">
+            <div className="flex flex-wrap items-center gap-4">
+              {FILTERS.map((f) => (
+                <button key={f.key} onClick={() => setFilter(f.key)} className={`text-[13px] transition-colors ${filter === f.key ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>{f.label}</button>
+              ))}
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              <select value={blade} onChange={(e) => setBlade(e.target.value)} className="rounded border border-border bg-[var(--panel)] px-2 py-1 text-[12px] text-secondary-text"><option value="">All blades</option>{blades.map((b) => <option key={b} value={b}>{b}</option>)}</select>
+              <select value={owner} onChange={(e) => setOwner(e.target.value)} className="rounded border border-border bg-[var(--panel)] px-2 py-1 text-[12px] text-secondary-text"><option value="">All owners</option>{owners.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+              <span className="inline-flex items-center gap-1 text-[11px] text-meta">{refreshing ? <Loader2 className="size-3 animate-spin" /> : <Radio className="size-3" />} live</span>
+            </div>
+          </div>
+
+          {canOperate && !noSessions && <div className="border border-border bg-panel p-2.5">{newSession}</div>}
+
+          {noSessions ? (
+            <div className="flex flex-col items-center gap-3 border border-dashed border-border bg-panel px-6 py-14 text-center">
+              <Bot className="size-7 text-meta" />
+              <div>
+                <div className="text-[15px] font-semibold text-foreground">No active AI sessions</div>
+                <div className="mt-1 text-[12.5px] text-meta">Start an AI session from any blade, or run a playbook below. Real sessions appear here automatically.</div>
+              </div>
+              {canOperate && <div className="mt-1">{newSession}</div>}
+            </div>
+          ) : visible.length === 0 ? (
+            <p className="border border-border bg-panel p-4 text-[13px] text-meta">No sessions match this filter.</p>
+          ) : (
+            <div className="space-y-2.5">
+              {visible.map((c) => <JobCard key={c.id} card={c} agentName={nameById[c.agentId] ?? c.agentId} />)}
+            </div>
+          )}
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <select value={blade} onChange={(e) => setBlade(e.target.value)} className="rounded border border-border bg-[var(--panel)] px-2 py-1 text-[12.5px] text-secondary-text">
-            <option value="">All blades</option>
-            {blades.map((b) => <option key={b} value={b}>{b}</option>)}
-          </select>
-          <select value={owner} onChange={(e) => setOwner(e.target.value)} className="rounded border border-border bg-[var(--panel)] px-2 py-1 text-[12.5px] text-secondary-text">
-            <option value="">All owners</option>
-            {owners.map((o) => <option key={o} value={o}>{o}</option>)}
-          </select>
-          <span className="inline-flex items-center gap-1 text-[11px] text-meta">{refreshing ? <Loader2 className="size-3 animate-spin" /> : <Activity className="size-3" />} live</span>
+
+        {/* RIGHT — control rail */}
+        <div className="space-y-4 lg:col-span-4">
+          <Rail title="Needs attention" icon={<AlertTriangle className="size-4" />}>
+            {counts.needsApproval + counts.waiting + counts.errors + initial.pendingApprovals.length === 0 ? (
+              <p className="text-[12.5px] text-positive">Nothing needs you right now.</p>
+            ) : (
+              <ul className="space-y-1.5 text-[12.5px]">
+                {initial.pendingApprovals.length > 0 && <Attn icon={<ShieldCheck className="size-3.5 text-attention" />} text={`${initial.pendingApprovals.length} action${initial.pendingApprovals.length === 1 ? "" : "s"} need approval`} />}
+                {counts.waiting > 0 && <Attn icon={<PauseCircle className="size-3.5 text-tertiary-text" />} text={`${counts.waiting} session${counts.waiting === 1 ? "" : "s"} waiting`} />}
+                {counts.errors > 0 && <Attn icon={<AlertTriangle className="size-3.5 text-critical" />} text={`${counts.errors} session error${counts.errors === 1 ? "" : "s"}`} />}
+              </ul>
+            )}
+          </Rail>
+
+          <Rail title="Pending approvals" icon={<ShieldCheck className="size-4" />}>
+            {initial.pendingApprovals.length === 0 ? (
+              <p className="text-[12.5px] text-meta">No actions awaiting approval.</p>
+            ) : (
+              <div className="space-y-2">
+                {initial.pendingApprovals.slice(0, 6).map((a) => (
+                  <div key={a.id} className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[12.5px] font-medium text-foreground">{a.title}</span>
+                      <span className="block truncate text-[11px] text-meta">{a.agentName}{a.financial ? " · $" : ""}</span>
+                    </span>
+                    {canApprove && (
+                      <Link href={a.sessionId ? `/ai-command/${a.sessionId}` : "/ai-org/approvals"} className="shrink-0 rounded border border-[var(--gold)]/50 px-2 py-0.5 text-[11px] font-medium text-[var(--gold)] transition-colors hover:bg-[var(--gold)]/10">Review</Link>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Rail>
+
+          <Rail title="Recently completed" icon={<CheckCircle2 className="size-4" />} action={<button onClick={() => setFilter("completed")} className="inline-flex items-center gap-0.5 text-[11px] text-meta transition-colors hover:text-foreground"><History className="size-3" /> View history</button>}>
+            {recentlyCompleted.length === 0 ? (
+              <p className="text-[12.5px] text-meta">Nothing completed yet.</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {recentlyCompleted.map((c) => (
+                  <li key={c.id}>
+                    <Link href={`/ai-command/${c.id}`} className="flex items-center gap-2 text-[12.5px] transition-colors hover:text-foreground">
+                      <CheckCircle2 className="size-3.5 shrink-0 text-positive" />
+                      <span className="min-w-0 flex-1 truncate text-secondary-text">{c.title}</span>
+                      <span className="shrink-0 text-[10.5px] text-meta">{ago(c.endedAt)}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Rail>
         </div>
       </div>
-
-      {/* New session */}
-      {canOperate && agents.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 border border-border bg-panel p-2.5">
-          <span className="text-[11px] uppercase tracking-[0.08em] text-meta">New AI session</span>
-          <select value={agentId} onChange={(e) => setAgentId(e.target.value)} className="rounded border border-border bg-[var(--panel)] px-2 py-1 text-[12.5px] text-secondary-text">
-            {agents.map((a) => <option key={a.id} value={a.id}>{a.name}{a.blade ? ` · ${a.blade}` : ""}</option>)}
-          </select>
-          <button onClick={startSession} disabled={starting || !agentId} className="inline-flex items-center gap-1.5 border border-attention/50 px-2.5 py-1 text-[12.5px] font-medium text-attention transition-colors hover:bg-attention/10 disabled:opacity-50">
-            {starting ? <Loader2 className="size-3.5 animate-spin" /> : <CirclePlus className="size-3.5" />} Open session
-          </button>
-          {playbooks.length > 0 && <span className="mx-1 text-[11px] text-meta">or run a playbook</span>}
-          {playbooks.map((pb) => (
-            <button key={pb.id} onClick={() => runPlaybook(pb)} disabled={starting} className="inline-flex items-center gap-1.5 border border-border px-2.5 py-1 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50" title={`${pb.blade} playbook`}>
-              {starting ? <Loader2 className="size-3.5 animate-spin" /> : <Radio className="size-3.5" />} {pb.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Session list */}
-      {visible.length === 0 ? (
-        <p className="border border-border bg-panel p-4 text-[13px] text-meta">No sessions match this filter. {sessions.length === 0 ? "Start one above, or an agent opens one when it runs." : ""}</p>
-      ) : (
-        <div className="divide-y divide-[var(--row-rule)] border border-border">
-          {visible.map((s) => {
-            const m = STATUS_META[s.status];
-            return (
-              <Link key={s.id} href={`/ai-command/${s.id}`} className="flex items-center gap-3 bg-panel px-3.5 py-3 transition-colors hover:bg-[var(--row-hover)]">
-                <span className={`size-2 shrink-0 rounded-full ${m.dot}`} aria-hidden />
-                <span className="flex size-8 shrink-0 items-center justify-center border border-border text-meta"><Boxes className="size-4" /></span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-2">
-                    <span className="truncate text-[13.5px] font-medium text-foreground">{s.title}</span>
-                    {s.blade && <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[9.5px] uppercase tracking-wide text-meta">{s.blade}</span>}
-                  </span>
-                  <span className="mt-0.5 block truncate text-[11.5px] text-muted-foreground">
-                    {nameById[s.agentId] ?? s.agentId}
-                    {s.owner ? ` · ${s.owner}` : ""}
-                    {s.objective ? ` · ${s.objective}` : s.status === "failed" && s.error ? ` · ${s.error}` : ""}
-                  </span>
-                </span>
-                <span className="hidden shrink-0 flex-col items-end gap-0.5 sm:flex">
-                  <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${m.text}`}>{m.label}</span>
-                  <span className="text-[10.5px] text-meta">{ago(s.updatedAt)}</span>
-                </span>
-                <ChevronRight className="size-4 shrink-0 text-meta" />
-              </Link>
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
 
-function Stat({ icon, label, value, sub, tone = "default", small }: { icon: React.ReactNode; label: string; value: string | number; sub?: string; tone?: "default" | "positive" | "attention"; small?: boolean }): React.JSX.Element {
-  const toneCls = tone === "positive" ? "text-positive" : tone === "attention" ? "text-attention" : "text-foreground";
+function JobCard({ card, agentName }: { card: AiSessionCard; agentName: string }): React.JSX.Element {
+  const m = STATUS_META[card.status];
   return (
-    <div className="min-w-0 p-3">
-      <div className="mb-1 inline-flex items-center gap-1.5 text-[10px] uppercase tracking-[0.1em] text-meta">{icon} {label}</div>
-      <div className={`truncate font-semibold tabular-nums ${small ? "text-[15px]" : "text-[22px] leading-none"} ${toneCls}`}>{value}</div>
-      {sub && <div className="mt-1 truncate text-[11px] text-meta">{sub}</div>}
+    <div className="surface border p-3.5">
+      <div className="flex items-start gap-2.5">
+        <span className={`mt-1 size-2 shrink-0 rounded-full ${m.dot}`} aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-[13.5px] font-semibold uppercase tracking-[0.02em] text-foreground">{agentName}</span>
+            <span className={`ml-auto inline-flex shrink-0 items-center gap-1 text-[11px] font-semibold uppercase tracking-wide ${m.text}`}>{m.label}</span>
+          </div>
+          <div className="mt-0.5 text-[12px] text-meta">
+            {card.blade ? <span className="text-tertiary-text">{card.blade}</span> : "cross-blade"} · {card.title}
+          </div>
+          {card.objective && (
+            <div className="mt-2">
+              <span className="text-[9.5px] uppercase tracking-[0.1em] text-meta">Objective</span>
+              <p className="text-[12.5px] text-secondary-text">{card.objective}</p>
+            </div>
+          )}
+          {card.lastActivity && <p className="mt-2 border-l-2 border-[var(--row-rule)] pl-2.5 text-[12.5px] text-tertiary-text">{card.lastActivity}</p>}
+          <div className="mt-2.5 flex items-center gap-3 text-[11px] text-meta">
+            <span>Last activity: {ago(card.updatedAt)}</span>
+            {card.owner && <span>· {card.owner}</span>}
+            <Link href={`/ai-command/${card.id}`} className="ml-auto inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[11.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">Open session <ArrowRight className="size-3" /></Link>
+          </div>
+        </div>
+      </div>
     </div>
   );
+}
+
+function Summary({ label, value, tone, onClick, active }: { label: string; value: number; tone: "default" | "positive" | "attention" | "critical" | "tertiary"; onClick: () => void; active: boolean }): React.JSX.Element {
+  const t = tone === "positive" ? "text-positive" : tone === "attention" ? "text-attention" : tone === "critical" ? "text-critical" : tone === "tertiary" ? "text-tertiary-text" : "text-foreground";
+  return (
+    <button onClick={onClick} className={`min-w-0 p-3 text-left transition-colors hover:bg-[var(--row-hover)] ${active ? "bg-[var(--row-hover)]" : ""}`}>
+      <div className="mb-1 text-[10px] uppercase tracking-[0.1em] text-meta">{label}</div>
+      <div className={`text-[24px] font-semibold leading-none tabular-nums ${t}`}>{value}</div>
+    </button>
+  );
+}
+
+function Rail({ title, icon, children, action }: { title: string; icon: React.ReactNode; children: React.ReactNode; action?: React.ReactNode }): React.JSX.Element {
+  return (
+    <section className="surface border p-3.5">
+      <div className="mb-2.5 flex items-center gap-2">
+        <h2 className="flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">{icon} {title}</h2>
+        {action && <span className="ml-auto">{action}</span>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Attn({ icon, text }: { icon: React.ReactNode; text: string }): React.JSX.Element {
+  return <li className="flex items-center gap-2 text-secondary-text">{icon} {text}</li>;
 }

@@ -291,6 +291,43 @@ export function listArchivedSessions(limit = 100): AiSession[] {
   return (getDb().prepare(`SELECT * FROM ai_sessions WHERE COALESCE(archived,0)=1 ORDER BY updated_at DESC LIMIT ?`).all(limit) as SessionRow[]).map(toSession);
 }
 
+/** A session plus its latest timeline line — the "current activity" the Command Center job cards show. */
+export interface AiSessionCard extends AiSession {
+  lastActivity: string | null;
+}
+
+/** Recent (non-archived) sessions with each one's latest activity line, newest-touched first. One query
+ *  (correlated subquery) so the Command Center card list is a single read. */
+export function listRecentSessionCards(limit = 100): AiSessionCard[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT s.*, (
+         SELECT e.label FROM ai_session_events e
+         WHERE e.session_id = s.id AND e.label IS NOT NULL
+         ORDER BY e.ts DESC, e.rowid DESC LIMIT 1
+       ) AS last_activity
+       FROM ai_sessions s
+       WHERE COALESCE(s.archived,0)=0
+       ORDER BY s.updated_at DESC LIMIT ?`,
+    )
+    .all(limit) as (SessionRow & { last_activity: string | null })[];
+  return rows.map((r) => ({ ...toSession(r), lastActivity: r.last_activity ?? null }));
+}
+
+/** Count of sessions that finished (done) today, by the ops-tz calendar day of ended_at. */
+export function countCompletedToday(todayYmd: string): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS n FROM ai_sessions WHERE status='done' AND ended_at IS NOT NULL AND substr(ended_at,1,10)=?`)
+    .get(todayYmd) as { n: number };
+  return row.n;
+}
+
+/** The session that raised a given approval (reverse of the link table), or null. */
+export function sessionIdForApproval(approvalId: string): string | null {
+  const row = getDb().prepare(`SELECT session_id FROM ai_session_approvals WHERE approval_id = ? LIMIT 1`).get(approvalId) as { session_id: string } | undefined;
+  return row?.session_id ?? null;
+}
+
 /** Sessions for one blade, newest first (the per-blade AI workspace). Excludes archived. */
 export function listSessionsForBlade(blade: string, limit = 50): AiSession[] {
   return (
