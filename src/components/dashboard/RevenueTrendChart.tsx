@@ -84,8 +84,8 @@ export function RevenueTrendChart({
         </div>
         <div className="flex items-center gap-3 text-[10.5px] text-meta">
           <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2 w-3 rounded-sm bg-[var(--gold)]" /> {curYear}</span>
-          <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2 w-3 rounded-sm bg-[var(--bar)]" /> {prevYear}</span>
           {targetLine != null && <span className="inline-flex items-center gap-1.5"><span className="inline-block h-0 w-3 border-t border-dashed border-[var(--gold)]" /> Target</span>}
+          <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2 w-3 rounded-sm bg-[var(--bar)]" /> {prevYear}</span>
         </div>
       </div>
 

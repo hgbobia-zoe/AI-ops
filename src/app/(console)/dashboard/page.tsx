@@ -8,7 +8,7 @@
 import Link from "next/link";
 import {
   AlertTriangle, ArrowRight, DollarSign, FileText, CalendarCheck, ShieldAlert, Truck, TrendingUp,
-  PieChart, Gauge, Radar, Lightbulb, ListChecks, Bot, CalendarDays, CircleDot, Phone, Mail, Users, Megaphone,
+  PieChart, Gauge, Radar, Lightbulb, ListChecks, Bot, CalendarDays, CircleDot, Phone, Mail, Users, Megaphone, MapPin,
 } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { commandCenter } from "@/lib/command/service";
@@ -78,14 +78,13 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const range: RangeKey = (RANGES.some((r) => r.key === sp.range) ? sp.range : "today") as RangeKey;
   const win = rangeWindow(range, today, year);
 
-  // Extra reads (existing services only) — prior-year trend, booked events in range, sales queue, upcoming, AI.
+  // Extra reads (existing services only) — prior-year trend, sales queue, upcoming (range-scoped), AI.
   const prev = safe(() => salesYearOverview(year - 1), null);
-  const bookedInRange = safe(() => getPipelineBookingsInRange(win.start, win.end).length, 0);
   const salesQ = showMoney ? safe(() => salesCommandCenter(), null) : null;
-  const upcoming = safe(() => getPipelineBookingsInRange(today, shiftYmd(today, 6)), [] as BookingView[])
+  const upcoming = safe(() => getPipelineBookingsInRange(win.start, win.end), [] as BookingView[])
     .filter((b) => b.eventDate)
     .sort((a, b) => (a.eventDate! < b.eventDate! ? -1 : 1))
-    .slice(0, 6);
+    .slice(0, 8);
   const aiOverview = safe(() => aiControlOverview(), null);
   const aiSessions = safe(() => listRecentSessions(6), []);
 
@@ -107,11 +106,15 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const revDelta = pctDelta(curM[curMonthIdx]?.signedRevenue ?? null, curM[curMonthIdx - 1]?.signedRevenue ?? null);
   const eventDelta = pctDelta(curM[curMonthIdx]?.count ?? null, curM[curMonthIdx - 1]?.count ?? null);
 
+  const bookedThisMonth = curM[curMonthIdx]?.count ?? 0; // events booked this month (matches "This month")
+
   const attention = showMoney ? c.attention : c.attention.filter((i) => i.source !== "finance");
   const crit = attention.filter((i) => i.priority === "critical").length;
   const high = attention.filter((i) => i.priority === "high").length;
   const med = attention.filter((i) => i.priority === "medium").length;
   const low = attention.filter((i) => i.priority === "info").length;
+  // Severity breakdown sub (e.g. "1 critical · 2 high · 1 medium"), matching the mockup's "1 medium · 1 low".
+  const riskSub = [crit && `${crit} critical`, high && `${high} high`, med && `${med} medium`, low && `${low} low`].filter(Boolean).join(" · ") || "all clear";
   const nextActions = attention.filter((i) => i.priority !== "info").slice(0, 6).map((i) => ({
     key: i.key, href: i.href, priority: i.priority,
     text: i.detail?.split("→")[1]?.trim() && i.detail.split("→")[1].trim().length > 3 ? i.detail.split("→")[1].trim() : i.title,
@@ -130,13 +133,16 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           <h1 className="text-[24px] font-semibold tracking-tight">Command Center</h1>
           <p className="text-[12.5px] text-meta">{formatYmdLong(today)} · real-time view of your business, operations and AI activity.</p>
         </div>
-        <div className="inline-flex overflow-hidden rounded border border-border">
-          {RANGES.map((r) => (
-            <Link key={r.key} href={r.key === "today" ? "/dashboard" : `/dashboard?range=${r.key}`} aria-current={range === r.key ? "page" : undefined}
-              className={`px-2.5 py-1 text-[12px] font-medium transition-colors ${range === r.key ? "bg-[var(--gold)]/15 text-[var(--gold)]" : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"}`}>
-              {r.label}
-            </Link>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="inline-flex overflow-hidden rounded border border-border">
+            {RANGES.map((r) => (
+              <Link key={r.key} href={r.key === "today" ? "/dashboard" : `/dashboard?range=${r.key}`} aria-current={range === r.key ? "page" : undefined}
+                className={`px-2.5 py-1 text-[12px] font-medium transition-colors ${range === r.key ? "bg-[var(--gold)]/15 text-[var(--gold)]" : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"}`}>
+                {r.label}
+              </Link>
+            ))}
+          </div>
+          <span className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1 text-[12px] text-tertiary-text"><MapPin className="size-3.5 text-meta" /> All locations</span>
         </div>
       </header>
 
@@ -148,19 +154,18 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             {showMoney ? (
               <Kpi icon={<DollarSign className="size-3.5" />} label={`Revenue (${rev.periodLabel.slice(0, 3)})`} big={money(rev.committed)}
                 sub={rev.target != null ? `Target ${money(rev.target)}` : "no target set"}
-                barPct={rev.pctOfTarget} delta={revDelta} spark={revSeries} />
+                barPct={rev.pctOfTarget} barLabel={rev.pctOfTarget != null ? `${rev.pctOfTarget}%` : undefined} delta={revDelta} spark={revSeries} />
             ) : (
               <Kpi icon={<CalendarCheck className="size-3.5" />} label="Events today" big={String(c.today_ops.events)} sub="scheduled" spark={null} />
             )}
             <Kpi icon={<FileText className="size-3.5" />} label="Quotes" big={String(pipe.quote.count)}
               sub={`${pipe.quote.count} open · ${pipe.signed.count} signed`} spark={quoteSeries} />
-            <Kpi icon={<CalendarCheck className="size-3.5" />} label="Booked events" big={String(bookedInRange)}
-              sub={win.label} delta={range === "today" ? eventDelta : null} bars={eventBars} />
+            <Kpi icon={<CalendarCheck className="size-3.5" />} label="Booked events" big={String(bookedThisMonth)}
+              sub="This month" delta={eventDelta} bars={eventBars} />
             <Kpi icon={<ShieldAlert className="size-3.5" />} label="Operational risks" big={String(crit + high + med + low)}
-              sub={crit ? `${crit} critical` : high ? `${high} high` : med ? `${med} medium` : "all clear"}
-              tone={crit ? "bad" : high || med ? "warn" : "good"} spark={null} href="#attention" />
+              sub={riskSub} tone={crit ? "bad" : high || med ? "warn" : "good"} spark={null} href="#attention" />
             <Kpi icon={<Truck className="size-3.5" />} label="Fleet & crew" big={`${c.today_ops.trucksUsed} / ${c.today_ops.fleetSize}`}
-              sub={util != null ? `${util}% utilization` : "active today"} barPct={util} spark={null} />
+              sub="Active today" barPct={util} barLabel={util != null ? `${util}% utilization` : undefined} spark={null} />
           </div>
 
           {/* Revenue performance + Quote status */}
@@ -270,10 +275,11 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             )}
           </Panel>
 
-          {/* Upcoming events */}
-          <Panel icon={<CalendarDays className="size-4" />} title="Upcoming events" href="/sales" hrefLabel="View all">
+          {/* Upcoming events — window follows the range tabs */}
+          <Panel icon={<CalendarDays className="size-4" />} title="Upcoming events" href="/sales" hrefLabel="View all"
+            chip={<span className="text-[10px] uppercase tracking-wide text-meta">{win.label}</span>}>
             {upcoming.length === 0 ? (
-              <p className="text-[12px] text-meta">No booked events in the next 7 days.</p>
+              <p className="text-[12px] text-meta">No booked events {win.label === "today" ? "today" : `in the ${win.label}`}.</p>
             ) : (
               <div className="space-y-0.5">
                 {upcoming.map((b) => (
@@ -340,8 +346,8 @@ function Panel({ icon, title, href, hrefLabel, children, className, badge, chip 
   );
 }
 
-function Kpi({ icon, label, big, sub, barPct, delta, spark, bars, tone, href }: {
-  icon: React.ReactNode; label: string; big: string; sub?: string; barPct?: number | null;
+function Kpi({ icon, label, big, sub, barPct, barLabel, delta, spark, bars, tone, href }: {
+  icon: React.ReactNode; label: string; big: string; sub?: string; barPct?: number | null; barLabel?: string;
   delta?: { pct: number; up: boolean } | null; spark?: (number | null)[] | null; bars?: (number | null)[]; tone?: "good" | "bad" | "warn"; href?: string;
 }): React.JSX.Element {
   const bigTone = tone === "bad" ? "text-critical" : tone === "good" ? "text-positive" : "text-foreground";
@@ -353,15 +359,20 @@ function Kpi({ icon, label, big, sub, barPct, delta, spark, bars, tone, href }: 
         {spark && spark.some((v) => v != null) && <Spark data={spark} />}
         {bars && bars.some((v) => (v ?? 0) > 0) && <MiniBars data={bars} />}
       </div>
+      {sub && <div className="mt-1.5 truncate text-[11px] text-meta">{sub}</div>}
       {barPct != null && (
-        <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-[var(--row-hover)]">
-          <div className="h-full bg-[var(--gold)]" style={{ width: `${Math.min(100, Math.max(0, barPct))}%` }} />
+        <div className="mt-2 flex items-center gap-2">
+          <div className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--row-hover)]">
+            <div className="h-full bg-[var(--gold)]" style={{ width: `${Math.min(100, Math.max(0, barPct))}%` }} />
+          </div>
+          {barLabel && <span className="shrink-0 text-[10.5px] tabular-nums text-tertiary-text">{barLabel}</span>}
         </div>
       )}
-      <div className="mt-1.5 flex items-center gap-2 text-[11px]">
-        {sub && <span className="truncate text-meta">{sub}</span>}
-        {delta && <span className={`ml-auto shrink-0 tabular-nums ${delta.up ? "text-positive" : "text-critical"}`}>{delta.up ? "▲" : "▼"} {delta.pct}%</span>}
-      </div>
+      {delta && (
+        <div className="mt-1.5 text-[11px]">
+          <span className={`tabular-nums ${delta.up ? "text-positive" : "text-critical"}`}>{delta.up ? "▲" : "▼"} {delta.pct}% <span className="text-meta">vs last month</span></span>
+        </div>
+      )}
     </>
   );
   return href ? <Link href={href} className="surface block border p-3 transition-colors hover:border-foreground/20">{body}</Link> : <div className="surface border p-3">{body}</div>;
@@ -421,13 +432,13 @@ function QuoteDonut({ signed, open, lost }: { signed: number; open: number; lost
         <text x={cx} y={cy - 2} textAnchor="middle" className="rotate-90 fill-[var(--foreground)] text-[20px] font-semibold tabular-nums" transform="rotate(90 60 60)">{total}</text>
         <text x={cx} y={cy + 14} textAnchor="middle" className="fill-[var(--text-meta)] text-[8px] uppercase tracking-wide" transform="rotate(90 60 60)">Total</text>
       </svg>
-      <div className="min-w-0 flex-1 space-y-1.5">
+      <div className="min-w-0 flex-1 space-y-2">
         {segs.map((s) => (
-          <div key={s.label} className="flex items-center gap-2 text-[12px]">
+          <div key={s.label} className="flex items-center gap-2 text-[12.5px]">
             <span className="size-2.5 shrink-0 rounded-sm" style={{ background: s.color }} aria-hidden />
             <span className="flex-1 text-secondary-text">{s.label}</span>
             <span className="tabular-nums text-foreground">{s.n}</span>
-            <span className="w-10 text-right tabular-nums text-meta">{total > 0 ? Math.round((s.n / total) * 100) : 0}%</span>
+            <span className="w-12 text-right tabular-nums text-meta">({total > 0 ? Math.round((s.n / total) * 100) : 0}%)</span>
           </div>
         ))}
       </div>
@@ -458,22 +469,28 @@ function TodayOps({ ops, showMoney }: { ops: { events: number; activeRoutes: num
           </div>
         </div>
       )}
-      <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-t border-rule pt-3 text-[12.5px]">
-        <Row label="Active routes" value={String(ops.activeRoutes)} />
-        <Row label="On time" value={String(onTime)} tone="good" />
-        <Row label="Drivers" value={String(ops.driversAssigned)} />
-        <Row label="Exceptions" value={String(ops.exceptions)} tone={ops.exceptions > 0 ? "bad" : undefined} />
-        {showMoney && ops.scheduledRevenue != null && <Row label="Scheduled $" value={money(ops.scheduledRevenue)} tone="good" />}
+      <div className="grid grid-cols-2 gap-2 border-t border-rule pt-3">
+        <OpStat n={ops.activeRoutes} label="Active routes" />
+        <OpStat n={onTime} label="On time" tone="good" />
+        <OpStat n={ops.driversAssigned} label="Drivers" />
+        <OpStat n={ops.exceptions} label="At risk" tone={ops.exceptions > 0 ? "bad" : "default"} />
       </div>
+      {showMoney && ops.scheduledRevenue != null && (
+        <div className="flex items-center justify-between border-t border-rule pt-2 text-[12.5px]">
+          <span className="text-meta">Scheduled revenue today</span>
+          <span className="font-semibold tabular-nums text-positive">{money(ops.scheduledRevenue)}</span>
+        </div>
+      )}
     </div>
   );
 }
 
-function Row({ label, value, tone }: { label: string; value: string; tone?: "good" | "bad" }): React.JSX.Element {
+function OpStat({ n, label, tone = "default" }: { n: number; label: string; tone?: "good" | "bad" | "default" }): React.JSX.Element {
+  const t = tone === "good" ? "text-positive" : tone === "bad" ? "text-critical" : "text-foreground";
   return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-meta">{label}</span>
-      <span className={`font-semibold tabular-nums ${tone === "good" ? "text-positive" : tone === "bad" ? "text-critical" : "text-foreground"}`}>{value}</span>
+    <div className="flex items-baseline gap-2">
+      <span className={`text-[20px] font-semibold tabular-nums ${t}`}>{n}</span>
+      <span className="text-[11.5px] text-meta">{label}</span>
     </div>
   );
 }
