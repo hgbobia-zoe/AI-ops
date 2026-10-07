@@ -9,6 +9,7 @@ import Link from "next/link";
 import {
   AlertTriangle, ArrowRight, DollarSign, FileText, CalendarCheck, ShieldAlert, Truck, TrendingUp,
   PieChart, Gauge, Radar, Lightbulb, ListChecks, Bot, CalendarDays, CircleDot, Phone, Mail, Users, Megaphone, MapPin,
+  Search, Bell, ChevronDown, Plus,
 } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { commandCenter } from "@/lib/command/service";
@@ -20,7 +21,7 @@ import { aiControlOverview } from "@/lib/ai/control";
 import { listRecentSessions } from "@/lib/ai/sessions";
 import { STATUS_META } from "@/lib/ai/sessionDisplay";
 import { formatYmdLong, shiftYmd } from "@/lib/dates";
-import { viewerRole } from "@/lib/auth/getSession";
+import { viewerRole, currentActor } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 import type { Priority } from "@/lib/ops/manager";
 import { RevenueTrendChart, type MonthPoint } from "@/components/dashboard/RevenueTrendChart";
@@ -70,6 +71,9 @@ function ago(iso: string | null): string {
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ range?: string }> }): Promise<React.JSX.Element> {
   const role = await viewerRole();
   const showMoney = canSeeFinancials(role);
+  const actor = await currentActor();
+  const firstName = actor.label.split(/[\s(]/)[0] || "Zoe";
+  const initials = actor.label.split(/\s+/).map((p) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "ZO";
   const c = await commandCenter();
   const rev = c.revenue;
   const year = c.year;
@@ -125,8 +129,29 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const pipe = c.pipeline;
 
   return (
-    <main className="mx-auto max-w-[1500px] p-4 pb-16 md:p-5">
+    <main className="mx-auto max-w-[1500px] p-4 pb-16 leading-[1.3] md:p-5">
       <AutoRefresh seconds={120} />
+
+      {/* v3 top bar — search, quick actions, notifications, viewer (dashboard chrome) */}
+      <div className="mb-2 flex h-[46px] items-center gap-2.5">
+        <div className="flex h-8 min-w-0 flex-[0_1_460px] items-center gap-2 rounded-md border border-border bg-[#151722] px-3 text-[12.5px] text-meta">
+          <Search className="size-[15px] shrink-0" />
+          <span className="truncate">Search anything… (quotes, events, customers, routes, risks)</span>
+          <span className="ml-auto shrink-0 rounded border border-[var(--bar)] px-1.5 text-[11px] text-[var(--bar-2)]">⌘K</span>
+        </div>
+        <div className="ml-auto flex items-center gap-2.5">
+          <Link href="/intake" className="flex h-8 items-center gap-2 rounded-md border border-border bg-[#151722] px-3 text-[12.5px] text-secondary-text transition-colors hover:border-[var(--bar)]"><Plus className="size-3.5" /> Quick Actions</Link>
+          <Link href="/ai-command" aria-label="Notifications" className="relative grid size-8 place-items-center rounded-md border border-border bg-[#151722] text-secondary-text transition-colors hover:border-[var(--bar)]">
+            <Bell className="size-4" />
+            {aiOverview && aiOverview.pendingApprovals > 0 && <span className="absolute right-[7px] top-[6px] size-1.5 rounded-full bg-critical" />}
+          </Link>
+          <div className="flex items-center gap-2 pl-1">
+            <span className="grid size-7 place-items-center rounded-full bg-[#3d3a78] text-[11px] font-semibold text-foreground">{initials}</span>
+            <span className="text-[12.5px] text-foreground">{firstName}</span>
+            <ChevronDown className="size-3 text-meta" />
+          </div>
+        </div>
+      </div>
 
       {/* Header + range tabs */}
       <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
