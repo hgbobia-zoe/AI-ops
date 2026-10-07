@@ -26,9 +26,12 @@ import {
   type UnifiedWorker, type ExceptionSeverity, type ReviewStatus, type ReviewWorker,
 } from "@/lib/payroll/types";
 import { getPayrollConfig } from "@/lib/payroll/config";
+import { readGustoSnapshot } from "@/lib/payroll/gustoSnapshot";
+import { WorkerEditor, type GustoPick } from "@/components/payroll/WorkerEditor";
 import { SyncButton } from "@/components/payroll/SyncButton";
 import { ApproveButton } from "@/components/payroll/ApproveButton";
 import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
+import { ExceptionActions } from "@/components/payroll/ExceptionActions";
 
 export const dynamic = "force-dynamic";
 
@@ -339,6 +342,9 @@ async function SyncTab({ period, which }: { period: { start: string; end: string
 // ── Workers / Contractors ──────────────────────────────────────────────────────────────────────────
 async function WorkersTab({ period, mode }: { period: { start: string; end: string; label: string }; mode: "all" | "contractors" }): Promise<React.JSX.Element> {
   const { workers, connecteamOk } = await unifiedWorkers(period);
+  const gustoMembers: GustoPick[] = (readGustoSnapshot()?.members ?? []).map((m) => ({
+    id: m.id, name: m.preferredName || `${m.firstName} ${m.lastName}`.trim() || m.id, personType: m.personType, country: m.country,
+  }));
   const filtered = mode === "contractors"
     ? workers.filter((w) => w.workerType === "US_CONTRACTOR" || w.workerType === "INTERNATIONAL_CONTRACTOR")
     : workers;
@@ -355,13 +361,13 @@ async function WorkersTab({ period, mode }: { period: { start: string; end: stri
     const intl = filtered.filter((w) => w.workerType === "INTERNATIONAL_CONTRACTOR");
     return (
       <div className="space-y-6">
-        <WorkerGroup title="US contractors" workers={us} />
-        <WorkerGroup title="International contractors" workers={intl} />
+        <WorkerGroup title="US contractors" workers={us} gustoMembers={gustoMembers} />
+        <WorkerGroup title="International contractors" workers={intl} gustoMembers={gustoMembers} />
         <TempPaySection period={period} />
       </div>
     );
   }
-  return <WorkerTable workers={filtered} />;
+  return <WorkerTable workers={filtered} gustoMembers={gustoMembers} />;
 }
 
 // Instawork temps — a labor-cost view, paid via Instawork (not Gusto). Estimate from booked gigs now,
@@ -415,16 +421,16 @@ async function TempPaySection({ period }: { period: { start: string; end: string
   );
 }
 
-function WorkerGroup({ title, workers }: { title: string; workers: UnifiedWorker[] }): React.JSX.Element {
+function WorkerGroup({ title, workers, gustoMembers }: { title: string; workers: UnifiedWorker[]; gustoMembers: GustoPick[] }): React.JSX.Element {
   return (
     <div>
       <h3 className="mb-2 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">{title} <span className="text-meta">({workers.length})</span></h3>
-      {workers.length === 0 ? <p className="text-[12px] text-meta">None.</p> : <WorkerTable workers={workers} />}
+      {workers.length === 0 ? <p className="text-[12px] text-meta">None.</p> : <WorkerTable workers={workers} gustoMembers={gustoMembers} />}
     </div>
   );
 }
 
-function WorkerTable({ workers }: { workers: UnifiedWorker[] }): React.JSX.Element {
+function WorkerTable({ workers, gustoMembers }: { workers: UnifiedWorker[]; gustoMembers: GustoPick[] }): React.JSX.Element {
   return (
     <div className="surface overflow-x-auto border">
       <table className="w-full min-w-[720px] text-[12.5px]">
@@ -438,6 +444,7 @@ function WorkerTable({ workers }: { workers: UnifiedWorker[] }): React.JSX.Eleme
             <th className="px-3 py-2 text-right font-medium">Rate</th>
             <th className="px-3 py-2 text-right font-medium">Period hours</th>
             <th className="px-3 py-2 font-medium">Status</th>
+            <th className="px-3 py-2 text-right font-medium">Edit</th>
           </tr>
         </thead>
         <tbody>
@@ -458,6 +465,12 @@ function WorkerTable({ workers }: { workers: UnifiedWorker[] }): React.JSX.Eleme
               <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{w.periodHours == null ? "—" : w.periodHours.toLocaleString("en-US")}</td>
               <td className="px-3 py-2">
                 <span className={w.active ? "text-positive" : "text-meta"}>{w.active ? "Active" : "Inactive"}</span>
+              </td>
+              <td className="px-3 py-2 text-right">
+                <WorkerEditor
+                  worker={{ recordId: w.recordId, connecteamUserId: w.connecteamUserId, name: w.name, workerType: w.workerType, payType: w.payType, payRate: w.payRate, currency: w.currency, country: w.country, gustoId: w.gustoId }}
+                  gustoMembers={gustoMembers}
+                />
               </td>
             </tr>
           ))}
@@ -484,6 +497,7 @@ function ExceptionsTab(): React.JSX.Element {
             <div className="text-[12px] text-secondary-text">{e.description}</div>
             <div className="mt-0.5 text-[10.5px] text-meta">{e.source ?? "—"} · {relTime(e.detectedAt)}</div>
           </div>
+          <ExceptionActions id={e.id} />
         </div>
       ))}
     </div>
