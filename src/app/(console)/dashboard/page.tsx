@@ -48,13 +48,14 @@ const NBA_LABEL: Record<string, string> = {
   VERIFY_AVAILABILITY: "Verify", REVIEW_QUOTE: "Review", WAIT: "View",
 };
 
-type RangeKey = "today" | "7d" | "14d" | "30d" | "90d" | "year";
+type RangeKey = "today" | "tomorrow" | "7d" | "14d" | "30d" | "90d" | "year";
 const RANGES: { key: RangeKey; label: string }[] = [
-  { key: "today", label: "Today" }, { key: "7d", label: "7D" }, { key: "14d", label: "14D" }, { key: "30d", label: "30D" }, { key: "90d", label: "90D" }, { key: "year", label: "2026" },
+  { key: "today", label: "Today" }, { key: "tomorrow", label: "Tomorrow" }, { key: "7d", label: "7D" }, { key: "14d", label: "14D" }, { key: "30d", label: "30D" }, { key: "90d", label: "90D" }, { key: "year", label: "2026" },
 ];
 // FUTURE window — for Upcoming Events (event dates ahead of today).
 function rangeWindow(key: RangeKey, today: string, year: number): { start: string; end: string; label: string } {
   switch (key) {
+    case "tomorrow": return { start: shiftYmd(today, 1), end: shiftYmd(today, 1), label: "tomorrow" };
     case "7d": return { start: today, end: shiftYmd(today, 6), label: "next 7 days" };
     case "14d": return { start: today, end: shiftYmd(today, 13), label: "next 14 days" };
     case "30d": return { start: today, end: shiftYmd(today, 29), label: "next 30 days" };
@@ -63,7 +64,8 @@ function rangeWindow(key: RangeKey, today: string, year: number): { start: strin
     default: return { start: today, end: today, label: "today" };
   }
 }
-// PAST window — for Quote Activity (quotes created before today). Same selector, natural direction.
+// PAST window — for Quote Activity (quotes created up to today). Same selector, natural direction.
+// "Tomorrow" has no created-quote history, so Activity falls back to today's created quotes.
 function activityWindow(key: RangeKey, today: string, year: number): { start: string; end: string; label: string } {
   switch (key) {
     case "7d": return { start: shiftYmd(today, -6), end: today, label: "last 7 days" };
@@ -71,7 +73,7 @@ function activityWindow(key: RangeKey, today: string, year: number): { start: st
     case "30d": return { start: shiftYmd(today, -29), end: today, label: "last 30 days" };
     case "90d": return { start: shiftYmd(today, -89), end: today, label: "last 90 days" };
     case "year": return { start: `${year}-01-01`, end: today, label: String(year) };
-    default: return { start: today, end: today, label: "today" };
+    default: return { start: today, end: today, label: "today" }; // today + tomorrow
   }
 }
 

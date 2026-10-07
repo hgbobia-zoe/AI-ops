@@ -126,7 +126,7 @@ export function QuotePipeline({ pipeline, activity, showMoney }: { pipeline: Pip
 // Thick ring split into slices, each with a leader line out to its value + short label. Non-zero slices
 // only; labels are collision-separated on each side. Drawn in normal orientation so arc + leader geometry
 // share one coordinate frame.
-const CX = 144, CY = 82, RO = 52, RI = 34, W = 288, H = 176;
+const CX = 150, CY = 100, RO = 52, RI = 34, W = 300, H = 224, GAP = 32, LABEL_DX = 88;
 
 function AnnotatedDonut({ segments, centerValue, centerLabel }: { segments: Seg[]; centerValue: string; centerLabel: string }): React.JSX.Element {
   const active = segments.filter((s) => s.value > 0);
@@ -148,9 +148,9 @@ function AnnotatedDonut({ segments, centerValue, centerLabel }: { segments: Seg[
   // Separate labels vertically on each side so they don't overlap (functional, no mutation).
   const layoutSide = (side: "l" | "r") => {
     const arr = geom.filter((g) => g.side === side).sort((a, b) => a.ey - b.ey);
-    const ys = arr.reduce<number[]>((acc, it, i) => [...acc, Math.max(it.ey, i === 0 ? -1e9 : acc[i - 1] + 22)], []);
-    const over = ys.length ? ys[ys.length - 1] - (H - 14) : 0;
-    return arr.map((it, i) => ({ it, ly: Math.max(16, over > 0 ? ys[i] - over : ys[i]) }));
+    const ys = arr.reduce<number[]>((acc, it, i) => [...acc, Math.max(it.ey, i === 0 ? -1e9 : acc[i - 1] + GAP)], []);
+    const over = ys.length ? ys[ys.length - 1] - (H - 18) : 0;
+    return arr.map((it, i) => ({ it, ly: Math.max(20, over > 0 ? ys[i] - over : ys[i]) }));
   };
   const laid = [...layoutSide("l"), ...layoutSide("r")];
 
@@ -164,23 +164,21 @@ function AnnotatedDonut({ segments, centerValue, centerLabel }: { segments: Seg[
       ))}
       {/* leaders + labels */}
       {laid.map(({ it, ly }, i) => {
-        const labelX = it.side === "r" ? CX + 84 : CX - 84;
+        const labelX = it.side === "r" ? CX + LABEL_DX : CX - LABEL_DX;
         const tx = it.side === "r" ? labelX + 4 : labelX - 4;
         const anchor = it.side === "r" ? "start" : "end";
         return (
           <g key={`l${i}`}>
-            <polyline points={`${it.sx.toFixed(1)},${it.sy.toFixed(1)} ${it.ex.toFixed(1)},${it.ey.toFixed(1)} ${labelX},${ly.toFixed(1)}`} fill="none" stroke="#595d6c" strokeWidth={1} />
-            <circle cx={it.sx} cy={it.sy} r={1.6} fill={it.s.color} />
-            <text x={tx} y={ly} textAnchor={anchor} dominantBaseline="middle">
-              <tspan className="fill-[var(--foreground)] text-[11.5px] font-semibold tabular-nums">{it.s.display}</tspan>
-              <tspan x={tx} dy={10.5} className="fill-[var(--text-meta)] text-[8px] uppercase tracking-wide">{it.s.short}</tspan>
-            </text>
+            <polyline points={`${it.sx.toFixed(1)},${it.sy.toFixed(1)} ${it.ex.toFixed(1)},${it.ey.toFixed(1)} ${labelX},${ly.toFixed(1)}`} fill="none" stroke="#6b7085" strokeWidth={1} />
+            <circle cx={it.sx} cy={it.sy} r={2} fill={it.s.color} />
+            <text x={tx} y={ly - 5} textAnchor={anchor} className="fill-[var(--foreground)] text-[12.5px] font-semibold tabular-nums">{it.s.display}</text>
+            <text x={tx} y={ly + 6} textAnchor={anchor} className="fill-[var(--text-meta)] text-[9px] uppercase tracking-wide">{it.s.short}</text>
           </g>
         );
       })}
       {/* center */}
-      <text x={CX} y={CY - 2} textAnchor="middle" className="fill-[var(--foreground)] text-[24px] font-semibold tabular-nums">{centerValue}</text>
-      <text x={CX} y={CY + 14} textAnchor="middle" className="fill-[var(--text-meta)] text-[8.5px] uppercase tracking-wide">{centerLabel}</text>
+      <text x={CX} y={CY - 1} textAnchor="middle" className="fill-[var(--foreground)] text-[27px] font-semibold tabular-nums">{centerValue}</text>
+      <text x={CX} y={CY + 16} textAnchor="middle" className="fill-[var(--text-meta)] text-[9px] uppercase tracking-wide">{centerLabel}</text>
     </svg>
   );
 }
