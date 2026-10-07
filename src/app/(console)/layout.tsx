@@ -52,7 +52,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
     const pick = (key: string, name: string): StatusIntegration | null => {
       const c = conns.find((x) => x.key === key);
       if (!c) return null;
-      return { name, tone: TONE[c.status], note: c.status === "ok" ? undefined : c.headline.toLowerCase() };
+      return { name, tone: TONE[c.status], note: c.status === "ok" ? undefined : c.headline.toLowerCase(), fixHref: c.fixHref ?? undefined };
     };
     integrations = [pick("routes", "Goodshuffle"), pick("openphone", "Quo"), pick("connecteam", "Connecteam"), pick("instawork", "Instawork"), pick("gps", "GPS"), pick("ignition", "Ignition")].filter((x): x is StatusIntegration => x !== null);
   }

@@ -1,15 +1,19 @@
 "use client";
 
-// Console status bar (Nocturne): 44px strip under the header row — live date/time on the left,
-// integration freshness in the middle (6px dot + name + state), live counts on the right. Integration
-// state is computed server-side and passed in; the clock ticks client-side.
+// Console status bar (Nocturne) — a 44px strip under the header: live date/time, then each integration as
+// a CHIP (icon · name · state tag [Live/Stale/Disconnected/Idle] · freshness · Fix →), live counts on the
+// right. Integration state is computed server-side and passed in; the clock ticks client-side.
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { Boxes, Phone, Users, Briefcase, MapPin, Navigation, Plug, ArrowRight } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 export interface StatusIntegration {
   name: string;
   tone: "ok" | "warn" | "down" | "idle";
-  note?: string; // freshness / consequence, e.g. "stale · 2h ago" or "unavailable since 1:48 PM"
+  note?: string; // freshness / consequence, e.g. "2h ago" or "unavailable since 1:48 PM · 2 queued"
+  fixHref?: string; // where to go to fix it (shows a Fix → link)
 }
 export interface StatusCount {
   label: string;
@@ -17,32 +21,58 @@ export interface StatusCount {
   tone?: "ok" | "warn" | "down";
 }
 
-const DOT: Record<string, string> = { ok: "bg-positive", warn: "bg-attention", down: "bg-critical", idle: "bg-[var(--bar)]" };
-const TEXT: Record<string, string> = { ok: "text-meta", warn: "text-attention", down: "text-critical", idle: "text-meta" };
+const STATE_LABEL: Record<string, string> = { ok: "Live", warn: "Stale", down: "Disconnected", idle: "Idle" };
+const DOT: Record<string, string> = { ok: "text-positive", warn: "text-attention", down: "text-critical", idle: "text-meta" };
+const TAG: Record<string, string> = {
+  ok: "bg-positive/12 text-positive",
+  warn: "bg-attention/12 text-attention",
+  down: "bg-critical/12 text-critical",
+  idle: "bg-[var(--bar)]/30 text-meta",
+};
+const CHIP_BORDER: Record<string, string> = { ok: "border-border", warn: "border-attention/35", down: "border-critical/40", idle: "border-border" };
+
+// Per-integration icon (brand-neutral lucide stand-ins, matching the mockup's chip icons).
+const ICON: Record<string, LucideIcon> = {
+  Goodshuffle: Boxes,
+  Quo: Phone,
+  Connecteam: Users,
+  Instawork: Briefcase,
+  GPS: MapPin,
+  "GPS / Ignition": Navigation,
+  Ignition: Navigation,
+};
 
 export function StatusBar({ integrations, counts }: { integrations: StatusIntegration[]; counts?: StatusCount[] }): React.JSX.Element {
   const [now, setNow] = useState<Date | null>(null);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mounted-clock pattern (avoids SSR hydration mismatch); matches kiosk/route pages
     setNow(new Date());
     const id = setInterval(() => setNow(new Date()), 30_000);
     return () => clearInterval(id);
   }, []);
 
   return (
-    <div className="flex h-11 shrink-0 items-center gap-5 border-b border-border bg-background px-6 text-[12px]">
-      <span className="shrink-0 text-foreground tabular-nums">
+    <div className="flex h-11 shrink-0 items-center gap-3 border-b border-border bg-background px-4 text-[12px]">
+      <span className="shrink-0 whitespace-nowrap text-foreground tabular-nums">
         {now ? now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : ""}
         {now ? <span className="ml-2 text-meta">{now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</span> : ""}
       </span>
 
-      <div className="flex min-w-0 flex-1 items-center gap-4 overflow-x-auto">
-        {integrations.map((i) => (
-          <span key={i.name} className="flex shrink-0 items-center gap-1.5">
-            <span className={`size-1.5 rounded-full ${DOT[i.tone]}`} />
-            <span className="text-tertiary-text">{i.name}</span>
-            {i.note && <span className={TEXT[i.tone]}>· {i.note}</span>}
-          </span>
-        ))}
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+        {integrations.map((i) => {
+          const Icon = ICON[i.name] ?? Plug;
+          return (
+            <span key={i.name} className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border bg-[#151722] px-2.5 ${CHIP_BORDER[i.tone]}`}>
+              <Icon className={`size-3.5 ${DOT[i.tone]}`} />
+              <span className="text-foreground">{i.name}</span>
+              <span className={`rounded px-1.5 py-0.5 text-[10.5px] ${TAG[i.tone]}`}>{STATE_LABEL[i.tone]}</span>
+              {i.note && <span className="max-w-[140px] truncate text-meta">{i.note}</span>}
+              {i.fixHref && (i.tone === "down" || i.tone === "warn") && (
+                <Link href={i.fixHref} className="inline-flex items-center gap-0.5 text-[#9fb6e6] hover:underline">Fix <ArrowRight className="size-3" /></Link>
+              )}
+            </span>
+          );
+        })}
       </div>
 
       {counts && counts.length > 0 && (

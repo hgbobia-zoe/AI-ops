@@ -129,7 +129,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const pipe = c.pipeline;
 
   return (
-    <main className="mx-auto max-w-[1500px] p-4 pb-16 leading-[1.3] md:p-5">
+    <main className="mx-auto max-w-[1500px] p-3 pb-8 leading-[1.3] md:p-4">
       <AutoRefresh seconds={120} />
 
       {/* v3 top bar — search, quick actions, notifications, viewer (dashboard chrome) */}
@@ -172,9 +172,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         </div>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-12">
         {/* ── LEFT: business cockpit ── */}
-        <div className="space-y-4 xl:col-span-9">
+        <div className="space-y-3 xl:col-span-9">
           {/* KPI row */}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
             {showMoney ? (
@@ -195,7 +195,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           </div>
 
           {/* Revenue performance + Quote status */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
             <Panel className="lg:col-span-8" icon={<TrendingUp className="size-4" />} title="Revenue performance" href="/sales" hrefLabel="Sales">
               <RevenueTrendChart months={months} target={rev.target} curYear={year} prevYear={year - 1} showMoney={showMoney} />
             </Panel>
@@ -205,7 +205,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           </div>
 
           {/* Operational capacity + Today's operations */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
             <Panel className="lg:col-span-8" icon={<Gauge className="size-4" />} title="Operational capacity — next 7 days" href="/risk" hrefLabel="Event Risk">
               <div className="grid grid-cols-7 gap-1.5">
                 {c.outlook.map((d) => {
@@ -235,7 +235,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           </div>
 
           {/* Needs attention + Top opportunities */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12" id="attention">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-12" id="attention">
             <Panel className="lg:col-span-5" icon={<Radar className="size-4" />} title="Needs attention" href="/ops" hrefLabel="Ops" badge={attention.length || undefined}>
               {attention.length === 0 ? (
                 <p className="text-[12.5px] text-positive">All operations are on track.</p>
@@ -280,7 +280,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         </div>
 
         {/* ── RIGHT RAIL: AI sessions / upcoming events / next actions ── */}
-        <div className="space-y-4 xl:col-span-3">
+        <div className="space-y-3 xl:col-span-3">
           {/* AI Sessions (LIVE) — a compact summary that links to the full AI Command Center */}
           <Panel icon={<Bot className="size-4" />} title="AI sessions" href="/ai-command" hrefLabel="View all"
             chip={aiOverview && aiOverview.liveCount > 0 ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-positive"><span className="size-1.5 rounded-full bg-positive" /> {aiOverview.liveCount} live</span> : undefined}>
@@ -367,7 +367,7 @@ function pctDelta(cur: number | null, prevV: number | null): { pct: number; up: 
 
 function Panel({ icon, title, href, hrefLabel, children, className, badge, chip }: { icon: React.ReactNode; title: string; href?: string; hrefLabel?: string; children: React.ReactNode; className?: string; badge?: number; chip?: React.ReactNode }): React.JSX.Element {
   return (
-    <section className={`surface flex flex-col border p-3.5 ${className ?? ""}`}>
+    <section className={`surface flex flex-col border p-3 ${className ?? ""}`}>
       <div className="mb-3 flex items-center gap-2">
         <h2 className="flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">{icon} {title}</h2>
         {badge != null && <span className="rounded bg-critical/15 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-critical">{badge}</span>}
@@ -452,7 +452,7 @@ function QuoteDonut({ signed, open, lost }: { signed: number; open: number; lost
   const r = 52, cx = 60, cy = 60, C = 2 * Math.PI * r;
   let offset = 0;
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex items-center gap-3">
       <svg viewBox="0 0 120 120" width={120} height={120} className="shrink-0 -rotate-90">
         <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--row-hover)" strokeWidth={14} />
         {total > 0 && segs.map((s) => {
