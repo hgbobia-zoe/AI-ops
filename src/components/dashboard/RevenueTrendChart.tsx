@@ -19,10 +19,10 @@ export interface MonthPoint {
 
 type Metric = "revenue" | "quotes" | "events";
 
-// Mockup chart palette (exact handoff hexes).
-const GOLD = "#d4b36b";
-const GOLD_LIGHT = "#e6cb8f"; // current month highlight
-const PREV = "#33364a"; // prior-year bars
+// Chart palette — vivid gold for the current year, a lifted slate for the prior year (still secondary).
+const GOLD = "#e8bd4e"; // current-year bars
+const GOLD_LIGHT = "#f5d583"; // current month highlight
+const PREV = "#3f4360"; // prior-year bars
 
 export function RevenueTrendChart({
   months,
@@ -112,13 +112,14 @@ export function RevenueTrendChart({
                   <div
                     key={m.label}
                     className="flex h-full items-end justify-center gap-[2px]"
-                    title={`${m.label} · ${curYear} ${fmt(cur)} · ${prevYear} ${fmt(prev)}`}
+                    title={`${m.label} · ${prevYear} ${fmt(prev)} · ${curYear} ${fmt(cur)}`}
                   >
+                    {/* Prior year on the left, current year on the right — an old → new reading. */}
+                    <span className="w-[9px] rounded-t-[1px]" style={{ height: prevH != null ? `${prevH}%` : 0, background: PREV }} />
                     <span
                       className="w-[9px] rounded-t-[1px]"
                       style={{ height: curH != null ? `${curH}%` : 0, background: i === currentMonthIdx ? GOLD_LIGHT : GOLD }}
                     />
-                    <span className="w-[9px] rounded-t-[1px]" style={{ height: prevH != null ? `${prevH}%` : 0, background: PREV }} />
                   </div>
                 );
               })}
@@ -137,9 +138,9 @@ export function RevenueTrendChart({
 
       {/* Legend (bottom, centered) */}
       <div className="mt-1 flex justify-center gap-[22px] text-[11.5px] text-tertiary-text">
-        <span className="flex items-center gap-1.5"><span className="size-[9px] rounded-[1px]" style={{ background: GOLD }} /> {curYear} {isMoney ? "Revenue" : ""}</span>
-        {targetPct != null && <span className="flex items-center gap-1.5"><span className="inline-block w-3.5 border-t border-dashed border-[#b2b6ca]" /> Target</span>}
         <span className="flex items-center gap-1.5"><span className="size-[9px] rounded-[1px]" style={{ background: PREV }} /> {prevYear} {isMoney ? "Revenue" : ""}</span>
+        {targetPct != null && <span className="flex items-center gap-1.5"><span className="inline-block w-3.5 border-t border-dashed border-[#b2b6ca]" /> Target</span>}
+        <span className="flex items-center gap-1.5"><span className="size-[9px] rounded-[1px]" style={{ background: GOLD }} /> {curYear} {isMoney ? "Revenue" : ""}</span>
       </div>
     </section>
   );

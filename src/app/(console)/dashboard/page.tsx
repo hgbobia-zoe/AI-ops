@@ -37,10 +37,10 @@ const moneyK = (n: number | null | undefined): string => {
 const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? "" : "s"}`;
 
 const P_DOT: Record<Priority, string> = { critical: "bg-critical", high: "bg-attention", medium: "bg-attention/70", info: "bg-[var(--bar)]" };
-// Capacity bar colors — the design-handoff mockup's exact chart palette (open / tight / at-limit).
-const CAP_HEX: Record<CapacityLevel, string> = { NORMAL: "#4fae7f", TIGHT: "#e3bf62", CONSTRAINED: "#df6e64", UNVERIFIED: "#3f424d" };
-// KPI accent palette — matches the v3 handoff (green revenue/fleet, blue quotes, purple booked, red risk).
-const KPI_C = { green: "#4fae7f", blue: "#7a9fd6", purple: "#5c55a0", purpleHi: "#9184d9", red: "#df837a", amber: "#e3bf62", track: "#262834" };
+// Vivid dashboard data-viz palette (brighter than the recessive Nocturne tokens; scoped to the dashboard).
+const CAP_HEX: Record<CapacityLevel, string> = { NORMAL: "#3ad492", TIGHT: "#f0c13a", CONSTRAINED: "#f06a5e", UNVERIFIED: "#3f424d" };
+// KPI accent palette — green revenue/fleet, blue quotes, purple booked, amber/red risk.
+const KPI_C = { green: "#3ad492", blue: "#5e9cf7", purple: "#8f74f2", purpleHi: "#b8a4ff", red: "#f06a5e", amber: "#f0c13a", track: "#262834" };
 const NBA_LABEL: Record<string, string> = {
   CALL_NOW: "Call", SEND_SMS: "Text", FOLLOW_UP: "Follow up", ASK_DISCOVERY: "Discover", HANDLE_OBJECTION: "Respond",
   VERIFY_AVAILABILITY: "Verify", REVIEW_QUOTE: "Review", WAIT: "View",
@@ -476,20 +476,20 @@ function KpiBars({ data, color, recentColor }: { data: (number | null)[]; color:
 function QuoteDonut({ signed, open, lost }: { signed: number; open: number; lost: number }): React.JSX.Element {
   const total = signed + open + lost;
   const segs = [
-    { label: "Signed", n: signed, color: "var(--positive)" },
-    { label: "Open", n: open, color: "var(--gold)" },
-    { label: "Lost", n: lost, color: "var(--critical)" },
+    { label: "Signed", n: signed, color: "#3ad492" },
+    { label: "Open", n: open, color: "#f0c13a" },
+    { label: "Lost", n: lost, color: "#f06a5e" },
   ];
-  const r = 52, cx = 60, cy = 60, C = 2 * Math.PI * r;
+  const r = 49, cx = 60, cy = 60, C = 2 * Math.PI * r;
   let offset = 0;
   return (
     <div className="flex items-center gap-3">
       <svg viewBox="0 0 120 120" width={120} height={120} className="shrink-0 -rotate-90">
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--row-hover)" strokeWidth={14} />
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--row-hover)" strokeWidth={22} />
         {total > 0 && segs.map((s) => {
           const frac = s.n / total;
           const len = frac * C;
-          const el = <circle key={s.label} cx={cx} cy={cy} r={r} fill="none" stroke={s.color} strokeWidth={14} strokeDasharray={`${len} ${C - len}`} strokeDashoffset={-offset} />;
+          const el = <circle key={s.label} cx={cx} cy={cy} r={r} fill="none" stroke={s.color} strokeWidth={22} strokeDasharray={`${len} ${C - len}`} strokeDashoffset={-offset} />;
           offset += len;
           return el;
         })}
