@@ -39,7 +39,7 @@ export function TodayMap(): React.JSX.Element {
       }
     };
     load();
-    const id = setInterval(load, 60_000); // refresh live truck positions each minute
+    const id = setInterval(load, 120_000); // refresh live truck positions every 2 min (server caches 60s)
     return () => { alive = false; clearInterval(id); };
   }, []);
 
