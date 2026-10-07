@@ -39,6 +39,8 @@ const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? "" : "s"}
 const P_DOT: Record<Priority, string> = { critical: "bg-critical", high: "bg-attention", medium: "bg-attention/70", info: "bg-[var(--bar)]" };
 // Capacity bar colors — the design-handoff mockup's exact chart palette (open / tight / at-limit).
 const CAP_HEX: Record<CapacityLevel, string> = { NORMAL: "#4fae7f", TIGHT: "#e3bf62", CONSTRAINED: "#df6e64", UNVERIFIED: "#3f424d" };
+// KPI accent palette — matches the v3 handoff (green revenue/fleet, blue quotes, purple booked, red risk).
+const KPI_C = { green: "#4fae7f", blue: "#7a9fd6", purple: "#5c55a0", purpleHi: "#9184d9", red: "#df837a", amber: "#e3bf62", track: "#262834" };
 const NBA_LABEL: Record<string, string> = {
   CALL_NOW: "Call", SEND_SMS: "Text", FOLLOW_UP: "Follow up", ASK_DISCOVERY: "Discover", HANDLE_OBJECTION: "Respond",
   VERIFY_AVAILABILITY: "Verify", REVIEW_QUOTE: "Review", WAIT: "View",
@@ -106,7 +108,6 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
 
   // KPI sparkline/delta helpers from current-year months.
   const curMonthIdx = Number(today.slice(5, 7)) - 1;
-  const revSeries = curM.map((m) => m.signedRevenue);
   const quoteSeries = curM.map((m) => (m.actionNeededCount ? m.actionNeededCount : null));
   const eventBars = curM.map((m) => m.count);
   const revDelta = pctDelta(curM[curMonthIdx]?.signedRevenue ?? null, curM[curMonthIdx - 1]?.signedRevenue ?? null);
@@ -181,18 +182,21 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             {showMoney ? (
               <Kpi icon={<DollarSign className="size-3.5" />} label={`Revenue (${rev.periodLabel.slice(0, 3)})`} big={money(rev.committed)}
                 sub={rev.target != null ? `Target ${money(rev.target)}` : "no target set"}
-                barPct={rev.pctOfTarget} barLabel={rev.pctOfTarget != null ? `${rev.pctOfTarget}%` : undefined} delta={revDelta} spark={revSeries} />
+                visual={{ kind: "progress", pct: rev.pctOfTarget, color: KPI_C.green, inlineLabel: rev.pctOfTarget != null ? `${rev.pctOfTarget}%` : undefined }}
+                footnote={revDelta ? { text: `${revDelta.up ? "▲" : "▼"} ${revDelta.pct}% vs last month`, tone: revDelta.up ? "good" : "bad" } : undefined} />
             ) : (
-              <Kpi icon={<CalendarCheck className="size-3.5" />} label="Events today" big={String(c.today_ops.events)} sub="scheduled" spark={null} />
+              <Kpi icon={<CalendarCheck className="size-3.5" />} label="Events today" big={String(c.today_ops.events)} sub="scheduled" />
             )}
             <Kpi icon={<FileText className="size-3.5" />} label="Quotes" big={String(pipe.quote.count)}
-              sub={`${pipe.quote.count} open · ${pipe.signed.count} signed`} spark={quoteSeries} />
+              sub={`${pipe.quote.count} open · ${pipe.signed.count} signed`} visual={{ kind: "spark", data: quoteSeries, color: KPI_C.blue }} />
             <Kpi icon={<CalendarCheck className="size-3.5" />} label="Booked events" big={String(bookedThisMonth)}
-              sub="This month" delta={eventDelta} bars={eventBars} />
+              sub="This month" visual={{ kind: "bars", data: eventBars, color: KPI_C.purple, recentColor: KPI_C.purpleHi }}
+              footnote={eventDelta ? { text: `${eventDelta.up ? "▲" : "▼"} ${eventDelta.pct}% vs last month`, tone: eventDelta.up ? "good" : "bad" } : undefined} />
             <Kpi icon={<ShieldAlert className="size-3.5" />} label="Operational risks" big={String(crit + high + med + low)}
-              sub={riskSub} tone={crit ? "bad" : high || med ? "warn" : "good"} spark={null} href="#attention" />
+              sub={riskSub} visual={{ kind: "severity", crit, high, med, low }} href="#attention" />
             <Kpi icon={<Truck className="size-3.5" />} label="Fleet & crew" big={`${c.today_ops.trucksUsed} / ${c.today_ops.fleetSize}`}
-              sub="Active today" barPct={util} barLabel={util != null ? `${util}% utilization` : undefined} spark={null} />
+              sub="Active today" visual={{ kind: "progress", pct: util, color: KPI_C.green }}
+              footnote={util != null ? { text: `${util}% utilization`, tone: "good" } : undefined} />
           </div>
 
           {/* Revenue performance + Quote status */}
@@ -388,66 +392,84 @@ function Panel({ icon, title, href, hrefLabel, children, className, badge, chip 
   );
 }
 
-function Kpi({ icon, label, big, sub, barPct, barLabel, delta, spark, bars, tone, href }: {
-  icon: React.ReactNode; label: string; big: string; sub?: string; barPct?: number | null; barLabel?: string;
-  delta?: { pct: number; up: boolean } | null; spark?: (number | null)[] | null; bars?: (number | null)[]; tone?: "good" | "bad" | "warn"; href?: string;
+type KpiVisual =
+  | { kind: "progress"; pct: number | null; color: string; inlineLabel?: string }
+  | { kind: "spark"; data: (number | null)[]; color: string }
+  | { kind: "bars"; data: (number | null)[]; color: string; recentColor?: string }
+  | { kind: "severity"; crit: number; high: number; med: number; low: number };
+
+// KPI card (v3 handoff): label → big number → sub, with the visual (spark / bars / progress) full-width at
+// the BOTTOM, then an optional footnote. The bottom group is pushed down so visuals align across the row.
+function Kpi({ icon, label, big, sub, tone, visual, footnote, href }: {
+  icon: React.ReactNode; label: string; big: string; sub?: string; tone?: "good" | "bad" | "warn";
+  visual?: KpiVisual; footnote?: { text: string; tone?: "good" | "bad" | "meta" }; href?: string;
 }): React.JSX.Element {
   const bigTone = tone === "bad" ? "text-critical" : tone === "good" ? "text-positive" : "text-foreground";
+  const footTone = footnote?.tone === "bad" ? "text-critical" : footnote?.tone === "good" ? "text-positive" : "text-meta";
   const body = (
-    <>
-      <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-[0.1em] text-meta">{icon} {label}</div>
-      <div className="flex items-end justify-between gap-2">
-        <div className={`text-[26px] font-semibold leading-none tabular-nums ${bigTone}`}>{big}</div>
-        {spark && spark.some((v) => v != null) && <Spark data={spark} />}
-        {bars && bars.some((v) => (v ?? 0) > 0) && <MiniBars data={bars} />}
-      </div>
-      {sub && <div className="mt-1.5 truncate text-[11px] text-meta">{sub}</div>}
-      {barPct != null && (
-        <div className="mt-2 flex items-center gap-2">
-          <div className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--row-hover)]">
-            <div className="h-full bg-[var(--gold)]" style={{ width: `${Math.min(100, Math.max(0, barPct))}%` }} />
-          </div>
-          {barLabel && <span className="shrink-0 text-[10.5px] tabular-nums text-tertiary-text">{barLabel}</span>}
+    <div className="flex h-full flex-col">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-[0.1em] text-meta">{icon} {label}</div>
+      <div className={`text-[26px] font-semibold leading-none tabular-nums ${bigTone}`}>{big}</div>
+      {sub && <div className="mt-1.5 truncate text-[11.5px] text-meta">{sub}</div>}
+      {(visual || footnote) && (
+        <div className="mt-auto pt-3">
+          {visual && renderKpiVisual(visual)}
+          {footnote && <div className={`mt-2 text-[11.5px] tabular-nums ${footTone}`}>{footnote.text}</div>}
         </div>
       )}
-      {delta && (
-        <div className="mt-1.5 text-[11px]">
-          <span className={`tabular-nums ${delta.up ? "text-positive" : "text-critical"}`}>{delta.up ? "▲" : "▼"} {delta.pct}% <span className="text-meta">vs last month</span></span>
-        </div>
-      )}
-    </>
+    </div>
   );
   return href ? <Link href={href} className="surface block border p-3 transition-colors hover:border-foreground/20">{body}</Link> : <div className="surface border p-3">{body}</div>;
 }
 
-function Spark({ data }: { data: (number | null)[] }): React.JSX.Element {
+function renderKpiVisual(v: KpiVisual): React.JSX.Element {
+  if (v.kind === "progress") {
+    return (
+      <div className="flex items-center gap-2">
+        <div className="h-[7px] flex-1 rounded-[1px]" style={{ background: KPI_C.track }}>
+          <div className="h-full rounded-[1px]" style={{ width: `${Math.min(100, Math.max(0, v.pct ?? 0))}%`, background: v.color }} />
+        </div>
+        {v.inlineLabel && <span className="shrink-0 text-[11.5px] tabular-nums text-secondary-text">{v.inlineLabel}</span>}
+      </div>
+    );
+  }
+  if (v.kind === "spark") return <KpiSpark data={v.data} color={v.color} />;
+  if (v.kind === "bars") return <KpiBars data={v.data} color={v.color} recentColor={v.recentColor ?? v.color} />;
+  // severity — a thin stacked bar from the real attention counts.
+  const total = v.crit + v.high + v.med + v.low;
+  const segs = [{ n: v.crit, c: KPI_C.red }, { n: v.high, c: KPI_C.amber }, { n: v.med, c: "#8f8a5e" }, { n: v.low, c: "#3f424d" }];
+  return (
+    <div className="flex h-[7px] w-full gap-[2px] overflow-hidden rounded-[1px]" style={{ background: KPI_C.track }}>
+      {total > 0 && segs.filter((s) => s.n > 0).map((s, i) => <span key={i} className="h-full" style={{ width: `${(s.n / total) * 100}%`, background: s.c }} />)}
+    </div>
+  );
+}
+
+function KpiSpark({ data, color }: { data: (number | null)[]; color: string }): React.JSX.Element {
   const vals = data.map((v) => v ?? 0);
   const max = Math.max(...vals, 1);
-  const W = 64, H = 26;
-  const step = W / Math.max(1, data.length - 1);
-  const pts = vals.map((v, i) => `${i * step},${H - (v / max) * (H - 3) - 1}`);
-  const lastIdx = vals.length - 1;
-  const lx = lastIdx * step, ly = H - (vals[lastIdx] / max) * (H - 3) - 1;
+  const n = vals.length;
+  const pts = vals.map((v, i) => `${(i / Math.max(1, n - 1)) * 120},${(30 - (v / max) * 26 - 2).toFixed(1)}`);
+  const id = `kg-${color.replace("#", "")}`;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="shrink-0" aria-hidden>
-      <polyline points={`0,${H} ${pts.join(" ")} ${W},${H}`} fill="var(--gold)" fillOpacity={0.1} stroke="none" />
-      <polyline points={pts.join(" ")} fill="none" stroke="var(--gold)" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={lx} cy={ly} r={2} fill="var(--gold)" />
+    <svg viewBox="0 0 120 30" preserveAspectRatio="none" className="block h-[30px] w-full" aria-hidden>
+      <defs><linearGradient id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity={0.28} /><stop offset="1" stopColor={color} stopOpacity={0} /></linearGradient></defs>
+      <path d={`M0 30 ${pts.map((p) => "L" + p).join(" ")} L120 30 Z`} fill={`url(#${id})`} />
+      <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }
 
-function MiniBars({ data }: { data: (number | null)[] }): React.JSX.Element {
+function KpiBars({ data, color, recentColor }: { data: (number | null)[]; color: string; recentColor: string }): React.JSX.Element {
   const vals = data.map((v) => v ?? 0);
   const max = Math.max(...vals, 1);
-  const W = 64, H = 26, n = vals.length, bw = (W / n) * 0.7;
+  const n = vals.length;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="shrink-0" aria-hidden>
-      {vals.map((v, i) => {
-        const h = (v / max) * (H - 2);
-        return <rect key={i} x={i * (W / n) + (W / n - bw) / 2} y={H - h} width={bw} height={Math.max(1, h)} rx={1} fill="var(--gold)" fillOpacity={0.8} />;
-      })}
-    </svg>
+    <div className="flex h-[30px] items-end gap-[3px]">
+      {vals.map((v, i) => (
+        <span key={i} className="flex-1 rounded-t-[1px]" style={{ height: `${Math.max(2, (v / max) * 30).toFixed(1)}px`, background: i >= n - 3 ? recentColor : color }} />
+      ))}
+    </div>
   );
 }
 
