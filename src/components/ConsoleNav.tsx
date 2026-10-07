@@ -21,7 +21,7 @@ import {
   Aperture, Plus, Dna,
   Headset, PhoneCall, FlaskConical,
   Search, FileText, Rocket,
-  BrainCircuit, Tent,
+  BrainCircuit, Tent, Wallet,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -91,6 +91,17 @@ const GROUPS: Group[] = [
       { href: "/scheduling", label: "Scheduling", icon: CalendarDays },
       { href: "/admin/passes", label: "Shift Passes", icon: KeyRound, manage: true },
       { href: "/finance", label: "Financial", icon: DollarSign, financial: true },
+    ],
+  },
+  {
+    // People — HR / Payroll. The reconciliation + control layer between Connecteam (operational time) and
+    // Gusto (payroll SoR): worker identity, time sync, exceptions, and the payroll audit trail. Pay + PII
+    // are sensitive, so it's owner/admin only (the blade carries `financial`, enforced in the proxy by
+    // canManagePayroll). Its sections are in-page tabs under the single /payroll blade.
+    label: "People",
+    icon: UsersRound,
+    blades: [
+      { href: "/payroll", label: "HR / Payroll", icon: Wallet, financial: true },
     ],
   },
   {

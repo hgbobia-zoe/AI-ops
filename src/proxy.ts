@@ -11,7 +11,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { verifySession, SESSION_COOKIE } from "@/lib/auth/session";
-import { canSeeFinancials, canManageSettings, canSeeCoaching } from "@/lib/auth/roles";
+import { canSeeFinancials, canManageSettings, canSeeCoaching, canManagePayroll } from "@/lib/auth/roles";
 import { verifyImageSig } from "@/lib/creative/assetUrl";
 
 const PUBLIC: string[] = [
@@ -105,6 +105,8 @@ const GUEST_ALLOW: string[] = [
 const guestAllowed = (p: string): boolean => GUEST_ALLOW.some((a) => p === a || p.startsWith(a + "/"));
 // Post-call coaching — sensitive transcripts + recaps, owner/admin only.
 const isCoaching = (p: string): boolean => p === "/coaching" || p.startsWith("/coaching/") || p.startsWith("/api/coaching");
+// HR / Payroll — worker pay, hours, Gusto sync. Sensitive money + PII, owner/admin only (canManagePayroll).
+const isPayroll = (p: string): boolean => p === "/payroll" || p.startsWith("/payroll/") || p.startsWith("/api/payroll");
 
 export async function proxy(req: NextRequest): Promise<NextResponse> {
   const secret = process.env.APP_SESSION_TOKEN;
@@ -149,6 +151,7 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
   if (isSettings(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
   if (isSeo(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
   if (isCoaching(pathname) && !canSeeCoaching(session.role)) return deny(req, "forbidden");
+  if (isPayroll(pathname) && !canManagePayroll(session.role)) return deny(req, "forbidden");
 
   return NextResponse.next();
 }

@@ -46,6 +46,12 @@ export function canManageUsers(role: Role): boolean {
   return role === "owner" || role === "admin";
 }
 
+/** HR / Payroll — worker pay, hours, and the Gusto sync are sensitive money + PII, so owner/admin only
+ *  (same bar as financials/settings). Members never see payroll. */
+export function canManagePayroll(role: Role): boolean {
+  return role === "owner" || role === "admin";
+}
+
 /** Can `actor` create/modify/deactivate a user whose role is `target`?
  *  Owner manages everyone; Admin manages Members only; nobody escalates above themselves. */
 export function canManageRole(actor: Role, target: Role): boolean {

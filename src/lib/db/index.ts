@@ -1687,6 +1687,106 @@ CREATE TABLE IF NOT EXISTS seo_diagnostics (
 );
 CREATE INDEX IF NOT EXISTS idx_seo_diagnostics_ts ON seo_diagnostics(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_seo_diagnostics_ok ON seo_diagnostics(ok, ts DESC);
+
+-- ── HR / Payroll (Zoe Payroll Control Plane) ──────────────────────────────────────────────────────
+-- Zoe is the reconciliation + control layer BETWEEN Connecteam (operational time source of truth) and
+-- Gusto (payroll system of record). These tables own the unified worker identity, the normalized time,
+-- the exceptions, and an immutable audit trail of every sync. Connecteam time is MIRRORED here, never
+-- overwritten; Gusto is written only through an approved, idempotent sync. RULES CALCULATE, AI INTERPRETS.
+
+-- Unified worker identity — the mapping layer on top of Connecteam (internal) + Instawork (temp) + Gusto.
+-- A row is created/edited by HR (the "match + classify" step); the LIVE Connecteam roster is merged in at
+-- read time, so people appear before any row exists (then persist on first sync / manual edit).
+CREATE TABLE IF NOT EXISTS hr_workers (
+  id                 TEXT PRIMARY KEY,            -- "HW-"+uuid
+  name               TEXT NOT NULL,               -- display name (seeded from Connecteam, editable)
+  email              TEXT,
+  worker_type        TEXT NOT NULL,               -- EMPLOYEE | US_CONTRACTOR | INTERNATIONAL_CONTRACTOR | UNKNOWN
+  employment_status  TEXT NOT NULL,               -- ACTIVE | INACTIVE
+  connecteam_user_id INTEGER,                     -- Connecteam userId — SoR for internal time + pay rate
+  instawork_worker   TEXT,                        -- Instawork name handle (temp labor)
+  gusto_id           TEXT,                        -- Gusto employee/contractor id (null = Needs Mapping)
+  gusto_entity_type  TEXT,                         -- employee | contractor
+  pay_type           TEXT,                        -- hourly | salary | fixed
+  pay_rate           REAL,                        -- override rate (internal falls back to Connecteam rate)
+  currency           TEXT,                        -- USD | EUR | ... (international contractors)
+  country            TEXT,                        -- USA | France | ...
+  active             INTEGER NOT NULL DEFAULT 1,
+  notes              TEXT,
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL,
+  UNIQUE(connecteam_user_id),                     -- one worker per Connecteam id (NULLs allowed, many)
+  UNIQUE(instawork_worker)
+);
+CREATE INDEX IF NOT EXISTS idx_hr_workers_type ON hr_workers(worker_type);
+
+-- Normalized time — the stable internal layer between Connecteam and Gusto. One row per source record per
+-- period; idempotent on (source_system, source_record_id, period). Connecteam hours are mirrored read-only.
+CREATE TABLE IF NOT EXISTS hr_time_entries (
+  id                    TEXT PRIMARY KEY,         -- "HT-"+uuid
+  sync_run_id           TEXT,                     -- the run that last wrote this row
+  worker_id             TEXT,                     -- hr_workers.id (null until matched)
+  period_start          TEXT NOT NULL,            -- YYYY-MM-DD
+  period_end            TEXT NOT NULL,
+  date                  TEXT,                     -- YYYY-MM-DD (null = period aggregate)
+  hours                 REAL NOT NULL,
+  hours_type            TEXT NOT NULL,            -- REGULAR | OVERTIME | DOUBLE_OVERTIME | PTO | OTHER
+  source_system         TEXT NOT NULL,            -- connecteam | instawork | manual
+  source_record_id      TEXT,                     -- the source id (idempotency)
+  checksum              TEXT,                     -- hash of the normalized record (change detection)
+  destination_record_id TEXT,                     -- Gusto time-entry id once pushed
+  status                TEXT NOT NULL,            -- NORMALIZED | MATCHED | RECONCILED | SYNCED | SKIPPED | FAILED
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT NOT NULL,
+  UNIQUE(source_system, source_record_id, period_start, period_end)
+);
+CREATE INDEX IF NOT EXISTS idx_hr_time_entries_period ON hr_time_entries(period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_hr_time_entries_worker ON hr_time_entries(worker_id);
+
+-- Payroll sync runs — the immutable audit/history of every sync (manual or scheduled). Never deleted.
+CREATE TABLE IF NOT EXISTS hr_sync_runs (
+  id                 TEXT PRIMARY KEY,            -- "HS-"+uuid
+  period_start       TEXT NOT NULL,               -- YYYY-MM-DD
+  period_end         TEXT NOT NULL,
+  trigger            TEXT NOT NULL,               -- manual | scheduled
+  initiated_by       TEXT,                        -- actor label (null for scheduled)
+  status             TEXT NOT NULL,               -- RUNNING | READY | REQUIRES_REVIEW | FAILED | SYNCED
+  workers_processed  INTEGER,
+  total_hours        REAL,
+  hours_ready        REAL,
+  exceptions_count   INTEGER,
+  review_count       INTEGER,
+  gusto_created      INTEGER,
+  gusto_updated      INTEGER,
+  skipped            INTEGER,
+  connecteam_ok      INTEGER,                     -- 1/0 — source availability (honest failure handling)
+  gusto_ok           INTEGER,                     -- 1/0/null — null = not configured (never pushed)
+  detail             TEXT,                        -- JSON summary / error
+  started_at         TEXT NOT NULL,
+  finished_at        TEXT,
+  UNIQUE(period_start, period_end, started_at)
+);
+CREATE INDEX IF NOT EXISTS idx_hr_sync_runs_period ON hr_sync_runs(period_start DESC);
+
+-- Exceptions queue — anything preventing a clean payroll. Idempotent re-detection via detect_key. Never
+-- silently discarded: resolved/ignored is an explicit human action.
+CREATE TABLE IF NOT EXISTS hr_exceptions (
+  id                 TEXT PRIMARY KEY,            -- "HE-"+uuid
+  sync_run_id        TEXT,
+  worker_id          TEXT,                        -- hr_workers.id (null if unmatched)
+  worker_label       TEXT,                        -- display handle even when unmatched
+  severity           TEXT NOT NULL,               -- CRITICAL | HIGH | MEDIUM | LOW
+  type               TEXT NOT NULL,               -- WORKER_MISSING_GUSTO | HOURS_DISCREPANCY | UNMATCHED_WORKER | ...
+  description        TEXT NOT NULL,
+  source             TEXT,                        -- connecteam | gusto | reconciliation
+  status             TEXT NOT NULL,               -- OPEN | IN_REVIEW | RESOLVED | IGNORED
+  resolution         TEXT,
+  resolved_by        TEXT,
+  resolved_at        TEXT,
+  detect_key         TEXT UNIQUE,                 -- period+worker+type — idempotent re-detection
+  detected_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hr_exceptions_status ON hr_exceptions(status, severity);
 `;
 
 type DB = InstanceType<typeof Database>;
