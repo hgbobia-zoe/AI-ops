@@ -63,7 +63,7 @@ export function QuotePipeline({ pipeline, activity, showMoney }: { pipeline: Pip
     : [];
 
   return (
-    <section className="surface flex flex-col border p-3">
+    <section className="surface flex h-full flex-col border p-3">
       <div className="mb-3 flex items-center gap-2">
         <h2 className="flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">
           <PieChart className="size-4 text-meta" /> Quote pipeline

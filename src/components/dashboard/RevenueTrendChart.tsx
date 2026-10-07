@@ -69,7 +69,7 @@ export function RevenueTrendChart({
   const targetPct = targetLine != null && targetLine > 0 && targetLine <= niceMax ? (1 - targetLine / niceMax) * 100 : null;
 
   return (
-    <section className="surface flex flex-col border p-3 px-3.5">
+    <section className="surface flex h-full flex-col border p-3 px-3.5">
       {/* Header: title + tabs (mockup puts the metric tabs in the header row) */}
       <div className="mb-2 flex items-center gap-2">
         <h2 className="flex items-center gap-1.5 text-[12.5px] font-medium uppercase tracking-[0.06em] text-tertiary-text">
@@ -92,15 +92,15 @@ export function RevenueTrendChart({
         </div>
       </div>
 
-      {/* Plot: 38px axis column + chart */}
-      <div className="grid" style={{ gridTemplateColumns: "38px minmax(0,1fr)" }}>
-        <div className="-mt-1.5 flex h-[120px] flex-col justify-between pr-2 text-right text-[10.5px] tabular-nums text-meta">
+      {/* Plot: 38px axis column + chart. Fills the tile height so it matches the Quote Pipeline tile. */}
+      <div className="grid min-h-[180px] flex-1" style={{ gridTemplateColumns: "38px minmax(0,1fr)" }}>
+        <div className="-mt-1.5 flex h-full flex-col justify-between pr-2 text-right text-[10.5px] tabular-nums text-meta">
           {ticks.map((t, i) => <span key={i}>{axisTick(t)}</span>)}
         </div>
-        <div>
+        <div className="flex flex-col">
           <div
-            className="relative h-[120px] border-b border-[#2c2f3a]"
-            style={{ backgroundImage: "repeating-linear-gradient(to bottom,#22242f 0 1px,transparent 1px 30px)" }}
+            className="relative flex-1 border-b border-[#2c2f3a]"
+            style={{ backgroundImage: "linear-gradient(to bottom,#22242f 0 1px,transparent 1px)", backgroundSize: "100% 25%" }}
           >
             <div className="absolute inset-0 grid grid-cols-12 items-end px-1">
               {months.map((m, i) => {

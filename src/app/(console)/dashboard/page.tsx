@@ -9,7 +9,7 @@ import Link from "next/link";
 import {
   AlertTriangle, ArrowRight, DollarSign, FileText, CalendarCheck, ShieldAlert, Truck,
   Gauge, Radar, Lightbulb, ListChecks, Bot, CalendarDays, CircleDot, Phone, Mail, Users, Megaphone, MapPin,
-  Search, Bell, ChevronDown, Plus,
+  Search, Bell, ChevronDown, Plus, Tag,
 } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { commandCenter } from "@/lib/command/service";
@@ -134,6 +134,15 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const revDelta = pctDelta(curM[curMonthIdx]?.signedRevenue ?? null, curM[curMonthIdx - 1]?.signedRevenue ?? null);
   const eventDelta = pctDelta(curM[curMonthIdx]?.count ?? null, curM[curMonthIdx - 1]?.count ?? null);
 
+  // Average order value — signed revenue per signed order (a single high-ticket event can outweigh many
+  // small ones, so this reads truer than raw event count). Monthly trend + current month + MoM delta.
+  const aovOf = (m?: { signedRevenue: number | null; signedCount: number }): number | null =>
+    m && m.signedRevenue != null && m.signedCount > 0 ? m.signedRevenue / m.signedCount : null;
+  const aovBars = curM.map((m) => aovOf(m));
+  const curAov = aovOf(curM[curMonthIdx]);
+  const aovDelta = pctDelta(curAov, aovOf(curM[curMonthIdx - 1]));
+  const ordersThisMonth = curM[curMonthIdx]?.signedCount ?? 0;
+
   const bookedThisMonth = curM[curMonthIdx]?.count ?? 0; // events booked this month (matches "This month")
 
   const attention = showMoney ? c.attention : c.attention.filter((i) => i.source !== "finance");
@@ -245,9 +254,15 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             <Kpi icon={<FileText className="size-3.5" />} label="Open quotes" big={String(pipelineData.count)}
               sub={showMoney ? `${money(openValue)} pipeline` : "awaiting response"}
               footnote={{ text: `${signedThisMonth} signed this month`, tone: "meta" }} />
-            <Kpi icon={<CalendarCheck className="size-3.5" />} label={`Booked events — ${monthName}`} big={String(bookedThisMonth)}
-              sub="This month" visual={{ kind: "bars", data: eventBars, color: KPI_C.purple, recentColor: KPI_C.purpleHi }}
-              footnote={eventDelta ? { text: `${eventDelta.up ? "▲" : "▼"} ${eventDelta.pct}% vs last month`, tone: eventDelta.up ? "good" : "bad" } : undefined} />
+            {showMoney ? (
+              <Kpi icon={<Tag className="size-3.5" />} label="Avg order value" big={money(curAov)}
+                sub={`${ordersThisMonth} orders · ${monthName}`} visual={{ kind: "bars", data: aovBars, color: KPI_C.purple, recentColor: KPI_C.purpleHi }}
+                footnote={aovDelta ? { text: `${aovDelta.up ? "▲" : "▼"} ${aovDelta.pct}% vs last month`, tone: aovDelta.up ? "good" : "bad" } : undefined} />
+            ) : (
+              <Kpi icon={<CalendarCheck className="size-3.5" />} label={`Booked events — ${monthName}`} big={String(bookedThisMonth)}
+                sub="This month" visual={{ kind: "bars", data: eventBars, color: KPI_C.purple, recentColor: KPI_C.purpleHi }}
+                footnote={eventDelta ? { text: `${eventDelta.up ? "▲" : "▼"} ${eventDelta.pct}% vs last month`, tone: eventDelta.up ? "good" : "bad" } : undefined} />
+            )}
             <Kpi icon={<ShieldAlert className="size-3.5" />} label="Open operational risks" big={String(crit + high + med + low)}
               sub={riskSub} visual={{ kind: "severity", crit, high, med, low }} href="#attention" />
             <Kpi icon={<Truck className="size-3.5" />} label="Fleet &amp; crew — today" big={`${c.today_ops.trucksUsed} / ${c.today_ops.fleetSize}`}
@@ -255,17 +270,20 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               footnote={util != null ? { text: `${util}% utilization`, tone: "good" } : undefined} />
           </div>
 
-          {/* Revenue performance + Quote status */}
-          <div className="grid grid-cols-1 gap-3 lg:[grid-template-columns:minmax(0,1fr)_420px]">
-            <div className="min-w-0">
+          {/* Revenue performance (cols 1–3, under Revenue/Quotes/AOV) + Quote Pipeline (cols 4–5, under
+              Risks/Fleet) — same 5-col grid as the KPIs so the tiles line up; equal height via stretch. */}
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-5">
+            <div className="min-w-0 lg:col-span-3">
               <RevenueTrendChart months={months} target={rev.target} curYear={year} prevYear={year - 1} showMoney={showMoney} currentMonthIdx={curMonthIdx} />
             </div>
-            <QuotePipeline pipeline={pipelineData} activity={activity} showMoney={showMoney} />
+            <div className="min-w-0 lg:col-span-2">
+              <QuotePipeline pipeline={pipelineData} activity={activity} showMoney={showMoney} />
+            </div>
           </div>
 
-          {/* Operational capacity + Today's operations */}
-          <div className="grid grid-cols-1 gap-3 lg:[grid-template-columns:minmax(0,1fr)_420px]">
-            <Panel icon={<Gauge className="size-4" />} title="Operational capacity — next 7 days" href="/risk" hrefLabel="Event Risk">
+          {/* Operational capacity + Today's operations — same 5-col alignment as the row above. */}
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-5">
+            <Panel className="lg:col-span-3" icon={<Gauge className="size-4" />} title="Operational capacity — next 7 days" href="/risk" hrefLabel="Event Risk">
               {/* One bordered box, 7 cells with dividers, today highlighted with a grey inset (matches v3). */}
               <div className="grid grid-cols-7 rounded border border-[var(--lifted)]">
                 {c.outlook.map((d, i) => {
@@ -295,7 +313,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                 <span className="flex items-center gap-1.5"><span className="h-[3px] w-2" style={{ background: CAP_HEX.CONSTRAINED }} /> at limit</span>
               </div>
             </Panel>
-            <Panel icon={<Truck className="size-4" />} title="Today's operations" scope={WIDGET_SCOPE.todaysOps.scope} href="/dispatch" hrefLabel="Routes">
+            <Panel className="lg:col-span-2" icon={<Truck className="size-4" />} title="Today's operations" scope={WIDGET_SCOPE.todaysOps.scope} href="/dispatch" hrefLabel="Routes">
               {hasOpsToday ? (
                 <>
                   <div className="mb-3"><TodayMap /></div>
