@@ -217,3 +217,9 @@
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
+
+/* Dark basemap from light OpenStreetMap tiles — invert + tune so the map reads dark (Nocturne), applied
+   only to the tile imagery (markers/labels live in other Leaflet panes and stay their true colors). */
+.map-dark-tiles {
+  filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.9) saturate(0.6);
+}

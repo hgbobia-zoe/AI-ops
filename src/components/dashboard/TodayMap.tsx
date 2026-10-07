@@ -55,9 +55,12 @@ export function TodayMap(): React.JSX.Element {
       // Init the map + dark basemap once.
       if (!mapRef.current && ref.current) {
         const map = L.map(ref.current, { zoomControl: false, attributionControl: true, scrollWheelZoom: false });
-        L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png", {
-          subdomains: "abcd", maxZoom: 19, detectRetina: true,
-          attribution: '&copy; OpenStreetMap &copy; CARTO',
+        // OpenStreetMap standard tiles — genuinely free and keyless. They are light, so the
+        // `.map-dark-tiles` CSS filter inverts them into a dark basemap that matches Nocturne (the filter
+        // hits only the tile imagery, not the markers/labels). Low-volume internal use per the OSM policy.
+        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19, className: "map-dark-tiles",
+          attribution: '&copy; OpenStreetMap contributors',
         }).addTo(map);
         L.control.zoom({ position: "topright" }).addTo(map);
         mapRef.current = map;
