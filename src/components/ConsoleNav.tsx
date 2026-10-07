@@ -256,7 +256,7 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
           onClick={close}
           aria-current={isActive(HUB.href) ? "page" : undefined}
           className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
-            isActive(HUB.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
+            isActive(HUB.href) ? "text-foreground shadow-[inset_3px_0_0_0_var(--foreground)]" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
           }`}
         >
           <HubIcon className={`size-[17px] shrink-0 ${isActive(HUB.href) ? "text-foreground" : "text-meta"}`} />
@@ -269,7 +269,7 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
           onClick={close}
           aria-current={isActive(AI_HUB.href) ? "page" : undefined}
           className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
-            isActive(AI_HUB.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
+            isActive(AI_HUB.href) ? "text-foreground shadow-[inset_3px_0_0_0_var(--foreground)]" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
           }`}
         >
           <AiHubIcon className={`size-[17px] shrink-0 ${isActive(AI_HUB.href) ? "text-foreground" : "text-meta"}`} />
@@ -305,7 +305,7 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
                         onClick={close}
                         aria-current={active ? "page" : undefined}
                         className={`flex items-center gap-2.5 rounded py-[7px] pl-[34px] pr-2.5 text-[13px] transition-colors ${
-                          active ? "bg-foreground/[0.08] font-medium text-foreground" : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"
+                          active ? "font-medium text-foreground shadow-[inset_3px_0_0_0_var(--foreground)]" : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"
                         }`}
                       >
                         <BIcon className={`size-[15px] shrink-0 ${active ? "text-foreground" : "text-meta"}`} />
