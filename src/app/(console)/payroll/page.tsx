@@ -25,8 +25,10 @@ import {
   WORKER_TYPE_LABEL, MAPPING_STATUS_LABEL, APPROVAL_STATUS_LABEL,
   type UnifiedWorker, type ExceptionSeverity, type ReviewStatus, type ReviewWorker,
 } from "@/lib/payroll/types";
+import { getPayrollConfig } from "@/lib/payroll/config";
 import { SyncButton } from "@/components/payroll/SyncButton";
 import { ApproveButton } from "@/components/payroll/ApproveButton";
+import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 
 export const dynamic = "force-dynamic";
 
@@ -184,7 +186,7 @@ async function OverviewTab({ period, which }: { period: { start: string; end: st
         <Metric label="Missing config" value={String(r.missingConfig)} sub="setup incomplete" tone={r.missingConfig > 0 ? "warn" : undefined} />
         <Metric label="Workers" value={String(o.workers)} sub={`${o.employees} employees · ${o.contractors} contractors`} />
         <Metric label="Last sync" value={o.lastSync ? relTime(o.lastSync.at) : "never"} sub={o.lastSync ? `${o.lastSync.status.toLowerCase().replace(/_/g, " ")} · ${o.lastSync.trigger}` : "run a sync to start"} />
-        <Metric label="Next automatic sync" value={o.nextAutomaticSync ?? "not scheduled"} sub="Monday 8:00 AM (when enabled)" />
+        <Metric label="Next automatic sync" value={o.nextAutomaticSync ?? "not scheduled"} sub={o.nextAutomaticSync ? "auto-sync on" : "enable in Settings"} />
         <Metric label="Gusto" value={o.gustoConfigured ? "connected" : "not connected"} sub="payroll destination" tone={o.gustoConfigured ? undefined : "warn"} />
         <Metric
           label="Temp labor (Instawork)"
@@ -532,27 +534,17 @@ function HistoryTab(): React.JSX.Element {
 function SettingsTab(): React.JSX.Element {
   const ctOk = connecteamConfigured();
   const guOk = gustoConfigured();
+  const cfg = getPayrollConfig();
   return (
     <div className="max-w-2xl space-y-3">
       <section className="surface border p-4">
         <h3 className="mb-3 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">Connections</h3>
         <div className="space-y-2.5 text-[12.5px]">
           <ConnRow name="Connecteam" role="Operational time source of truth" ok={ctOk} detail={ctOk ? "connected (CONNECTEAM_API_KEY set)" : "not connected"} />
-          <ConnRow name="Gusto" role="Payroll system of record (destination)" ok={guOk} detail={guOk ? "connected" : "not connected — add GUSTO_API_TOKEN to enable push"} />
+          <ConnRow name="Gusto" role="Payroll system of record — browser tab-replay (Auto-Pull extension)" ok={guOk} detail={guOk ? "connected — pull landed" : "not connected — open Gusto in the office browser (Auto-Pull extension)"} />
         </div>
       </section>
-      <section className="surface border p-4">
-        <h3 className="mb-3 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">Schedule &amp; policy</h3>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-[12.5px]">
-          <Field label="Pay period" value="Weekly (Mon–Sun)" sub="cadence — configurable soon" />
-          <Field label="Automatic sync" value="Monday 8:00 AM" sub="not yet enabled" />
-          <Field label="Overtime threshold" value="40 h / week" sub="flags a MEDIUM exception" />
-          <Field label="Gusto push" value="Manual approval" sub="never auto-pushes with open exceptions" />
-        </div>
-        <p className="mt-4 border-t border-rule pt-3 text-[11.5px] text-meta">
-          Editable settings (schedule on/off, thresholds, worker-matching rules, approval requirements) arrive with the scheduler slice. Credentials are stored write-only, never shown in the client.
-        </p>
-      </section>
+      <PayrollSettingsForm initial={cfg} />
     </div>
   );
 }

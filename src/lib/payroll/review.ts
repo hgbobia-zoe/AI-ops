@@ -5,6 +5,7 @@
 // "0 exceptions" (spec §3).
 
 import { unifiedWorkers } from "./workers";
+import { getPayrollConfig } from "./config";
 import type { IssueTag, PayPeriod, PayrollReviewResult, ReviewStatus, ReviewWorker, UnifiedWorker } from "./types";
 
 export interface ReviewOptions {
@@ -72,8 +73,9 @@ export function classifyReview(period: PayPeriod, workers: UnifiedWorker[], conn
   };
 }
 
-/** Fetch + classify for a period (the Review screen entry point). */
-export async function payrollReview(period: PayPeriod, opts: ReviewOptions = DEFAULT_REVIEW_OPTIONS): Promise<PayrollReviewResult> {
+/** Fetch + classify for a period (the Review screen entry point). Uses the configured overtime threshold. */
+export async function payrollReview(period: PayPeriod, opts?: ReviewOptions): Promise<PayrollReviewResult> {
   const { workers, connecteamOk } = await unifiedWorkers(period);
-  return classifyReview(period, workers, connecteamOk, opts);
+  const resolved = opts ?? { overtimeThreshold: getPayrollConfig().overtimeThreshold };
+  return classifyReview(period, workers, connecteamOk, resolved);
 }

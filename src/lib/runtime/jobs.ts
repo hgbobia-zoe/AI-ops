@@ -16,6 +16,8 @@ import { slackNotify } from "@/lib/notify/slack";
 import { discover } from "@/lib/seo/discovery";
 import { configured as ubersuggestConfigured } from "@/lib/seo/ubersuggest";
 import { connecteamConfigured, refreshConnecteamHealth } from "@/lib/connecteam";
+import { getPayrollConfig } from "@/lib/payroll/config";
+import { runScheduledPayrollSyncIfDue } from "@/lib/payroll/scheduler";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { logImport, getLatestImportBySource, recordInstaworkProbe, type ImportRow } from "@/lib/pull/state";
@@ -93,6 +95,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     run: async () => {
       const r = await runShiftLifecycleTick();
       return { ok: r.ok, detail: r.detail };
+    },
+  },
+  {
+    key: "payroll-sync",
+    label: "Payroll auto-sync (Connecteam → review)",
+    bucket: "server",
+    configured: () => getPayrollConfig().autoSyncEnabled && connecteamConfigured(),
+    note: "On the configured day/hour (default Mondays 8am ET): pull Connecteam hours, reconcile, create the Payroll Review and notify. Never auto-pushes to Gusto; only auto-approves when clean AND policy allows.",
+    run: async () => {
+      const r = await runScheduledPayrollSyncIfDue();
+      return { ok: true, detail: r.detail }; // "waiting"/"already ran" are healthy no-ops, not failures
     },
   },
   {

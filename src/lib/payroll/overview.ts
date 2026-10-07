@@ -7,6 +7,7 @@ import { countOpenExceptions, latestSyncRun, getApproval } from "./store";
 import { gustoConfigured } from "./gusto";
 import { instaworkTempPay } from "./instawork";
 import { classifyReview } from "./review";
+import { getPayrollConfig, scheduleLabel } from "./config";
 import type { PayPeriod, PayrollOverview, PayrollStatus, UnifiedWorker } from "./types";
 
 export async function payrollOverview(period: PayPeriod): Promise<PayrollOverview> {
@@ -15,7 +16,8 @@ export async function payrollOverview(period: PayPeriod): Promise<PayrollOvervie
   const active = workers.filter((w) => w.active);
 
   // Deterministic payroll-readiness classification (the taxonomy that drives "Can I approve payroll?").
-  const rv = classifyReview(period, workers, connecteamOk);
+  const cfg = getPayrollConfig();
+  const rv = classifyReview(period, workers, connecteamOk, { overtimeThreshold: cfg.overtimeThreshold });
   const approval = getApproval(period.start, period.end);
 
   // Total hours — only when the time source answered; otherwise UNVERIFIED (null), never a fabricated 0.
@@ -79,7 +81,7 @@ export async function payrollOverview(period: PayPeriod): Promise<PayrollOvervie
     exceptions,
     unmatchedWorkers,
     lastSync,
-    nextAutomaticSync: null, // set once the Monday scheduler is enabled in Settings (later slice)
+    nextAutomaticSync: cfg.autoSyncEnabled ? scheduleLabel(cfg) : null,
     status,
     gustoConfigured: gustoConfigured(),
     tempLabor,
