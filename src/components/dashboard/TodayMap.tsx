@@ -12,7 +12,7 @@ import "leaflet/dist/leaflet.css";
 import { Loader2, MapPin } from "lucide-react";
 
 interface Pin { truckId: string; seq: number; lat: number; lng: number; label: string; kind: "delivery" | "pickup"; state: "done" | "active" | "waiting" }
-interface TruckMarker { truckId: string; label: string; lat: number; lng: number; ts: string | null }
+interface TruckMarker { truckId: string; label: string; lat: number; lng: number; ts: string | null; heading: number | null }
 interface MapData { pins: Pin[]; trucks: TruckMarker[]; gpsConfigured: boolean }
 
 const STATE_FILL: Record<Pin["state"], string> = { done: "#86c3a2", active: "#6aa8ff", waiting: "#595d6c" };
@@ -26,11 +26,18 @@ function stopIcon(L: typeof LType, n: number, fill: string): LType.DivIcon {
     iconSize: [20, 20], iconAnchor: [10, 10],
   });
 }
-function truckIcon(L: typeof LType, label: string): LType.DivIcon {
+// A directional heading arrow (like Ignition): points north at 0deg, rotates clockwise by the heading.
+// When the device reports no heading, it points up (no rotation).
+function truckIcon(L: typeof LType, label: string, heading: number | null): LType.DivIcon {
+  const deg = heading == null ? 0 : heading;
   return L.divIcon({
     className: "",
-    html: `<div title="${label}" style="width:18px;height:18px;border-radius:4px;background:${GOLD};border:2px solid #161826;box-shadow:0 1px 4px rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center"><svg width="10" height="10" viewBox="0 0 24 24" fill="#161826"><path d="M3 6a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v3h3l3 3v4a1 1 0 0 1-1 1h-1a2.5 2.5 0 0 1-5 0H9a2.5 2.5 0 0 1-5 0H4a1 1 0 0 1-1-1V6Z"/></svg></div>`,
-    iconSize: [18, 18], iconAnchor: [9, 9],
+    html: `<div title="${label}" style="width:26px;height:26px;transform:rotate(${deg}deg);transform-origin:50% 50%">
+      <svg width="26" height="26" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" fill="#161826" fill-opacity="0.55"/>
+        <path d="M12 3.5 L18 19 L12 15.2 L6 19 Z" fill="${GOLD}" stroke="#161826" stroke-width="1.2" stroke-linejoin="round"/>
+      </svg></div>`,
+    iconSize: [26, 26], iconAnchor: [13, 13],
   });
 }
 
@@ -98,8 +105,9 @@ export function TodayMap(): React.JSX.Element {
       if (!layer) return;
       layer.clearLayers();
       for (const t of trucks) {
-        L.marker([t.lat, t.lng], { icon: truckIcon(L, t.label), zIndexOffset: 1000 })
-          .bindTooltip(`${t.label} (live)`, { direction: "top" }).addTo(layer);
+        const dir = t.heading == null ? "" : ` · ${Math.round(t.heading)}°`;
+        L.marker([t.lat, t.lng], { icon: truckIcon(L, t.label, t.heading), zIndexOffset: 1000 })
+          .bindTooltip(`${t.label} (live${dir})`, { direction: "top" }).addTo(layer);
       }
     }
 

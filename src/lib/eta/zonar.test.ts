@@ -35,6 +35,13 @@ describe("parsePosition", () => {
     expect(parsePosition({ asset: { latitude: 39, longitude: -76.6 } })).toMatchObject({ lat: 39, lng: -76.6 });
   });
 
+  it("captures the heading (direction of travel), normalized to 0-359", () => {
+    expect(parsePosition({ lat: 39, long: -77, heading: 90 })).toMatchObject({ heading: 90 });
+    expect(parsePosition({ lat: 39, long: -77, direction: "270" })).toMatchObject({ heading: 270 });
+    expect(parsePosition({ lat: 39, long: -77, bearing: 450 })).toMatchObject({ heading: 90 }); // wrapped
+    expect(parsePosition({ lat: 39, long: -77 }).heading).toBeUndefined();
+  });
+
   it("ignores the (0,0) null-island 'no fix' value", () => {
     expect(parsePosition({ lat: 0, long: 0 })).toBeNull();
   });

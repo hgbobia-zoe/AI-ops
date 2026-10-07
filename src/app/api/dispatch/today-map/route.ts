@@ -32,6 +32,8 @@ export interface TruckMarker {
   lat: number;
   lng: number;
   ts: string | null;
+  /** Heading in degrees (0 = north, clockwise), or null when the device doesn't report it. */
+  heading: number | null;
 }
 
 export async function GET(): Promise<NextResponse> {
@@ -75,7 +77,7 @@ export async function GET(): Promise<NextResponse> {
     await Promise.all(
       vehicles.map(async (v) => {
         const pos = await cachedPos(v.truckId);
-        if (pos) trucks.push({ truckId: v.truckId, label: v.name, lat: pos.lat, lng: pos.lng, ts: pos.ts ?? null });
+        if (pos) trucks.push({ truckId: v.truckId, label: v.name, lat: pos.lat, lng: pos.lng, ts: pos.ts ?? null, heading: pos.heading ?? null });
       }),
     );
   }
@@ -86,13 +88,14 @@ export async function GET(): Promise<NextResponse> {
 // Shared position cache (60s TTL) on globalThis so it survives Next's per-bundle module copies and is
 // shared across requests/viewers — bounds map-driven GPS calls to ~1 per truck per minute.
 const POS_TTL_MS = 60_000;
-const pc = globalThis as unknown as { __zoeTruckPosCache?: Map<string, { pos: { lat: number; lng: number; ts?: string } | null; at: number }> };
+type Pos = { lat: number; lng: number; ts?: string; heading?: number };
+const pc = globalThis as unknown as { __zoeTruckPosCache?: Map<string, { pos: Pos | null; at: number }> };
 const posCache = (pc.__zoeTruckPosCache ??= new Map());
 
-async function cachedPos(truckId: string): Promise<{ lat: number; lng: number; ts?: string } | null> {
+async function cachedPos(truckId: string): Promise<Pos | null> {
   const hit = posCache.get(truckId);
   if (hit && Date.now() - hit.at < POS_TTL_MS) return hit.pos;
-  let pos: { lat: number; lng: number; ts?: string } | null = null;
+  let pos: Pos | null = null;
   try {
     pos = await getTruckPosition(truckId);
   } catch {

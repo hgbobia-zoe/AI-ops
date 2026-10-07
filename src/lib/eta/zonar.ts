@@ -44,6 +44,8 @@ export interface TruckPosition {
   lat: number;
   lng: number;
   ts?: string;
+  /** Direction of travel in degrees (0 = north, clockwise), when the device reports it. */
+  heading?: number;
 }
 
 // GPS TrackIt caps calls per day; when we hit 429 (rate-limited / quota reached) there's
@@ -117,6 +119,7 @@ export function parsePosition(data: unknown): TruckPosition | null {
 const LAT_KEYS = new Set(["lat", "latitude"]);
 const LNG_KEYS = new Set(["long", "lng", "lon", "longitude"]);
 const TS_KEYS = new Set(["time", "timestamp", "fetchtime", "datetime", "eventtime", "lastupdate"]);
+const HEADING_KEYS = new Set(["heading", "direction", "bearing", "course", "azimuth", "dir"]);
 
 function isNum(v: unknown): boolean {
   return v !== null && v !== "" && !Number.isNaN(Number(v));
@@ -128,6 +131,7 @@ function findLatLng(node: unknown, depth: number): TruckPosition | null {
   let lat: number | undefined;
   let lng: number | undefined;
   let ts: string | undefined;
+  let heading: number | undefined;
   for (const key of Object.keys(obj)) {
     const kl = key.toLowerCase();
     const val = obj[key];
@@ -136,6 +140,7 @@ function findLatLng(node: unknown, depth: number): TruckPosition | null {
     if (!ts && TS_KEYS.has(kl) && (typeof val === "string" || typeof val === "number")) {
       ts = String(val);
     }
+    if (heading === undefined && HEADING_KEYS.has(kl) && isNum(val)) heading = ((Number(val) % 360) + 360) % 360;
   }
   // A valid pair, in plausible range, and not the (0,0) null-island 'no fix' value.
   if (
@@ -145,7 +150,7 @@ function findLatLng(node: unknown, depth: number): TruckPosition | null {
     Math.abs(lat) <= 90 &&
     Math.abs(lng) <= 180
   ) {
-    return { lat, lng, ts };
+    return { lat, lng, ts, heading };
   }
   for (const key of Object.keys(obj)) {
     const child = findLatLng(obj[key], depth + 1);
