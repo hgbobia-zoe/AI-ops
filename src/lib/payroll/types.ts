@@ -2,7 +2,7 @@
 // services and (serializable) client views can import them. Money is in the worker's own currency;
 // an unknown value stays null (FACTS ONLY — never a fabricated 0).
 
-export type WorkerType = "EMPLOYEE" | "US_CONTRACTOR" | "INTERNATIONAL_CONTRACTOR" | "UNKNOWN";
+export type WorkerType = "EMPLOYEE" | "US_CONTRACTOR" | "INTERNATIONAL_CONTRACTOR" | "TEMPORARY_WORKER" | "UNKNOWN";
 export type EmploymentStatus = "ACTIVE" | "INACTIVE";
 export type PayType = "hourly" | "salary" | "fixed";
 export type GustoEntityType = "employee" | "contractor";
@@ -11,7 +11,14 @@ export const WORKER_TYPE_LABEL: Record<WorkerType, string> = {
   EMPLOYEE: "Employee",
   US_CONTRACTOR: "US Contractor",
   INTERNATIONAL_CONTRACTOR: "International Contractor",
+  TEMPORARY_WORKER: "Temporary Worker",
   UNKNOWN: "Unclassified",
+};
+
+// How confident the Gusto mapping is. Never silently "matched" on an ambiguous name (spec §2).
+export type MappingStatus = "UNMATCHED" | "SUGGESTED" | "MATCHED" | "CONFIRMED";
+export const MAPPING_STATUS_LABEL: Record<MappingStatus, string> = {
+  UNMATCHED: "Unmatched", SUGGESTED: "Suggested", MATCHED: "Matched", CONFIRMED: "Confirmed",
 };
 
 // A stored worker-identity override row (the mapping HR owns on top of Connecteam / Instawork / Gusto).
@@ -56,6 +63,64 @@ export interface UnifiedWorker {
   active: boolean;
   persisted: boolean;
   periodHours: number | null; // actual hours in the active period (null = source unavailable)
+  mappingStatus: MappingStatus;
+}
+
+// ── Payroll Review (the human checkpoint between reconciliation and Gusto) ───────────────────────────
+export type ReviewStatus = "READY" | "REQUIRES_REVIEW" | "BLOCKED";
+// An issue's class — kept distinct so the Overview never conflates "needs review" with "0 exceptions" (§3).
+export type IssueKind = "BLOCKING" | "EXCEPTION" | "MISSING_CONFIG";
+export interface IssueTag {
+  kind: IssueKind;
+  code: string;
+  label: string;
+}
+export interface ReviewWorker {
+  key: string;
+  name: string;
+  workerType: WorkerType;
+  hours: number | null; // actual Connecteam hours this period
+  payRate: number | null;
+  currency: string;
+  estPay: number | null; // hours × rate (null when either unknown)
+  mappingStatus: MappingStatus;
+  status: ReviewStatus;
+  issues: IssueTag[];
+}
+export interface PayrollReviewResult {
+  period: PayPeriod;
+  workers: ReviewWorker[]; // workers with hours this period (the ones being paid)
+  ready: ReviewWorker[];
+  review: ReviewWorker[];
+  blocked: ReviewWorker[];
+  counts: { workers: number; ready: number; review: number; blocked: number };
+  hours: number | null;
+  blockingIssues: number;
+  exceptions: number;
+  missingConfig: number;
+  estReadyPayroll: number | null;
+  estReviewPayroll: number | null;
+  estBlockedPayroll: number | null;
+  status: ReviewStatus | "NO_DATA";
+  connecteamOk: boolean;
+}
+
+// Approval lifecycle for a period's payroll run (spec §9). Gusto push is gated on APPROVED.
+export type PayrollApprovalStatus =
+  | "DRAFT" | "REVIEW_REQUIRED" | "APPROVED" | "PUSHING" | "SYNCED" | "PARTIALLY_SYNCED" | "FAILED";
+export const APPROVAL_STATUS_LABEL: Record<PayrollApprovalStatus, string> = {
+  DRAFT: "Draft", REVIEW_REQUIRED: "Review required", APPROVED: "Approved", PUSHING: "Pushing",
+  SYNCED: "Synced", PARTIALLY_SYNCED: "Partially synced", FAILED: "Failed",
+};
+export interface PayrollApproval {
+  periodStart: string;
+  periodEnd: string;
+  status: PayrollApprovalStatus;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  readyWorkerCount: number | null;
+  estApprovedAmount: number | null;
+  updatedAt: string;
 }
 
 export type PayrollStatus = "READY_FOR_REVIEW" | "REQUIRES_REVIEW" | "NOT_READY" | "SYNCED" | "NO_DATA";
@@ -92,6 +157,21 @@ export interface PayrollOverview {
   gustoConfigured: boolean;
   // Instawork temps — a separate labor-cost line (paid via Instawork, NOT in the Gusto run).
   tempLabor: { amount: number | null; basis: "actual" | "estimated" | "none"; hours: number | null };
+  // Payroll review rollup (the "Can I approve payroll?" answer) + the approval decision state.
+  review: {
+    status: ReviewStatus | "NO_DATA";
+    workers: number;
+    hours: number | null;
+    ready: number;
+    requiresReview: number;
+    blocked: number;
+    blockingIssues: number;
+    exceptions: number;
+    missingConfig: number;
+    estReady: number | null;
+    estBlocked: number | null;
+  };
+  approvalStatus: PayrollApprovalStatus | null;
 }
 
 export type ExceptionSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";

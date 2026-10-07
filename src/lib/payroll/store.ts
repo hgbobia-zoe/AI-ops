@@ -8,6 +8,7 @@ import type {
   WorkerRecord, WorkerType, EmploymentStatus, PayType, GustoEntityType,
   PayrollException, ExceptionSeverity, ExceptionStatus,
   SyncRun, SyncTrigger, SyncStatus, HoursType, TimeEntryStatus,
+  PayrollApproval, PayrollApprovalStatus,
 } from "./types";
 
 // ── hr_workers ─────────────────────────────────────────────────────────────────────────────────────
@@ -281,4 +282,38 @@ export function recordTempPayout(p: {
     `INSERT INTO hr_temp_payouts (id, period_start, period_end, worker_name, actual_hours, actual_amount, currency, source, imported_by, imported_at)
      VALUES (@id, @ps, @pe, @name, @h, @a, @c, @src, @by, @now)`,
   ).run({ id: `HP-${randomUUID()}`, ps: p.periodStart, pe: p.periodEnd, name: p.workerName, h: p.actualHours, a: p.actualAmount, c: p.currency ?? "USD", src, by: p.importedBy ?? null, now });
+}
+
+// ── hr_payroll_approvals (the per-period approval decision) ──────────────────────────────────────────
+interface ApprovalRow {
+  period_start: string; period_end: string; status: string; approved_by: string | null;
+  approved_at: string | null; ready_worker_count: number | null; est_approved_amount: number | null;
+  snapshot_json: string | null; updated_at: string;
+}
+function toApproval(r: ApprovalRow): PayrollApproval {
+  return {
+    periodStart: r.period_start, periodEnd: r.period_end, status: r.status as PayrollApprovalStatus,
+    approvedBy: r.approved_by, approvedAt: r.approved_at, readyWorkerCount: r.ready_worker_count,
+    estApprovedAmount: r.est_approved_amount, updatedAt: r.updated_at,
+  };
+}
+export function getApproval(periodStart: string, periodEnd: string): PayrollApproval | null {
+  const r = getDb().prepare("SELECT * FROM hr_payroll_approvals WHERE period_start=? AND period_end=?").get(periodStart, periodEnd) as ApprovalRow | undefined;
+  return r ? toApproval(r) : null;
+}
+export function upsertApproval(p: {
+  periodStart: string; periodEnd: string; status: PayrollApprovalStatus; approvedBy?: string | null;
+  approvedAt?: string | null; readyWorkerCount?: number | null; estApprovedAmount?: number | null; snapshot?: unknown;
+}): PayrollApproval {
+  const now = new Date().toISOString();
+  getDb().prepare(
+    `INSERT INTO hr_payroll_approvals (period_start, period_end, status, approved_by, approved_at, ready_worker_count, est_approved_amount, snapshot_json, updated_at)
+     VALUES (@ps, @pe, @status, @by, @at, @rc, @amt, @snap, @now)
+     ON CONFLICT(period_start, period_end) DO UPDATE SET
+       status=@status, approved_by=@by, approved_at=@at, ready_worker_count=@rc, est_approved_amount=@amt, snapshot_json=@snap, updated_at=@now`,
+  ).run({
+    ps: p.periodStart, pe: p.periodEnd, status: p.status, by: p.approvedBy ?? null, at: p.approvedAt ?? null,
+    rc: p.readyWorkerCount ?? null, amt: p.estApprovedAmount ?? null, snap: p.snapshot != null ? JSON.stringify(p.snapshot) : null, now,
+  });
+  return getApproval(p.periodStart, p.periodEnd)!;
 }

@@ -3,15 +3,20 @@
 // is null when its source is unavailable. The AI layer (later) only INTERPRETS this; it never recomputes it.
 
 import { unifiedWorkers, workerCounts } from "./workers";
-import { countOpenExceptions, latestSyncRun } from "./store";
+import { countOpenExceptions, latestSyncRun, getApproval } from "./store";
 import { gustoConfigured } from "./gusto";
 import { instaworkTempPay } from "./instawork";
+import { classifyReview } from "./review";
 import type { PayPeriod, PayrollOverview, PayrollStatus, UnifiedWorker } from "./types";
 
 export async function payrollOverview(period: PayPeriod): Promise<PayrollOverview> {
   const { workers, connecteamOk } = await unifiedWorkers(period);
   const counts = workerCounts(workers);
   const active = workers.filter((w) => w.active);
+
+  // Deterministic payroll-readiness classification (the taxonomy that drives "Can I approve payroll?").
+  const rv = classifyReview(period, workers, connecteamOk);
+  const approval = getApproval(period.start, period.end);
 
   // Total hours — only when the time source answered; otherwise UNVERIFIED (null), never a fabricated 0.
   const totalHours = connecteamOk
@@ -55,7 +60,12 @@ export async function payrollOverview(period: PayPeriod): Promise<PayrollOvervie
   const last = latestSyncRun();
   const lastSync = last ? { at: last.finishedAt ?? last.startedAt, status: last.status, trigger: last.trigger } : null;
 
-  const status = deriveStatus({ connecteamOk, totalHours, exceptions, unmatchedWorkers, last, period });
+  // Top-line status mirrors the review classification (the approval state is surfaced separately).
+  const status: PayrollStatus =
+    rv.status === "NO_DATA" ? "NO_DATA"
+      : rv.status === "BLOCKED" ? "NOT_READY"
+        : rv.status === "REQUIRES_REVIEW" ? "REQUIRES_REVIEW"
+          : "READY_FOR_REVIEW";
 
   return {
     period,
@@ -73,17 +83,21 @@ export async function payrollOverview(period: PayPeriod): Promise<PayrollOvervie
     status,
     gustoConfigured: gustoConfigured(),
     tempLabor,
+    review: {
+      status: rv.status,
+      workers: rv.counts.workers,
+      hours: rv.hours,
+      ready: rv.counts.ready,
+      requiresReview: rv.counts.review,
+      blocked: rv.counts.blocked,
+      blockingIssues: rv.blockingIssues,
+      exceptions: rv.exceptions,
+      missingConfig: rv.missingConfig,
+      estReady: rv.estReadyPayroll,
+      estBlocked: rv.estBlockedPayroll,
+    },
+    approvalStatus: approval?.status ?? null,
   };
-}
-
-function deriveStatus(x: {
-  connecteamOk: boolean; totalHours: number | null; exceptions: number; unmatchedWorkers: number;
-  last: ReturnType<typeof latestSyncRun>; period: PayPeriod;
-}): PayrollStatus {
-  if (!x.connecteamOk || x.totalHours == null) return "NO_DATA";
-  if (x.exceptions > 0 || x.unmatchedWorkers > 0) return "REQUIRES_REVIEW";
-  if (x.last && x.last.status === "SYNCED" && x.last.periodStart === x.period.start && x.last.periodEnd === x.period.end) return "SYNCED";
-  return "READY_FOR_REVIEW";
 }
 
 export type { UnifiedWorker };

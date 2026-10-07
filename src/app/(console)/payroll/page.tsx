@@ -8,7 +8,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   Wallet, RefreshCw, Users, UserCheck, Globe2, AlertTriangle, History, Settings,
-  ArrowRight, Boxes, CheckCircle2, CircleAlert,
+  ArrowRight, Boxes, CheckCircle2, CircleAlert, ClipboardCheck, Ban,
 } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManagePayroll } from "@/lib/auth/roles";
@@ -17,20 +17,23 @@ import { connecteamConfigured } from "@/lib/connecteam";
 import { namedPeriod } from "@/lib/payroll/period";
 import { payrollOverview } from "@/lib/payroll/overview";
 import { unifiedWorkers } from "@/lib/payroll/workers";
-import { listExceptions, listSyncRuns, countTimeEntries } from "@/lib/payroll/store";
+import { payrollReview } from "@/lib/payroll/review";
+import { listExceptions, listSyncRuns, countTimeEntries, getApproval } from "@/lib/payroll/store";
 import { gustoConfigured } from "@/lib/payroll/gusto";
 import { instaworkTempPay } from "@/lib/payroll/instawork";
 import {
-  PAYROLL_STATUS_LABEL, WORKER_TYPE_LABEL, type PayrollStatus, type UnifiedWorker,
-  type ExceptionSeverity,
+  WORKER_TYPE_LABEL, MAPPING_STATUS_LABEL, APPROVAL_STATUS_LABEL,
+  type UnifiedWorker, type ExceptionSeverity, type ReviewStatus, type ReviewWorker,
 } from "@/lib/payroll/types";
 import { SyncButton } from "@/components/payroll/SyncButton";
+import { ApproveButton } from "@/components/payroll/ApproveButton";
 
 export const dynamic = "force-dynamic";
 
-type Tab = "overview" | "sync" | "workers" | "contractors" | "exceptions" | "history" | "settings";
+type Tab = "overview" | "review" | "sync" | "workers" | "contractors" | "exceptions" | "history" | "settings";
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: "overview", label: "Overview", icon: <Wallet className="size-3.5" /> },
+  { key: "review", label: "Payroll Review", icon: <ClipboardCheck className="size-3.5" /> },
   { key: "sync", label: "Time Sync", icon: <RefreshCw className="size-3.5" /> },
   { key: "workers", label: "Workers", icon: <Users className="size-3.5" /> },
   { key: "contractors", label: "Contractors", icon: <Globe2 className="size-3.5" /> },
@@ -39,6 +42,16 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: "settings", label: "Settings", icon: <Settings className="size-3.5" /> },
 ];
 
+const REVIEW_TONE: Record<ReviewStatus | "NO_DATA", string> = {
+  READY: "text-positive border-positive/40 bg-positive/10",
+  REQUIRES_REVIEW: "text-attention border-attention/40 bg-attention/10",
+  BLOCKED: "text-critical border-critical/40 bg-critical/10",
+  NO_DATA: "text-meta border-border bg-[var(--row)]",
+};
+const REVIEW_LABEL: Record<ReviewStatus | "NO_DATA", string> = {
+  READY: "Ready", REQUIRES_REVIEW: "Requires review", BLOCKED: "Blocked", NO_DATA: "No data",
+};
+
 const money = (n: number | null, cur = "USD"): string => {
   if (n == null) return "—";
   const sym = cur === "EUR" ? "€" : cur === "GBP" ? "£" : "$";
@@ -46,13 +59,6 @@ const money = (n: number | null, cur = "USD"): string => {
 };
 const hrs = (n: number | null): string => (n == null ? "—" : `${n.toLocaleString("en-US")} h`);
 
-const STATUS_TONE: Record<PayrollStatus, string> = {
-  READY_FOR_REVIEW: "text-positive border-positive/40 bg-positive/10",
-  REQUIRES_REVIEW: "text-attention border-attention/40 bg-attention/10",
-  NOT_READY: "text-critical border-critical/40 bg-critical/10",
-  SYNCED: "text-positive border-positive/40 bg-positive/10",
-  NO_DATA: "text-meta border-border bg-[var(--row)]",
-};
 const SEV_TONE: Record<ExceptionSeverity, string> = {
   CRITICAL: "text-critical bg-critical/15", HIGH: "text-attention bg-attention/15",
   MEDIUM: "text-secondary-text bg-[var(--row)]", LOW: "text-meta bg-[var(--row)]",
@@ -106,6 +112,7 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
       </nav>
 
       {tab === "overview" && <OverviewTab period={period} which={which} />}
+      {tab === "review" && <ReviewTab period={period} which={which} />}
       {tab === "sync" && <SyncTab period={period} which={which} />}
       {tab === "workers" && <WorkersTab period={period} mode="all" />}
       {tab === "contractors" && <WorkersTab period={period} mode="contractors" />}
@@ -125,43 +132,57 @@ async function safeToday(): Promise<string> {
 }
 
 // ── Overview (Payroll Command Center) ────────────────────────────────────────────────────────────────
+// The one question it answers: "Can I approve payroll?" Status comes from the deterministic review
+// classification; blockers / exceptions / missing-config are shown distinctly (never conflated).
 async function OverviewTab({ period, which }: { period: { start: string; end: string; label: string }; which: "current" | "previous" }): Promise<React.JSX.Element> {
   const o = await payrollOverview(period);
+  const r = o.review;
+  const ready = r.status === "READY";
+  const msg =
+    r.status === "NO_DATA" ? "Connecteam time source unavailable — pull hours to begin."
+      : r.status === "BLOCKED" ? `${r.blocked} worker${r.blocked === 1 ? "" : "s"} blocked (${r.blockingIssues} blocking issue${r.blockingIssues === 1 ? "" : "s"}). Resolve before approving.`
+        : r.status === "REQUIRES_REVIEW" ? `${r.requiresReview} worker${r.requiresReview === 1 ? "" : "s"} need review. ${r.ready} ready to approve.`
+          : `All ${r.ready} worker${r.ready === 1 ? "" : "s"} ready. Review and approve.`;
   return (
     <div className="space-y-4">
-      {/* Status + actions */}
+      {/* Status + actions — "Can I approve payroll?" */}
       <section className="surface flex flex-wrap items-center justify-between gap-4 border p-4">
-        <div className="flex items-center gap-4">
-          <div>
-            <div className="text-[10.5px] uppercase tracking-[0.1em] text-meta">Payroll status</div>
-            <div className={`mt-1.5 inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-[13px] font-semibold ${STATUS_TONE[o.status]}`}>
-              {o.status === "READY_FOR_REVIEW" || o.status === "SYNCED" ? <CheckCircle2 className="size-4" /> : <CircleAlert className="size-4" />}
-              {PAYROLL_STATUS_LABEL[o.status]}
-            </div>
-            <div className="mt-2 text-[12px] text-meta">
-              {o.status === "NO_DATA" ? "Connecteam time source unavailable — connect it to pull hours."
-                : o.status === "REQUIRES_REVIEW" ? `${o.exceptions} exception${o.exceptions === 1 ? "" : "s"} · ${o.unmatchedWorkers} worker${o.unmatchedWorkers === 1 ? "" : "s"} need review before payroll.`
-                : "Hours pulled and reconciled. Review, then push to Gusto."}
-            </div>
+        <div>
+          <div className="flex items-center gap-2 text-[10.5px] uppercase tracking-[0.1em] text-meta">
+            Payroll status
+            {o.approvalStatus && <span className="rounded bg-[var(--row)] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-normal text-tertiary-text">{APPROVAL_STATUS_LABEL[o.approvalStatus]}</span>}
+          </div>
+          <div className={`mt-1.5 inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-[13px] font-semibold ${REVIEW_TONE[r.status]}`}>
+            {ready ? <CheckCircle2 className="size-4" /> : r.status === "BLOCKED" ? <Ban className="size-4" /> : <CircleAlert className="size-4" />}
+            {REVIEW_LABEL[r.status]}
+          </div>
+          <div className="mt-2 text-[12px] text-meta">{msg}</div>
+          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[11.5px] text-meta">
+            <span>{r.workers} workers</span><span>{hrs(r.hours)}</span>
+            <span className="text-positive">{r.ready} ready</span>
+            <span className="text-attention">{r.requiresReview} review</span>
+            <span className="text-critical">{r.blocked} blocked</span>
           </div>
         </div>
         <div className="flex items-end gap-3">
-          <SyncButton which={which} label="Sync Hours" variant="primary" />
-          <SyncButton which={which} label="Run Reconciliation" variant="secondary" />
+          <Link href={`/payroll?tab=review${which === "previous" ? "&period=previous" : ""}`}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-foreground px-4 text-[13px] font-medium text-background transition-opacity hover:opacity-90">
+            <ClipboardCheck className="size-4" /> Review Payroll
+          </Link>
+          <SyncButton which={which} label="Sync Hours" variant="secondary" />
         </div>
       </section>
 
-      {/* Metrics */}
+      {/* Metrics — status first, then the blocker/exception/config taxonomy kept distinct (§3) */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <Metric label="Pay period" value={period.label} sub={`${period.start} → ${period.end}`} />
-        <Metric label="Total hours" value={hrs(o.totalHours)} sub={o.connecteamOk ? "from Connecteam" : "source unavailable"} tone={o.connecteamOk ? undefined : "warn"} />
-        <Metric label="Estimated labor" value={money(o.estimatedLabor.amount, o.estimatedLabor.currency)} sub={o.estimatedLabor.partial ? "partial — some rates unknown" : "USD workers"} />
+        <Metric label="Total hours" value={hrs(r.hours)} sub={o.connecteamOk ? "actual · from Connecteam" : "source unavailable"} tone={o.connecteamOk ? undefined : "warn"} />
+        <Metric label="Est. ready payroll" value={money(r.estReady)} sub={`${r.ready} ready worker${r.ready === 1 ? "" : "s"}`} />
+        <Metric label="Est. blocked payroll" value={money(r.estBlocked)} sub={`${r.blocked} blocked`} tone={r.blocked > 0 ? "warn" : undefined} />
+        <Metric label="Blocking issues" value={String(r.blockingIssues)} sub="prevent approval" tone={r.blockingIssues > 0 ? "warn" : undefined} />
+        <Metric label="Exceptions" value={String(r.exceptions)} sub="anomalies to review" tone={r.exceptions > 0 ? "warn" : undefined} />
+        <Metric label="Missing config" value={String(r.missingConfig)} sub="setup incomplete" tone={r.missingConfig > 0 ? "warn" : undefined} />
         <Metric label="Workers" value={String(o.workers)} sub={`${o.employees} employees · ${o.contractors} contractors`} />
-        <Metric label="Employees" value={String(o.employees)} />
-        <Metric label="Contractors" value={String(o.contractors)} sub={`${o.internationalContractors} international`} />
-        <Metric label="International" value={String(o.internationalContractors)} sub="contractors" />
-        <Metric label="Exceptions" value={String(o.exceptions)} tone={o.exceptions > 0 ? "warn" : undefined} />
-        <Metric label="Unmatched workers" value={String(o.unmatchedWorkers)} sub="no Gusto mapping" tone={o.unmatchedWorkers > 0 ? "warn" : undefined} />
         <Metric label="Last sync" value={o.lastSync ? relTime(o.lastSync.at) : "never"} sub={o.lastSync ? `${o.lastSync.status.toLowerCase().replace(/_/g, " ")} · ${o.lastSync.trigger}` : "run a sync to start"} />
         <Metric label="Next automatic sync" value={o.nextAutomaticSync ?? "not scheduled"} sub="Monday 8:00 AM (when enabled)" />
         <Metric label="Gusto" value={o.gustoConfigured ? "connected" : "not connected"} sub="payroll destination" tone={o.gustoConfigured ? undefined : "warn"} />
@@ -175,26 +196,137 @@ async function OverviewTab({ period, which }: { period: { start: string; end: st
   );
 }
 
-// ── Time Sync ────────────────────────────────────────────────────────────────────────────────────────
+// ── Payroll Review (the human checkpoint) ────────────────────────────────────────────────────────────
+async function ReviewTab({ period, which }: { period: { start: string; end: string; label: string }; which: "current" | "previous" }): Promise<React.JSX.Element> {
+  const r = await payrollReview(period);
+  const approval = getApproval(period.start, period.end);
+  if (r.status === "NO_DATA") {
+    return <EmptyState icon={<ClipboardCheck className="size-5" />} title="Nothing to review yet" body="No worker hours for this period (or Connecteam is unavailable). Run a sync to pull hours, then review." />;
+  }
+  return (
+    <div className="space-y-4">
+      <section className="surface flex flex-wrap items-center justify-between gap-4 border p-4">
+        <div>
+          <div className="flex items-center gap-2 text-[10.5px] uppercase tracking-[0.1em] text-meta">
+            Review · {period.label}
+            {approval && <span className="rounded bg-[var(--row)] px-1.5 py-0.5 text-[9.5px] font-semibold tracking-normal text-tertiary-text">{APPROVAL_STATUS_LABEL[approval.status]}{approval.approvedBy ? ` · ${approval.approvedBy}` : ""}</span>}
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-[12.5px]">
+            <span className="text-foreground">{r.counts.workers} workers · {hrs(r.hours)}</span>
+            <span className="text-positive">{r.counts.ready} ready · {money(r.estReadyPayroll)}</span>
+            <span className="text-attention">{r.counts.review} review</span>
+            <span className="text-critical">{r.counts.blocked} blocked · {money(r.estBlockedPayroll)}</span>
+          </div>
+        </div>
+        <ApproveButton which={which} readyCount={r.counts.ready} />
+      </section>
+
+      <ReviewGroup title="Blocked" tone="critical" rows={r.blocked} note="A blocking issue prevents payroll — resolve before approving." />
+      <ReviewGroup title="Requires review" tone="attention" rows={r.review} note="Anomalies or incomplete config — review, then they become ready." />
+      <ReviewGroup title="Ready" tone="positive" rows={r.ready} note="Clean records, eligible for approval." />
+    </div>
+  );
+}
+
+function ReviewGroup({ title, tone, rows, note }: { title: string; tone: "critical" | "attention" | "positive"; rows: ReviewWorker[]; note: string }): React.JSX.Element {
+  const dot = tone === "critical" ? "bg-critical" : tone === "attention" ? "bg-attention" : "bg-positive";
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-2">
+        <span className={`size-2 rounded-full ${dot}`} />
+        <h3 className="text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">{title} <span className="text-meta">({rows.length})</span></h3>
+        <span className="text-[11px] text-meta">— {note}</span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="pl-4 text-[12px] text-meta">None.</p>
+      ) : (
+        <div className="surface overflow-x-auto border">
+          <table className="w-full min-w-[820px] text-[12.5px]">
+            <thead>
+              <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
+                <th className="px-3 py-2 font-medium">Worker</th>
+                <th className="px-3 py-2 font-medium">Type</th>
+                <th className="px-3 py-2 text-right font-medium">Hours</th>
+                <th className="px-3 py-2 text-right font-medium">Rate</th>
+                <th className="px-3 py-2 text-right font-medium">Est. pay</th>
+                <th className="px-3 py-2 font-medium">Gusto</th>
+                <th className="px-3 py-2 font-medium">Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((w) => (
+                <tr key={w.key} className="border-b border-rule/60 last:border-0 hover:bg-[var(--row-hover)]">
+                  <td className="px-3 py-2 font-medium text-foreground">{w.name}</td>
+                  <td className="px-3 py-2 text-tertiary-text">{WORKER_TYPE_LABEL[w.workerType]}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{w.hours == null ? "—" : w.hours.toLocaleString("en-US")}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{w.payRate != null ? `${money(w.payRate, w.currency)}/hr` : <span className="text-attention">missing</span>}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{money(w.estPay, w.currency)}</td>
+                  <td className="px-3 py-2"><span className={w.mappingStatus === "UNMATCHED" ? "text-attention" : "text-secondary-text"}>{MAPPING_STATUS_LABEL[w.mappingStatus]}</span></td>
+                  <td className="px-3 py-2">
+                    {w.issues.length === 0 ? <span className="text-positive">—</span> : (
+                      <span className="flex flex-wrap gap-1">
+                        {w.issues.map((i) => (
+                          <span key={i.code} className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${i.kind === "BLOCKING" ? "bg-critical/15 text-critical" : i.kind === "EXCEPTION" ? "bg-attention/15 text-attention" : "bg-[var(--row)] text-meta"}`}>{i.label}</span>
+                        ))}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Time Sync (the pipeline) ─────────────────────────────────────────────────────────────────────────
 async function SyncTab({ period, which }: { period: { start: string; end: string; label: string }; which: "current" | "previous" }): Promise<React.JSX.Element> {
   const records = countTimeEntries(period.start, period.end);
-  const runs = listSyncRuns(1);
-  const last = runs[0] ?? null;
+  const last = listSyncRuns(1)[0] ?? null;
+  const r = await payrollReview(period);
+  const matched = r.workers.filter((w) => w.mappingStatus !== "UNMATCHED").length;
+  const unmatched = r.workers.filter((w) => w.mappingStatus === "UNMATCHED").length;
+
+  const stages: { label: string; value: string; state: "ok" | "warn" | "idle" }[] = [
+    { label: "Connecteam import", value: r.connecteamOk ? hrs(r.hours) : "unavailable", state: r.connecteamOk ? "ok" : "warn" },
+    { label: "Normalized", value: r.connecteamOk ? `${hrs(r.hours)} · ${r.counts.workers} workers` : "—", state: r.connecteamOk ? "ok" : "idle" },
+    { label: "Matched (Gusto)", value: String(matched), state: matched > 0 ? "ok" : "idle" },
+    { label: "Unmatched", value: String(unmatched), state: unmatched > 0 ? "warn" : "ok" },
+    { label: "Valid (ready)", value: String(r.counts.ready), state: r.counts.ready > 0 ? "ok" : "idle" },
+    { label: "Requires review", value: String(r.counts.review + r.counts.blocked), state: r.counts.review + r.counts.blocked > 0 ? "warn" : "ok" },
+    { label: "Gusto preparation", value: gustoConfigured() ? "ready" : "not connected", state: gustoConfigured() ? "ok" : "warn" },
+    { label: "Approval", value: r.status === "READY" ? "eligible" : "pending review", state: r.status === "READY" ? "ok" : "idle" },
+    { label: "Gusto push", value: "disabled (connect Gusto)", state: "idle" },
+  ];
+  const dot = (s: "ok" | "warn" | "idle") => (s === "ok" ? "bg-positive" : s === "warn" ? "bg-attention" : "bg-[var(--bar)]");
+
   return (
     <div className="max-w-2xl space-y-4">
       <section className="surface border p-4">
-        <div className="grid grid-cols-2 gap-x-6 gap-y-4 text-[13px]">
+        <div className="mb-3 grid grid-cols-2 gap-x-6 gap-y-3 text-[12.5px]">
           <Field label="Source" value="Connecteam" sub={connecteamConfigured() ? "connected" : "not connected"} />
           <Field label="Destination" value="Gusto" sub={gustoConfigured() ? "connected" : "not connected (push disabled)"} />
           <Field label="Pay period" value={period.label} sub={which === "current" ? "this week" : "last week"} />
           <Field label="Normalized records" value={String(records)} sub="time entries stored" />
-          <Field label="Last sync" value={last ? relTime(last.finishedAt ?? last.startedAt) : "never"} sub={last ? `${last.status.toLowerCase().replace(/_/g, " ")} · ${last.trigger}` : undefined} />
-          <Field label="Next automatic" value="not scheduled" sub="Monday 8:00 AM (when enabled)" />
         </div>
-        <div className="mt-5 flex items-center gap-3 border-t border-rule pt-4">
+        <div className="border-t border-rule pt-3">
+          <div className="mb-2 text-[10.5px] uppercase tracking-[0.08em] text-meta">Pipeline · {period.label}</div>
+          <ol className="space-y-0">
+            {stages.map((s, i) => (
+              <li key={s.label} className="flex items-center gap-3 py-1.5">
+                <span className={`size-2 shrink-0 rounded-full ${dot(s.state)}`} />
+                <span className="w-40 shrink-0 text-[12.5px] text-secondary-text">{i + 1}. {s.label}</span>
+                <span className={`text-[12.5px] tabular-nums ${s.state === "warn" ? "text-attention" : "text-foreground"}`}>{s.value}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+        <div className="mt-4 flex items-center gap-3 border-t border-rule pt-4">
           <SyncButton which={which} label="Sync Now" variant="primary" />
           <p className="text-[11.5px] text-meta">
-            Pulls Connecteam hours for the period, normalizes + matches workers, and flags exceptions. Idempotent — running twice never duplicates hours. Gusto push runs only on an approved, clean period (coming next).
+            Pulls Connecteam hours, normalizes + matches workers, reconciles and flags blockers/exceptions. Idempotent — running twice never duplicates hours.{last ? ` Last run ${relTime(last.finishedAt ?? last.startedAt)} · ${last.status.toLowerCase().replace(/_/g, " ")}.` : ""} Gusto push runs only after approval.
           </p>
         </div>
       </section>

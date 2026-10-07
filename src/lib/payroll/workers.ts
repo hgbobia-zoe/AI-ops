@@ -62,6 +62,7 @@ export async function unifiedWorkers(period: PayPeriod): Promise<UnifiedWorkersR
       active: rec ? rec.active : true,
       persisted: Boolean(rec),
       periodHours: hours,
+      mappingStatus: rec?.gustoId ? "MATCHED" : "UNMATCHED",
     });
   }
 
@@ -88,6 +89,7 @@ export async function unifiedWorkers(period: PayPeriod): Promise<UnifiedWorkersR
       active: rec.active,
       persisted: true,
       periodHours: null, // no live hours source for non-Connecteam workers yet
+      mappingStatus: rec.gustoId ? "MATCHED" : "UNMATCHED",
     });
   }
 

@@ -1805,6 +1805,22 @@ CREATE TABLE IF NOT EXISTS hr_temp_payouts (
   UNIQUE(period_start, period_end, worker_name, source)
 );
 CREATE INDEX IF NOT EXISTS idx_hr_temp_payouts_period ON hr_temp_payouts(period_start, period_end);
+
+-- Payroll approval — the human checkpoint lifecycle per pay period (spec §9). One row per period; Gusto push
+-- is gated on status = APPROVED. Records WHO approved, WHEN, and a snapshot of WHAT (ready worker count + est
+-- amount). History of sync runs lives in hr_sync_runs; this is the approval decision layer over them.
+CREATE TABLE IF NOT EXISTS hr_payroll_approvals (
+  period_start        TEXT NOT NULL,     -- YYYY-MM-DD
+  period_end          TEXT NOT NULL,
+  status              TEXT NOT NULL,     -- DRAFT | REVIEW_REQUIRED | APPROVED | PUSHING | SYNCED | PARTIALLY_SYNCED | FAILED
+  approved_by         TEXT,
+  approved_at         TEXT,
+  ready_worker_count  INTEGER,
+  est_approved_amount REAL,
+  snapshot_json       TEXT,              -- what was approved/excluded at approval time
+  updated_at          TEXT NOT NULL,
+  PRIMARY KEY (period_start, period_end)
+);
 `;
 
 type DB = InstanceType<typeof Database>;
