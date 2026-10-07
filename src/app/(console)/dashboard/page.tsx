@@ -8,7 +8,7 @@
 import Link from "next/link";
 import {
   AlertTriangle, ArrowRight, DollarSign, FileText, CalendarCheck, ShieldAlert, Truck,
-  PieChart, Gauge, Radar, Lightbulb, ListChecks, Bot, CalendarDays, CircleDot, Phone, Mail, Users, Megaphone, MapPin,
+  Gauge, Radar, Lightbulb, ListChecks, Bot, CalendarDays, CircleDot, Phone, Mail, Users, Megaphone, MapPin,
   Search, Bell, ChevronDown, Plus,
 } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
@@ -16,7 +16,7 @@ import { commandCenter } from "@/lib/command/service";
 import { capacityLevel, type CapacityLevel } from "@/lib/command/calc";
 import { salesYearOverview } from "@/lib/sales/service";
 import { salesCommandCenter } from "@/lib/salesos/commandCenter";
-import { getPipelineBookingsInRange, type BookingView } from "@/lib/db/repo";
+import { getPipelineBookingsInRange, getQuoteActivityInRange, type BookingView } from "@/lib/db/repo";
 import { aiControlOverview } from "@/lib/ai/control";
 import { listRecentSessions } from "@/lib/ai/sessions";
 import { STATUS_META } from "@/lib/ai/sessionDisplay";
@@ -25,6 +25,8 @@ import { viewerRole, currentActor } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 import type { Priority } from "@/lib/ops/manager";
 import { RevenueTrendChart, type MonthPoint } from "@/components/dashboard/RevenueTrendChart";
+import { QuotePipeline, type PipelineBucket } from "@/components/dashboard/QuotePipeline";
+import { WIDGET_SCOPE } from "@/lib/command/widgetScope";
 import { TodayMap } from "@/components/dashboard/TodayMap";
 
 export const dynamic = "force-dynamic";
@@ -46,22 +48,37 @@ const NBA_LABEL: Record<string, string> = {
   VERIFY_AVAILABILITY: "Verify", REVIEW_QUOTE: "Review", WAIT: "View",
 };
 
-type RangeKey = "today" | "7d" | "30d" | "90d" | "year";
+type RangeKey = "today" | "7d" | "14d" | "30d" | "90d" | "year";
 const RANGES: { key: RangeKey; label: string }[] = [
-  { key: "today", label: "Today" }, { key: "7d", label: "7D" }, { key: "30d", label: "30D" }, { key: "90d", label: "90D" }, { key: "year", label: "2026" },
+  { key: "today", label: "Today" }, { key: "7d", label: "7D" }, { key: "14d", label: "14D" }, { key: "30d", label: "30D" }, { key: "90d", label: "90D" }, { key: "year", label: "2026" },
 ];
+// FUTURE window — for Upcoming Events (event dates ahead of today).
 function rangeWindow(key: RangeKey, today: string, year: number): { start: string; end: string; label: string } {
   switch (key) {
     case "7d": return { start: today, end: shiftYmd(today, 6), label: "next 7 days" };
+    case "14d": return { start: today, end: shiftYmd(today, 13), label: "next 14 days" };
     case "30d": return { start: today, end: shiftYmd(today, 29), label: "next 30 days" };
     case "90d": return { start: today, end: shiftYmd(today, 89), label: "next 90 days" };
     case "year": return { start: `${year}-01-01`, end: `${year}-12-31`, label: String(year) };
     default: return { start: today, end: today, label: "today" };
   }
 }
+// PAST window — for Quote Activity (quotes created before today). Same selector, natural direction.
+function activityWindow(key: RangeKey, today: string, year: number): { start: string; end: string; label: string } {
+  switch (key) {
+    case "7d": return { start: shiftYmd(today, -6), end: today, label: "last 7 days" };
+    case "14d": return { start: shiftYmd(today, -13), end: today, label: "last 14 days" };
+    case "30d": return { start: shiftYmd(today, -29), end: today, label: "last 30 days" };
+    case "90d": return { start: shiftYmd(today, -89), end: today, label: "last 90 days" };
+    case "year": return { start: `${year}-01-01`, end: today, label: String(year) };
+    default: return { start: today, end: today, label: "today" };
+  }
+}
 
 function dow(ymd: string): string { return new Date(`${ymd}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" }); }
 function dnum(ymd: string): string { return new Date(`${ymd}T00:00:00Z`).toLocaleDateString("en-US", { day: "numeric", timeZone: "UTC" }); }
+function daysBetween(a: string, b: string): number { return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000); }
+function titleCase(s: string): string { return s.charAt(0).toUpperCase() + s.slice(1); }
 function mon(ymd: string): string { return new Date(`${ymd}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }).toUpperCase(); }
 function ago(iso: string | null): string {
   if (!iso) return "—";
@@ -89,10 +106,13 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   // Extra reads (existing services only) — prior-year trend, sales queue, upcoming (range-scoped), AI.
   const prev = safe(() => salesYearOverview(year - 1), null);
   const salesQ = showMoney ? safe(() => salesCommandCenter(), null) : null;
+  // UPCOMING EVENTS — the one widget that follows the global selector. Earliest-first, capped to a short
+  // dashboard preview (the Events blade holds the full list).
   const upcoming = safe(() => getPipelineBookingsInRange(win.start, win.end), [] as BookingView[])
     .filter((b) => b.eventDate)
     .sort((a, b) => (a.eventDate! < b.eventDate! ? -1 : 1))
-    .slice(0, 8);
+    .slice(0, 6);
+  const upcomingTitle = `Upcoming events — ${titleCase(win.label)}`;
   const aiOverview = safe(() => aiControlOverview(), null);
   const aiSessions = safe(() => listRecentSessions(6), []);
 
@@ -106,9 +126,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     events: { cur: m.signedCount || null, prev: prevM[i]?.signedCount || null },
   }));
 
-  // KPI sparkline/delta helpers from current-year months.
+  // KPI delta/trend helpers from current-year months.
   const curMonthIdx = Number(today.slice(5, 7)) - 1;
-  const quoteSeries = curM.map((m) => (m.actionNeededCount ? m.actionNeededCount : null));
   const eventBars = curM.map((m) => m.count);
   const revDelta = pctDelta(curM[curMonthIdx]?.signedRevenue ?? null, curM[curMonthIdx - 1]?.signedRevenue ?? null);
   const eventDelta = pctDelta(curM[curMonthIdx]?.count ?? null, curM[curMonthIdx - 1]?.count ?? null);
@@ -128,7 +147,41 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   }));
 
   const util = c.today_ops.fleetSize > 0 ? Math.round((c.today_ops.trucksUsed / c.today_ops.fleetSize) * 100) : null;
-  const pipe = c.pipeline;
+
+  // ── Widget data scopes (contract in widgetScope.ts) ──────────────────────────
+  const monthName = rev.periodLabel; // "October" — the MTD revenue/booked month
+  const signedThisMonth = curM[curMonthIdx]?.signedCount ?? 0;
+
+  // QUOTE PIPELINE (current open, by EVENT date) — NOT range-scoped. Open-quote revenue split into
+  // event-date horizon buckets, because the urgent question is how much open revenue is approaching.
+  const openQuotes = safe(() => getPipelineBookingsInRange(today, shiftYmd(today, 3650)), [] as BookingView[]).filter((b) => !b.signed && b.eventDate);
+  const HORIZONS: { label: string; lo: number; hi: number }[] = [
+    { label: "0–7 days", lo: 0, hi: 7 }, { label: "8–14 days", lo: 8, hi: 14 }, { label: "15–30 days", lo: 15, hi: 30 },
+    { label: "31–60 days", lo: 31, hi: 60 }, { label: "60+ days", lo: 61, hi: Infinity },
+  ];
+  const pipelineBuckets: PipelineBucket[] = HORIZONS.map((h) => {
+    const inB = openQuotes.filter((b) => { const d = daysBetween(today, b.eventDate!); return d >= h.lo && d <= h.hi; });
+    const priced = inB.filter((b) => b.grandTotal != null);
+    return { label: h.label, count: inB.length, value: priced.length ? priced.reduce((s, b) => s + (b.grandTotal ?? 0), 0) : null };
+  });
+  const openValue = openQuotes.some((b) => b.grandTotal != null) ? openQuotes.reduce((s, b) => s + (b.grandTotal ?? 0), 0) : null;
+  const pipelineData = { count: openQuotes.length, value: openValue, buckets: pipelineBuckets };
+
+  // QUOTE ACTIVITY (by CREATED date) — controlled by the global selector as a PAST window. Never mixes
+  // with event-date pipeline.
+  const actWin = activityWindow(range, today, year);
+  const actRaw = showMoney ? safe(() => getQuoteActivityInRange(actWin.start, actWin.end), null) : null;
+  const activity = actRaw ? {
+    ...actRaw,
+    winRate: actRaw.signed + actRaw.lost > 0 ? Math.round((actRaw.signed / (actRaw.signed + actRaw.lost)) * 100) : null,
+    label: actWin.label,
+  } : null;
+
+  // Next operational day — for the Today's Operations empty state (don't show a giant empty map).
+  const futureOps = safe(() => getPipelineBookingsInRange(shiftYmd(today, 1), shiftYmd(today, 60)), [] as BookingView[]).filter((b) => b.eventDate);
+  const nextOpDate = futureOps.length ? futureOps[0].eventDate! : null;
+  const nextOpDay = nextOpDate ? { date: nextOpDate, count: futureOps.filter((b) => b.eventDate === nextOpDate).length } : null;
+  const hasOpsToday = c.today_ops.stops > 0 || c.today_ops.activeRoutes > 0;
 
   return (
     <main className="p-3 pb-8 leading-[1.3] md:px-4 md:pb-4">
@@ -180,21 +233,22 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           {/* KPI row */}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
             {showMoney ? (
-              <Kpi icon={<DollarSign className="size-3.5" />} label={`Revenue (${rev.periodLabel.slice(0, 3)})`} big={money(rev.committed)}
+              <Kpi icon={<DollarSign className="size-3.5" />} label={`Revenue — ${monthName}`} big={money(rev.committed)}
                 sub={rev.target != null ? `Target ${money(rev.target)}` : "no target set"}
                 visual={{ kind: "progress", pct: rev.pctOfTarget, color: KPI_C.green, inlineLabel: rev.pctOfTarget != null ? `${rev.pctOfTarget}%` : undefined }}
                 footnote={revDelta ? { text: `${revDelta.up ? "▲" : "▼"} ${revDelta.pct}% vs last month`, tone: revDelta.up ? "good" : "bad" } : undefined} />
             ) : (
               <Kpi icon={<CalendarCheck className="size-3.5" />} label="Events today" big={String(c.today_ops.events)} sub="scheduled" />
             )}
-            <Kpi icon={<FileText className="size-3.5" />} label="Quotes" big={String(pipe.quote.count)}
-              sub={`${pipe.quote.count} open · ${pipe.signed.count} signed`} visual={{ kind: "spark", data: quoteSeries, color: KPI_C.blue }} />
-            <Kpi icon={<CalendarCheck className="size-3.5" />} label="Booked events" big={String(bookedThisMonth)}
+            <Kpi icon={<FileText className="size-3.5" />} label="Open quotes" big={String(pipelineData.count)}
+              sub={showMoney ? `${money(openValue)} pipeline` : "awaiting response"}
+              footnote={{ text: `${signedThisMonth} signed this month`, tone: "meta" }} />
+            <Kpi icon={<CalendarCheck className="size-3.5" />} label={`Booked events — ${monthName}`} big={String(bookedThisMonth)}
               sub="This month" visual={{ kind: "bars", data: eventBars, color: KPI_C.purple, recentColor: KPI_C.purpleHi }}
               footnote={eventDelta ? { text: `${eventDelta.up ? "▲" : "▼"} ${eventDelta.pct}% vs last month`, tone: eventDelta.up ? "good" : "bad" } : undefined} />
-            <Kpi icon={<ShieldAlert className="size-3.5" />} label="Operational risks" big={String(crit + high + med + low)}
+            <Kpi icon={<ShieldAlert className="size-3.5" />} label="Open operational risks" big={String(crit + high + med + low)}
               sub={riskSub} visual={{ kind: "severity", crit, high, med, low }} href="#attention" />
-            <Kpi icon={<Truck className="size-3.5" />} label="Fleet & crew" big={`${c.today_ops.trucksUsed} / ${c.today_ops.fleetSize}`}
+            <Kpi icon={<Truck className="size-3.5" />} label="Fleet &amp; crew — today" big={`${c.today_ops.trucksUsed} / ${c.today_ops.fleetSize}`}
               sub="Active today" visual={{ kind: "progress", pct: util, color: KPI_C.green }}
               footnote={util != null ? { text: `${util}% utilization`, tone: "good" } : undefined} />
           </div>
@@ -204,9 +258,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             <div className="min-w-0">
               <RevenueTrendChart months={months} target={rev.target} curYear={year} prevYear={year - 1} showMoney={showMoney} currentMonthIdx={curMonthIdx} />
             </div>
-            <Panel icon={<PieChart className="size-4" />} title="Quote status" href="/salesos" hrefLabel="Sales OS">
-              <QuoteDonut signed={pipe.signed.count} open={pipe.quote.count} lost={pipe.lost.count} />
-            </Panel>
+            <QuotePipeline pipeline={pipelineData} activity={activity} showMoney={showMoney} />
           </div>
 
           {/* Operational capacity + Today's operations */}
@@ -241,9 +293,15 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                 <span className="flex items-center gap-1.5"><span className="h-[3px] w-2" style={{ background: CAP_HEX.CONSTRAINED }} /> at limit</span>
               </div>
             </Panel>
-            <Panel icon={<Truck className="size-4" />} title="Today's operations" href="/dispatch" hrefLabel="Routes">
-              <div className="mb-3"><TodayMap /></div>
-              <TodayOps ops={c.today_ops} showMoney={showMoney} />
+            <Panel icon={<Truck className="size-4" />} title="Today's operations" scope={WIDGET_SCOPE.todaysOps.scope} href="/dispatch" hrefLabel="Routes">
+              {hasOpsToday ? (
+                <>
+                  <div className="mb-3"><TodayMap /></div>
+                  <TodayOps ops={c.today_ops} showMoney={showMoney} />
+                </>
+              ) : (
+                <TodayOpsEmpty ops={c.today_ops} nextOpDay={nextOpDay} showMoney={showMoney} />
+              )}
             </Panel>
           </div>
 
@@ -252,7 +310,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         {/* ── RIGHT RAIL (486px): AI sessions / upcoming events ── */}
         <div className="space-y-3 min-w-0">
           {/* AI Sessions (LIVE) — a compact summary that links to the full AI Command Center */}
-          <Panel icon={<Bot className="size-4" />} title="AI sessions" href="/ai-command" hrefLabel="View all"
+          <Panel icon={<Bot className="size-4" />} title="AI sessions" scope={WIDGET_SCOPE.aiSessions.scope} href="/ai-command" hrefLabel="View all"
             chip={aiOverview && aiOverview.liveCount > 0 ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-positive"><span className="size-1.5 rounded-full bg-positive" /> {aiOverview.liveCount} live</span> : undefined}>
             {aiSessions.length === 0 ? (
               <p className="text-[12px] text-meta">No AI sessions yet. <Link href="/ai-command" className="text-tertiary-text hover:text-foreground">Open the AI Command Center →</Link></p>
@@ -278,9 +336,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             )}
           </Panel>
 
-          {/* Upcoming events — window follows the range tabs */}
-          <Panel icon={<CalendarDays className="size-4" />} title="Upcoming events" href="/sales" hrefLabel="View all"
-            chip={<span className="text-[10px] uppercase tracking-wide text-meta">{win.label}</span>}>
+          {/* Upcoming events — the one widget that follows the global selector (event-date horizon). */}
+          <Panel icon={<CalendarDays className="size-4" />} title={upcomingTitle} href="/sales" hrefLabel="View all">
             {upcoming.length === 0 ? (
               <p className="text-[12px] text-meta">No booked events {win.label === "today" ? "today" : `in the ${win.label}`}.</p>
             ) : (
@@ -307,25 +364,29 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
 
       {/* Bottom row (full width, matches v3) — needs attention / top opportunities / next actions */}
       <div className="mt-3 grid grid-cols-1 gap-3 lg:[grid-template-columns:minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,1fr)]" id="attention">
-        <Panel icon={<Radar className="size-4" />} title="Needs attention" href="/ops" hrefLabel="Ops" badge={attention.length || undefined}>
+        <Panel icon={<Radar className="size-4" />} title="Needs attention" scope={WIDGET_SCOPE.needsAttention.scope} href="/ops" hrefLabel="Ops" badge={attention.length || undefined}>
           {attention.length === 0 ? (
             <p className="text-[12.5px] text-positive">All operations are on track.</p>
           ) : (
-            <div className="space-y-1.5">
-              {attention.slice(0, 5).map((i) => (
-                <Link key={i.key} href={i.href} className="flex items-center gap-2.5 rounded px-1.5 py-2 transition-colors hover:bg-[var(--row-hover)]">
-                  <span className={`size-2 shrink-0 rounded-full ${P_DOT[i.priority]}`} aria-hidden />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12.5px] font-medium text-foreground">{i.title}</span>
-                    {i.detail && <span className="block truncate text-[11px] text-muted-foreground">{i.detail.split("→")[0].trim()}</span>}
-                  </span>
-                  <ArrowRight className="size-3.5 shrink-0 text-meta" />
-                </Link>
-              ))}
+            <div className="space-y-1">
+              {attention.slice(0, 5).map((i) => {
+                const reason = i.detail?.split("→")[0].trim();
+                const action = i.detail?.split("→")[1]?.trim();
+                return (
+                  <Link key={i.key} href={i.href} className="flex items-start gap-2.5 rounded px-1.5 py-2 transition-colors hover:bg-[var(--row-hover)]">
+                    <span className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${SEV_TAG[i.priority]}`}>{SEV_LABEL[i.priority]}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[12.5px] font-medium text-foreground">{i.title}</span>
+                      {reason && <span className="block truncate text-[11px] text-muted-foreground">{reason}</span>}
+                      {action && <span className="mt-0.5 inline-flex items-center gap-0.5 text-[11px] font-medium text-[#9fb6e6]">{action} <ArrowRight className="size-3" /></span>}
+                    </span>
+                  </Link>
+                );
+              })}
             </div>
           )}
         </Panel>
-        <Panel icon={<Lightbulb className="size-4" />} title="Top opportunities" href="/salesos" hrefLabel="Sales OS"
+        <Panel icon={<Lightbulb className="size-4" />} title="Top opportunities" scope={WIDGET_SCOPE.topOpportunities.scope} href="/salesos" hrefLabel="Sales OS"
           chip={<span className="inline-flex items-center gap-1 rounded border border-[var(--gold)]/40 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--gold)]"><Bot className="size-3" /> AI recommends</span>}>
           {!salesQ || salesQ.items.length === 0 ? (
             <p className="text-[12.5px] text-meta">{showMoney ? "No open opportunities ranked right now." : "Hidden for your role."}</p>
@@ -347,7 +408,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             </div>
           )}
         </Panel>
-        <Panel icon={<ListChecks className="size-4" />} title="Next actions" href="/ops" hrefLabel="View all">
+        <Panel icon={<ListChecks className="size-4" />} title="Next actions" scope={WIDGET_SCOPE.nextActions.scope} href="/ops" hrefLabel="View all">
           {nextActions.length === 0 ? (
             <p className="text-[12px] text-positive">Nothing needs you right now.</p>
           ) : (
@@ -378,12 +439,14 @@ function pctDelta(cur: number | null, prevV: number | null): { pct: number; up: 
 
 // ── Panels + KPI ─────────────────────────────────────────────────────────────
 
-function Panel({ icon, title, href, hrefLabel, children, className, badge, chip }: { icon: React.ReactNode; title: string; href?: string; hrefLabel?: string; children: React.ReactNode; className?: string; badge?: number; chip?: React.ReactNode }): React.JSX.Element {
+function Panel({ icon, title, scope, href, hrefLabel, children, className, badge, chip }: { icon: React.ReactNode; title: string; scope?: string; href?: string; hrefLabel?: string; children: React.ReactNode; className?: string; badge?: number; chip?: React.ReactNode }): React.JSX.Element {
   return (
     <section className={`surface flex flex-col border p-3 ${className ?? ""}`}>
       <div className="mb-3 flex items-center gap-2">
         <h2 className="flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">{icon} {title}</h2>
         {badge != null && <span className="rounded bg-critical/15 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-critical">{badge}</span>}
+        {/* Data-scope tag — every widget states its business time horizon (widgetScope.ts). */}
+        {scope && <span className="rounded bg-[var(--row-hover)] px-1.5 py-0.5 text-[9px] uppercase tracking-[0.08em] text-meta">{scope}</span>}
         {chip}
         {href && hrefLabel && <Link href={href} className="ml-auto inline-flex items-center gap-0.5 text-[11px] text-meta transition-colors hover:text-foreground">{hrefLabel} <ArrowRight className="size-3" /></Link>}
       </div>
@@ -391,6 +454,15 @@ function Panel({ icon, title, href, hrefLabel, children, className, badge, chip 
     </section>
   );
 }
+
+// Needs-attention severity labels + tag colors (priority → user-facing severity).
+const SEV_LABEL: Record<Priority, string> = { critical: "Critical", high: "High", medium: "Medium", info: "Low" };
+const SEV_TAG: Record<Priority, string> = {
+  critical: "bg-critical/15 text-critical",
+  high: "bg-attention/15 text-attention",
+  medium: "bg-attention/10 text-attention",
+  info: "bg-[var(--row-hover)] text-meta",
+};
 
 type KpiVisual =
   | { kind: "progress"; pct: number | null; color: string; inlineLabel?: string }
@@ -473,39 +545,34 @@ function KpiBars({ data, color, recentColor }: { data: (number | null)[]; color:
   );
 }
 
-function QuoteDonut({ signed, open, lost }: { signed: number; open: number; lost: number }): React.JSX.Element {
-  const total = signed + open + lost;
-  const segs = [
-    { label: "Signed", n: signed, color: "#3ad492" },
-    { label: "Open", n: open, color: "#f0c13a" },
-    { label: "Lost", n: lost, color: "#f06a5e" },
-  ];
-  const r = 49, cx = 60, cy = 60, C = 2 * Math.PI * r;
-  let offset = 0;
+// Today's Operations EMPTY state — shown instead of a giant empty map when nothing is dispatched today.
+// Compact counts + the next operational day, so the panel doesn't waste the space an active map would use.
+function TodayOpsEmpty({ ops, nextOpDay, showMoney }: { ops: { events: number; activeRoutes: number; driversAssigned: number; scheduledRevenue: number | null }; nextOpDay: { date: string; count: number } | null; showMoney: boolean }): React.JSX.Element {
+  const headline = ops.events > 0 ? `${plural(ops.events, "event")} booked — not dispatched.` : "No routes scheduled today.";
+  const monTitle = nextOpDay ? mon(nextOpDay.date).charAt(0) + mon(nextOpDay.date).slice(1).toLowerCase() : "";
   return (
-    <div className="flex items-center gap-3">
-      <svg viewBox="0 0 120 120" width={120} height={120} className="shrink-0 -rotate-90">
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--row-hover)" strokeWidth={22} />
-        {total > 0 && segs.map((s) => {
-          const frac = s.n / total;
-          const len = frac * C;
-          const el = <circle key={s.label} cx={cx} cy={cy} r={r} fill="none" stroke={s.color} strokeWidth={22} strokeDasharray={`${len} ${C - len}`} strokeDashoffset={-offset} />;
-          offset += len;
-          return el;
-        })}
-        <text x={cx} y={cy - 2} textAnchor="middle" className="rotate-90 fill-[var(--foreground)] text-[20px] font-semibold tabular-nums" transform="rotate(90 60 60)">{total}</text>
-        <text x={cx} y={cy + 14} textAnchor="middle" className="fill-[var(--text-meta)] text-[8px] uppercase tracking-wide" transform="rotate(90 60 60)">Total</text>
-      </svg>
-      <div className="min-w-0 flex-1 space-y-2">
-        {segs.map((s) => (
-          <div key={s.label} className="flex items-center gap-2 text-[12.5px]">
-            <span className="size-2.5 shrink-0 rounded-sm" style={{ background: s.color }} aria-hidden />
-            <span className="flex-1 text-secondary-text">{s.label}</span>
-            <span className="tabular-nums text-foreground">{s.n}</span>
-            <span className="w-12 text-right tabular-nums text-meta">({total > 0 ? Math.round((s.n / total) * 100) : 0}%)</span>
+    <div className="space-y-3">
+      <p className="text-[12.5px] text-meta">{headline}</p>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+        <OpStat n={ops.events} label="Events" />
+        <OpStat n={ops.activeRoutes} label="Routes" />
+        <OpStat n={ops.driversAssigned} label="Drivers" />
+        {showMoney && (
+          <div className="flex items-baseline gap-2">
+            <span className="text-[20px] font-semibold tabular-nums text-foreground">{money(ops.scheduledRevenue ?? 0)}</span>
+            <span className="text-[11.5px] text-meta">Scheduled</span>
           </div>
-        ))}
+        )}
       </div>
+      {nextOpDay && (
+        <div className="border-t border-rule pt-3">
+          <div className="text-[10px] uppercase tracking-[0.08em] text-meta">Next operational day</div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className="text-[14px] font-semibold tabular-nums text-foreground">{monTitle} {dnum(nextOpDay.date)}</span>
+            <span className="text-[12px] text-meta">{plural(nextOpDay.count, "event")}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

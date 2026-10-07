@@ -73,7 +73,7 @@ export function RevenueTrendChart({
       {/* Header: title + tabs (mockup puts the metric tabs in the header row) */}
       <div className="mb-2 flex items-center gap-2">
         <h2 className="flex items-center gap-1.5 text-[12.5px] font-medium uppercase tracking-[0.06em] text-tertiary-text">
-          <TrendingUp className="size-[15px] text-meta" /> Revenue performance
+          <TrendingUp className="size-[15px] text-meta" /> {curYear} Revenue performance
         </h2>
         <div className="ml-auto flex gap-1.5">
           {metrics.map((mt) => (
