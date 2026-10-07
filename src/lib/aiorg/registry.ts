@@ -67,6 +67,11 @@ const T = {
   statusSync: (): Tool => ({ id: "status_sync", label: "Push stop/route status to Goodshuffle", category: "EXTERNAL", perm: "APPROVAL_REQUIRED", backing: "none (proposed GS status-sync write, v3)" }),
   publishContent: (): Tool => ({ id: "publish_content", label: "Publish content", category: "EXTERNAL", perm: "APPROVAL_REQUIRED", backing: "none (no auto-publish path)" }),
   changeSettings: (): Tool => ({ id: "change_settings", label: "Change settings / users", category: "EXTERNAL", perm: "APPROVAL_REQUIRED", backing: "admin/* (canManageSettings)" }),
+
+  // PAYROLL — read + interpret only. The engine CALCULATES hours/rates/reconciliation; the AI INTERPRETS.
+  // No payroll-write tool exists here (pushing/running payroll is FORBIDDEN → simply absent).
+  payrollReview: (): Tool => ({ id: "payroll_review", label: "Read payroll review (ready / blocked)", category: "DATA", perm: "READ", backing: "payroll/review.ts:payrollReview" }),
+  payrollReconcile: (): Tool => ({ id: "payroll_reconcile", label: "Explain payroll blockers + reconciliation", category: "ANALYSIS", perm: "ANALYZE", backing: "payroll/review.ts:classifyReview" }),
 };
 
 // ── The roster ────────────────────────────────────────────────────────────────
@@ -235,6 +240,28 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     escalationRules: [],
     backing: "coming",
     valueMeasure: "Not wired yet",
+  },
+  {
+    id: "payroll-manager",
+    name: "Payroll Manager",
+    department: "backoffice",
+    owner: "Lisa",
+    mission: "Make each payroll period accurate, reconciled, and ready — and explain exactly what's blocking it.",
+    responsibilities: [
+      "Interpret the deterministic payroll review (ready / requires-review / blocked)",
+      "Explain why payroll isn't ready and which workers need mapping, rates, or review",
+      "Summarize what changed from last period",
+    ],
+    inputs: [
+      { label: "Payroll review", ref: "payroll/review.ts:payrollReview", href: "/payroll?tab=review" },
+      { label: "Payroll exceptions", ref: "payroll/store.ts:listExceptions", href: "/payroll?tab=exceptions" },
+    ],
+    // READ + ANALYZE + escalate only. RULES CALCULATE (the engine), AI INTERPRETS. No payroll-write tool
+    // exists (running/pushing payroll is FORBIDDEN → absent); the human approves in the Payroll Review.
+    toolbox: [T.payrollReview(), T.payrollReconcile(), T.raiseException(), T.recordAudit()],
+    escalationRules: [{ when: "A pay period has blocking issues (no Gusto mapping / no pay rate) before payday" }],
+    backing: "coming", // the deterministic engine is live; the AI interpretation layer is the foundation
+    valueMeasure: "Payroll-ready %, blockers resolved before payday, time-to-approve",
   },
   {
     id: "back-office",
@@ -476,6 +503,7 @@ export const BLADE_AGENTS: Record<BladeKey, string[]> = {
   dispatch: ["dispatch-route", "inventory-exception"],
   "event-risk": ["event-risk", "inventory-exception"],
   finance: ["business-intelligence", "executive-briefing", "priority-exception"],
+  payroll: ["payroll-manager"],
   command: ["executive-briefing", "priority-exception", "business-intelligence"],
 };
 
@@ -491,6 +519,7 @@ const CANONICAL_BLADE: Record<string, BladeKey> = {
   staffing: "staffing",
   scheduling: "scheduling",
   hiring: "staffing",
+  "payroll-manager": "payroll",
   "back-office": "staffing",
   "event-radar": "radar",
   content: "marketing",

@@ -137,9 +137,9 @@ describe("blade mapping — per-blade filtered view", () => {
 });
 
 describe("registry integrity", () => {
-  it("has 19 employees with unique ids", () => {
-    expect(AI_EMPLOYEES).toHaveLength(19);
-    expect(new Set(AI_EMPLOYEES.map((e) => e.id)).size).toBe(19);
+  it("has 20 employees with unique ids", () => {
+    expect(AI_EMPLOYEES).toHaveLength(20);
+    expect(new Set(AI_EMPLOYEES.map((e) => e.id)).size).toBe(20);
   });
 
   it("every employee's owner is a real human in HUMANS", () => {
@@ -154,10 +154,10 @@ describe("registry integrity", () => {
     }
   });
 
-  it("the honest backing split matches the design doc (10 live, 1 seed, 6 partial, 2 coming)", () => {
+  it("the honest backing split matches the design doc (10 live, 1 seed, 6 partial, 3 coming)", () => {
     const by = { live: 0, seed: 0, partial: 0, coming: 0 };
     for (const e of AI_EMPLOYEES) by[e.backing]++;
-    expect(by).toEqual({ live: 10, seed: 1, partial: 6, coming: 2 });
+    expect(by).toEqual({ live: 10, seed: 1, partial: 6, coming: 3 });
   });
 
   it("badges Event Radar as SEED and Hiring + Competitive Intelligence as COMING", () => {

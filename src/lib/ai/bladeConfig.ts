@@ -19,6 +19,7 @@ export const AI_BLADES: BladeKey[] = [
   "dispatch",
   "event-risk",
   "finance",
+  "payroll",
   "command",
 ];
 

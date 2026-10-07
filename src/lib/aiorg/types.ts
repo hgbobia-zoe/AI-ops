@@ -20,6 +20,7 @@ export type BladeKey =
   | "dispatch"
   | "event-risk"
   | "finance"
+  | "payroll"
   | "command";
 
 /** Honest backing state of an employee's data source (see the per-agent table in the design doc).

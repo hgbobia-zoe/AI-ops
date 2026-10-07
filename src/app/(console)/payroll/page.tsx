@@ -27,6 +27,7 @@ import {
 } from "@/lib/payroll/types";
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { readGustoSnapshot } from "@/lib/payroll/gustoSnapshot";
+import { BladeAgents } from "@/components/aiorg/BladeAgents";
 import { WorkerEditor, type GustoPick } from "@/components/payroll/WorkerEditor";
 import { SyncButton } from "@/components/payroll/SyncButton";
 import { ApproveButton } from "@/components/payroll/ApproveButton";
@@ -115,6 +116,8 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
           </Link>
         ))}
       </nav>
+
+      <div className="mb-4"><BladeAgents blade="payroll" /></div>
 
       {tab === "overview" && <OverviewTab period={period} which={which} />}
       {tab === "review" && <ReviewTab period={period} which={which} />}
