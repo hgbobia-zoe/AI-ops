@@ -7,7 +7,7 @@
 
 import Link from "next/link";
 import {
-  AlertTriangle, ArrowRight, DollarSign, FileText, CalendarCheck, ShieldAlert, Truck, TrendingUp,
+  AlertTriangle, ArrowRight, DollarSign, FileText, CalendarCheck, ShieldAlert, Truck,
   PieChart, Gauge, Radar, Lightbulb, ListChecks, Bot, CalendarDays, CircleDot, Phone, Mail, Users, Megaphone, MapPin,
   Search, Bell, ChevronDown, Plus,
 } from "lucide-react";
@@ -37,7 +37,8 @@ const moneyK = (n: number | null | undefined): string => {
 const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? "" : "s"}`;
 
 const P_DOT: Record<Priority, string> = { critical: "bg-critical", high: "bg-attention", medium: "bg-attention/70", info: "bg-[var(--bar)]" };
-const CAP_BAR: Record<CapacityLevel, string> = { NORMAL: "bg-positive/70", TIGHT: "bg-attention/80", CONSTRAINED: "bg-critical/80", UNVERIFIED: "bg-[var(--bar)]" };
+// Capacity bar colors — the design-handoff mockup's exact chart palette (open / tight / at-limit).
+const CAP_HEX: Record<CapacityLevel, string> = { NORMAL: "#4fae7f", TIGHT: "#e3bf62", CONSTRAINED: "#df6e64", UNVERIFIED: "#3f424d" };
 const NBA_LABEL: Record<string, string> = {
   CALL_NOW: "Call", SEND_SMS: "Text", FOLLOW_UP: "Follow up", ASK_DISCOVERY: "Discover", HANDLE_OBJECTION: "Respond",
   VERIFY_AVAILABILITY: "Verify", REVIEW_QUOTE: "Review", WAIT: "View",
@@ -129,7 +130,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const pipe = c.pipeline;
 
   return (
-    <main className="mx-auto max-w-[1500px] p-3 pb-8 leading-[1.3] md:p-4">
+    <main className="p-3 pb-8 leading-[1.3] md:px-4 md:pb-4">
       <AutoRefresh seconds={120} />
 
       {/* v3 top bar — search, quick actions, notifications, viewer (dashboard chrome) */}
@@ -172,9 +173,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         </div>
       </header>
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-12">
+      <div className="grid grid-cols-1 gap-3 xl:[grid-template-columns:minmax(0,1fr)_486px]">
         {/* ── LEFT: business cockpit ── */}
-        <div className="space-y-3 xl:col-span-9">
+        <div className="space-y-3 min-w-0">
           {/* KPI row */}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
             {showMoney ? (
@@ -195,92 +196,57 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           </div>
 
           {/* Revenue performance + Quote status */}
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
-            <Panel className="lg:col-span-8" icon={<TrendingUp className="size-4" />} title="Revenue performance" href="/sales" hrefLabel="Sales">
-              <RevenueTrendChart months={months} target={rev.target} curYear={year} prevYear={year - 1} showMoney={showMoney} />
-            </Panel>
-            <Panel className="lg:col-span-4" icon={<PieChart className="size-4" />} title="Quote status" href="/salesos" hrefLabel="Sales OS">
+          <div className="grid grid-cols-1 gap-3 lg:[grid-template-columns:minmax(0,1fr)_296px]">
+            <div className="min-w-0">
+              <RevenueTrendChart months={months} target={rev.target} curYear={year} prevYear={year - 1} showMoney={showMoney} currentMonthIdx={curMonthIdx} />
+            </div>
+            <Panel icon={<PieChart className="size-4" />} title="Quote status" href="/salesos" hrefLabel="Sales OS">
               <QuoteDonut signed={pipe.signed.count} open={pipe.quote.count} lost={pipe.lost.count} />
             </Panel>
           </div>
 
           {/* Operational capacity + Today's operations */}
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
-            <Panel className="lg:col-span-8" icon={<Gauge className="size-4" />} title="Operational capacity — next 7 days" href="/risk" hrefLabel="Event Risk">
-              <div className="grid grid-cols-7 gap-1.5">
-                {c.outlook.map((d) => {
+          <div className="grid grid-cols-1 gap-3 lg:[grid-template-columns:minmax(0,1fr)_296px]">
+            <Panel icon={<Gauge className="size-4" />} title="Operational capacity — next 7 days" href="/risk" hrefLabel="Event Risk">
+              {/* One bordered box, 7 cells with dividers, today highlighted with a grey inset (matches v3). */}
+              <div className="grid grid-cols-7 rounded border border-[var(--lifted)]">
+                {c.outlook.map((d, i) => {
                   const lvl = capacityLevel(d.verdict);
-                  // Real crew ratio "X/Y" = drivers scheduled / needed (from the capacity scan). When no
+                  // Real crew ratio "X / Y" = drivers scheduled / needed (from the capacity scan). When no
                   // routes are needed that day, there's nothing to crew — show jobs instead of a fake ratio.
                   const hasRatio = d.driversNeeded != null && d.driversNeeded > 0 && d.driversScheduled != null;
                   const fill = hasRatio ? Math.min(100, Math.round((d.driversScheduled! / d.driversNeeded!) * 100)) : d.jobs ? 100 : 8;
+                  const value = hasRatio ? `${d.driversScheduled} / ${d.driversNeeded}` : d.jobs ? String(d.jobs) : "—";
+                  const monTitle = mon(d.date).charAt(0) + mon(d.date).slice(1).toLowerCase();
                   return (
-                    <div key={d.date} className={`flex flex-col items-center gap-1 rounded border p-2 ${d.isToday ? "border-[var(--gold)]/40 bg-[var(--gold)]/[0.04]" : "border-border"}`}>
-                      <span className="text-[10px] uppercase tracking-wide text-meta">{dow(d.date)}</span>
-                      <span className="text-[11px] tabular-nums text-tertiary-text">{mon(d.date)} {dnum(d.date)}</span>
-                      <span className="text-[16px] font-semibold tabular-nums">{hasRatio ? `${d.driversScheduled}/${d.driversNeeded}` : d.jobs || "—"}</span>
-                      <span className="text-[9px] uppercase tracking-wide text-meta">{hasRatio ? "crew" : d.jobs ? "jobs" : "open"}</span>
-                      <span className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--row-hover)]" aria-hidden title={d.verdict ?? "available"}>
-                        <span className={`block h-full rounded-full ${CAP_BAR[lvl]}`} style={{ width: `${fill}%` }} />
-                      </span>
+                    <div key={d.date} className={`py-2 text-center ${i < 6 ? "border-r border-[var(--lifted)]" : ""} ${d.isToday ? "rounded-l-[3px] bg-[var(--row)] shadow-[inset_0_0_0_1px_var(--bar)]" : ""}`}>
+                      <div className="text-[12px] uppercase tracking-[0.06em] text-secondary-text">{dow(d.date)}</div>
+                      <div className="mt-0.5 text-[12px] tabular-nums text-muted-foreground">{monTitle} {dnum(d.date)}</div>
+                      <div className="mt-1.5 text-[13.5px] font-medium tabular-nums">{value}</div>
+                      <div className="mx-2.5 mt-1.5 h-[5px] rounded-[3px] bg-[var(--border)]" title={d.verdict ?? "available"}>
+                        <span className="block h-full rounded-[3px]" style={{ width: `${fill}%`, background: CAP_HEX[lvl] }} />
+                      </div>
                     </div>
                   );
                 })}
               </div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 px-0.5 text-[11px] text-meta">
+                <span>Crews booked / available</span>
+                <span className="flex items-center gap-1.5"><span className="h-[3px] w-2" style={{ background: CAP_HEX.NORMAL }} /> open</span>
+                <span className="flex items-center gap-1.5"><span className="h-[3px] w-2" style={{ background: CAP_HEX.TIGHT }} /> tight</span>
+                <span className="flex items-center gap-1.5"><span className="h-[3px] w-2" style={{ background: CAP_HEX.CONSTRAINED }} /> at limit</span>
+              </div>
             </Panel>
-            <Panel className="lg:col-span-4" icon={<Truck className="size-4" />} title="Today's operations" href="/dispatch" hrefLabel="Routes">
+            <Panel icon={<Truck className="size-4" />} title="Today's operations" href="/dispatch" hrefLabel="Routes">
               <div className="mb-3"><TodayMap /></div>
               <TodayOps ops={c.today_ops} showMoney={showMoney} />
             </Panel>
           </div>
 
-          {/* Needs attention + Top opportunities */}
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-12" id="attention">
-            <Panel className="lg:col-span-5" icon={<Radar className="size-4" />} title="Needs attention" href="/ops" hrefLabel="Ops" badge={attention.length || undefined}>
-              {attention.length === 0 ? (
-                <p className="text-[12.5px] text-positive">All operations are on track.</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {attention.slice(0, 5).map((i) => (
-                    <Link key={i.key} href={i.href} className="flex items-center gap-2.5 rounded px-1.5 py-2 transition-colors hover:bg-[var(--row-hover)]">
-                      <span className={`size-2 shrink-0 rounded-full ${P_DOT[i.priority]}`} aria-hidden />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[12.5px] font-medium text-foreground">{i.title}</span>
-                        {i.detail && <span className="block truncate text-[11px] text-muted-foreground">{i.detail.split("→")[0].trim()}</span>}
-                      </span>
-                      <ArrowRight className="size-3.5 shrink-0 text-meta" />
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </Panel>
-            <Panel className="lg:col-span-7" icon={<Lightbulb className="size-4" />} title="Top opportunities" href="/salesos" hrefLabel="Sales OS"
-              chip={<span className="inline-flex items-center gap-1 rounded border border-[var(--gold)]/40 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--gold)]"><Bot className="size-3" /> AI recommends</span>}>
-              {!salesQ || salesQ.items.length === 0 ? (
-                <p className="text-[12.5px] text-meta">{showMoney ? "No open opportunities ranked right now." : "Hidden for your role."}</p>
-              ) : (
-                <div className="space-y-0.5">
-                  {salesQ.items.slice(0, 5).map((it, idx) => (
-                    <div key={it.id} className="flex items-center gap-2.5 rounded px-1.5 py-1.5 hover:bg-[var(--row-hover)]">
-                      <span className="w-4 shrink-0 text-center text-[11px] tabular-nums text-meta">{idx + 1}</span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[12.5px] font-medium text-foreground">{it.eventName || it.clientName}</span>
-                        <span className="block truncate text-[11px] text-muted-foreground">{it.stateLabel}{it.daysToEvent != null ? ` · in ${it.daysToEvent}d` : ""}</span>
-                      </span>
-                      <span className="shrink-0 text-[12px] font-semibold tabular-nums text-[var(--gold)]">{moneyK(it.value)}</span>
-                      <Link href={`/salesos/${it.id}`} className="shrink-0 rounded border border-[var(--gold)]/50 px-2 py-0.5 text-[11px] font-medium text-[var(--gold)] transition-colors hover:bg-[var(--gold)]/10">
-                        {NBA_LABEL[it.nba.action] ?? "Open"}
-                      </Link>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Panel>
-          </div>
         </div>
 
-        {/* ── RIGHT RAIL: AI sessions / upcoming events / next actions ── */}
-        <div className="space-y-3 xl:col-span-3">
+        {/* ── RIGHT RAIL (486px): AI sessions / upcoming events ── */}
+        <div className="space-y-3 min-w-0">
           {/* AI Sessions (LIVE) — a compact summary that links to the full AI Command Center */}
           <Panel icon={<Bot className="size-4" />} title="AI sessions" href="/ai-command" hrefLabel="View all"
             chip={aiOverview && aiOverview.liveCount > 0 ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-positive"><span className="size-1.5 rounded-full bg-positive" /> {aiOverview.liveCount} live</span> : undefined}>
@@ -332,23 +298,66 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             )}
           </Panel>
 
-          {/* Next actions */}
-          <Panel icon={<ListChecks className="size-4" />} title="Next actions" href="/ops" hrefLabel="View all">
-            {nextActions.length === 0 ? (
-              <p className="text-[12px] text-positive">Nothing needs you right now.</p>
-            ) : (
-              <div className="space-y-0.5">
-                {nextActions.map((a) => (
-                  <Link key={a.key} href={a.href} className="flex items-center gap-2.5 rounded px-1.5 py-2 transition-colors hover:bg-[var(--row-hover)]">
-                    <ActionIcon text={a.text} />
-                    <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">{a.text}</span>
-                    <span className={`size-1.5 shrink-0 rounded-full ${P_DOT[a.priority]}`} aria-hidden />
-                  </Link>
-                ))}
-              </div>
-            )}
-          </Panel>
         </div>
+      </div>
+
+      {/* Bottom row (full width, matches v3) — needs attention / top opportunities / next actions */}
+      <div className="mt-3 grid grid-cols-1 gap-3 lg:[grid-template-columns:minmax(0,1fr)_minmax(0,1.15fr)_minmax(0,1fr)]" id="attention">
+        <Panel icon={<Radar className="size-4" />} title="Needs attention" href="/ops" hrefLabel="Ops" badge={attention.length || undefined}>
+          {attention.length === 0 ? (
+            <p className="text-[12.5px] text-positive">All operations are on track.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {attention.slice(0, 5).map((i) => (
+                <Link key={i.key} href={i.href} className="flex items-center gap-2.5 rounded px-1.5 py-2 transition-colors hover:bg-[var(--row-hover)]">
+                  <span className={`size-2 shrink-0 rounded-full ${P_DOT[i.priority]}`} aria-hidden />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12.5px] font-medium text-foreground">{i.title}</span>
+                    {i.detail && <span className="block truncate text-[11px] text-muted-foreground">{i.detail.split("→")[0].trim()}</span>}
+                  </span>
+                  <ArrowRight className="size-3.5 shrink-0 text-meta" />
+                </Link>
+              ))}
+            </div>
+          )}
+        </Panel>
+        <Panel icon={<Lightbulb className="size-4" />} title="Top opportunities" href="/salesos" hrefLabel="Sales OS"
+          chip={<span className="inline-flex items-center gap-1 rounded border border-[var(--gold)]/40 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--gold)]"><Bot className="size-3" /> AI recommends</span>}>
+          {!salesQ || salesQ.items.length === 0 ? (
+            <p className="text-[12.5px] text-meta">{showMoney ? "No open opportunities ranked right now." : "Hidden for your role."}</p>
+          ) : (
+            <div className="space-y-0.5">
+              {salesQ.items.slice(0, 5).map((it, idx) => (
+                <div key={it.id} className="flex items-center gap-2.5 rounded px-1.5 py-1.5 hover:bg-[var(--row-hover)]">
+                  <span className="w-4 shrink-0 text-center text-[11px] tabular-nums text-meta">{idx + 1}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12.5px] font-medium text-foreground">{it.eventName || it.clientName}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">{it.stateLabel}{it.daysToEvent != null ? ` · in ${it.daysToEvent}d` : ""}</span>
+                  </span>
+                  <span className="shrink-0 text-[12px] font-semibold tabular-nums text-[var(--gold)]">{moneyK(it.value)}</span>
+                  <Link href={`/salesos/${it.id}`} className="shrink-0 rounded border border-[var(--gold)]/50 px-2 py-0.5 text-[11px] font-medium text-[var(--gold)] transition-colors hover:bg-[var(--gold)]/10">
+                    {NBA_LABEL[it.nba.action] ?? "Open"}
+                  </Link>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+        <Panel icon={<ListChecks className="size-4" />} title="Next actions" href="/ops" hrefLabel="View all">
+          {nextActions.length === 0 ? (
+            <p className="text-[12px] text-positive">Nothing needs you right now.</p>
+          ) : (
+            <div className="space-y-0.5">
+              {nextActions.map((a) => (
+                <Link key={a.key} href={a.href} className="flex items-center gap-2.5 rounded px-1.5 py-2 transition-colors hover:bg-[var(--row-hover)]">
+                  <ActionIcon text={a.text} />
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">{a.text}</span>
+                  <span className={`size-1.5 shrink-0 rounded-full ${P_DOT[a.priority]}`} aria-hidden />
+                </Link>
+              ))}
+            </div>
+          )}
+        </Panel>
       </div>
     </main>
   );
