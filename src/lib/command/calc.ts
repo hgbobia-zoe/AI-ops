@@ -13,14 +13,18 @@ export interface OutlookDay {
   jobs: number; // booked events that day (lost/cancelled already excluded upstream)
   revenue: number | null; // committed (signed) $ that day; null when nothing priced/signed
   verdict: string | null; // capacity verdict for the day, if computed
+  driversScheduled: number | null; // crew ratio "X" — drivers scheduled that day
+  driversNeeded: number | null; // crew ratio "Y" — drivers needed (peak concurrent routes)
 }
 
-/** Build the next `days` days from `today`, folding in booked events and any capacity verdicts. */
+/** Build the next `days` days from `today`, folding in booked events, capacity verdicts and (when
+ *  supplied) the per-day driver ratio for the capacity strip. */
 export function sevenDayOutlook(
   today: string,
   bookings: { date: string; revenue?: number | null; signed?: boolean }[],
   capacityByDate: Map<string, string>,
   days = 7,
+  crewByDate?: Map<string, { scheduled: number | null; needed: number | null }>,
 ): OutlookDay[] {
   const out: OutlookDay[] = [];
   for (let i = 0; i < days; i++) {
@@ -33,7 +37,13 @@ export function sevenDayOutlook(
       jobs++;
       if (b.signed && typeof b.revenue === "number") revenue = (revenue ?? 0) + b.revenue;
     }
-    out.push({ date, dow, isToday: i === 0, jobs, revenue, verdict: capacityByDate.get(date) ?? null });
+    const crew = crewByDate?.get(date);
+    out.push({
+      date, dow, isToday: i === 0, jobs, revenue,
+      verdict: capacityByDate.get(date) ?? null,
+      driversScheduled: crew?.scheduled ?? null,
+      driversNeeded: crew?.needed ?? null,
+    });
   }
   return out;
 }

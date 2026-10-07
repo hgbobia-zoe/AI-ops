@@ -19,13 +19,18 @@ export interface CapacityResult {
   date: string;
   verdict: CapacityVerdict;
   reasons: string[];
+  /** Distinct drivers on the schedule that day (the "X" in X/Y). */
+  scheduledDrivers: number;
+  /** Drivers needed = peak concurrent routes (the "Y"). 0 when nothing is booked. */
+  driversNeeded: number;
 }
 
 const ORDER: Record<CapacityVerdict, number> = { AVAILABLE: 0, TIGHT: 1, CONSTRAINED: 2, UNVERIFIED: 3 };
 
 export function classifyCapacity(inp: CapacityInput): CapacityResult {
+  const crew = { scheduledDrivers: inp.scheduledDrivers, driversNeeded: inp.peakConcurrentRoutes };
   // Absence of staffing data is UNKNOWN, not a verdict.
-  if (!inp.staffingVerified) return { date: inp.date, verdict: "UNVERIFIED", reasons: ["Connecteam staffing couldn't be verified"] };
+  if (!inp.staffingVerified) return { date: inp.date, verdict: "UNVERIFIED", reasons: ["Connecteam staffing couldn't be verified"], ...crew };
 
   let verdict: CapacityVerdict = "AVAILABLE";
   const reasons: string[] = [];
@@ -40,5 +45,5 @@ export function classifyCapacity(inp: CapacityInput): CapacityResult {
   else if (inp.worstStaffingSeverity === "MEDIUM") bump("TIGHT", "tight staffing");
 
   if (reasons.length === 0) reasons.push("fleet + crew cover the day");
-  return { date: inp.date, verdict, reasons };
+  return { date: inp.date, verdict, reasons, ...crew };
 }

@@ -1784,6 +1784,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // archive flag so a finished session can be filed without deleting its history. Both additive/nullable.
   { table: "ai_sessions", column: "objective", type: "TEXT" }, // the session's current goal (editable)
   { table: "ai_sessions", column: "archived", type: "INTEGER" }, // 1 = archived (filed, hidden from live/recent)
+  // Per-day crew ratio for the Command Center capacity strip ("X/Y" = drivers scheduled / needed).
+  { table: "day_capacity", column: "scheduled_drivers", type: "INTEGER" },
+  { table: "day_capacity", column: "drivers_needed", type: "INTEGER" },
 ];
 
 function migrate(db: DB): void {

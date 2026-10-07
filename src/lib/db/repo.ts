@@ -1856,17 +1856,22 @@ export interface DayCapacityRecord {
   date: string;
   verdict: string;
   reasons: string[];
+  scheduledDrivers?: number;
+  driversNeeded?: number;
 }
 
 export function saveDayCapacity(items: DayCapacityRecord[]): void {
   const db = getDb();
   const now = new Date().toISOString();
   const up = db.prepare(
-    `INSERT INTO day_capacity (date, verdict, reasons, computed_at) VALUES (@date,@verdict,@reasons,@now)
-     ON CONFLICT(date) DO UPDATE SET verdict=@verdict, reasons=@reasons, computed_at=@now`,
+    `INSERT INTO day_capacity (date, verdict, reasons, scheduled_drivers, drivers_needed, computed_at)
+       VALUES (@date,@verdict,@reasons,@scheduled,@needed,@now)
+     ON CONFLICT(date) DO UPDATE SET verdict=@verdict, reasons=@reasons,
+       scheduled_drivers=@scheduled, drivers_needed=@needed, computed_at=@now`,
   );
   const tx = db.transaction(() => {
-    for (const i of items) up.run({ date: i.date, verdict: i.verdict, reasons: JSON.stringify(i.reasons), now });
+    for (const i of items)
+      up.run({ date: i.date, verdict: i.verdict, reasons: JSON.stringify(i.reasons), scheduled: i.scheduledDrivers ?? null, needed: i.driversNeeded ?? null, now });
   });
   tx();
 }
@@ -1875,6 +1880,9 @@ export interface DayCapacityView {
   date: string;
   verdict: string;
   reasons: string[];
+  /** Drivers scheduled / needed that day (the capacity strip's "X/Y"). Null on older rows / unverified. */
+  scheduledDrivers: number | null;
+  driversNeeded: number | null;
 }
 
 /** Capacity verdicts for upcoming dates (>= today), soonest first. */
@@ -1883,6 +1891,8 @@ export function getUpcomingCapacity(today: string): DayCapacityView[] {
     date: String(r.date),
     verdict: String(r.verdict),
     reasons: (safeJson(String(r.reasons ?? "[]")) as string[]) ?? [],
+    scheduledDrivers: r.scheduled_drivers == null ? null : Number(r.scheduled_drivers),
+    driversNeeded: r.drivers_needed == null ? null : Number(r.drivers_needed),
   }));
 }
 

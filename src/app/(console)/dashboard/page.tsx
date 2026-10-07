@@ -24,6 +24,7 @@ import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 import type { Priority } from "@/lib/ops/manager";
 import { RevenueTrendChart, type MonthPoint } from "@/components/dashboard/RevenueTrendChart";
+import { TodayMap } from "@/components/dashboard/TodayMap";
 
 export const dynamic = "force-dynamic";
 
@@ -184,19 +185,26 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               <div className="grid grid-cols-7 gap-1.5">
                 {c.outlook.map((d) => {
                   const lvl = capacityLevel(d.verdict);
+                  // Real crew ratio "X/Y" = drivers scheduled / needed (from the capacity scan). When no
+                  // routes are needed that day, there's nothing to crew — show jobs instead of a fake ratio.
+                  const hasRatio = d.driversNeeded != null && d.driversNeeded > 0 && d.driversScheduled != null;
+                  const fill = hasRatio ? Math.min(100, Math.round((d.driversScheduled! / d.driversNeeded!) * 100)) : d.jobs ? 100 : 8;
                   return (
-                    <div key={d.date} className={`flex flex-col items-center gap-1 rounded border p-2 ${d.isToday ? "border-attention/40 bg-attention/[0.04]" : "border-border"}`}>
+                    <div key={d.date} className={`flex flex-col items-center gap-1 rounded border p-2 ${d.isToday ? "border-[var(--gold)]/40 bg-[var(--gold)]/[0.04]" : "border-border"}`}>
                       <span className="text-[10px] uppercase tracking-wide text-meta">{dow(d.date)}</span>
                       <span className="text-[11px] tabular-nums text-tertiary-text">{mon(d.date)} {dnum(d.date)}</span>
-                      <span className="text-[16px] font-semibold tabular-nums">{d.jobs || "—"}</span>
-                      <span className="text-[9px] uppercase tracking-wide text-meta">{d.jobs ? "jobs" : "open"}</span>
-                      <span className={`h-1 w-full rounded-full ${CAP_BAR[lvl]}`} aria-hidden title={d.verdict ?? "available"} />
+                      <span className="text-[16px] font-semibold tabular-nums">{hasRatio ? `${d.driversScheduled}/${d.driversNeeded}` : d.jobs || "—"}</span>
+                      <span className="text-[9px] uppercase tracking-wide text-meta">{hasRatio ? "crew" : d.jobs ? "jobs" : "open"}</span>
+                      <span className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--row-hover)]" aria-hidden title={d.verdict ?? "available"}>
+                        <span className={`block h-full rounded-full ${CAP_BAR[lvl]}`} style={{ width: `${fill}%` }} />
+                      </span>
                     </div>
                   );
                 })}
               </div>
             </Panel>
             <Panel className="lg:col-span-4" icon={<Truck className="size-4" />} title="Today's operations" href="/dispatch" hrefLabel="Routes">
+              <div className="mb-3"><TodayMap /></div>
               <TodayOps ops={c.today_ops} showMoney={showMoney} />
             </Panel>
           </div>

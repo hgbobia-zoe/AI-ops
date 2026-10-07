@@ -164,6 +164,7 @@ export async function commandCenter(): Promise<CommandCenter> {
   const capAll = getUpcomingCapacity(today);
   const capacity: CapacityDay[] = capAll.filter((c) => c.verdict !== "AVAILABLE").slice(0, 6);
   const capacityByDate = new Map(capAll.map((c) => [c.date, c.verdict]));
+  const crewByDate = new Map(capAll.map((c) => [c.date, { scheduled: c.scheduledDrivers, needed: c.driversNeeded }]));
   const anyConstrainedSoon = capAll.slice(0, 3).some((c) => c.verdict === "CONSTRAINED");
 
   // 7-day outlook.
@@ -172,7 +173,7 @@ export async function commandCenter(): Promise<CommandCenter> {
     revenue: b.grandTotal,
     signed: b.signed,
   }));
-  const outlook = sevenDayOutlook(today, weekBookings, capacityByDate, 7);
+  const outlook = sevenDayOutlook(today, weekBookings, capacityByDate, 7, crewByDate);
 
   const status = dayStatus(today_ops.events, criticalOrHigh, anyConstrainedSoon);
 
