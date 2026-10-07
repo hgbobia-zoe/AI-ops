@@ -18,6 +18,9 @@ primary_region = "iad"
   PORT = "3000"
   DATABASE_PATH = "/data/dispatch.db"
   GOODSHUFFLE_STORAGE_STATE = "/data/goodshuffle-auth.json"
+  # Blades whose AI agents may auto-raise approval proposals (still human-decided; execution always needs
+  # an approval). Comma list of BladeKeys, or "*" for all. Remove a blade here to turn its auto-propose off.
+  AI_AUTOPROPOSE_BLADES = "salesos"
 
 # SQLite lives here. Volumes are per-machine, so run exactly ONE machine.
 [mounts]

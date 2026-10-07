@@ -42,9 +42,24 @@ function key(blade: BladeKey): string {
   return `aiBlade.${blade}`;
 }
 
+/** Blades force-enabled for auto-propose by config (comma list in AI_AUTOPROPOSE_BLADES, or "*" for all).
+ *  A deploy-time lever so auto-propose can be turned on without writing the settings DB. It only affects
+ *  whether AI may PROPOSE — execution still requires a human approval. Env wins over the stored toggle. */
+function envAutoProposeBlades(): Set<string> {
+  return new Set(
+    (process.env.AI_AUTOPROPOSE_BLADES ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+}
+
 export function getBladeAiConfig(blade: BladeKey): BladeAiConfig {
   const stored = getJson<Partial<BladeAiConfig>>(key(blade), {});
-  return { ...defaultBladeAiConfig(), ...stored };
+  const merged = { ...defaultBladeAiConfig(), ...stored };
+  const env = envAutoProposeBlades();
+  if (env.has("*") || env.has(blade)) merged.autoPropose = true; // config force-on
+  return merged;
 }
 
 /** Merge a partial update into a blade's config. Returns the merged result. */

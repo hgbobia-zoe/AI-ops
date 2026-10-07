@@ -68,4 +68,23 @@ describe("blade AI config", () => {
     expect(isValidBlade("salesos")).toBe(true);
     expect(isValidBlade("nope")).toBe(false);
   });
+
+  it("AI_AUTOPROPOSE_BLADES force-enables auto-propose (env wins over the stored toggle)", () => {
+    const saved = process.env.AI_AUTOPROPOSE_BLADES;
+    try {
+      process.env.AI_AUTOPROPOSE_BLADES = "salesos, dispatch";
+      expect(getBladeAiConfig("salesos").autoPropose).toBe(true);
+      expect(getBladeAiConfig("dispatch").autoPropose).toBe(true);
+      expect(getBladeAiConfig("finance").autoPropose).toBe(false); // not listed
+      // Env forces on even if the stored toggle says off.
+      setBladeAiConfig("salesos", { autoPropose: false });
+      expect(getBladeAiConfig("salesos").autoPropose).toBe(true);
+      // Wildcard enables all.
+      process.env.AI_AUTOPROPOSE_BLADES = "*";
+      expect(getBladeAiConfig("finance").autoPropose).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.AI_AUTOPROPOSE_BLADES;
+      else process.env.AI_AUTOPROPOSE_BLADES = saved;
+    }
+  });
 });
