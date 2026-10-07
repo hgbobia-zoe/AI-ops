@@ -39,6 +39,7 @@ const PUBLIC: string[] = [
   "/api/finance/revenue", // own token; hit by the pull, not a person
   "/api/route/import",
   "/api/instawork/import", // Auto-Pull Instawork browser pull POST (from a logged-in app.instawork.com tab); own token (fail-open), CORS-locked to app.instawork.com — must not bounce to auth
+  "/api/payroll/gusto/import", // Auto-Pull Gusto browser pull POST (from a logged-in app.gusto.com tab); GS_INGEST_TOKEN (fail-open), CORS-locked to app.gusto.com — must not bounce to auth (and NOT be caught by the owner/admin /api/payroll gate)
 
   "/api/route/prune", // Auto-Pull sanitize: drop routes GS no longer has; own token (fail-open), CORS-locked
   "/api/gs/projects",

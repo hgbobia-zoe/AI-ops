@@ -126,7 +126,7 @@ export function QuotePipeline({ pipeline, activity, showMoney }: { pipeline: Pip
 // Thick ring split into slices, each with a leader line out to its value + short label. Non-zero slices
 // only; labels are collision-separated on each side. Drawn in normal orientation so arc + leader geometry
 // share one coordinate frame.
-const CX = 150, CY = 100, RO = 52, RI = 34, W = 300, H = 224, GAP = 32, LABEL_DX = 88;
+const CX = 150, CY = 100, RO = 57, RI = 37, W = 300, H = 220, GAP = 36, LABEL_DX = 92;
 
 function AnnotatedDonut({ segments, centerValue, centerLabel }: { segments: Seg[]; centerValue: string; centerLabel: string }): React.JSX.Element {
   const active = segments.filter((s) => s.value > 0);
@@ -171,14 +171,14 @@ function AnnotatedDonut({ segments, centerValue, centerLabel }: { segments: Seg[
           <g key={`l${i}`}>
             <polyline points={`${it.sx.toFixed(1)},${it.sy.toFixed(1)} ${it.ex.toFixed(1)},${it.ey.toFixed(1)} ${labelX},${ly.toFixed(1)}`} fill="none" stroke="#6b7085" strokeWidth={1} />
             <circle cx={it.sx} cy={it.sy} r={2} fill={it.s.color} />
-            <text x={tx} y={ly - 5} textAnchor={anchor} className="fill-[var(--foreground)] text-[12.5px] font-semibold tabular-nums">{it.s.display}</text>
-            <text x={tx} y={ly + 6} textAnchor={anchor} className="fill-[var(--text-meta)] text-[9px] uppercase tracking-wide">{it.s.short}</text>
+            <text x={tx} y={ly - 6} textAnchor={anchor} className="fill-[var(--foreground)] text-[13.5px] font-semibold tabular-nums">{it.s.display}</text>
+            <text x={tx} y={ly + 7} textAnchor={anchor} className="fill-[var(--text-meta)] text-[10px] uppercase tracking-wide">{it.s.short}</text>
           </g>
         );
       })}
       {/* center */}
-      <text x={CX} y={CY - 1} textAnchor="middle" className="fill-[var(--foreground)] text-[27px] font-semibold tabular-nums">{centerValue}</text>
-      <text x={CX} y={CY + 16} textAnchor="middle" className="fill-[var(--text-meta)] text-[9px] uppercase tracking-wide">{centerLabel}</text>
+      <text x={CX} y={CY - 1} textAnchor="middle" className="fill-[var(--foreground)] text-[30px] font-semibold tabular-nums">{centerValue}</text>
+      <text x={CX} y={CY + 17} textAnchor="middle" className="fill-[var(--text-meta)] text-[9.5px] uppercase tracking-wide">{centerLabel}</text>
     </svg>
   );
 }

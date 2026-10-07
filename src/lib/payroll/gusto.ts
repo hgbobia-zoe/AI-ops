@@ -1,12 +1,14 @@
 // Gusto — the payroll SYSTEM OF RECORD (destination). The rest of HR/Payroll never calls Gusto directly;
 // it goes through this provider abstraction, so the sync engine, reconciliation and UI stay independent of
-// the raw API. Modeled on src/lib/connecteam.ts: key-gated, never throws from the read paths, returns
-// empty/"not configured" when unset.
+// how Gusto is reached.
 //
-// There is NO live Gusto integration yet. The official Gusto Embedded/Partner API is the intended path
-// (NOT browser automation — Gusto does not block server IPs). Credentials will be configured in HR → Settings
-// (stored write-only like other provider secrets) or via the GUSTO_API_TOKEN env/Fly secret. Until a token
-// is present, `gustoConfigured()` is false and the engine records gusto_ok = null (never pushes).
+// Gusto's official API access is pending approval, so (like Goodshuffle + Instawork) we use BROWSER
+// TAB-REPLAY: a logged-in app.gusto.com tab replays Gusto's GraphQL operations and POSTs them to
+// /api/payroll/gusto/import, which snapshots them (src/lib/payroll/gustoSnapshot.ts). This provider READS
+// from that snapshot — the server never calls Gusto itself. WRITES (pushing approved time) go through the
+// human-approved gs_outbox drain replayed in-tab (never an auto-submit from here).
+
+import { readGustoSnapshot, gustoSnapshotFresh } from "./gustoSnapshot";
 
 export type GustoEntity = "employee" | "contractor";
 
@@ -53,42 +55,66 @@ export interface GustoPayrollProvider {
   getPayPeriods(): Promise<GustoPayPeriodRef[]>;
 }
 
+/** "Connected" = a browser pull has landed a snapshot. (Freshness is a separate health signal.) */
 export function gustoConfigured(): boolean {
-  return Boolean(process.env.GUSTO_API_TOKEN);
+  return readGustoSnapshot() != null;
 }
 
-// The default provider: safe no-op reads, writes refused. Swapped for a real API-backed provider once the
-// Gusto integration lands (same interface, so nothing else changes).
-class UnconfiguredGustoProvider implements GustoPayrollProvider {
+const COUNTRY_US = new Set(["usa", "us", "united states", "united states of america"]);
+function entityOf(personType: string): GustoEntity {
+  return personType === "contractor" ? "contractor" : "employee";
+}
+
+// Snapshot-backed provider: reads come from the browser-pulled Gusto snapshot; writes are refused here
+// (they go through the approved gs_outbox replay, never a direct submit from the server).
+class SnapshotGustoProvider implements GustoPayrollProvider {
   readonly id = "gusto";
   configured(): boolean {
     return gustoConfigured();
   }
   async validateConnection(): Promise<ConnectionResult> {
-    return { configured: false, ok: false, detail: "not connected" };
+    const snap = readGustoSnapshot();
+    if (!snap) return { configured: false, ok: false, detail: "not connected" };
+    return { configured: true, ok: gustoSnapshotFresh(), detail: gustoSnapshotFresh() ? `connected · pulled ${snap.fetchedAt}` : "stale — refresh the Gusto pull" };
   }
   async getWorkers(): Promise<GustoWorker[]> {
-    return [];
+    const snap = readGustoSnapshot();
+    if (!snap) return [];
+    return snap.members.map((m) => ({
+      id: m.id,
+      firstName: m.firstName,
+      lastName: m.lastName,
+      email: null, // not exposed by the MembersTable operation
+      entityType: entityOf(m.personType),
+      country: m.country,
+    }));
   }
   async getTimeEntries(): Promise<GustoTimeEntry[]> {
-    return [];
+    return []; // time entries are not pulled yet (reconciliation reads pay periods; entries come with the write capture)
   }
   async createTimeEntries(): Promise<{ created: GustoTimeEntry[] }> {
-    throw new Error("Gusto is not configured — cannot create time entries.");
+    throw new Error("Direct Gusto writes are disabled — push goes through the approved gs_outbox replay.");
   }
   async updateTimeEntries(): Promise<{ updated: GustoTimeEntry[] }> {
-    throw new Error("Gusto is not configured — cannot update time entries.");
+    throw new Error("Direct Gusto writes are disabled — push goes through the approved gs_outbox replay.");
   }
   async getPayPeriods(): Promise<GustoPayPeriodRef[]> {
-    return [];
+    const snap = readGustoSnapshot();
+    if (!snap) return [];
+    return snap.payPeriods.map((p) => ({ start: p.startDate ?? "", end: p.endDate ?? "", payrollId: p.payScheduleId }));
   }
+}
+
+/** Is this Gusto member a US or international worker, for classification. */
+export function gustoIsInternational(country: string | null): boolean {
+  if (!country) return false;
+  return !COUNTRY_US.has(country.trim().toLowerCase());
 }
 
 let _provider: GustoPayrollProvider | null = null;
 
-/** The active Gusto provider. Today this is always the unconfigured stub; when the real API-backed
- *  provider is implemented it is selected here (behind `gustoConfigured()`), leaving every caller unchanged. */
+/** The active Gusto provider (snapshot-backed browser-replay). */
 export function getGustoProvider(): GustoPayrollProvider {
-  if (!_provider) _provider = new UnconfiguredGustoProvider();
+  if (!_provider) _provider = new SnapshotGustoProvider();
   return _provider;
 }

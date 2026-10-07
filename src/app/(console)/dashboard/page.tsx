@@ -256,7 +256,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           </div>
 
           {/* Revenue performance + Quote status */}
-          <div className="grid grid-cols-1 gap-3 lg:[grid-template-columns:minmax(0,1fr)_296px]">
+          <div className="grid grid-cols-1 gap-3 lg:[grid-template-columns:minmax(0,1fr)_420px]">
             <div className="min-w-0">
               <RevenueTrendChart months={months} target={rev.target} curYear={year} prevYear={year - 1} showMoney={showMoney} currentMonthIdx={curMonthIdx} />
             </div>
@@ -264,7 +264,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
           </div>
 
           {/* Operational capacity + Today's operations */}
-          <div className="grid grid-cols-1 gap-3 lg:[grid-template-columns:minmax(0,1fr)_296px]">
+          <div className="grid grid-cols-1 gap-3 lg:[grid-template-columns:minmax(0,1fr)_420px]">
             <Panel icon={<Gauge className="size-4" />} title="Operational capacity — next 7 days" href="/risk" hrefLabel="Event Risk">
               {/* One bordered box, 7 cells with dividers, today highlighted with a grey inset (matches v3). */}
               <div className="grid grid-cols-7 rounded border border-[var(--lifted)]">
