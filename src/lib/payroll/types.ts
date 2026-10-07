@@ -90,6 +90,8 @@ export interface PayrollOverview {
   nextAutomaticSync: string | null; // null until the scheduler is enabled
   status: PayrollStatus;
   gustoConfigured: boolean;
+  // Instawork temps — a separate labor-cost line (paid via Instawork, NOT in the Gusto run).
+  tempLabor: { amount: number | null; basis: "actual" | "estimated" | "none"; hours: number | null };
 }
 
 export type ExceptionSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
@@ -138,3 +140,26 @@ export interface SyncRun {
 
 export type TimeEntryStatus = "NORMALIZED" | "MATCHED" | "RECONCILED" | "SYNCED" | "SKIPPED" | "FAILED";
 export type HoursType = "REGULAR" | "OVERTIME" | "DOUBLE_OVERTIME" | "PTO" | "OTHER";
+
+// ── Instawork temp pay (paid via Instawork, NOT Gusto) ───────────────────────────────────────────────
+// One temp worker's pay for a period: the ESTIMATE from booked gigs, plus the ACTUAL once imported.
+export interface TempWorkerPay {
+  name: string;
+  gigs: number;
+  hours: number | null; // scheduled window hours (null = window unknown)
+  estCost: number | null; // USD estimate from the gig seat price
+  actualHours: number | null; // imported from Instawork timesheets (null = not imported)
+  actualCost: number | null;
+}
+export interface TempPayResult {
+  ok: boolean; // Instawork snapshot available
+  asOf: string | null; // snapshot fetch time (point-in-time)
+  periodGigs: number; // booked gigs falling in the period
+  workers: TempWorkerPay[];
+  totalHours: number | null;
+  totalEstCost: number | null;
+  totalActualCost: number | null;
+  hasActuals: boolean;
+  partial: boolean; // some seat price/window unknown, or unnamed seats
+  note: string;
+}

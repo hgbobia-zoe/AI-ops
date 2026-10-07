@@ -19,6 +19,7 @@ import { payrollOverview } from "@/lib/payroll/overview";
 import { unifiedWorkers } from "@/lib/payroll/workers";
 import { listExceptions, listSyncRuns, countTimeEntries } from "@/lib/payroll/store";
 import { gustoConfigured } from "@/lib/payroll/gusto";
+import { instaworkTempPay } from "@/lib/payroll/instawork";
 import {
   PAYROLL_STATUS_LABEL, WORKER_TYPE_LABEL, type PayrollStatus, type UnifiedWorker,
   type ExceptionSeverity,
@@ -164,6 +165,11 @@ async function OverviewTab({ period, which }: { period: { start: string; end: st
         <Metric label="Last sync" value={o.lastSync ? relTime(o.lastSync.at) : "never"} sub={o.lastSync ? `${o.lastSync.status.toLowerCase().replace(/_/g, " ")} · ${o.lastSync.trigger}` : "run a sync to start"} />
         <Metric label="Next automatic sync" value={o.nextAutomaticSync ?? "not scheduled"} sub="Monday 8:00 AM (when enabled)" />
         <Metric label="Gusto" value={o.gustoConfigured ? "connected" : "not connected"} sub="payroll destination" tone={o.gustoConfigured ? undefined : "warn"} />
+        <Metric
+          label="Temp labor (Instawork)"
+          value={money(o.tempLabor.amount)}
+          sub={o.tempLabor.basis === "actual" ? "actual · paid via Instawork" : o.tempLabor.basis === "estimated" ? "estimated · paid via Instawork" : "no temp gigs this period"}
+        />
       </div>
     </div>
   );
@@ -203,11 +209,11 @@ async function WorkersTab({ period, mode }: { period: { start: string; end: stri
     ? workers.filter((w) => w.workerType === "US_CONTRACTOR" || w.workerType === "INTERNATIONAL_CONTRACTOR")
     : workers;
 
-  if (!connecteamOk && workers.length === 0) {
+  if (mode === "all" && !connecteamOk && workers.length === 0) {
     return <EmptyState icon={<Users className="size-5" />} title="No worker data" body="Connecteam isn't reachable, so the roster is unavailable. Connect Connecteam to populate workers." />;
   }
-  if (filtered.length === 0) {
-    return <EmptyState icon={<Globe2 className="size-5" />} title={mode === "contractors" ? "No contractors yet" : "No workers yet"} body={mode === "contractors" ? "Classify workers as contractors in the Workers tab to see them here." : "Run a sync to populate the worker directory from Connecteam."} />;
+  if (mode === "all" && filtered.length === 0) {
+    return <EmptyState icon={<Users className="size-5" />} title="No workers yet" body="Run a sync to populate the worker directory from Connecteam." />;
   }
 
   if (mode === "contractors") {
@@ -217,10 +223,62 @@ async function WorkersTab({ period, mode }: { period: { start: string; end: stri
       <div className="space-y-6">
         <WorkerGroup title="US contractors" workers={us} />
         <WorkerGroup title="International contractors" workers={intl} />
+        <TempPaySection period={period} />
       </div>
     );
   }
   return <WorkerTable workers={filtered} />;
+}
+
+// Instawork temps — a labor-cost view, paid via Instawork (not Gusto). Estimate from booked gigs now,
+// with an Actual column that fills once Instawork payouts are imported (the reconcile seam).
+async function TempPaySection({ period }: { period: { start: string; end: string; label: string } }): Promise<React.JSX.Element> {
+  const t = await instaworkTempPay(period);
+  return (
+    <div>
+      <h3 className="mb-1 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">
+        Instawork temps <span className="text-meta">· paid separately{t.workers.length ? ` (${t.workers.length})` : ""}</span>
+      </h3>
+      {(t.ok || t.workers.length > 0) && <p className="mb-2 text-[11px] text-meta">{t.note}{t.ok && t.asOf ? ` · gigs as of ${relTime(t.asOf)}` : ""}</p>}
+      {!t.ok && t.workers.length === 0 ? (
+        <p className="text-[12px] text-meta">Instawork snapshot unavailable — refresh the Instawork pull to estimate temp pay.</p>
+      ) : t.workers.length === 0 ? (
+        <p className="text-[12px] text-meta">No Instawork gigs booked in this period.</p>
+      ) : (
+        <div className="surface overflow-x-auto border">
+          <table className="w-full min-w-[640px] text-[12.5px]">
+            <thead>
+              <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
+                <th className="px-3 py-2 font-medium">Worker</th>
+                <th className="px-3 py-2 text-right font-medium">Gigs</th>
+                <th className="px-3 py-2 text-right font-medium">Hours</th>
+                <th className="px-3 py-2 text-right font-medium">Estimated</th>
+                <th className="px-3 py-2 text-right font-medium">Actual</th>
+              </tr>
+            </thead>
+            <tbody>
+              {t.workers.map((w) => (
+                <tr key={w.name} className="border-b border-rule/60 last:border-0 hover:bg-[var(--row-hover)]">
+                  <td className="px-3 py-2 font-medium text-foreground">{w.name}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-tertiary-text">{w.gigs || "—"}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{w.hours == null ? "—" : w.hours.toLocaleString("en-US")}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{money(w.estCost)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{w.actualCost == null ? <span className="text-meta">— not imported</span> : money(w.actualCost)}</td>
+                </tr>
+              ))}
+              <tr className="border-t border-rule font-medium">
+                <td className="px-3 py-2 text-tertiary-text">Total</td>
+                <td className="px-3 py-2"></td>
+                <td className="px-3 py-2 text-right tabular-nums text-foreground">{t.totalHours == null ? "—" : t.totalHours.toLocaleString("en-US")}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-foreground">{money(t.totalEstCost)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-foreground">{money(t.totalActualCost)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function WorkerGroup({ title, workers }: { title: string; workers: UnifiedWorker[] }): React.JSX.Element {

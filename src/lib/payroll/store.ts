@@ -244,3 +244,41 @@ export function countTimeEntries(periodStart: string, periodEnd: string): number
   const r = getDb().prepare("SELECT COUNT(*) AS n FROM hr_time_entries WHERE period_start=? AND period_end=?").get(periodStart, periodEnd) as { n: number };
   return r.n;
 }
+
+// ── hr_temp_payouts (actual Instawork payouts — the reconcile seam) ──────────────────────────────────
+export interface TempPayoutActual {
+  workerName: string;
+  actualHours: number | null;
+  actualAmount: number | null;
+  currency: string | null;
+}
+/** Stored ACTUAL temp payouts for a period, keyed by worker name (null-safe map). Empty until imported. */
+export function listTempPayouts(periodStart: string, periodEnd: string): Map<string, TempPayoutActual> {
+  const rows = getDb().prepare(
+    "SELECT worker_name, actual_hours, actual_amount, currency FROM hr_temp_payouts WHERE period_start=? AND period_end=?",
+  ).all(periodStart, periodEnd) as { worker_name: string; actual_hours: number | null; actual_amount: number | null; currency: string | null }[];
+  const m = new Map<string, TempPayoutActual>();
+  for (const r of rows) m.set(r.worker_name, { workerName: r.worker_name, actualHours: r.actual_hours, actualAmount: r.actual_amount, currency: r.currency });
+  return m;
+}
+/** Idempotent upsert of one actual payout (import or manual entry). */
+export function recordTempPayout(p: {
+  periodStart: string; periodEnd: string; workerName: string; actualHours: number | null;
+  actualAmount: number | null; currency?: string | null; source?: string; importedBy?: string | null;
+}): void {
+  const src = p.source ?? "manual";
+  const db = getDb();
+  const existing = db.prepare(
+    "SELECT id FROM hr_temp_payouts WHERE period_start=? AND period_end=? AND worker_name=? AND source=?",
+  ).get(p.periodStart, p.periodEnd, p.workerName, src) as { id: string } | undefined;
+  const now = new Date().toISOString();
+  if (existing) {
+    db.prepare("UPDATE hr_temp_payouts SET actual_hours=@h, actual_amount=@a, currency=@c, imported_by=@by, imported_at=@now WHERE id=@id")
+      .run({ id: existing.id, h: p.actualHours, a: p.actualAmount, c: p.currency ?? "USD", by: p.importedBy ?? null, now });
+    return;
+  }
+  db.prepare(
+    `INSERT INTO hr_temp_payouts (id, period_start, period_end, worker_name, actual_hours, actual_amount, currency, source, imported_by, imported_at)
+     VALUES (@id, @ps, @pe, @name, @h, @a, @c, @src, @by, @now)`,
+  ).run({ id: `HP-${randomUUID()}`, ps: p.periodStart, pe: p.periodEnd, name: p.workerName, h: p.actualHours, a: p.actualAmount, c: p.currency ?? "USD", src, by: p.importedBy ?? null, now });
+}

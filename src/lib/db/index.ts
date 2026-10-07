@@ -1787,6 +1787,24 @@ CREATE TABLE IF NOT EXISTS hr_exceptions (
   detected_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_hr_exceptions_status ON hr_exceptions(status, severity);
+
+-- Actual Instawork temp payouts — the reconcile seam. Temps are paid via Instawork (NOT Gusto); HR computes
+-- an ESTIMATE from booked gigs (scheduled window × seat price) now, and reconciles it against the ACTUAL
+-- amount Instawork billed once that timesheet/payments data is imported. Idempotent on (period, worker, source).
+CREATE TABLE IF NOT EXISTS hr_temp_payouts (
+  id            TEXT PRIMARY KEY,         -- "HP-"+uuid
+  period_start  TEXT NOT NULL,            -- YYYY-MM-DD
+  period_end    TEXT NOT NULL,
+  worker_name   TEXT NOT NULL,            -- Instawork worker name (the only stable handle)
+  actual_hours  REAL,                     -- approved worked hours (null until imported)
+  actual_amount REAL,                     -- actual amount billed (worker currency)
+  currency      TEXT,                     -- USD | ...
+  source        TEXT NOT NULL,            -- instawork_import | manual
+  imported_by   TEXT,
+  imported_at   TEXT NOT NULL,
+  UNIQUE(period_start, period_end, worker_name, source)
+);
+CREATE INDEX IF NOT EXISTS idx_hr_temp_payouts_period ON hr_temp_payouts(period_start, period_end);
 `;
 
 type DB = InstanceType<typeof Database>;

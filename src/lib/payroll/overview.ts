@@ -5,6 +5,7 @@
 import { unifiedWorkers, workerCounts } from "./workers";
 import { countOpenExceptions, latestSyncRun } from "./store";
 import { gustoConfigured } from "./gusto";
+import { instaworkTempPay } from "./instawork";
 import type { PayPeriod, PayrollOverview, PayrollStatus, UnifiedWorker } from "./types";
 
 export async function payrollOverview(period: PayPeriod): Promise<PayrollOverview> {
@@ -41,6 +42,15 @@ export async function payrollOverview(period: PayPeriod): Promise<PayrollOvervie
   // Unmatched = active workers who worked this period but have no Gusto mapping (can't be paid through Gusto).
   const unmatchedWorkers = active.filter((w) => (w.periodHours ?? 0) > 0 && !w.gustoMapped).length;
 
+  // Instawork temps — separate labor-cost line (paid via Instawork, never in the Gusto run).
+  const temp = await instaworkTempPay(period);
+  const tempAmount = temp.totalActualCost ?? temp.totalEstCost ?? null;
+  const tempLabor = {
+    amount: tempAmount,
+    basis: (temp.totalActualCost != null ? "actual" : temp.totalEstCost != null ? "estimated" : "none") as "actual" | "estimated" | "none",
+    hours: temp.totalHours,
+  };
+
   const exceptions = countOpenExceptions();
   const last = latestSyncRun();
   const lastSync = last ? { at: last.finishedAt ?? last.startedAt, status: last.status, trigger: last.trigger } : null;
@@ -62,6 +72,7 @@ export async function payrollOverview(period: PayPeriod): Promise<PayrollOvervie
     nextAutomaticSync: null, // set once the Monday scheduler is enabled in Settings (later slice)
     status,
     gustoConfigured: gustoConfigured(),
+    tempLabor,
   };
 }
 
