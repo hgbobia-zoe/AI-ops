@@ -126,7 +126,7 @@ export function QuotePipeline({ pipeline, activity, showMoney }: { pipeline: Pip
 // Thick ring split into slices, each with a leader line out to its value + short label. Non-zero slices
 // only; labels are collision-separated on each side. Drawn in normal orientation so arc + leader geometry
 // share one coordinate frame.
-const CX = 150, CY = 100, RO = 57, RI = 37, W = 300, H = 220, GAP = 36, LABEL_DX = 92;
+const CX = 166, CY = 100, RO = 57, RI = 37, W = 332, H = 220, GAP = 36, LABEL_DX = 90;
 
 function AnnotatedDonut({ segments, centerValue, centerLabel }: { segments: Seg[]; centerValue: string; centerLabel: string }): React.JSX.Element {
   const active = segments.filter((s) => s.value > 0);
