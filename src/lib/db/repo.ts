@@ -714,6 +714,7 @@ export interface BookingRecord {
   dateCreated?: string | null; // YYYY-MM-DD
   venue?: string | null;
   location?: string | null; // city/state/zip/county string
+  archived?: boolean; // Goodshuffle `archived` — project off the active board (Lost/Cancelled/closed)
 }
 
 export interface BookingView {
@@ -740,6 +741,7 @@ export interface BookingView {
   clientNotes: string | null;
   lastSentDate: string | null;
   lineItems: string[] | null; // captured line-item titles (event-type signal); null = never captured
+  archived: boolean; // Goodshuffle `archived` — off the active board (Lost/Cancelled/closed)
 }
 
 function parseLineItems(raw: unknown): string[] | null {
@@ -777,6 +779,7 @@ function toBookingView(r: Record<string, unknown>): BookingView {
     clientNotes: (r.client_notes as string) ?? null,
     lastSentDate: (r.last_sent_date as string) ?? null,
     lineItems: parseLineItems(r.line_items),
+    archived: Number(r.archived ?? 0) === 1,
   };
 }
 
@@ -900,14 +903,14 @@ export function saveBookings(items: BookingRecord[]): void {
   const up = db.prepare(
     `INSERT INTO bookings (booking_id, event_name, event_date, status_label, signed, contract_total,
        grand_total, amount_paid, amount_due, client_name, client_email, client_phone, quote_sent_date,
-       date_created, venue, location, updated_at)
+       date_created, venue, location, archived, updated_at)
      VALUES (@bookingId,@eventName,@eventDate,@statusLabel,@signed,@contractTotal,@grandTotal,
-       @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@venue,@location,@now)
+       @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@venue,@location,@archived,@now)
      ON CONFLICT(booking_id) DO UPDATE SET event_name=@eventName, event_date=@eventDate,
        status_label=@statusLabel, signed=@signed, contract_total=@contractTotal, grand_total=@grandTotal,
        amount_paid=@amountPaid, amount_due=@amountDue, client_name=@clientName, client_email=@clientEmail,
        client_phone=@clientPhone, quote_sent_date=@quoteSentDate, date_created=@dateCreated,
-       venue=@venue, location=@location, updated_at=@now`,
+       venue=@venue, location=@location, archived=@archived, updated_at=@now`,
   );
   const tx = db.transaction(() => {
     for (const i of items)
@@ -928,6 +931,7 @@ export function saveBookings(items: BookingRecord[]): void {
         dateCreated: i.dateCreated ?? null,
         venue: i.venue ?? null,
         location: i.location ?? null,
+        archived: i.archived ? 1 : 0,
         now,
       });
   });
@@ -1114,6 +1118,7 @@ export function getPipelineBookingsInRange(start: string, end: string): BookingV
       .prepare(
         `SELECT * FROM bookings
          WHERE event_date IS NOT NULL AND event_date >= ? AND event_date <= ?
+           AND COALESCE(archived,0) = 0
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
          ORDER BY event_date ASC`,
@@ -1194,7 +1199,7 @@ export function getPipelineBreakdown(today: string): PipelineBreakdown {
          SUM(grand_total) AS total,
          COUNT(grand_total) AS priced
        FROM bookings
-       WHERE event_date IS NOT NULL AND event_date >= ?
+       WHERE event_date IS NOT NULL AND event_date >= ? AND COALESCE(archived,0) = 0
        GROUP BY cls`,
     )
     .all(today) as { cls: string; n: number; total: number | null; priced: number }[];

@@ -40,6 +40,7 @@ interface InProject {
   dateCreated?: string | null;
   venue?: string | null;
   location?: string | null;
+  archived?: boolean;
 }
 
 const dollars = (cents: number | undefined): number | null =>
@@ -82,6 +83,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       dateCreated: ymd(p.dateCreated),
       venue: p.venue?.trim() || null,
       location: p.location?.trim() || null,
+      archived: Boolean(p.archived),
     });
   }
   if (records.length > 0) saveBookings(records);

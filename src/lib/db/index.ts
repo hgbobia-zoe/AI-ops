@@ -1891,6 +1891,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Cancellation safeguard: ISO ts set once the signed→lost linen safeguard has run for a booking, so
   // repeated pulls never re-fire the Slack ask / GSPRO task (idempotency).
   { table: "bookings", column: "cancel_safeguard_at", type: "TEXT" },
+  // Goodshuffle `archived` flag (project removed from the active board — Lost/Cancelled/closed). The
+  // authoritative off-pipeline signal; excluded from open-quote pipeline/upcoming (text status can lag).
+  { table: "bookings", column: "archived", type: "INTEGER DEFAULT 0" },
   // SEO Growth Phase 2: the Kanban lifecycle stage (separate from the Phase-1 `status`) + the explainable
   // priority breakdown JSON. Both additive on the Phase-1 seo_opportunities table.
   { table: "seo_opportunities", column: "stage", type: "TEXT" },
