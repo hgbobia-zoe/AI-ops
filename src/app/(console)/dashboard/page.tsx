@@ -16,7 +16,7 @@ import { commandCenter } from "@/lib/command/service";
 import { capacityLevel, type CapacityLevel } from "@/lib/command/calc";
 import { salesYearOverview } from "@/lib/sales/service";
 import { salesCommandCenter } from "@/lib/salesos/commandCenter";
-import { getPipelineBookingsInRange, getQuoteActivityInRange, type BookingView } from "@/lib/db/repo";
+import { getPipelineBookingsInRange, getQuoteStageSnapshot, type BookingView } from "@/lib/db/repo";
 import { aiControlOverview } from "@/lib/ai/control";
 import { listRecentSessions } from "@/lib/ai/sessions";
 import { STATUS_META } from "@/lib/ai/sessionDisplay";
@@ -64,19 +64,6 @@ function rangeWindow(key: RangeKey, today: string, year: number): { start: strin
     default: return { start: today, end: today, label: "today" };
   }
 }
-// PAST window — for Quote Activity (quotes created up to today). Same selector, natural direction.
-// "Tomorrow" has no created-quote history, so Activity falls back to today's created quotes.
-function activityWindow(key: RangeKey, today: string, year: number): { start: string; end: string; label: string } {
-  switch (key) {
-    case "7d": return { start: shiftYmd(today, -6), end: today, label: "last 7 days" };
-    case "14d": return { start: shiftYmd(today, -13), end: today, label: "last 14 days" };
-    case "30d": return { start: shiftYmd(today, -29), end: today, label: "last 30 days" };
-    case "90d": return { start: shiftYmd(today, -89), end: today, label: "last 90 days" };
-    case "year": return { start: `${year}-01-01`, end: today, label: String(year) };
-    default: return { start: today, end: today, label: "today" }; // today + tomorrow
-  }
-}
-
 function dow(ymd: string): string { return new Date(`${ymd}T00:00:00Z`).toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" }); }
 function dnum(ymd: string): string { return new Date(`${ymd}T00:00:00Z`).toLocaleDateString("en-US", { day: "numeric", timeZone: "UTC" }); }
 function daysBetween(a: string, b: string): number { return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000); }
@@ -178,15 +165,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const openValue = openQuotes.some((b) => b.grandTotal != null) ? openQuotes.reduce((s, b) => s + (b.grandTotal ?? 0), 0) : null;
   const pipelineData = { count: openQuotes.length, value: openValue, buckets: pipelineBuckets };
 
-  // QUOTE ACTIVITY (by CREATED date) — controlled by the global selector as a PAST window. Never mixes
-  // with event-date pipeline.
-  const actWin = activityWindow(range, today, year);
-  const actRaw = showMoney ? safe(() => getQuoteActivityInRange(actWin.start, actWin.end), null) : null;
-  const activity = actRaw ? {
-    ...actRaw,
-    winRate: actRaw.signed + actRaw.lost > 0 ? Math.round((actRaw.signed / (actRaw.signed + actRaw.lost)) * 100) : null,
-    label: actWin.label,
-  } : null;
+  // QUOTE STAGES — a current snapshot of upcoming quotes by Goodshuffle stage (New / Quote Sent / Action
+  // Needed / Signed; Lost excluded). Range-INDEPENDENT on purpose: "where do we stand generally."
+  const quoteStages = safe(() => getQuoteStageSnapshot(today), null);
 
   // Next operational day — for the Today's Operations empty state (don't show a giant empty map).
   const futureOps = safe(() => getPipelineBookingsInRange(shiftYmd(today, 1), shiftYmd(today, 60)), [] as BookingView[]).filter((b) => b.eventDate);
@@ -277,7 +258,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               <RevenueTrendChart months={months} target={rev.target} curYear={year} prevYear={year - 1} showMoney={showMoney} currentMonthIdx={curMonthIdx} />
             </div>
             <div className="min-w-0 lg:col-span-2">
-              <QuotePipeline pipeline={pipelineData} activity={activity} showMoney={showMoney} />
+              <QuotePipeline pipeline={pipelineData} stages={quoteStages} showMoney={showMoney} />
             </div>
           </div>
 

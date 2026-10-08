@@ -1,16 +1,14 @@
 "use client";
 
-// Quote Pipeline — an annotated donut (leader lines call out each number) with an accurate cohort.
-// Two modes behind a compact toggle:
+// Quote Pipeline — an annotated donut (leader lines call out each number). Two modes behind a toggle,
+// BOTH range-independent (they show current state, so the dashboard date toggle doesn't change them):
 //
 //   PIPELINE (default): "How much open business can we still win, and how soon?" Current OPEN quotes
-//     (by EVENT date), the donut split into event-date horizon buckets (0–7 / 8–14 / 15–30 / 31–60 / 60+
-//     days), colored by urgency (nearer = warmer). Center = open-quote count. Not restricted to the
-//     global date range — it's the current open book.
+//     (by EVENT date), split into event-date horizon buckets (0–7 / 8–14 / 15–30 / 31–60 / 60+ days),
+//     colored by urgency. Center = open-quote count. $ value shown when money is visible.
 //
-//   ACTIVITY: "How are we converting the quotes we generate?" Quotes by CREATED/SENT date over the
-//     selected global range, split into signed / open / lost. Center = quotes created. Plus a win rate.
-//     Pipeline (event date) and Activity (created date) never mix. Money gated by the caller.
+//   STAGES: "Where do we stand generally?" A current snapshot of upcoming quotes by Goodshuffle stage —
+//     New / Quote Sent / Action Needed / Signed (Lost excluded). Center = total upcoming quotes.
 
 import { useState } from "react";
 import Link from "next/link";
@@ -26,16 +24,12 @@ export interface PipelineData {
   value: number | null;
   buckets: PipelineBucket[];
 }
-export interface ActivityData {
-  created: number;
-  signed: number;
-  open: number;
-  lost: number;
+export interface StageData {
+  // Current snapshot of upcoming quotes by Goodshuffle stage (range-independent; Lost excluded).
   stageNew: number;
   stageQuoteSent: number;
   stageActionNeeded: number;
-  winRate: number | null; // signed / (signed + lost), or null when nothing is decided
-  label: string; // "last 30 days"
+  stageSigned: number;
 }
 
 // Horizon urgency colors (vivid, matching the dashboard palette): nearer events are warmer.
@@ -46,8 +40,8 @@ const moneyFull = (n: number | null): string => (n == null ? "—" : "$" + Math.
 
 interface Seg { short: string; value: number; color: string; display: string }
 
-export function QuotePipeline({ pipeline, activity, showMoney }: { pipeline: PipelineData; activity: ActivityData | null; showMoney: boolean }): React.JSX.Element {
-  const [mode, setMode] = useState<"pipeline" | "activity">("pipeline");
+export function QuotePipeline({ pipeline, stages, showMoney }: { pipeline: PipelineData; stages: StageData | null; showMoney: boolean }): React.JSX.Element {
+  const [mode, setMode] = useState<"pipeline" | "stages">("pipeline");
 
   // Pipeline donut: slice weight = $ value (or count when money is hidden); callout shows the same.
   const pipeSegs: Seg[] = pipeline.buckets.map((b, i) => ({
@@ -57,16 +51,17 @@ export function QuotePipeline({ pipeline, activity, showMoney }: { pipeline: Pip
     display: showMoney ? moneyFull(b.value) : String(b.count),
   }));
 
-  // Activity funnel — Goodshuffle stages (Lost excluded; it doesn't matter for this view).
-  const actSegs: Seg[] = activity
+  // Stage snapshot — where the upcoming quotes stand now (Goodshuffle stages; Lost excluded). NOT tied to
+  // the global date range: "where do we stand generally."
+  const stageSegs: Seg[] = stages
     ? [
-        { short: "New", value: activity.stageNew, color: "#5e9cf7", display: String(activity.stageNew) },
-        { short: "Quote Sent", value: activity.stageQuoteSent, color: "#f0c13a", display: String(activity.stageQuoteSent) },
-        { short: "Action Needed", value: activity.stageActionNeeded, color: "#f0953a", display: String(activity.stageActionNeeded) },
-        { short: "Signed", value: activity.signed, color: "#3ad492", display: String(activity.signed) },
+        { short: "New", value: stages.stageNew, color: "#5e9cf7", display: String(stages.stageNew) },
+        { short: "Quote Sent", value: stages.stageQuoteSent, color: "#f0c13a", display: String(stages.stageQuoteSent) },
+        { short: "Action Needed", value: stages.stageActionNeeded, color: "#f0953a", display: String(stages.stageActionNeeded) },
+        { short: "Signed", value: stages.stageSigned, color: "#3ad492", display: String(stages.stageSigned) },
       ]
     : [];
-  const actTotal = activity ? activity.stageNew + activity.stageQuoteSent + activity.stageActionNeeded + activity.signed : 0;
+  const stageTotal = stages ? stages.stageNew + stages.stageQuoteSent + stages.stageActionNeeded + stages.stageSigned : 0;
 
   return (
     <section className="surface flex h-full flex-col border p-3">
@@ -75,7 +70,7 @@ export function QuotePipeline({ pipeline, activity, showMoney }: { pipeline: Pip
           <PieChart className="size-4 text-meta" /> Quote pipeline
         </h2>
         <div className="ml-auto flex gap-1.5">
-          {(["pipeline", "activity"] as const).map((m) => (
+          {(["pipeline", "stages"] as const).map((m) => (
             <button
               key={m}
               onClick={() => setMode(m)}
@@ -103,21 +98,15 @@ export function QuotePipeline({ pipeline, activity, showMoney }: { pipeline: Pip
             <AnnotatedDonut segments={pipeSegs} centerValue={String(pipeline.count)} centerLabel="open" />
           )}
         </>
-      ) : !activity || !showMoney ? (
-        <p className="mt-2 text-[12.5px] text-meta">{showMoney ? "No quote activity in this period." : "Hidden for your role."}</p>
-      ) : actTotal === 0 ? (
+      ) : stageTotal === 0 ? (
         <>
-          <div className="mb-1 text-[10px] uppercase tracking-[0.08em] text-meta">Quote activity · {activity.label}</div>
-          <p className="py-8 text-center text-[12px] text-meta">No active quotes created {activity.label}.</p>
+          <div className="mb-1 text-[10px] uppercase tracking-[0.08em] text-meta">Current · by stage</div>
+          <p className="py-8 text-center text-[12px] text-meta">No active quotes right now.</p>
         </>
       ) : (
         <>
-          <div className="mb-1 text-[10px] uppercase tracking-[0.08em] text-meta">Quote activity · {activity.label}</div>
-          <AnnotatedDonut segments={actSegs} centerValue={String(actTotal)} centerLabel="quotes" />
-          <div className="mt-2 flex items-center justify-between border-t border-rule pt-2.5">
-            <span className="text-[11.5px] uppercase tracking-[0.08em] text-meta">Win rate</span>
-            <span className="text-[15px] font-semibold tabular-nums text-foreground">{activity.winRate == null ? "—" : `${activity.winRate}%`}</span>
-          </div>
+          <div className="mb-1 text-[10px] uppercase tracking-[0.08em] text-meta">Current · by stage</div>
+          <AnnotatedDonut segments={stageSegs} centerValue={String(stageTotal)} centerLabel="quotes" />
         </>
       )}
 
