@@ -30,6 +30,8 @@ export function PrReviewPanel(): React.JSX.Element {
   const [busy, setBusy] = useState<number | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [tokenInput, setTokenInput] = useState("");
+  const [connecting, setConnecting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,6 +64,21 @@ export function PrReviewPanel(): React.JSX.Element {
     }
   }, [load]);
 
+  const connect = useCallback(async () => {
+    const token = tokenInput.trim();
+    if (token.length < 20) { setMsg({ kind: "err", text: "That doesn't look like a valid token." }); return; }
+    setConnecting(true); setMsg(null);
+    try {
+      const r = await fetch("/api/ai/github/token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token }) });
+      if (r.ok) { setTokenInput(""); setMsg({ kind: "ok", text: "Connected. Loading pull requests…" }); await load(); }
+      else { const j = await r.json().catch(() => ({})); setMsg({ kind: "err", text: j.error ? `Could not connect: ${j.error}` : "Could not connect." }); }
+    } catch {
+      setMsg({ kind: "err", text: "Could not reach the server." });
+    } finally {
+      setConnecting(false);
+    }
+  }, [tokenInput, load]);
+
   return (
     <section className="surface border">
       <div className="flex items-center gap-2 px-3 py-2.5">
@@ -76,10 +93,24 @@ export function PrReviewPanel(): React.JSX.Element {
 
       <div className="border-t border-border p-3">
         {!configured ? (
-          <p className="text-[12px] text-meta">
-            In-app merge isn&apos;t connected yet. Add a fine-grained GitHub token (Pull requests: read/write on this repo) as the
-            <code className="mx-1 rounded bg-[var(--row-hover)] px-1">GITHUB_PR_TOKEN</code> secret — see <code className="rounded bg-[var(--row-hover)] px-1">docs/self-improvement-setup.md</code>. Until then, merge on GitHub.
-          </p>
+          <div className="space-y-2">
+            <p className="text-[12px] text-meta">
+              Connect GitHub to review and merge here. Paste a token — ideally a <strong className="text-secondary-text">fine-grained PAT</strong> scoped to this repo with <strong className="text-secondary-text">Pull requests: read/write</strong> only (so it can&apos;t touch branch protection even if leaked). It&apos;s stored write-only in the app.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="password"
+                value={tokenInput}
+                onChange={(e) => setTokenInput(e.target.value)}
+                placeholder="github_pat_… or ghp_…"
+                autoComplete="off"
+                className="min-w-0 flex-1 rounded border border-border bg-[var(--panel)] px-2.5 py-1.5 font-mono text-[12px] text-foreground placeholder:text-meta focus:border-foreground/30 focus:outline-none"
+              />
+              <button onClick={connect} disabled={connecting || tokenInput.trim().length < 20} className="inline-flex items-center gap-1 rounded border border-[var(--gold)]/50 px-3 py-1.5 text-[12px] font-medium text-[var(--gold)] transition-colors hover:bg-[var(--gold)]/10 disabled:opacity-50">
+                {connecting ? <Loader2 className="size-3.5 animate-spin" /> : null} Connect
+              </button>
+            </div>
+          </div>
         ) : prs === null ? (
           <p className="text-[12px] text-meta">Loading…</p>
         ) : prs.length === 0 ? (
