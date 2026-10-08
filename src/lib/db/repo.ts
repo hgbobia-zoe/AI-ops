@@ -1238,29 +1238,39 @@ export function archiveBookingsNotIn(keepIds: string[]): number {
 
 export interface QuoteActivity {
   created: number; // quotes whose created/sent date falls in [start,end]
-  signed: number; // of those, now signed
+  signed: number; // of those, now signed (won) — Goodshuffle "Contract Signed"
   lost: number; // of those, now lost/cancelled
-  open: number; // created − signed − lost (still outstanding)
+  open: number; // created − signed − lost (still outstanding = new + quoteSent + actionNeeded)
+  // Stage funnel (Goodshuffle stages, Lost excluded): where the created quotes sit now.
+  stageNew: number; // "New Project"
+  stageQuoteSent: number; // "Quote Sent" / "Quote"
+  stageActionNeeded: number; // "Unsigned Changes" — signed then modified, needs re-sign
 }
 
 /** Quote ACTIVITY in [start,end] by CREATED/SENT date (NOT event date) — the conversion view: "how are
- *  the quotes we generated in this window converting?". Compared on YYYY-MM-DD so an ISO datetime in the
- *  column still falls inside an inclusive date window. Separate from event-date pipeline on purpose. */
+ *  the quotes we generated in this window converting?", broken into Goodshuffle's stages. Compared on
+ *  YYYY-MM-DD so an ISO datetime still falls inside an inclusive date window. Lost/cancelled are excluded
+ *  from the funnel (they don't matter for this view). Separate from event-date pipeline on purpose. */
 export function getQuoteActivityInRange(start: string, end: string): QuoteActivity {
-  const row = getDb()
+  const rows = getDb()
     .prepare(
-      `SELECT
-         COUNT(*) AS created,
-         SUM(CASE WHEN signed = 1 THEN 1 ELSE 0 END) AS signed,
-         SUM(CASE WHEN LOWER(COALESCE(status_label,'')) LIKE '%lost%'
-                    OR LOWER(COALESCE(status_label,'')) LIKE '%cancel%' THEN 1 ELSE 0 END) AS lost
-       FROM bookings
+      `SELECT status_label, signed FROM bookings
        WHERE substr(COALESCE(date_created, quote_sent_date), 1, 10) >= ?
          AND substr(COALESCE(date_created, quote_sent_date), 1, 10) <= ?`,
     )
-    .get(start, end) as { created: number; signed: number; lost: number };
-  const created = Number(row.created ?? 0), signed = Number(row.signed ?? 0), lost = Number(row.lost ?? 0);
-  return { created, signed, lost, open: Math.max(0, created - signed - lost) };
+    .all(start, end) as { status_label: string | null; signed: number | null }[];
+  let created = 0, signed = 0, lost = 0, stageNew = 0, stageQuoteSent = 0, stageActionNeeded = 0;
+  for (const r of rows) {
+    created++;
+    const s = (r.status_label ?? "").toLowerCase();
+    if (s.includes("lost") || s.includes("cancel")) { lost++; continue; }
+    if (s.includes("unsigned")) stageActionNeeded++; // "Unsigned Changes" = Action Needed (check before signed)
+    else if (s.includes("signed") || r.signed === 1) signed++; // "Contract Signed" / signed flag = won
+    else if (s.startsWith("quote")) stageQuoteSent++;
+    else if (s.includes("new")) stageNew++;
+    else stageQuoteSent++; // unknown open status → treat as sent
+  }
+  return { created, signed, lost, open: Math.max(0, created - signed - lost), stageNew, stageQuoteSent, stageActionNeeded };
 }
 
 /** Per-booking rows dated in [start,end] (for the finance event table). */

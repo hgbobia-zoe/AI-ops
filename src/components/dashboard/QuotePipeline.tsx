@@ -31,6 +31,9 @@ export interface ActivityData {
   signed: number;
   open: number;
   lost: number;
+  stageNew: number;
+  stageQuoteSent: number;
+  stageActionNeeded: number;
   winRate: number | null; // signed / (signed + lost), or null when nothing is decided
   label: string; // "last 30 days"
 }
@@ -54,13 +57,16 @@ export function QuotePipeline({ pipeline, activity, showMoney }: { pipeline: Pip
     display: showMoney ? moneyFull(b.value) : String(b.count),
   }));
 
+  // Activity funnel — Goodshuffle stages (Lost excluded; it doesn't matter for this view).
   const actSegs: Seg[] = activity
     ? [
+        { short: "New", value: activity.stageNew, color: "#5e9cf7", display: String(activity.stageNew) },
+        { short: "Quote Sent", value: activity.stageQuoteSent, color: "#f0c13a", display: String(activity.stageQuoteSent) },
+        { short: "Action Needed", value: activity.stageActionNeeded, color: "#f0953a", display: String(activity.stageActionNeeded) },
         { short: "Signed", value: activity.signed, color: "#3ad492", display: String(activity.signed) },
-        { short: "Open", value: activity.open, color: "#f0c13a", display: String(activity.open) },
-        { short: "Lost", value: activity.lost, color: "#f06a5e", display: String(activity.lost) },
       ]
     : [];
+  const actTotal = activity ? activity.stageNew + activity.stageQuoteSent + activity.stageActionNeeded + activity.signed : 0;
 
   return (
     <section className="surface flex h-full flex-col border p-3">
@@ -99,15 +105,15 @@ export function QuotePipeline({ pipeline, activity, showMoney }: { pipeline: Pip
         </>
       ) : !activity || !showMoney ? (
         <p className="mt-2 text-[12.5px] text-meta">{showMoney ? "No quote activity in this period." : "Hidden for your role."}</p>
-      ) : activity.created === 0 ? (
+      ) : actTotal === 0 ? (
         <>
           <div className="mb-1 text-[10px] uppercase tracking-[0.08em] text-meta">Quote activity · {activity.label}</div>
-          <p className="py-8 text-center text-[12px] text-meta">No quotes created {activity.label}.</p>
+          <p className="py-8 text-center text-[12px] text-meta">No active quotes created {activity.label}.</p>
         </>
       ) : (
         <>
           <div className="mb-1 text-[10px] uppercase tracking-[0.08em] text-meta">Quote activity · {activity.label}</div>
-          <AnnotatedDonut segments={actSegs} centerValue={String(activity.created)} centerLabel="created" />
+          <AnnotatedDonut segments={actSegs} centerValue={String(actTotal)} centerLabel="quotes" />
           <div className="mt-2 flex items-center justify-between border-t border-rule pt-2.5">
             <span className="text-[11.5px] uppercase tracking-[0.08em] text-meta">Win rate</span>
             <span className="text-[15px] font-semibold tabular-nums text-foreground">{activity.winRate == null ? "—" : `${activity.winRate}%`}</span>
