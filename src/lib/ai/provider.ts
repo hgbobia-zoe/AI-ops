@@ -100,6 +100,21 @@ export function bridgeConnected(): boolean {
   return getJson<{ connected?: boolean }>(BRIDGE_CONNECTED_KEY, {}).connected === true;
 }
 
+// ── Responder auth (headless bridge) ───────────────────────────────────────────
+// The queue + bridge endpoints accept EITHER an owner/admin browser cookie OR a shared responder token in
+// the `x-bridge-token` header. The token path only activates when AI_BRIDGE_TOKEN is set — a headless
+// responder (an Agent-SDK worker or a Claude Code session) can't present a cookie. While it's unset, only
+// the cookie path works, so there is no open hole: the responder simply isn't wired until the token is
+// configured. Mirrors the GS_INGEST_TOKEN idiom, but gated-by-default (the responder can post into session
+// timelines, so we never fail open).
+export function bridgeTokenConfigured(): boolean {
+  return !!process.env.AI_BRIDGE_TOKEN;
+}
+export function bridgeTokenValid(token: string | null | undefined): boolean {
+  const expected = process.env.AI_BRIDGE_TOKEN;
+  return !!expected && typeof token === "string" && token.length > 0 && token === expected;
+}
+
 const sessionBridge: AiProviderDef = {
   id: "session-bridge",
   name: "Claude Session Bridge",
