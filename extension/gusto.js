@@ -62,6 +62,23 @@
     return out;
   }
 
+  // If we're a BACKGROUND (hidden) tab — i.e. the one the Auto-Pull worker keeps alive, which lands on the
+  // dashboard — hop to the People page so the roster/pay queries actually fire (the hook is passive; it
+  // needs the app to run them). Never on a visible tab (that would yank the operator's page). Once only.
+  function maybeSeedNavigate() {
+    try {
+      if (!document.hidden || window.__zoeGustoNav) return;
+      const p = location.pathname;
+      if (/\/people(\/|$)/.test(p) || /\/pay(\/|$|\?)/.test(p)) return; // already where queries fire
+      if (cap.MembersTable) return; // already captured
+      const slug = p.split("/").filter(Boolean)[0];
+      if (!slug) return;
+      window.__zoeGustoNav = true;
+      location.assign(location.origin + "/" + slug + "/people/all");
+    } catch (e) { /* ignore */ }
+  }
+  setTimeout(maybeSeedNavigate, 5000);
+
   function schedulePost() { clearTimeout(postTimer); postTimer = setTimeout(sendToZoe, 3000); }
 
   async function sendToZoe() {

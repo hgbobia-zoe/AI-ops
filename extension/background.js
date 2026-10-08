@@ -29,6 +29,8 @@ const IW_MATCH = "https://app.instawork.com/*";
 const IW_HOME = "https://app.instawork.com/";
 const IGN_MATCH = "https://ignition.zonarsystems.com/*";
 const IGN_HOME = "https://ignition.zonarsystems.com/";
+const GUSTO_MATCH = "https://app.gusto.com/*";
+const GUSTO_HOME = "https://app.gusto.com/";
 const CREATE_TIMEOUT_MS = 90_000; // reap an unclaimed/stuck create tab after this
 
 // ── Badge ─────────────────────────────────────────────────────────────────────
@@ -142,6 +144,28 @@ async function ensureIgnitionTab() {
   }
 }
 
+/** Return a live app.gusto.com tab, creating a single pinned background one if none exists. Same
+ *  find-or-create logic as the Instawork/Ignition tabs: the Gusto content script (gusto.js, world MAIN)
+ *  replays the app's GraphQL reads + POSTs them, and self-refreshes on its own 10-min timer. We never
+ *  close it. A freshly-opened background tab lands on the dashboard; gusto.js then navigates it to the
+ *  People page (only when hidden) so the roster/pay queries actually fire. */
+async function ensureGustoTab() {
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: GUSTO_MATCH });
+  } catch (e) {
+    tabs = [];
+  }
+  const live = tabs.find((t) => t.id != null);
+  if (live) return { tab: live, justOpened: false };
+  try {
+    const tab = await chrome.tabs.create({ url: GUSTO_HOME, pinned: true, active: false });
+    return { tab, justOpened: true };
+  } catch (e) {
+    return { tab: null, justOpened: false };
+  }
+}
+
 /** Nudge the content script in existing GS tab(s) to run a pull now. The content script watches
  *  storage.pullNow and also accepts a direct message; storage is the reliable cross-tab trigger. The
  *  Instawork content script watches the SAME storage.pullNow, so this one nudge pulls both. */
@@ -166,6 +190,10 @@ async function runPullCycle(reason) {
   // Keep a signed-in Ignition tab alive too, so Zonar ETA links can be minted from this office machine.
   // Its content script polls our server on its own short timer; the shared pullNow nudge also pokes it.
   const ign = await ensureIgnitionTab().catch(() => ({ justOpened: false }));
+  // Keep a signed-in Gusto tab alive too, so HR/Payroll pulls the roster + pay rates on the same 10-min
+  // cadence. gusto.js (world MAIN) can't read chrome.storage, so it isn't nudged via pullNow — it self-
+  // refreshes on its own 10-min timer in whatever Gusto tab stays open. Best-effort.
+  await ensureGustoTab().catch(() => ({ justOpened: false }));
   if (!tab) {
     badgeFor("no_tab");
     return { ok: false, reason: "no_tab" };
