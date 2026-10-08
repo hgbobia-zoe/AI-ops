@@ -1112,13 +1112,18 @@ export function getUpcomingBookings(startYmd: string): BookingView[] {
 
 /** Booked events in [start,end], soonest first, EXCLUDING cancelled/lost (the live pipeline).
  *  Ranged sibling of getUpcomingBookings — used for a full-year (or any-period) pipeline view. */
-export function getPipelineBookingsInRange(start: string, end: string): BookingView[] {
+// `includeArchived` matters because Goodshuffle archives COMPLETED/won events too (not just Lost). The
+// open-pipeline/upcoming views want archived OUT (a Lost/orphaned quote isn't winnable); the REVENUE view
+// (full year) wants archived IN, or every completed won event disappears from the revenue chart. Lost is
+// excluded by status_label in both cases.
+export function getPipelineBookingsInRange(start: string, end: string, opts?: { includeArchived?: boolean }): BookingView[] {
+  const archClause = opts?.includeArchived ? "" : "AND COALESCE(archived,0) = 0";
   return (
     getDb()
       .prepare(
         `SELECT * FROM bookings
          WHERE event_date IS NOT NULL AND event_date >= ? AND event_date <= ?
-           AND COALESCE(archived,0) = 0
+           ${archClause}
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
          ORDER BY event_date ASC`,

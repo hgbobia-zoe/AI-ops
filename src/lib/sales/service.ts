@@ -46,7 +46,9 @@ export interface SalesYearOverview {
 /** Full-year revenue + booking view for the Sales page, navigable across years. */
 export function salesYearOverview(year: number): SalesYearOverview {
   const currentYear = Number(todayInOpsTz().slice(0, 4));
-  const bookings = getPipelineBookingsInRange(`${year}-01-01`, `${year}-12-31`).map((b) => ({
+  // Revenue view: include archived — GS archives COMPLETED/won events, and they're real revenue (Lost is
+  // still excluded by status_label). Without this the whole year's completed revenue vanishes from the chart.
+  const bookings = getPipelineBookingsInRange(`${year}-01-01`, `${year}-12-31`, { includeArchived: true }).map((b) => ({
     date: b.eventDate as string,
     revenue: b.grandTotal,
     signed: b.signed,
