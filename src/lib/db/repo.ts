@@ -2772,7 +2772,7 @@ function toAudit(r: Record<string, unknown>): AuditRow {
 export function getAuditForEntity(entity: string, entityId: string, limit = 50): AuditRow[] {
   return (
     getDb()
-      .prepare("SELECT * FROM audit_logs WHERE entity = ? AND entity_id = ? ORDER BY ts DESC LIMIT ?")
+      .prepare("SELECT * FROM audit_logs WHERE entity = ? AND entity_id = ? ORDER BY ts DESC, rowid DESC LIMIT ?")
       .all(entity, entityId, limit) as Record<string, unknown>[]
   ).map(toAudit);
 }
@@ -2783,7 +2783,7 @@ export function getRecentAudit(actions: string[], limit = 100): AuditRow[] {
   const ph = actions.map(() => "?").join(",");
   return (
     getDb()
-      .prepare(`SELECT * FROM audit_logs WHERE action IN (${ph}) ORDER BY ts DESC LIMIT ?`)
+      .prepare(`SELECT * FROM audit_logs WHERE action IN (${ph}) ORDER BY ts DESC, rowid DESC LIMIT ?`)
       .all(...actions, limit) as Record<string, unknown>[]
   ).map(toAudit);
 }
