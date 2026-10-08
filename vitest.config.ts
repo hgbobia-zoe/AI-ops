@@ -13,5 +13,11 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     // DB tests run against a throwaway in-memory SQLite, never the real file.
     env: { DATABASE_PATH: ":memory:" },
+    // Each test file gets its OWN forked process, so the module-level getDb() singleton (and its in-memory
+    // SQLite) starts fresh per file. Without this, files run in a shared worker and the DB leaks across
+    // them — e.g. one file's lead "L-1" rows contaminate another's (a latent flake that only shows in the
+    // full suite, never when a file runs alone). Deterministic isolation is the prerequisite for CI gating.
+    pool: "forks",
+    poolOptions: { forks: { isolate: true, singleFork: false } },
   },
 });
