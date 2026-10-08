@@ -7,7 +7,7 @@
 //   grandTotalCents?, contractTotalCents?, amountPaidCents?, amountDueCents?, clientName?, clientEmail? }] }
 
 import { NextResponse } from "next/server";
-import { saveBookings, enqueueWarehouseTeamAdds, type BookingRecord } from "@/lib/db/repo";
+import { saveBookings, enqueueWarehouseTeamAdds, archiveBookingsNotIn, type BookingRecord } from "@/lib/db/repo";
 import { recordPull, logImport } from "@/lib/pull/state";
 
 export const dynamic = "force-dynamic";
@@ -97,9 +97,15 @@ export async function POST(req: Request): Promise<NextResponse> {
   logImport("bookings", !partial, { rowsIn: projects.length, rowsWritten: records.length, detail });
   if (!partial && records.length > 0) recordPull("bookings", records.length);
 
+  // Prune deleted-in-GS orphans: GS DELETES projects (not just marks them Lost), and an upsert pull never
+  // removes a row GS stopped returning — so a deleted quote lingers as a phantom open quote. On a COMPLETE
+  // pull (not partial) carrying a real full set, archive any booking GS no longer returns. The size floor
+  // guarantees a small/truncated pull can never mass-archive the pipeline.
+  const pruned = !partial && records.length >= 100 ? archiveBookingsNotIn(records.map((r) => r.bookingId)) : 0;
+
   // Auto-add the Warehouse Desktop account to every SIGNED project's GSPRO team (add-once, batched)
   // so the warehouse tablet/workstation sees signed work. The office extension drains these ops.
   const wdQueued = records.length > 0 ? enqueueWarehouseTeamAdds() : 0;
 
-  return NextResponse.json({ ok: true, saved: records.length, partial, wdQueued }, { headers: CORS });
+  return NextResponse.json({ ok: true, saved: records.length, partial, wdQueued, pruned }, { headers: CORS });
 }

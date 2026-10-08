@@ -1216,6 +1216,21 @@ export function getPipelineBreakdown(today: string): PipelineBreakdown {
   return out;
 }
 
+/** Prune orphans: archive any booking whose id is NOT in `keepIds` (the full set from a COMPLETE pull).
+ *  Goodshuffle DELETES projects (not just marks them Lost/archived), and an upsert pull never removes a
+ *  row GS stopped returning — so a deleted quote lingers as a phantom open quote. Flipping archived 0→1
+ *  drops it from the pipeline/upcoming; it's reversible (a later pull that includes it restores GS's value).
+ *  Caller MUST guard this to complete pulls only (not partial, and a real full set) — see the ingest route. */
+export function archiveBookingsNotIn(keepIds: string[]): number {
+  if (keepIds.length === 0) return 0;
+  const db = getDb();
+  const ph = keepIds.map(() => "?").join(",");
+  const r = db
+    .prepare(`UPDATE bookings SET archived = 1, updated_at = ? WHERE COALESCE(archived,0) = 0 AND booking_id NOT IN (${ph})`)
+    .run(new Date().toISOString(), ...keepIds);
+  return r.changes;
+}
+
 export interface QuoteActivity {
   created: number; // quotes whose created/sent date falls in [start,end]
   signed: number; // of those, now signed
