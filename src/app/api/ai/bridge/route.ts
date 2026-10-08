@@ -11,6 +11,7 @@
 import { NextResponse } from "next/server";
 import { setBridgeConnected, bridgeConnected, activeAiProviderId, bridgeTokenValid } from "@/lib/ai/provider";
 import { setSessionResult, appendEvent, endSession, getSession, claimInstruction } from "@/lib/ai/sessions";
+import { notifyRequester } from "@/lib/ai/notify";
 import { currentActor, viewerRole } from "@/lib/auth/getSession";
 import { canManageAi } from "@/lib/auth/roles";
 
@@ -51,10 +52,19 @@ export async function POST(req: Request): Promise<NextResponse> {
   // A connected session posts its interpreted result back into a session.
   if (body.sessionId && body.result) {
     const sid = body.sessionId.trim();
-    if (!getSession(sid)) return NextResponse.json({ error: "not_found" }, { status: 404 });
+    const session = getSession(sid);
+    if (!session) return NextResponse.json({ error: "not_found" }, { status: 404 });
     setSessionResult(sid, body.result);
     appendEvent(sid, { kind: "message", actor, label: "Result posted by the connected session" });
     if (body.end) endSession(sid, "done", { result: body.result, actor });
+    // Let the person who owns the session know a reply landed (DM when possible, else a channel post that
+    // names them). Fire-and-forget — a slow/failed Slack must never block the responder's post. Email is
+    // null until the app stores user emails, so this currently falls back to a channel post.
+    void notifyRequester({
+      name: session.owner ?? session.startedBy,
+      email: null,
+      text: `Your AI session "${session.title}" has a reply. Open the AI Command Center to see it.`,
+    }).catch(() => {});
   }
 
   return NextResponse.json({ ok: true, connected: bridgeConnected() });

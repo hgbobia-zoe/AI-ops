@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { createRequest, listRequests, countRequestsByStatus, REQUEST_TYPES, type AiRequestType, type AiRequestStatus } from "@/lib/ai/requests";
 import { bridgeTokenValid } from "@/lib/ai/provider";
+import { notifyRequester } from "@/lib/ai/notify";
 import { currentActor, viewerRole } from "@/lib/auth/getSession";
 import { canOperateAi } from "@/lib/auth/roles";
 
@@ -51,5 +52,18 @@ export async function POST(req: Request): Promise<NextResponse> {
     requestedBy,
     changeKey: body.changeKey,
   });
+
+  // When the responder files on someone's behalf, let them know it was captured. A person filing their own
+  // idea in the app isn't pinged (they already see it). Fire-and-forget; email is null until user emails
+  // exist, so this falls back to a named channel post.
+  if (tokenAuthed && requestedBy && requestedBy !== "AI responder") {
+    const kind = type === "feature" ? "feature request" : type === "question" ? "question" : "request";
+    void notifyRequester({
+      name: requestedBy,
+      email: null,
+      text: `Your ${kind} "${title}" was received and is being tracked in the AI Command Center.`,
+    }).catch(() => {});
+  }
+
   return NextResponse.json({ ok: true, request });
 }
