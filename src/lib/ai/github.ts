@@ -5,12 +5,21 @@
 // leaked, it cannot weaken the controls). The merge endpoint that uses this is HUMAN-ONLY (owner/admin
 // cookie, never the AI's bridge token), so the agent can never merge its own PR through the app.
 
+import { getSecret } from "@/lib/secrets";
+
 const API = "https://api.github.com";
 
 export function githubRepo(): string {
   return process.env.GITHUB_REPO || "hgbobia-zoe/AI-ops";
 }
 function token(): string {
+  // Prefer the in-app secrets store (set via /admin, no redeploy) then the env/Fly secret.
+  try {
+    const s = getSecret("github.prToken");
+    if (s) return s;
+  } catch {
+    /* secrets store unavailable (non-DB context) — fall through to env */
+  }
   return process.env.GITHUB_PR_TOKEN || "";
 }
 export function githubMergeConfigured(): boolean {
