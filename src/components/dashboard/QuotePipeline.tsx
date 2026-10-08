@@ -53,11 +53,12 @@ export function QuotePipeline({ pipeline, stages, showMoney }: { pipeline: Pipel
 
   // Stage snapshot — where the upcoming quotes stand now (Goodshuffle stages; Lost excluded). NOT tied to
   // the global date range: "where do we stand generally."
+  // Match Goodshuffle's stage colors: New = yellow, Quote Sent = blue, Action Needed = red, Signed = green.
   const stageSegs: Seg[] = stages
     ? [
-        { short: "New", value: stages.stageNew, color: "#5e9cf7", display: String(stages.stageNew) },
-        { short: "Quote Sent", value: stages.stageQuoteSent, color: "#f0c13a", display: String(stages.stageQuoteSent) },
-        { short: "Action Needed", value: stages.stageActionNeeded, color: "#f0953a", display: String(stages.stageActionNeeded) },
+        { short: "New", value: stages.stageNew, color: "#f0c13a", display: String(stages.stageNew) },
+        { short: "Quote Sent", value: stages.stageQuoteSent, color: "#5e9cf7", display: String(stages.stageQuoteSent) },
+        { short: "Action Needed", value: stages.stageActionNeeded, color: "#f06a5e", display: String(stages.stageActionNeeded) },
         { short: "Signed", value: stages.stageSigned, color: "#3ad492", display: String(stages.stageSigned) },
       ]
     : [];
