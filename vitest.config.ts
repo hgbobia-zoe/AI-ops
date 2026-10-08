@@ -13,13 +13,9 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     // DB tests run against a throwaway in-memory SQLite, never the real file.
     env: { DATABASE_PATH: ":memory:" },
-    // Run the whole suite in ONE forked process (no worker pool). better-sqlite3 is a native addon that
-    // crashes vitest's multi-process/worker runners on the Linux CI image ("Worker exited unexpectedly");
-    // a single long-lived process loads it once and is stable. Each test FILE still starts with a clean DB
-    // via vitest.setup.ts (beforeAll clears every table), so there is no cross-file in-memory-SQLite leak.
-    // Sequential + single-process = a bit slower, but deterministic and CI-safe.
-    pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
+    // Each test FILE starts with a clean DB (vitest.setup.ts clears every table in beforeAll), so the
+    // in-memory SQLite connection (which survives vitest's per-file module isolation) never leaks one
+    // file's rows into the next. The default pool is fine once CI runs Node >=22 (better-sqlite3's engine).
     setupFiles: ["./vitest.setup.ts"],
   },
 });

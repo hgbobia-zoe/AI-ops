@@ -26,7 +26,9 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # better-sqlite3@13 requires Node >=22 (EBADENGINE on 20 crashes the native addon in the test
+          # worker). Match the local toolchain.
+          node-version: "22"
           cache: npm
 
       - name: Install dependencies
