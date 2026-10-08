@@ -31,4 +31,6 @@
 /src/lib/ai/improvement/        @hgbobia-zoe
 /src/app/api/ai/bridge/         @hgbobia-zoe
 /src/app/api/ai/requests/       @hgbobia-zoe
+/src/app/api/ai/improvement/    @hgbobia-zoe
 /docs/ai-bridge-responder.md    @hgbobia-zoe
+/docs/self-improvement-setup.md @hgbobia-zoe

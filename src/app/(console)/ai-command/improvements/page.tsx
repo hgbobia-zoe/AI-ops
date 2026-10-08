@@ -5,14 +5,16 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowLeft, Wrench } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
-import { canViewAi } from "@/lib/auth/roles";
+import { canViewAi, canManageAi } from "@/lib/auth/roles";
 import { listRuns, countRunsByState } from "@/lib/ai/improvement/store";
 import { ImprovementRunsBoard } from "@/components/aiorg/ImprovementRunsBoard";
+import { ImprovementGovernance } from "@/components/aiorg/ImprovementGovernance";
 
 export const dynamic = "force-dynamic";
 
 export default async function ImprovementsPage(): Promise<React.JSX.Element> {
-  if (!canViewAi(await viewerRole())) redirect("/dashboard");
+  const role = await viewerRole();
+  if (!canViewAi(role)) redirect("/dashboard");
   const runs = listRuns({ limit: 500 });
   const counts = countRunsByState();
 
@@ -29,6 +31,11 @@ export default async function ImprovementsPage(): Promise<React.JSX.Element> {
           Each self-improvement run, carried through a controlled loop: investigate, plan, code, validate, PR, CI, merge, deploy, and verify. The controller owns scope, the change budget, and the merge/deploy/rollback gates — nothing reaches production without passing them.
         </p>
       </header>
+      {canManageAi(role) && (
+        <div className="mb-4">
+          <ImprovementGovernance />
+        </div>
+      )}
       <ImprovementRunsBoard runs={runs} counts={counts} />
     </main>
   );

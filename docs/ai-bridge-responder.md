@@ -144,29 +144,32 @@ the honest map; keep it honest as the loop is built.
   infra, test config, or this contract requires an explicit human review before merge. *Only a hard gate
   against the agent once the agent runs under a scoped, non-admin identity distinct from the reviewer.*
 
-### NOT built yet — automation MUST stay off until these exist (contract-only / missing)
-- **Scope gate (per request)** — the responder is *told* to stay within the blade and flag material scope
-  expansion, but nothing computes or enforces "in scope / out of scope". No code gate.
-- **Change budget** — no tracking/enforcement of files touched, lines changed, directories, commands run,
-  wall-clock, or retries. Must be **configurable** (not arbitrary) and enforced by the controller, not the
-  LLM. MISSING.
-- **Explicit lifecycle state machine (gate 13)** — the target states are
-  `REQUESTED → INVESTIGATING → PLANNED → CODING → VALIDATING → PR_CREATED → CI_RUNNING → READY_TO_MERGE →
-  MERGED → DEPLOYING → DEPLOYED → VERIFYING → VERIFIED`, with failure states `VALIDATION_FAILED`,
-  `CI_FAILED`, `SCOPE_EXCEEDED`, `SESSION_FAILED`, `DEPLOYMENT_FAILED`, `HEALTH_CHECK_FAILED`,
-  `ROLLBACK_REQUIRED`, `ROLLED_BACK`, `HUMAN_REVIEW_REQUIRED`. Today the store has only the coarse
-  `ai_sessions.status` (running/awaiting_approval/paused/done/failed/cancelled) and `ai_requests.status`
-  (new/triaged/in_progress/in_review/done/declined). The rich controller state machine is MISSING.
-- **Deployment detection / trigger from the controller** — MISSING. Deploy is manual (`flyctl`) or a future
-  CI step; the controller cannot observe deploy status.
-- **Post-deployment verification (gates 8–9)** — MISSING. There is no health check, smoke test, error-rate
-  or integration check after a deploy. "Deployed" is NOT "Verified".
-- **Rollback (gate 10)** — MISSING. No defined or automated rollback on a failed health check.
-- **Bounded self-repair on CI failure (gate 7)** — MISSING as code. The retry limit + escalate-after-N must
-  be controller-enforced, not left to the LLM.
+### Now BUILT — the controller (`src/lib/ai/improvement/*`, `/api/ai/improvement/*`, `/ai-command/improvements`)
+- **Lifecycle state machine (gate 13)** — `machine.ts`: the full `REQUESTED → … → VERIFIED` path plus the
+  failure/hold states (`VALIDATION_FAILED`, `CI_FAILED`, `SCOPE_EXCEEDED`, `SESSION_FAILED`,
+  `DEPLOYMENT_FAILED`, `HEALTH_CHECK_FAILED`, `ROLLBACK_REQUIRED`, `ROLLED_BACK`, `HUMAN_REVIEW_REQUIRED`).
+  The *only* way state changes is `store.transitionRun`, which refuses an illegal move.
+- **Scope gate (gate 1)** — `scope.ts` + `service.enforceScope`: per-run allowed/forbidden paths PLUS an
+  always-forbidden set (the agent's own controls) that no scope can open. A violation trips `scope_exceeded`.
+- **Change budget (gate 4)** — `budget.ts` + `config.ts` + `service.enforceBudget`: configurable
+  files/lines/dirs/commands/retries/wall-clock; a breach stops the run.
+- **Bounded self-repair (gate 7)** — `service.retryRepair`/`reportCi`/`reportValidation`: repair cycles are
+  capped by the retry budget, then escalate to a human — never an infinite loop.
+- **Deploy detection + verification + rollback (gates 8–10)** — `deploy.ts` (read-only `/api/version`
+  compare), `verify.ts` (`evaluateHealth`), `rollback.ts` (decide + `repository_dispatch` to the rollback
+  workflow). `service.verifyAndRoute` turns `deployed` into `verified` or routes to rollback/human.
+- **Observability (gate 11)** — `/ai-command/improvements` shows every run's state, budget use, PR, deploy,
+  health, and the full lifecycle trail.
+
+### Still requires a human to PROVISION (see docs/self-improvement-setup.md)
+- A **scoped, non-admin agent identity** + a **sandbox** — without these the gates above are advisory
+  against an agent holding owner/admin creds. This is the single most important remaining step.
+- The **secrets**: `AI_BRIDGE_TOKEN` (done), the agent's fine-grained PAT, `FLY_API_TOKEN` (CI only),
+  `GITHUB_DISPATCH_TOKEN` (for auto-rollback).
+- One **live validation of the rollback workflow** before auto-rollback is trusted.
 
 ### Hard rule for automation
-Auto-merge and auto-deploy **must stay disabled** until the deployment/verification/rollback gates (8–10)
-and the change-budget + state-machine controller exist. Merging and deploying AI-written code with no
-post-deploy verification and no rollback is exactly the unsafe path the audit forbids: a successful merge is
-not a successful improvement. Until then: **human merges, humans deploy, and the agent only opens PRs.**
+Autonomy (autoMerge / autoDeploy / autoRollback) is **OFF by default** and is turned on only by a human in
+the `/ai-command/improvements` Governance panel, in the safe order in the setup doc — and only after the
+scoped identity + sandbox exist and rollback has been validated once. A successful merge is not a successful
+improvement. Until then: **human merges, humans deploy, and the agent only opens PRs.**
