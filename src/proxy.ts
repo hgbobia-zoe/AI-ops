@@ -17,6 +17,7 @@ import { verifyImageSig } from "@/lib/creative/assetUrl";
 const PUBLIC: string[] = [
   "/login",
   "/privacy", // public privacy policy (Chrome Web Store listing requirement for the Auto-Pull extension)
+  "/api/version", // build identity (git commit / deploy time) — no secrets; read by the improvement controller + monitoring
   "/join", // invite acceptance — the invitee isn't logged in yet (token-gated by the invite itself)
   "/pass", // Shift Pass gateway — the visitor has no session yet; the token IS the credential
   "/pass-expired", // dead-end for an ended/invalid pass (no session)

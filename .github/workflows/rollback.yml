@@ -1,0 +1,49 @@
+# Rollback (audit gate 10). Fired by a repository_dispatch (event type "improvement-rollback") that the
+# self-improvement controller sends when a post-deploy health check fails AND auto-rollback is enabled; it
+# can also be run by hand from the Actions tab. The Fly credential lives HERE, in CI — the controller holds
+# only a dispatch token that can fire this one pre-defined workflow, nothing else (audit gate 12).
+#
+# Rollback = redeploy the immediately previous Fly release image. flyctl's exact rollback surface varies by
+# version, so this resolves the previous image ref from `flyctl releases` and redeploys it. VALIDATE this
+# once against the live app (dispatch it manually) before relying on automatic rollback.
+
+name: Rollback
+
+on:
+  repository_dispatch:
+    types: [improvement-rollback]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you rolling back?"
+        required: false
+        default: "manual rollback"
+
+concurrency:
+  group: deploy-main # share the deploy lock so a rollback never races a deploy
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Roll back to previous release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Roll back
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          APP: zoe-dispatch
+          REASON: ${{ github.event.client_payload.reason || github.event.inputs.reason }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then echo "FLY_API_TOKEN not set — cannot roll back."; exit 1; fi
+          echo "Rollback requested. Reason: ${REASON:-unspecified}"
+          echo "Current releases:"
+          flyctl releases --app "$APP" | head -n 6
+          # The immediately previous successful image (second row of the JSON release list).
+          PREV=$(flyctl releases --json --app "$APP" | jq -r '[.[] | select(.Status=="complete" or .Status=="succeeded")][1].ImageRef // .[1].ImageRef // empty')
+          if [ -z "$PREV" ] || [ "$PREV" = "null" ]; then echo "::error::could not resolve a previous image to roll back to"; exit 1; fi
+          echo "Rolling back to: $PREV"
+          flyctl deploy --remote-only --app "$APP" --image "$PREV" -e ROLLED_BACK_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "Rollback deploy issued."
