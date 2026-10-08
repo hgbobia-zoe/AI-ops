@@ -301,6 +301,49 @@ CREATE TABLE IF NOT EXISTS ai_requests (
 CREATE INDEX IF NOT EXISTS idx_ai_requests_status ON ai_requests(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_requests_session ON ai_requests(session_id);
 
+-- Self-Improvement Controller. An IMPROVEMENT RUN is one controlled attempt to carry an improvement
+-- request through the autonomous software-engineering loop. The CONTROLLER (code) owns the state machine,
+-- the scope gate, the change budget, and the merge/deploy/verify/rollback gates; the AI only investigates,
+-- plans, writes code, and diagnoses. Governing law: RULES CONTROL EXECUTION. Every state change is also an
+-- append-only event, so the full lifecycle (incl. failures + rollback) is a pure read, never fabricated.
+-- state: see src/lib/ai/improvement/types.ts RunState (requested..verified + failure/hold states).
+CREATE TABLE IF NOT EXISTS improvement_runs (
+  id            TEXT PRIMARY KEY,     -- "IR-"+uuid
+  request_id    TEXT,                 -- originating ai_requests.id (null = filed directly)
+  blade         TEXT NOT NULL,        -- the single blade being improved
+  state         TEXT NOT NULL,        -- RunState
+  scope_json    TEXT NOT NULL,        -- RunScope (blade/summary/problem/allowedPaths/forbiddenPaths)
+  budget_json   TEXT NOT NULL,        -- ChangeBudget (configurable limits)
+  metrics_json  TEXT NOT NULL,        -- RunMetrics (consumed so far)
+  branch        TEXT,                 -- isolated branch/worktree name
+  commit_sha    TEXT,                 -- head commit of the change
+  pr_url        TEXT,
+  pr_number     INTEGER,
+  deploy_json   TEXT,                 -- DeployInfo (provider/deployId/previousId/status) — for rollback
+  health_json   TEXT,                 -- HealthResult (post-deploy verification)
+  plan          TEXT,                 -- the AI's implementation plan (pre-code, gate 2)
+  error         TEXT,                 -- honest failure reason when in a failure state
+  started_by    TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  ended_at      TEXT                  -- set on a terminal state (verified / rolled_back)
+);
+CREATE INDEX IF NOT EXISTS idx_improvement_runs_state ON improvement_runs(state, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_improvement_runs_request ON improvement_runs(request_id);
+
+-- Append-only lifecycle log for a run — every state transition is one row (the audit trail for gate 11).
+CREATE TABLE IF NOT EXISTS improvement_run_events (
+  id          TEXT PRIMARY KEY,       -- "IRE-"+uuid
+  run_id      TEXT NOT NULL,
+  ts          TEXT NOT NULL,
+  from_state  TEXT,                   -- null for the initial 'requested'
+  to_state    TEXT NOT NULL,
+  actor       TEXT NOT NULL,          -- "controller" | "ai" | a human label
+  note        TEXT,
+  payload     TEXT                    -- JSON detail (bounded)
+);
+CREATE INDEX IF NOT EXISTS idx_improvement_run_events_run ON improvement_run_events(run_id, ts);
+
 -- Event Risk Engine (MVP2). Persisted risks with a stable signature so re-scans update in
 -- place (never duplicate); lifecycle OPEN→ACKNOWLEDGED→IN_PROGRESS→RESOLVED/DISMISSED.
 CREATE TABLE IF NOT EXISTS risk_items (

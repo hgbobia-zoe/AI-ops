@@ -28,6 +28,7 @@
 # The autonomous loop's own control surface (sessions, requests backlog, bridge endpoints, the contract)
 /src/lib/ai/sessions.ts         @hgbobia-zoe
 /src/lib/ai/requests.ts         @hgbobia-zoe
+/src/lib/ai/improvement/        @hgbobia-zoe
 /src/app/api/ai/bridge/         @hgbobia-zoe
 /src/app/api/ai/requests/       @hgbobia-zoe
 /docs/ai-bridge-responder.md    @hgbobia-zoe
