@@ -737,6 +737,24 @@ export async function updatePublishedShift(input: PublishShiftInput & { shiftId:
   return { ok: true, shiftId: input.shiftId };
 }
 
+export interface SetPayRateResult {
+  ok: boolean;
+  status?: number;
+  error?: string;
+}
+/** Upsert a worker's HOURLY pay rate into Connecteam (PUT /pay-rates/v1/pay-rates). Needs the
+ *  `pay_rates.write` scope on the API key. Honest: ok only on a real 2xx; surfaces Connecteam's error —
+ *  e.g. HAS_LOCKED_DAYS (effectiveDate on/after a locked timesheet day) or a 403 when the key lacks write
+ *  scope. The body mirrors the read shape (payRatesByUsers[].payRate.defaultRate + effectiveDate + rateType). */
+export async function setConnecteamPayRate(userId: number, hourlyRate: number, effectiveDate: string): Promise<SetPayRateResult> {
+  if (!connecteamConfigured()) return { ok: false, error: "Connecteam not configured" };
+  if (!(hourlyRate >= 0)) return { ok: false, error: "invalid rate" };
+  const body = { payRatesByUsers: [{ userId, payRate: { defaultRate: hourlyRate, effectiveDate, isDefaultRateEnabled: true, rateType: "hourly" } }] };
+  const r = await ctWrite("PUT", "/pay-rates/v1/pay-rates", body);
+  if (r.status !== 200 && r.status !== 201) return { ok: false, status: r.status, error: extractErr(r.json) || `Connecteam HTTP ${r.status || "error"}` };
+  return { ok: true, status: r.status };
+}
+
 /** Best-effort pull of the created shift id from Connecteam's (loosely documented) response shape. */
 function extractCreatedShiftId(json: unknown): string | undefined {
   const shifts = findArray(json, ["shifts"]);

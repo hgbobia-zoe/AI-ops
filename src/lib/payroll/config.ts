@@ -11,6 +11,7 @@ export interface PayrollConfig {
   syncHour: number; // 0–23, local ET (default 8am)
   approvalPolicy: "always_require" | "auto_if_clean"; // never auto-approve unless explicitly set
   overtimeThreshold: number; // weekly hours above which overtime is flagged (EXCEPTION)
+  rateWriteback: boolean; // when a Gusto pull syncs rates, also write them back into Connecteam (PUT)
 }
 
 const KEY = "payroll.config";
@@ -21,6 +22,7 @@ export const DEFAULT_PAYROLL_CONFIG: PayrollConfig = {
   syncHour: 8,
   approvalPolicy: "always_require",
   overtimeThreshold: 40,
+  rateWriteback: true,
 };
 
 export const DOW_LABEL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -43,6 +45,7 @@ export function savePayrollConfig(patch: Partial<PayrollConfig>): PayrollConfig 
     syncHour: clampInt(patch.syncHour, 0, 23, cur.syncHour),
     approvalPolicy: patch.approvalPolicy === "auto_if_clean" || patch.approvalPolicy === "always_require" ? patch.approvalPolicy : cur.approvalPolicy,
     overtimeThreshold: clampInt(patch.overtimeThreshold, 1, 168, cur.overtimeThreshold),
+    rateWriteback: typeof patch.rateWriteback === "boolean" ? patch.rateWriteback : cur.rateWriteback,
   };
   setJson(KEY, next);
   return next;

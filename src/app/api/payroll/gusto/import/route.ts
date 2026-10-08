@@ -6,7 +6,7 @@
 // Must be PUBLIC in the proxy (it's hit cross-origin by the Gusto tab, not an app session).
 
 import { NextResponse } from "next/server";
-import { parseGustoMembers, parseGustoPayPeriods, saveGustoSnapshot } from "@/lib/payroll/gustoSnapshot";
+import { parseGustoMembers, parseGustoPayPeriods, attachPayRates, saveGustoSnapshot } from "@/lib/payroll/gustoSnapshot";
 import { reconcileGustoFromSnapshot } from "@/lib/payroll/gustoMatch";
 import { recordPull, logImport } from "@/lib/pull/state";
 
@@ -29,14 +29,14 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
   }
 
-  let body: { members?: unknown; timeTracking?: unknown };
+  let body: { members?: unknown; timeTracking?: unknown; pay?: Record<string, unknown> };
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400, headers: CORS });
   }
 
-  const members = parseGustoMembers(body.members);
+  const members = attachPayRates(parseGustoMembers(body.members), body.pay);
   const payPeriods = parseGustoPayPeriods(body.timeTracking);
 
   // A pull that returned no members is almost certainly a signed-out / blocked tab — don't clobber a good
@@ -54,7 +54,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     /* matching is best-effort; the snapshot is still stored */
   }
   recordPull("gusto", members.length);
-  logImport("gusto", true, { detail: `${members.length} members, ${payPeriods.length} periods${match ? `, ${match.matched} matched` : ""}` });
+  logImport("gusto", true, {
+    detail: `${members.length} members, ${payPeriods.length} periods${match ? `, ${match.matched} matched, ${match.ratesApplied} rates, ${match.connecteamRatesWritten}→CT` : ""}`,
+  });
 
   return NextResponse.json({ ok: true, members: members.length, payPeriods: payPeriods.length, match }, { headers: CORS });
 }

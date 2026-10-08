@@ -22,6 +22,10 @@ export interface GustoSnapshotMember {
   jobTitle: string | null;
   country: string | null;
   employmentEntityUuid: string | null;
+  // Compensation from the per-worker pay query (CompanyMemberDashboardPeopleShowPay), when pulled.
+  payRate: number | null; // the amount (hourly rate, or salary figure when payUnit is not hourly)
+  payCurrency: string | null;
+  payUnit: string | null; // "Hour" (hourly) | "Year" | "Month" | …
 }
 export interface GustoSnapshotPayPeriod {
   id: string;
@@ -65,9 +69,45 @@ export function parseGustoMembers(raw: unknown): GustoSnapshotMember[] {
       jobTitle: str(m.jobTitle),
       country,
       employmentEntityUuid: str(m.currentEmploymentTypeEntityUuid),
+      payRate: null,
+      payCurrency: null,
+      payUnit: null,
     });
   }
   return out;
+}
+
+/** Parse one CompanyMemberDashboardPeopleShowPay response → the worker's current compensation. Employee
+ *  rate lives at company.memberCompensationEmployeeCard.jobs[0].currentCompensation.details. Defensive;
+ *  returns nulls when absent (e.g. a contractor, whose rate is on a different card). */
+export function parseGustoPayRate(raw: unknown): { amount: number | null; currency: string | null; unit: string | null } {
+  const details = (raw as {
+    data?: { member?: { company?: { memberCompensationEmployeeCard?: { jobs?: Array<{ currentCompensation?: { details?: Record<string, unknown> } }> } } } };
+  })?.data?.member?.company?.memberCompensationEmployeeCard?.jobs?.[0]?.currentCompensation?.details;
+  if (!details) return { amount: null, currency: null, unit: null };
+  const pa = (details.paymentAmount ?? {}) as Record<string, unknown>;
+  const amt = Number(pa.amount);
+  return {
+    amount: Number.isFinite(amt) ? amt : null,
+    currency: str(pa.currencyCode),
+    unit: str(details.paymentUnit),
+  };
+}
+
+/** Attach per-member pay rates (parsed from a { memberId: rawPayResponse } map) onto the members. */
+export function attachPayRates(members: GustoSnapshotMember[], payByMember: Record<string, unknown> | undefined): GustoSnapshotMember[] {
+  if (!payByMember) return members;
+  for (const m of members) {
+    const raw = payByMember[m.id];
+    if (!raw) continue;
+    const r = parseGustoPayRate(raw);
+    if (r.amount != null) {
+      m.payRate = r.amount;
+      m.payCurrency = r.currency;
+      m.payUnit = r.unit;
+    }
+  }
+  return members;
 }
 
 /** Parse a raw TimeTrackingDashboard GraphQL response into normalized pay periods. */

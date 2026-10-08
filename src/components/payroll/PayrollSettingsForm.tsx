@@ -64,6 +64,13 @@ export function PayrollSettingsForm({ initial }: { initial: PayrollConfig }): Re
           </select>
         </label>
         <label className="flex flex-col gap-1">
+          <span className={labelCls}>Pay-rate write-back to Connecteam</span>
+          <select className={fieldCls} value={cfg.rateWriteback ? "on" : "off"} onChange={(e) => set("rateWriteback", e.target.value === "on")}>
+            <option value="on">On — sync Gusto rates into Connecteam</option>
+            <option value="off">Off — hold rates in Zoe only</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
           <span className={labelCls}>Sync day</span>
           <select className={fieldCls} value={cfg.syncDay} onChange={(e) => set("syncDay", Number(e.target.value))} disabled={!cfg.autoSyncEnabled}>
             {DOW.map((d, i) => <option key={i} value={i}>{d}</option>)}

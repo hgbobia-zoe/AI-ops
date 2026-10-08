@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseGustoMembers, parseGustoPayPeriods } from "./gustoSnapshot";
+import { parseGustoMembers, parseGustoPayPeriods, parseGustoPayRate, attachPayRates } from "./gustoSnapshot";
 import { gustoIsInternational } from "./gusto";
+
+const payResponse = (amount: string, unit: string) => ({
+  data: { member: { company: { memberCompensationEmployeeCard: { jobs: [{ currentCompensation: { details: { paymentAmount: { amount, currencyCode: "USD" }, paymentUnit: unit } } }] } } } },
+});
 
 // Representative MembersTable response (the real captured shape: data.company.members.nodes[]).
 const membersResponse = {
@@ -52,6 +56,30 @@ describe("parseGustoPayPeriods", () => {
   });
   it("returns [] when the field is absent", () => {
     expect(parseGustoPayPeriods({ data: { company: {} } })).toEqual([]);
+  });
+});
+
+describe("parseGustoPayRate", () => {
+  it("extracts the hourly amount, currency, and unit", () => {
+    expect(parseGustoPayRate(payResponse("25.00", "Hour"))).toEqual({ amount: 25, currency: "USD", unit: "Hour" });
+  });
+  it("returns nulls for a contractor / missing compensation card", () => {
+    expect(parseGustoPayRate({ data: { member: { company: {} } } })).toEqual({ amount: null, currency: null, unit: null });
+    expect(parseGustoPayRate(null)).toEqual({ amount: null, currency: null, unit: null });
+  });
+});
+
+describe("attachPayRates", () => {
+  it("merges parsed rates onto members by id, leaving unmatched members untouched", () => {
+    const members = parseGustoMembers({
+      data: { company: { members: { nodes: [
+        { id: "m1", personType: "Employee", legalFirstName: "A", lastName: "B" },
+        { id: "m2", personType: "Employee", legalFirstName: "C", lastName: "D" },
+      ] } } },
+    });
+    attachPayRates(members, { m1: payResponse("30.5", "Hour") });
+    expect(members.find((m) => m.id === "m1")).toMatchObject({ payRate: 30.5, payCurrency: "USD", payUnit: "Hour" });
+    expect(members.find((m) => m.id === "m2")).toMatchObject({ payRate: null });
   });
 });
 
