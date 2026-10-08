@@ -1,0 +1,33 @@
+# Safety-critical paths — the controls that govern the autonomous agent itself. A change to any of these
+# requires an explicit human (code-owner) review before it can merge, even when CI is green and auto-merge
+# is enabled. This is the enforcement for audit gate 12: THE AGENT MUST NOT be able to weaken its own
+# safety controls without a human review path. Everything NOT listed here can follow the normal flow.
+#
+# NOTE: this is only a hard gate against the agent once (a) branch protection has
+# "Require review from Code Owners" enabled AND (b) the agent runs under a scoped identity that is NOT an
+# admin and NOT the code owner (so it cannot approve its own PR or bypass as admin). Until then it documents
+# intent and gates non-admin contributors. See docs/ai-bridge-responder.md "Controller-owned gates".
+
+# CI / CD and the merge gate itself
+/.github/                       @hgbobia-zoe
+
+# Deploy + runtime infrastructure
+/Dockerfile                     @hgbobia-zoe
+/fly.toml                       @hgbobia-zoe
+
+# Test configuration (disabling/weakening tests must be reviewed)
+/vitest.config.ts               @hgbobia-zoe
+
+# Authentication & authorization
+/src/lib/auth/                  @hgbobia-zoe
+
+# The execution gate (what an approved action is allowed to do) and the AI provider seam
+/src/lib/aiorg/approvals.ts     @hgbobia-zoe
+/src/lib/ai/provider.ts         @hgbobia-zoe
+
+# The autonomous loop's own control surface (sessions, requests backlog, bridge endpoints, the contract)
+/src/lib/ai/sessions.ts         @hgbobia-zoe
+/src/lib/ai/requests.ts         @hgbobia-zoe
+/src/app/api/ai/bridge/         @hgbobia-zoe
+/src/app/api/ai/requests/       @hgbobia-zoe
+/docs/ai-bridge-responder.md    @hgbobia-zoe

@@ -120,3 +120,53 @@ Anthropic has no flat-subscription cloud runtime that polls sub-hourly 24/7 (clo
 inactivity; cloud "routines" have a 1-hour minimum). So genuine hands-off 24/7 means the Fly Agent-SDK
 worker. The office-machine session is the zero-new-cost way to prove the loop first; moving to the Fly
 worker later is a deploy, not a rewrite, because both speak this same contract.
+
+---
+
+# Controller-owned gates (what is ENFORCED vs. what is only CONTRACT)
+
+**Design principle: RULES CONTROL EXECUTION. AI INTERPRETS AND GENERATES CHANGES.** The LLM must never
+decide whether its own safety requirements can be ignored. Below, each gate is marked by how it is actually
+enforced *today* — because a control that lives only in this prose is advisory, not a gate. This section is
+the honest map; keep it honest as the loop is built.
+
+### Enforced by CODE or CONFIG today (real gates)
+- **Operational execution scope** — `src/lib/aiorg/approvals.ts`: an approved action can only run a proven
+  `gs_outbox` op (email/note/task, behind env send-gates). `modify_quote`, `change_pricing`,
+  `schedule_change`, `hiring`, `firing`, `instawork_gig` are **FORBIDDEN to execute** (intent recorded,
+  never forced). This is a real controller-side scope gate for operational actions.
+- **Authentication / authorization** — `src/lib/auth/roles.ts` + proxy: view/operate/approve/manage levels;
+  the headless responder authenticates with `AI_BRIDGE_TOKEN` (gated-by-default).
+- **CI merge gate** — `.github/workflows/ci.yml` (typecheck + full test suite). Required via branch
+  protection; "green" is meaningful only because the suite now runs.
+- **Self-modification review (gate 12)** — `.github/CODEOWNERS` + branch protection "require Code Owner
+  review": a PR touching CI, auth, the approvals gate, the provider seam, the control-plane surface, deploy
+  infra, test config, or this contract requires an explicit human review before merge. *Only a hard gate
+  against the agent once the agent runs under a scoped, non-admin identity distinct from the reviewer.*
+
+### NOT built yet — automation MUST stay off until these exist (contract-only / missing)
+- **Scope gate (per request)** — the responder is *told* to stay within the blade and flag material scope
+  expansion, but nothing computes or enforces "in scope / out of scope". No code gate.
+- **Change budget** — no tracking/enforcement of files touched, lines changed, directories, commands run,
+  wall-clock, or retries. Must be **configurable** (not arbitrary) and enforced by the controller, not the
+  LLM. MISSING.
+- **Explicit lifecycle state machine (gate 13)** — the target states are
+  `REQUESTED → INVESTIGATING → PLANNED → CODING → VALIDATING → PR_CREATED → CI_RUNNING → READY_TO_MERGE →
+  MERGED → DEPLOYING → DEPLOYED → VERIFYING → VERIFIED`, with failure states `VALIDATION_FAILED`,
+  `CI_FAILED`, `SCOPE_EXCEEDED`, `SESSION_FAILED`, `DEPLOYMENT_FAILED`, `HEALTH_CHECK_FAILED`,
+  `ROLLBACK_REQUIRED`, `ROLLED_BACK`, `HUMAN_REVIEW_REQUIRED`. Today the store has only the coarse
+  `ai_sessions.status` (running/awaiting_approval/paused/done/failed/cancelled) and `ai_requests.status`
+  (new/triaged/in_progress/in_review/done/declined). The rich controller state machine is MISSING.
+- **Deployment detection / trigger from the controller** — MISSING. Deploy is manual (`flyctl`) or a future
+  CI step; the controller cannot observe deploy status.
+- **Post-deployment verification (gates 8–9)** — MISSING. There is no health check, smoke test, error-rate
+  or integration check after a deploy. "Deployed" is NOT "Verified".
+- **Rollback (gate 10)** — MISSING. No defined or automated rollback on a failed health check.
+- **Bounded self-repair on CI failure (gate 7)** — MISSING as code. The retry limit + escalate-after-N must
+  be controller-enforced, not left to the LLM.
+
+### Hard rule for automation
+Auto-merge and auto-deploy **must stay disabled** until the deployment/verification/rollback gates (8–10)
+and the change-budget + state-machine controller exist. Merging and deploying AI-written code with no
+post-deploy verification and no rollback is exactly the unsafe path the audit forbids: a successful merge is
+not a successful improvement. Until then: **human merges, humans deploy, and the agent only opens PRs.**
