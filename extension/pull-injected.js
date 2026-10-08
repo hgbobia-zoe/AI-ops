@@ -38,7 +38,7 @@ function zoePull(apiBase) {
     function loop(pg) { return fetchPage(pg).then((r) => { if (!pErr && r.count > 0 && pg < 60) return loop(pg + 1); return null; }); }
     return loop(0).then(() => {
       const recs = Object.keys(all).map((id) => { const p = all[id];
-        return { bookingId: String(p.id), eventName: p.eventName || "", eventDate: d2(p.logistics_start_date), statusLabel: p.statusLabel || "", signed: !!p.signed, grandTotalCents: p.grand_total, contractTotalCents: p.contract_subtotal, amountPaidCents: p.amount_paid, amountDueCents: p.amount_due, clientName: p.client_name || "", clientEmail: p.client_email || "", clientPhone: p.client_phone || "", quoteSentDate: d2(p.quote_sent_date), dateCreated: d2(p.date_created), venue: p.venueLabel || "", location: p.cityStateZipCounty || "" };
+        return { bookingId: String(p.id), eventName: p.eventName || "", eventDate: d2(p.logistics_start_date), statusLabel: p.statusLabel || "", signed: !!p.signed, archived: !!p.archived, grandTotalCents: p.grand_total, contractTotalCents: p.contract_subtotal, amountPaidCents: p.amount_paid, amountDueCents: p.amount_due, clientName: p.client_name || "", clientEmail: p.client_email || "", clientPhone: p.client_phone || "", quoteSentDate: d2(p.quote_sent_date), dateCreated: d2(p.date_created), venue: p.venueLabel || "", location: p.cityStateZipCounty || "" };
       });
       if (!recs.length) return { saved: 0, partial: pErr };
       const todayY = new Date().toISOString().slice(0, 10);
