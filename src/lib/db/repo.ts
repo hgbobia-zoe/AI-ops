@@ -1226,37 +1226,42 @@ export function getPipelineBreakdown(today: string): PipelineBreakdown {
  *  row GS stopped returning — so a deleted quote lingers as a phantom open quote. Flipping archived 0→1
  *  drops it from the pipeline/upcoming; it's reversible (a later pull that includes it restores GS's value).
  *  Caller MUST guard this to complete pulls only (not partial, and a real full set) — see the ingest route. */
-export function archiveBookingsNotIn(keepIds: string[]): number {
-  if (keepIds.length === 0) return 0;
+export function archiveBookingsNotIn(keepIds: string[], maxArchive: number): { archived: number; skipped: boolean } {
+  if (keepIds.length === 0) return { archived: 0, skipped: false };
   const db = getDb();
   const ph = keepIds.map(() => "?").join(",");
+  // SAFETY: a silently-truncated pull (HTTP 200 with a short results page) isn't flagged partial, so it
+  // could otherwise archive hundreds of still-live projects. Real daily deletions are a handful — if the
+  // candidate set is larger than maxArchive, this is almost certainly a bad pull: skip, don't mass-archive.
+  const candidates = (db.prepare(`SELECT COUNT(*) AS c FROM bookings WHERE COALESCE(archived,0) = 0 AND booking_id NOT IN (${ph})`).get(...keepIds) as { c: number }).c;
+  if (candidates > maxArchive) return { archived: 0, skipped: true };
   const r = db
     .prepare(`UPDATE bookings SET archived = 1, updated_at = ? WHERE COALESCE(archived,0) = 0 AND booking_id NOT IN (${ph})`)
     .run(new Date().toISOString(), ...keepIds);
-  return r.changes;
+  return { archived: r.changes, skipped: false };
 }
 
 export interface QuoteStageSnapshot {
-  // Current snapshot of UPCOMING quotes by Goodshuffle stage (Lost/cancelled/archived excluded). Range-
-  // INDEPENDENT on purpose — it answers "where do we stand generally", so the dashboard date toggle must
-  // not change it.
+  // Current snapshot of ALL ACTIVE (non-archived) quotes by Goodshuffle stage — matches GS's own
+  // Projects stage bar (New / Quote Sent / Action Needed / Signed; Lost/cancelled/archived excluded). NOT
+  // date-scoped: it answers "where do we stand generally", so the dashboard date toggle doesn't change it.
   stageNew: number; // "New Project"
   stageQuoteSent: number; // "Quote Sent" / "Quote"
   stageActionNeeded: number; // "Unsigned Changes" — signed then modified, needs re-sign
   stageSigned: number; // "Contract Signed" / signed flag = won
 }
 
-/** Where the upcoming quotes stand now, by Goodshuffle stage. Upcoming = event_date >= today, not
- *  archived, not Lost/cancelled. Not scoped to any created/selected window — a current status snapshot. */
-export function getQuoteStageSnapshot(today: string): QuoteStageSnapshot {
+/** Where the active quotes stand now, by Goodshuffle stage — all non-archived, non-Lost bookings (any
+ *  date), to match GS's Projects stage counts. Not scoped to any window: a current status snapshot. */
+export function getQuoteStageSnapshot(): QuoteStageSnapshot {
   const rows = getDb()
     .prepare(
       `SELECT status_label, signed FROM bookings
-       WHERE event_date IS NOT NULL AND event_date >= ? AND COALESCE(archived,0) = 0
+       WHERE COALESCE(archived,0) = 0
          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'`,
     )
-    .all(today) as { status_label: string | null; signed: number | null }[];
+    .all() as { status_label: string | null; signed: number | null }[];
   let stageNew = 0, stageQuoteSent = 0, stageActionNeeded = 0, stageSigned = 0;
   for (const r of rows) {
     const s = (r.status_label ?? "").toLowerCase();

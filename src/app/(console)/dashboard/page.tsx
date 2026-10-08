@@ -165,9 +165,9 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const openValue = openQuotes.some((b) => b.grandTotal != null) ? openQuotes.reduce((s, b) => s + (b.grandTotal ?? 0), 0) : null;
   const pipelineData = { count: openQuotes.length, value: openValue, buckets: pipelineBuckets };
 
-  // QUOTE STAGES — a current snapshot of upcoming quotes by Goodshuffle stage (New / Quote Sent / Action
-  // Needed / Signed; Lost excluded). Range-INDEPENDENT on purpose: "where do we stand generally."
-  const quoteStages = safe(() => getQuoteStageSnapshot(today), null);
+  // QUOTE STAGES — a current snapshot of ALL ACTIVE quotes by Goodshuffle stage (New / Quote Sent / Action
+  // Needed / Signed; Lost/archived excluded), matching GS's Projects stage bar. Not date-scoped.
+  const quoteStages = safe(() => getQuoteStageSnapshot(), null);
 
   // Next operational day — for the Today's Operations empty state (don't show a giant empty map).
   const futureOps = safe(() => getPipelineBookingsInRange(shiftYmd(today, 1), shiftYmd(today, 60)), [] as BookingView[]).filter((b) => b.eventDate);

@@ -99,9 +99,12 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   // Prune deleted-in-GS orphans: GS DELETES projects (not just marks them Lost), and an upsert pull never
   // removes a row GS stopped returning — so a deleted quote lingers as a phantom open quote. On a COMPLETE
-  // pull (not partial) carrying a real full set, archive any booking GS no longer returns. The size floor
-  // guarantees a small/truncated pull can never mass-archive the pipeline.
-  const pruned = !partial && records.length >= 100 ? archiveBookingsNotIn(records.map((r) => r.bookingId)) : 0;
+  // pull (not partial) carrying a real full set, archive any booking GS no longer returns. The >=100 floor
+  // plus the per-call cap (archiveBookingsNotIn skips if it would archive more than a handful) guard against
+  // a silently-truncated pull wrongly mass-archiving live projects.
+  const prune = !partial && records.length >= 100 ? archiveBookingsNotIn(records.map((r) => r.bookingId), 15) : { archived: 0, skipped: false };
+  if (prune.skipped) logImport("bookings", false, { rowsIn: projects.length, rowsWritten: records.length, detail: "prune skipped — too many orphans, likely a truncated pull" });
+  const pruned = prune.archived;
 
   // Auto-add the Warehouse Desktop account to every SIGNED project's GSPRO team (add-once, batched)
   // so the warehouse tablet/workstation sees signed work. The office extension drains these ops.
