@@ -275,6 +275,32 @@ CREATE TABLE IF NOT EXISTS ai_session_approvals (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_session_approvals_session ON ai_session_approvals(session_id);
 
+-- AI Requests backlog — the bridge responder's product/feature-request intake. When a session instruction
+-- is an idea for the product ("the app should do X") rather than an operational task or a question, the
+-- responder files it here so it is TRACKED, not lost in a timeline. A request can graduate to an
+-- implementation PR; the human MERGE of that PR is the approval (governing law: nothing here executes a
+-- production change — this is a tracked record, and any operational write still goes through ai_approvals).
+-- type: feature | question | operational. status: new | triaged | in_progress | in_review | done | declined.
+CREATE TABLE IF NOT EXISTS ai_requests (
+  id            TEXT PRIMARY KEY,         -- "REQ-"+uuid
+  session_id    TEXT,                     -- originating ai_sessions.id (null = filed directly)
+  blade         TEXT,                     -- originating BladeKey
+  requested_by  TEXT,                     -- the human who asked (for the Slack DM + attribution)
+  title         TEXT NOT NULL,            -- short headline
+  body          TEXT,                     -- the full request / instruction text
+  type          TEXT NOT NULL,            -- feature | question | operational
+  status        TEXT NOT NULL,            -- new | triaged | in_progress | in_review | done | declined
+  pr_url        TEXT,                     -- implementation PR URL (set when the responder opens one)
+  pr_number     INTEGER,                  -- implementation PR number
+  branch        TEXT,                     -- implementation branch name
+  notes         TEXT,                     -- triage / status notes
+  change_key    TEXT UNIQUE,              -- idempotency (e.g. "req:"+instruction event id) — one request per instruction
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_requests_status ON ai_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_requests_session ON ai_requests(session_id);
+
 -- Event Risk Engine (MVP2). Persisted risks with a stable signature so re-scans update in
 -- place (never duplicate); lifecycle OPEN→ACKNOWLEDGED→IN_PROGRESS→RESOLVED/DISMISSED.
 CREATE TABLE IF NOT EXISTS risk_items (

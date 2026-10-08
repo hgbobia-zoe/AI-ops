@@ -3,10 +3,13 @@
 // from AI Org (who the employees are) and from Admin → AI Configuration (how the system is governed). Any
 // signed staff may view and operate; guests have no AI access.
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Inbox, ArrowRight } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canViewAi, canOperateAi, canApproveAi, canSeeFinancials } from "@/lib/auth/roles";
 import { aiCommandOverview } from "@/lib/ai/control";
+import { countOpenRequests } from "@/lib/ai/requests";
 import { todayInOpsTz } from "@/lib/dates";
 import { AI_EMPLOYEES } from "@/lib/aiorg/registry";
 import { AiCommandConsole } from "@/components/aiorg/AiCommandConsole";
@@ -22,12 +25,23 @@ export default async function AiCommandPage({ searchParams }: { searchParams: Pr
   const nameById: Record<string, string> = {};
   for (const e of AI_EMPLOYEES) nameById[e.id] = e.name;
   const { blade } = await searchParams;
+  const openRequests = countOpenRequests();
 
   return (
     <main className="mx-auto max-w-[1500px] p-4 pb-16 md:p-5">
-      <header className="mb-5">
-        <h1 className="text-[24px] font-semibold tracking-tight">AI Command Center</h1>
-        <p className="text-[12.5px] text-meta">Real-time control center for AI work across Zoe Operations. AI interprets and proposes; the app and a human decide.</p>
+      <header className="mb-5 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-[24px] font-semibold tracking-tight">AI Command Center</h1>
+          <p className="text-[12.5px] text-meta">Real-time control center for AI work across Zoe Operations. AI interprets and proposes; the app and a human decide.</p>
+        </div>
+        <Link
+          href="/ai-command/requests"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded border border-border px-2.5 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground"
+        >
+          <Inbox className="size-4" /> Requests
+          {openRequests > 0 && <span className="rounded-full bg-attention/15 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-attention">{openRequests}</span>}
+          <ArrowRight className="size-3.5" />
+        </Link>
       </header>
 
       <AiCommandConsole
