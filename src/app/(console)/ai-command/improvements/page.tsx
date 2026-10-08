@@ -9,6 +9,7 @@ import { canViewAi, canManageAi } from "@/lib/auth/roles";
 import { listRuns, countRunsByState } from "@/lib/ai/improvement/store";
 import { ImprovementRunsBoard } from "@/components/aiorg/ImprovementRunsBoard";
 import { ImprovementGovernance } from "@/components/aiorg/ImprovementGovernance";
+import { PrReviewPanel } from "@/components/aiorg/PrReviewPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,8 @@ export default async function ImprovementsPage(): Promise<React.JSX.Element> {
         </p>
       </header>
       {canManageAi(role) && (
-        <div className="mb-4">
+        <div className="mb-4 space-y-4">
+          <PrReviewPanel />
           <ImprovementGovernance />
         </div>
       )}

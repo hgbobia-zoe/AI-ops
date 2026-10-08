@@ -25,6 +25,10 @@
 /src/lib/aiorg/approvals.ts     @hgbobia-zoe
 /src/lib/ai/provider.ts         @hgbobia-zoe
 
+# The in-app merge mechanism (holds the GitHub token; a human-only endpoint merges PRs)
+/src/lib/ai/github.ts           @hgbobia-zoe
+/src/app/api/ai/github/         @hgbobia-zoe
+
 # The autonomous loop's own control surface (sessions, requests backlog, bridge endpoints, the contract)
 /src/lib/ai/sessions.ts         @hgbobia-zoe
 /src/lib/ai/requests.ts         @hgbobia-zoe

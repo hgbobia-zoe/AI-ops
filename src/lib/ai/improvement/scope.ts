@@ -17,9 +17,11 @@ export const ALWAYS_FORBIDDEN_PATHS: string[] = [
   "src/lib/ai/improvement/", //        the self-improvement controller itself (scope/budget/machine/service)
   "src/lib/ai/sessions.ts",
   "src/lib/ai/requests.ts",
+  "src/lib/ai/github.ts", //            the in-app merge mechanism (holds the GitHub token)
   "src/app/api/ai/bridge/",
   "src/app/api/ai/requests/",
   "src/app/api/ai/improvement/",
+  "src/app/api/ai/github/",
   "docs/ai-bridge-responder.md", //    the responder contract
   "Dockerfile",
   "fly.toml",
