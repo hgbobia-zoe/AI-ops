@@ -81,9 +81,13 @@ export function parseGustoMembers(raw: unknown): GustoSnapshotMember[] {
  *  rate lives at company.memberCompensationEmployeeCard.jobs[0].currentCompensation.details. Defensive;
  *  returns nulls when absent (e.g. a contractor, whose rate is on a different card). */
 export function parseGustoPayRate(raw: unknown): { amount: number | null; currency: string | null; unit: string | null } {
-  const details = (raw as {
-    data?: { member?: { company?: { memberCompensationEmployeeCard?: { jobs?: Array<{ currentCompensation?: { details?: Record<string, unknown> } }> } } } };
-  })?.data?.member?.company?.memberCompensationEmployeeCard?.jobs?.[0]?.currentCompensation?.details;
+  type Card = { jobs?: Array<{ currentCompensation?: { details?: Record<string, unknown> } }> } | undefined;
+  const company = (raw as { data?: { member?: { company?: { memberCompensationEmployeeCard?: Card; memberCompensationCard?: Card } } } })?.data?.member?.company;
+  // Employees live on memberCompensationEmployeeCard; contractors (incl. international) on
+  // memberCompensationCard — same currentCompensation.details shape.
+  const details =
+    company?.memberCompensationEmployeeCard?.jobs?.[0]?.currentCompensation?.details ??
+    company?.memberCompensationCard?.jobs?.[0]?.currentCompensation?.details;
   if (!details) return { amount: null, currency: null, unit: null };
   const pa = (details.paymentAmount ?? {}) as Record<string, unknown>;
   const amt = Number(pa.amount);

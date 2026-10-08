@@ -63,7 +63,11 @@ describe("parseGustoPayRate", () => {
   it("extracts the hourly amount, currency, and unit", () => {
     expect(parseGustoPayRate(payResponse("25.00", "Hour"))).toEqual({ amount: 25, currency: "USD", unit: "Hour" });
   });
-  it("returns nulls for a contractor / missing compensation card", () => {
+  it("reads a contractor's rate from memberCompensationCard (not the employee card)", () => {
+    const contractor = { data: { member: { company: { memberCompensationCard: { jobs: [{ currentCompensation: { details: { paymentAmount: { amount: "28.00", currencyCode: "USD" }, paymentUnit: "Hour" } } }] } } } } };
+    expect(parseGustoPayRate(contractor)).toEqual({ amount: 28, currency: "USD", unit: "Hour" });
+  });
+  it("returns nulls for a missing compensation card", () => {
     expect(parseGustoPayRate({ data: { member: { company: {} } } })).toEqual({ amount: null, currency: null, unit: null });
     expect(parseGustoPayRate(null)).toEqual({ amount: null, currency: null, unit: null });
   });
