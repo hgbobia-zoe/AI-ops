@@ -6,7 +6,7 @@
 
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Send, Pause, Play, Pencil, Archive, Target, Check, X } from "lucide-react";
+import { Loader2, Send, Pause, Play, Pencil, Archive, Target, Check, X, AlertTriangle, CheckCircle2 } from "lucide-react";
 import type { SessionStatus } from "@/lib/ai/sessions";
 
 const TERMINAL: SessionStatus[] = ["done", "failed", "cancelled"];
@@ -29,19 +29,39 @@ export function AiSessionControls({
   const [instruction, setInstruction] = useState("");
   const [editTitle, setEditTitle] = useState<string | null>(null);
   const [editObjective, setEditObjective] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
 
   const terminal = TERMINAL.includes(status);
 
+  // Returns true on success so callers can react (clear the box, confirm). Errors are surfaced, never
+  // swallowed — a dropped request used to look identical to a delivered one.
   const call = useCallback(
-    async (op: string, extra: Record<string, unknown> = {}) => {
+    async (op: string, extra: Record<string, unknown> = {}): Promise<boolean> => {
       setBusy(op);
+      setError(null);
       try {
         const r = await fetch("/api/ai/sessions/manage", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ sessionId, op, ...extra }),
         });
-        if (r.ok) router.refresh();
+        if (r.ok) {
+          router.refresh();
+          return true;
+        }
+        let msg = `Request failed (${r.status}).`;
+        try {
+          const j = (await r.json()) as { error?: string };
+          if (j?.error) msg = `Request failed: ${j.error}.`;
+        } catch {
+          /* non-JSON error body */
+        }
+        setError(msg);
+        return false;
+      } catch {
+        setError("Could not reach the server — your instruction was not sent. Check your connection and try again.");
+        return false;
       } finally {
         setBusy(null);
       }
@@ -52,8 +72,12 @@ export function AiSessionControls({
   const sendInstruction = useCallback(async () => {
     const text = instruction.trim();
     if (!text) return;
-    await call("instruct", { text });
-    setInstruction("");
+    setSent(false);
+    const ok = await call("instruct", { text });
+    if (ok) {
+      setInstruction("");
+      setSent(true);
+    }
   }, [instruction, call]);
 
   return (
@@ -64,16 +88,23 @@ export function AiSessionControls({
           <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-meta">Send a new instruction</label>
           <textarea
             value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
+            onChange={(e) => { setInstruction(e.target.value); setSent(false); }}
             rows={2}
             placeholder="Tell this session what to do next…"
             className="w-full resize-y rounded border border-border bg-[var(--panel)] px-2.5 py-2 text-[13px] text-foreground placeholder:text-meta focus:border-foreground/30 focus:outline-none"
           />
-          <div className="mt-2 flex justify-end">
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <span aria-live="polite" className="min-w-0 text-[11.5px]">
+              {error ? (
+                <span className="inline-flex items-center gap-1 text-critical"><AlertTriangle className="size-3.5 shrink-0" /> {error}</span>
+              ) : sent ? (
+                <span className="inline-flex items-center gap-1 text-positive"><CheckCircle2 className="size-3.5 shrink-0" /> Sent. Recorded in the activity stream — see the status above.</span>
+              ) : null}
+            </span>
             <button
               onClick={sendInstruction}
               disabled={busy === "instruct" || !instruction.trim()}
-              className="inline-flex items-center gap-1.5 border border-attention/50 px-2.5 py-1 text-[12.5px] font-medium text-attention transition-colors hover:bg-attention/10 disabled:opacity-50"
+              className="inline-flex shrink-0 items-center gap-1.5 border border-attention/50 px-2.5 py-1 text-[12.5px] font-medium text-attention transition-colors hover:bg-attention/10 disabled:opacity-50"
             >
               {busy === "instruct" ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />} Send
             </button>

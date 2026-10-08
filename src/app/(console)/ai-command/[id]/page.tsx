@@ -10,9 +10,10 @@ import { notFound, redirect } from "next/navigation";
 import { ArrowLeft, Wrench, ShieldCheck, Target, Lightbulb, Zap, MessageSquare, Flag, Play, Activity, Database, CircleDot } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canViewAi, canApproveAi, canSeeFinancials } from "@/lib/auth/roles";
-import { getSession as getAiSession, listSessionEvents, listSessionTools, listSessionApprovalIds, type SessionEventKind } from "@/lib/ai/sessions";
+import { getSession as getAiSession, listSessionEvents, listSessionTools, listSessionApprovalIds, isSessionTerminal, type SessionEventKind } from "@/lib/ai/sessions";
 import { getApproval, type AiApproval } from "@/lib/aiorg/approvals";
 import { agentDisplayName } from "@/lib/ai/control";
+import { activeAiProviderId, aiProviderById, bridgeConnected } from "@/lib/ai/provider";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { AiSessionControls } from "@/components/aiorg/AiSessionControls";
 import { ApprovalCard, type ApprovalCardData } from "@/components/aiorg/ApprovalCard";
@@ -75,6 +76,29 @@ export default async function AiSessionWorkspacePage({ params }: { params: Promi
   const live = session.status === "running" || session.status === "awaiting_approval";
   const m = STATUS_META[session.status];
 
+  // Is the newest instruction still unanswered? Scan the timeline newest-first: an instruction with no
+  // agent response after it means the session is holding a request it has not acted on. `started` and
+  // `state_change` rows are neutral (pause/resume/rename) and keep the scan going.
+  const RESPONSE_KINDS: SessionEventKind[] = ["step", "tool_call", "message", "recommendation", "action_available", "approval_raised", "finished"];
+  let awaitingInstruction = false;
+  for (const e of events) {
+    if (e.kind === "instruction") { awaitingInstruction = true; break; }
+    if (RESPONSE_KINDS.includes(e.kind) || e.kind === "error") break;
+  }
+  awaitingInstruction = awaitingInstruction && !isSessionTerminal(session.status);
+
+  // Honest view of what (if anything) can respond. Nothing auto-dispatches an instruction to a responder;
+  // the only inbound-response path is a connected Claude session posting back via the bridge. So we never
+  // imply work is in flight — we say plainly whether a response can arrive and how.
+  const providerId = activeAiProviderId();
+  const providerDef = aiProviderById(providerId);
+  const bridge = providerDef.mode === "deferred" && bridgeConnected();
+
+  // Don't show a green "Working" pill when the session is really just holding an unprocessed instruction.
+  const pill = awaitingInstruction && session.status === "running"
+    ? { label: "Received — awaiting response", dot: "bg-attention", text: "text-attention" }
+    : m;
+
   return (
     <main className="mx-auto max-w-[1300px] p-4 pb-16 md:p-5">
       {live && <AutoRefresh seconds={15} />}
@@ -89,8 +113,8 @@ export default async function AiSessionWorkspacePage({ params }: { params: Promi
             <div className="flex items-center gap-2">
               <span className="text-[13.5px] font-semibold uppercase tracking-[0.02em] text-foreground">{agentDisplayName(session.agentId)}</span>
               {session.blade && <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-meta">{session.blade}</span>}
-              <span className={`ml-auto inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide ${m.text}`}>
-                <span className={`size-1.5 rounded-full ${m.dot}`} aria-hidden /> {m.label}
+              <span className={`ml-auto inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide ${pill.text}`}>
+                <span className={`size-1.5 rounded-full ${pill.dot}`} aria-hidden /> {pill.label}
               </span>
             </div>
             <h1 className="mt-1 text-[19px] font-semibold tracking-tight">{session.title}</h1>
@@ -115,6 +139,23 @@ export default async function AiSessionWorkspacePage({ params }: { params: Promi
       </header>
 
       {session.error && <div className="mb-4 border border-critical/40 bg-critical/[0.04] px-3 py-2 text-[12.5px] text-critical">{session.error}</div>}
+
+      {/* Honest responder status — the session records instructions but does not generate replies on its
+          own; the only way a response arrives is a connected Claude session posting back. Say so plainly
+          rather than leaving a perpetual "Working" pill with nothing behind it. */}
+      {awaitingInstruction && (
+        <div className="mb-4 flex items-start gap-2.5 border border-attention/30 bg-attention/[0.04] px-3 py-2.5">
+          <CircleDot className="mt-0.5 size-4 shrink-0 text-attention" aria-hidden />
+          <div className="min-w-0 text-[12.5px] leading-relaxed">
+            <div className="font-medium text-foreground">Instruction received and recorded.</div>
+            <p className="mt-0.5 text-secondary-text">
+              {bridge
+                ? "A Claude session is connected. When it posts a response it will appear in the activity stream below, and this page refreshes on its own. This session does not generate a reply by itself."
+                : `No automated responder is attached to this session, so it will not reply on its own. A response appears here only when a connected Claude session posts one back (active AI provider: ${providerDef.name}). Connect one in Admin → AI Configuration.`}
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
         {/* Left: controls + action requests + tools */}
