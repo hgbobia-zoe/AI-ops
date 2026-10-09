@@ -13,8 +13,12 @@
 
 import type { Route, Stop } from "@/lib/types";
 
-/** How far into TOMORROW we pre-mint timed stops (only tomorrow stops scheduled within this horizon). */
-export const PREMINT_LOOKAHEAD_H = 12;
+/** How far ahead we pre-mint timed stops that fall on TOMORROW's route (today's stops are always minted).
+ *  Set to ~the max window we can still give a live link for (PREMINT_MAX_WINDOW_H), so a morning pre-mint
+ *  reaches the late-night / early-next-morning departures that spill past midnight after an evening event
+ *  (an 11pm or 1am delivery is ~16-18h out from the morning — well inside this). Kept just under the 24h
+ *  window cap so every selected stop's validity window still comfortably covers its departure. */
+export const PREMINT_LOOKAHEAD_H = 22;
 /** Buffer added after a stop's scheduled time so the link is still valid if the driver runs late. */
 export const PREMINT_BUFFER_H = 3;
 /** Hard clamp on the mint's validity window (Ignition accepts a bounded dateRange). */

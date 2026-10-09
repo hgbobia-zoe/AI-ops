@@ -99,20 +99,22 @@ describe("selectStopsToPreMint — today vs early-tomorrow", () => {
     expect(plan.map((p) => p.stop.stopId)).toEqual(["A", "B"]);
   });
 
-  it("tomorrow: only stops scheduled within the ~12h horizon; untimed tomorrow stops are skipped", () => {
-    const soon = "2026-10-05T22:00:00.000Z"; // 8h after NOW → within 12h
-    const late = "2026-10-06T20:00:00.000Z"; // >12h after NOW
+  it("tomorrow: stops within the ~22h horizon are pre-minted (covers late-night / early-next-day departures); farther-out + untimed are skipped", () => {
+    const soon = "2026-10-05T22:00:00.000Z"; // 8h after NOW
+    const night = "2026-10-06T08:00:00.000Z"; // 18h after NOW — e.g. a 1am pickup after an evening event
+    const late = "2026-10-06T20:00:00.000Z"; // 30h after NOW → beyond the coverable window
     const plan = selectStopsToPreMint({
       routes: [
         tomorrowRoute([
           stop({ stopId: "SOON", eta: soon }),
+          stop({ stopId: "NIGHT", eta: night }),
           stop({ stopId: "LATE", eta: late }),
           stop({ stopId: "UNTIMED", eta: undefined, plannedWindow: undefined }),
         ]),
       ],
       now: NOW,
     });
-    expect(plan.map((p) => p.stop.stopId)).toEqual(["SOON"]);
+    expect(plan.map((p) => p.stop.stopId)).toEqual(["SOON", "NIGHT"]);
   });
 
   it("skips non-upcoming / unaddressed stops regardless of day", () => {
