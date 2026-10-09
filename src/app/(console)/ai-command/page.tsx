@@ -14,6 +14,7 @@ import { listActiveRuns } from "@/lib/ai/improvement/store";
 import { todayInOpsTz } from "@/lib/dates";
 import { AI_EMPLOYEES } from "@/lib/aiorg/registry";
 import { AiCommandConsole } from "@/components/aiorg/AiCommandConsole";
+import { DeployStatusCard } from "@/components/ops/DeployStatusCard";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +55,10 @@ export default async function AiCommandPage({ searchParams }: { searchParams: Pr
           </Link>
         </div>
       </header>
+
+      <div className="mb-5">
+        <DeployStatusCard />
+      </div>
 
       <AiCommandConsole
         initial={overview}
