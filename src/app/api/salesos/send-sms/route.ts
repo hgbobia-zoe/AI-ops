@@ -7,12 +7,12 @@
 
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
-import { getBookingById, insertMessage, smsRecentlySent, enqueueGsOp, insertCommsEventIfNew } from "@/lib/db/repo";
+import { getBookingById, insertMessage, smsRecentlySent, insertCommsEventIfNew } from "@/lib/db/repo";
 import { sendSms } from "@/lib/notify/sms";
 import { getSettings } from "@/lib/settings";
 import { viewerInitials, viewerQuoUserId, authEnabled } from "@/lib/auth/getSession";
 import { openphoneUserInitials } from "@/lib/comms/openphone";
-import { salesOsNoteLine } from "@/lib/salesos/noteFormat";
+import { syncTouchpointNote, shortHash } from "@/lib/comms/noteSync";
 import { logSalesEvent } from "@/lib/salesos/audit";
 import { todayInOpsTz } from "@/lib/dates";
 
@@ -66,13 +66,21 @@ export async function POST(req: Request): Promise<NextResponse> {
   });
 
   if (res.ok) {
-    // Log the sent text back into the Goodshuffle project notes so the comms history stays complete.
-    // Queued for a logged-in session to write (the server can't call Goodshuffle directly).
+    // Log the sent text back into the Goodshuffle project's INTERNAL notes so the outreach trail stays
+    // complete. Queued for a logged-in session to write (the server can't call Goodshuffle directly), and
+    // gated behind GS_NOTE_SYNC_ENABLED + deduped on the provider message id.
     try {
-      // Initials: the picked Quo rep first (Quo's own record matches), then the signed-in user, else "SalesOS".
+      // Initials: the picked Quo rep first (Quo's own record matches), then the signed-in user, else "Zoe team".
       const initials = (userId ? await openphoneUserInitials(userId) : null) ?? (await viewerInitials());
-      const line = salesOsNoteLine(initials, `Sent text: "${text}"`, todayInOpsTz());
-      enqueueGsOp({ op: "note_append", transactionId: id, label: "sms sent", payload: { line } });
+      syncTouchpointNote({
+        kind: "text",
+        messageId: res.providerMsgId || `${id}:${shortHash(text)}`,
+        transactionId: id,
+        repInitials: initials,
+        clientName: lead.clientName,
+        snippet: text,
+        dateYmd: todayInOpsTz(),
+      });
       // Sales audit trail: who sent it, and whether they edited the AI draft first.
       await logSalesEvent("MESSAGE_SENT", id, { chars: text.length, to: phone.slice(-4), sender: initials ?? "SalesOS", edited: Boolean(body.edited) });
       // Unified timeline: record the outbound side of the conversation.

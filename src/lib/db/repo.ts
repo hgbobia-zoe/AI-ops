@@ -2107,6 +2107,17 @@ export function listPendingGsOps(limit = 50): GsOutboxItem[] {
   ).map(toGsItem);
 }
 
+/** Has a touchpoint note already been queued for this dedupe key (any status)? Prevents double-logging
+ *  the same call/text/email across retries or repeated webhook events. Matches on the `dedupeKey` we
+ *  store in the note_append payload; older note ops without one simply never match. */
+export function gsNoteOpExists(dedupeKey: string): boolean {
+  if (!dedupeKey) return false;
+  const row = getDb()
+    .prepare("SELECT 1 FROM gs_outbox WHERE op = 'note_append' AND json_extract(payload, '$.dedupeKey') = ? LIMIT 1")
+    .get(dedupeKey);
+  return Boolean(row);
+}
+
 /** All write-backs (any status), newest first — for the dispatch sync panel. */
 export function listGsOps(limit = 50): GsOutboxItem[] {
   return (
