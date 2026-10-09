@@ -2798,7 +2798,14 @@ export function auditExistsSince(entity: string, entityId: string, action: strin
 
 export function createTracking(stopId: string, routeId: string, baseUrl: string): { token: string; url: string } {
   const token = randomUUID().replace(/-/g, "").slice(0, 20);
-  const url = `${baseUrl.replace(/\/$/, "")}/track/${token}`;
+  // Customer-facing tracking link. Prefer a dedicated BRANDED domain (TRACK_BASE_URL, e.g.
+  // https://track.zoeeventsdmv.com) over the app's own origin — a `*.fly.dev` URL in an SMS looks
+  // unbranded and is more likely to be carrier-spam-filtered. Falls back to the request/PUBLIC_BASE_URL
+  // origin when unset, so nothing breaks before the domain is wired. The branded host must point at this
+  // same app (CNAME + Fly cert) so /track/<token> resolves there; the page still upgrades to the live
+  // Ignition map once the mint lands.
+  const base = (process.env.TRACK_BASE_URL || baseUrl).replace(/\/$/, "");
+  const url = `${base}/track/${token}`;
   const expiresAt = new Date(Date.now() + 12 * 3600 * 1000).toISOString();
   getDb()
     .prepare(
