@@ -48,6 +48,10 @@ export interface AppSettings {
   /** Per-truck vehicle id in the active GPS provider (truckId → provider vehicle id).
    *  Used by server-side GPS providers (Samsara/Motive); Zonar uses ignitionUnits. */
   gpsVehicleIds: Record<string, string>;
+  /** AI Org employees an operator has PAUSED (list of agent ids). A paused agent proposes nothing and
+   *  shows as paused in the org chart. This is an operational on/off switch — it does NOT edit the
+   *  code-reviewed employee config. Owner/admin only; toggled from the org chart tile detail panel. */
+  aiPaused: string[];
 }
 
 // The variables a template may reference, with a short description for the admin UI.
@@ -123,6 +127,7 @@ export function defaultSettings(): AppSettings {
     smsProvider: process.env.SMS_PROVIDER || "openphone",
     gpsProvider: process.env.GPS_PROVIDER || "zonar",
     gpsVehicleIds: {},
+    aiPaused: [],
   };
 }
 

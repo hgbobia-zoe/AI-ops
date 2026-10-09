@@ -10,10 +10,25 @@ import { salesLeads, getLead } from "@/lib/salesos/service";
 import { lostQuotesOverview } from "@/lib/salesos/lostService";
 import { draftLeadOutreach } from "@/lib/salesos/outreachService";
 import { STAGE_LABEL } from "@/lib/salesos/calc";
+import { getSettings } from "@/lib/settings";
 import { approvalExistsByKey, createApproval, type ApprovalActionType, type ApprovalCard } from "./approvals";
 
 /** Cap per proposer run — bounded, never a flood. */
 const MAX_PER_RUN = 6;
+
+/** Operator paused this agent from the org chart? A paused agent proposes NOTHING (the pause is an
+ *  operational on/off switch honored here, not just a display flag). Best-effort: unreadable settings
+ *  default to not-paused so the normal path keeps working. */
+function agentPaused(id: string): boolean {
+  try {
+    return (getSettings().aiPaused ?? []).includes(id);
+  } catch {
+    return false;
+  }
+}
+
+/** An empty result for a paused (or otherwise no-op) proposer run. */
+const noRun = (agent: string): ProposeResult => ({ agent, candidates: 0, created: 0, skipped: 0 });
 
 export interface ProposeResult {
   agent: string;
@@ -41,6 +56,7 @@ function whatIfLine(actionType: ApprovalActionType): string {
 
 // ── Outreach — drafted follow-up on an open, actionable lead ─────────────────────
 export async function proposeOutreachApprovals(): Promise<ProposeResult> {
+  if (agentPaused("outreach")) return noRun("outreach");
   const overview = salesLeads();
   const today = overview.today;
   // Only leads the worklist says to act on now/today — deterministic, not a sweep of the whole pipeline.
@@ -95,6 +111,7 @@ export async function proposeOutreachApprovals(): Promise<ProposeResult> {
 
 // ── Lost Quote — drafted win-back on a worthwhile lost deal ───────────────────────
 export async function proposeLostQuoteApprovals(): Promise<ProposeResult> {
+  if (agentPaused("lost-quote")) return noRun("lost-quote");
   const overview = lostQuotesOverview();
   // Win-back candidates: lost quotes worth re-approaching (deterministic $ floor), biggest first.
   const candidates = overview.lost

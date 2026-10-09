@@ -8,7 +8,8 @@ import { redirect } from "next/navigation";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings, canSeeFinancials } from "@/lib/auth/roles";
 import { aiOrg } from "@/lib/aiorg/service";
-import { HUMANS } from "@/lib/aiorg/registry";
+import { AI_EMPLOYEES, HUMANS } from "@/lib/aiorg/registry";
+import { authoritySplit } from "@/lib/aiorg/types";
 import { buildOrgTree, type OrgAgentInput } from "@/lib/aiorg/orgTree";
 import { BackingBadge, HealthMark, MetricRow, OrgTabs, StateDot } from "@/components/aiorg/AiOrgBits";
 import { OrgChart } from "@/components/aiorg/OrgChart";
@@ -22,16 +23,32 @@ export default async function AiEmployeesPage(): Promise<React.JSX.Element> {
   if (!canManageSettings(role)) redirect("/dashboard");
   const org = await aiOrg({ showMoney: canSeeFinancials(role) });
 
-  // Build the org-chart tree from the REAL roster + the derived agent views (honest backing/state carried
-  // through). The leaves link into each agent's detail page.
-  const agents: OrgAgentInput[] = org.employees.map((e) => ({
-    id: e.id,
-    name: e.name,
-    department: e.department,
-    backing: e.backing,
-    state: e.state,
-  }));
+  // Build the org-chart tree from the REAL roster + the derived agent views (honest backing/state), and
+  // carry each agent's config detail (mission, responsibilities, inputs, authority counts, value measure)
+  // so a tile click can show "what it does" + settings without a page nav. Everything is real data.
+  const cfgById = new Map(AI_EMPLOYEES.map((c) => [c.id, c]));
+  const agents: OrgAgentInput[] = org.employees.map((e) => {
+    const c = cfgById.get(e.id);
+    const split = c ? authoritySplit(c.toolbox) : { can: [], requiresApproval: [] };
+    return {
+      id: e.id,
+      name: e.name,
+      department: e.department,
+      backing: e.backing,
+      state: e.state,
+      mission: e.mission,
+      responsibilities: c?.responsibilities ?? [],
+      inputs: (c?.inputs ?? []).map((i) => ({ label: i.label, href: i.href })),
+      canCount: split.can.length,
+      approvalCount: split.requiresApproval.length,
+      metrics: e.metrics.map((m) => ({ label: m.label, value: m.value, tone: m.tone })),
+      lastRunAt: e.lastRunAt,
+      valueMeasure: c?.valueMeasure ?? "",
+      paused: e.paused,
+    };
+  });
   const tree = buildOrgTree(HUMANS, agents);
+  const canManage = canManageSettings(role);
 
   return (
     <main className="max-w-[1100px] p-6">
@@ -43,7 +60,7 @@ export default async function AiEmployeesPage(): Promise<React.JSX.Element> {
       <OrgTabs active="/ai-org/employees" />
 
       {/* ── THE ORG CHART (centerpiece) ── */}
-      <OrgChart tree={tree} />
+      <OrgChart tree={tree} canManage={canManage} />
 
       {/* Legend — what the marks mean (honest states + backing) */}
       <div className="mb-8 mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] text-meta">

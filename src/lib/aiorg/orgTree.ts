@@ -37,8 +37,31 @@ const BRANCH_ORDER: AiDept[] = ["sales", "backoffice", "marketing", "ops_exec"];
 
 // ── Tree node shapes ──────────────────────────────────────────────────────────
 
+/** Detail carried per agent for the tile detail panel. All OPTIONAL + presentation-ready (serializable to
+ *  the client component). Everything here is real data from the employee config + derived view — the tree
+ *  fabricates nothing; a caller that doesn't supply it (e.g. a pure unit test) simply omits it. */
+export interface OrgAgentDetail {
+  /** One-sentence mission. */
+  mission?: string;
+  /** What it does, bulleted (config.responsibilities). */
+  responsibilities?: string[];
+  /** The real module reads it consumes, with optional deep links. */
+  inputs?: { label: string; href?: string }[];
+  /** Toolbox authority split counts (can unaided / needs human approval). */
+  canCount?: number;
+  approvalCount?: number;
+  /** Today's headline metrics (empty for a "coming" agent). */
+  metrics?: { label: string; value: string | number; tone?: string }[];
+  /** ISO timestamp of the last run, or null. */
+  lastRunAt?: string | null;
+  /** How the value of this employee is measured. */
+  valueMeasure?: string;
+  /** Operator has paused this agent (operational on/off). */
+  paused?: boolean;
+}
+
 /** A leaf AI-employee node (all real data, carried through from the derived view). */
-export interface OrgAgentNode {
+export interface OrgAgentNode extends OrgAgentDetail {
   id: string;
   name: string;
   /** The role line shown under the name (the department label — agents have no separate title field). */
@@ -79,8 +102,9 @@ export function splitCoOwners(name: string): string[] {
     .filter(Boolean);
 }
 
-/** The minimal agent shape the tree needs — maps directly from an AiEmployeeView. */
-export interface OrgAgentInput {
+/** The agent shape the tree needs — maps directly from an AiEmployeeView (+ its config). The detail
+ *  fields are OPTIONAL, so a pure unit test can still build the tree from id/name/dept/backing/state. */
+export interface OrgAgentInput extends OrgAgentDetail {
   id: string;
   name: string;
   department: AiDept;
@@ -114,6 +138,16 @@ export function buildOrgTree(humans: Human[], agents: OrgAgentInput[]): OrgTree 
       department: a.department,
       backing: a.backing,
       state: a.state,
+      // Carry the detail through for the tile panel (all optional — omitted stays undefined).
+      mission: a.mission,
+      responsibilities: a.responsibilities,
+      inputs: a.inputs,
+      canCount: a.canCount,
+      approvalCount: a.approvalCount,
+      metrics: a.metrics,
+      lastRunAt: a.lastRunAt,
+      valueMeasure: a.valueMeasure,
+      paused: a.paused,
     };
     const bucket = byDept.get(a.department);
     if (bucket) bucket.push(node);

@@ -121,6 +121,9 @@ export interface AiEmployeeView {
   lastDetail: string | null;
   /** Data-source health, from computeConnections() when the employee declares a healthKey. */
   health: { status: "ok" | "idle" | "attention" | "off"; label: string } | null;
+  /** Operator has paused this employee (operational on/off, persisted in settings). "coming" is never
+   *  paused. A paused employee reads as intentionally off in the UI and proposes nothing. */
+  paused: boolean;
 }
 
 export interface HumanCard {
@@ -148,15 +151,21 @@ export interface EmployeeSignal {
   /** When the backing is live/partial/seed: does the source have anything to show right now? Drives
    *  the idle-vs-ok dot. Defaults to true. */
   active?: boolean;
+  /** Operator paused this employee from the org chart (settings.aiPaused). A paused employee reads as
+   *  intentionally off (state "idle" + a Paused flag) and its proposer produces nothing. Does NOT edit
+   *  the code-reviewed config — it is an operational on/off switch only. */
+  paused?: boolean;
 }
 
 /** Build the derived view for one employee from its config + resolved signal. PURE.
  *  Enforces the house law: a "coming" employee NEVER shows metrics and is always state "coming". */
 export function buildEmployeeView(emp: AIEmployee, signal: EmployeeSignal = {}): AiEmployeeView {
   const coming = emp.backing === "coming";
+  const paused = !coming && signal.paused === true;
   const metrics = coming ? [] : signal.metrics ?? [];
   let state: AiLiveState;
   if (coming) state = "coming";
+  else if (paused) state = "idle"; // operator turned it off — intentionally quiet, not a problem
   else if (signal.health && signal.health.status === "off") state = "attention";
   else if (signal.health && signal.health.status === "attention") state = "attention";
   else if (signal.health && signal.health.status === "idle") state = "idle"; // connected, just nothing to do now
@@ -174,6 +183,7 @@ export function buildEmployeeView(emp: AIEmployee, signal: EmployeeSignal = {}):
     lastRunAt: coming ? null : signal.lastRunAt ?? null,
     lastDetail: coming ? null : signal.lastDetail ?? null,
     health: coming ? null : signal.health ?? null,
+    paused,
   };
 }
 

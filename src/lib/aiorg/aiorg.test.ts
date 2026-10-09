@@ -52,6 +52,20 @@ describe("buildEmployeeView — honesty enforcement", () => {
   it("defaults to 'ok' with no signal", () => {
     expect(buildEmployeeView(base()).state).toBe("ok");
   });
+
+  it("a PAUSED employee reads as intentionally off (state 'idle' + paused flag), overriding active/health", () => {
+    const v = buildEmployeeView(base(), { paused: true, active: true, health: { status: "ok", label: "Connected" }, metrics: [{ label: "Open", value: 3 }] });
+    expect(v.state).toBe("idle");
+    expect(v.paused).toBe(true);
+    // Not paused by default.
+    expect(buildEmployeeView(base()).paused).toBe(false);
+  });
+
+  it("a 'coming' employee is never paused (nothing to pause)", () => {
+    const v = buildEmployeeView(base({ backing: "coming" }), { paused: true });
+    expect(v.paused).toBe(false);
+    expect(v.state).toBe("coming");
+  });
 });
 
 describe("authoritySplit", () => {
