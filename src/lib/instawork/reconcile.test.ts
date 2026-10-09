@@ -6,6 +6,7 @@ import {
   summarizeInstaworkByRole,
   gigOverlapsWindow,
   instaworkGigsForRoute,
+  findGigForWorker,
 } from "./reconcile";
 import type { InstaworkShift } from "./types";
 
@@ -23,9 +24,31 @@ function shift(p: Partial<InstaworkShift>): InstaworkShift {
     total: p.total ?? 1,
     locationName: p.locationName ?? "ZER",
     workers: p.workers ?? [],
+    workerIds: p.workerIds ?? [],
     interestedPending: p.interestedPending ?? 0,
+    clockInCode: p.clockInCode ?? null,
+    clockOutCode: p.clockOutCode ?? null,
   };
 }
+
+describe("findGigForWorker", () => {
+  const day = "2026-10-03"; // the local start-day of the default shift()
+  it("matches by worker id (preferred) and returns that gig's codes", () => {
+    const g = shift({ id: "g9", workerIds: ["55"], workers: ["Alex P"], clockInCode: "3243", clockOutCode: "2450" });
+    const hit = findGigForWorker([g], day, { workerId: "55" });
+    expect(hit?.clockInCode).toBe("3243");
+    expect(hit?.clockOutCode).toBe("2450");
+  });
+  it("falls back to a case-insensitive name match", () => {
+    const g = shift({ id: "g9", workers: ["Alex P"] });
+    expect(findGigForWorker([g], day, { workerName: "alex p" })?.id).toBe("g9");
+  });
+  it("returns null when the worker is not on any gig that day", () => {
+    const g = shift({ id: "g9", workers: ["Someone Else"] });
+    expect(findGigForWorker([g], day, { workerName: "Alex P" })).toBeNull();
+    expect(findGigForWorker([g], "2026-10-04", { workerName: "Someone Else" })).toBeNull();
+  });
+});
 
 describe("instaworkCoversRole", () => {
   it("Driver covers only the driver role", () => {

@@ -16,7 +16,11 @@ export interface InstaworkShift {
   total: number; // total_shifts_count
   locationName: string | null;
   workers: string[]; // assigned worker names
+  workerIds: string[]; // assigned worker ids (stable handle, parallel to workers)
   interestedPending: number; // interested pros not yet booked
+  // Per-gig clock codes (shared by that gig's workers). null when Instawork didn't send them (FACTS ONLY).
+  clockInCode: string | null;
+  clockOutCode: string | null;
 }
 
 export type InstaworkHealthStatus = "not_configured" | "ok" | "error";

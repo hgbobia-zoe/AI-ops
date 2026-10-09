@@ -12,9 +12,18 @@ import type { ShiftAssignment, ShiftRole, StaffShift } from "./types";
 /** The Zoe main line — the dispatch number on every packet. NEVER the customer's number (memory rule). */
 export const ZOE_DISPATCH_PHONE = "301-291-5296";
 
+// Per-worker-type timekeeping facts. Internal: Connecteam owns the clock (personal code). Instawork: the
+// gig carries a per-gig clock-in / clock-out code; when we captured them they ride here, otherwise null
+// (the worker clocks through the Instawork app). FACTS ONLY — a code we don't have stays null.
 export type WorkerTimekeeping =
-  | { kind: "internal"; system: "connecteam"; howTo: string }
-  | { kind: "instawork"; system: "instawork"; howTo: string };
+  | { kind: "internal"; system: "connecteam" }
+  | { kind: "instawork"; system: "instawork"; clockInCode: string | null; clockOutCode: string | null };
+
+/** One coworker on the shift: their display name + their OWN duty (so the crew list reads per-person). */
+export interface PacketCoworker {
+  name: string;
+  role: ShiftRole;
+}
 
 export interface ShiftPacket {
   shiftId: string;
@@ -32,30 +41,34 @@ export interface ShiftPacket {
     workerKind: "internal" | "instawork";
     displayName: string;
     truck: { id: string; name: string } | null;
+    // supervisor stays in the packet data (readiness/exception code reads it) but never renders in a message.
     supervisor: { name: string; phone?: string | null } | null;
-    coworkers: string[];
+    coworkers: PacketCoworker[];
   };
   operations: { route: { stops: number; firstStop: string | null } | null; equipment: string[]; instructions: string | null };
   timekeeping: WorkerTimekeeping;
   dispatch: { phone: string };
 }
 
-/** The structured context the caller assembles from the DB (truck, supervisor, route, coworkers). */
+/** The structured context the caller assembles from the DB (truck, supervisor, route, coworkers). For an
+ *  Instawork worker, the matched gig's clock-in / clock-out codes (null when not captured). */
 export interface PacketContext {
   truck: { id: string; name: string } | null;
   supervisor: { name: string; phone?: string | null } | null;
-  coworkers: string[];
+  coworkers: PacketCoworker[];
   route: { stops: number; firstStop: string | null } | null;
   mapUrl: string | null;
   equipment: string[];
+  clockInCode?: string | null;
+  clockOutCode?: string | null;
 }
 
-// Honest, per-worker-type timekeeping copy. Internal: Connecteam owns the clock. Instawork: Instawork
-// owns it and we have no captured clock surface, so we say so plainly rather than imply a Zoe clock.
-const TIMEKEEPING: Record<"internal" | "instawork", WorkerTimekeeping> = {
-  internal: { kind: "internal", system: "connecteam", howTo: "Clock in and out on the Connecteam app at your report time." },
-  instawork: { kind: "instawork", system: "instawork", howTo: "Clock in through the Instawork app. Zoe cannot clock you in." },
-};
+// Build the honest timekeeping fact for a worker. Internal → Connecteam. Instawork → the gig's codes if
+// captured, else null (templates then fall back to "clock in/out through the Instawork app").
+function timekeepingFor(workerKind: "internal" | "instawork", ctx: PacketContext): WorkerTimekeeping {
+  if (workerKind === "internal") return { kind: "internal", system: "connecteam" };
+  return { kind: "instawork", system: "instawork", clockInCode: ctx.clockInCode ?? null, clockOutCode: ctx.clockOutCode ?? null };
+}
 
 /** Stable JSON (sorted keys) so the version hash is deterministic regardless of property order. */
 function stableStringify(v: unknown): string {
@@ -69,7 +82,8 @@ function stableStringify(v: unknown): string {
 export function buildShiftPacket(shift: StaffShift, assignment: ShiftAssignment, ctx: PacketContext): ShiftPacket {
   const base: Omit<ShiftPacket, "version"> = {
     shiftId: shift.id,
-    identity: { date: shift.date, role: shift.role, eventLabel: shift.eventLabel },
+    // The worker's OWN duty, not the shift's role — a shift can carry a driver + helpers on different duties.
+    identity: { date: shift.date, role: assignment.role, eventLabel: shift.eventLabel },
     reporting: {
       reportTime: shift.reportTime ?? (shift.windowKnown ? shift.startTime : null),
       reportLocation: shift.reportLocation ?? shift.location,
@@ -86,7 +100,7 @@ export function buildShiftPacket(shift: StaffShift, assignment: ShiftAssignment,
       coworkers: ctx.coworkers,
     },
     operations: { route: ctx.route, equipment: ctx.equipment.length ? ctx.equipment : shift.equipment, instructions: shift.instructions },
-    timekeeping: TIMEKEEPING[assignment.workerKind],
+    timekeeping: timekeepingFor(assignment.workerKind, ctx),
     dispatch: { phone: ZOE_DISPATCH_PHONE },
   };
   const version = createHash("sha1").update(stableStringify(base)).digest("hex").slice(0, 12);

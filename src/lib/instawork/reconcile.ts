@@ -32,6 +32,24 @@ export function instaworkShiftsForDate(shifts: InstaworkShift[], date: string): 
   return shifts.filter((s) => instaworkLocalDate(s) === date);
 }
 
+/** The gig a specific Instawork worker is booked on for a day, so we can read that gig's per-gig clock
+ *  codes for the worker's packet. Match is by local start-day plus the worker's id (preferred, stable) or
+ *  name (case-insensitive fallback). Returns the first match, or null when we can't tie the worker to a
+ *  gig that day (then the packet honestly falls back to the Instawork-app clock line). Pure. */
+export function findGigForWorker(
+  shifts: InstaworkShift[],
+  date: string,
+  opts: { workerName?: string | null; workerId?: string | null },
+): InstaworkShift | null {
+  const id = (opts.workerId ?? "").trim();
+  const name = (opts.workerName ?? "").trim().toLowerCase();
+  for (const g of instaworkShiftsForDate(shifts, date)) {
+    if (id && g.workerIds.some((w) => w === id)) return g;
+    if (name && g.workers.some((w) => w.trim().toLowerCase() === name)) return g;
+  }
+  return null;
+}
+
 export interface InstaworkRoleSummary {
   total: number; // Instawork positions covering this role that day
   booked: number; // filled

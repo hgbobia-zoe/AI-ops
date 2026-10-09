@@ -15,9 +15,10 @@ export function toShift(r: Record<string, unknown>): InstaworkShift | null {
   const startsAt = typeof r.starts_at === "string" ? r.starts_at : null;
   const endsAt = typeof r.ends_at === "string" ? r.ends_at : null;
   if (!id || !startsAt || !endsAt) return null;
-  const workers = Array.isArray(r.shifts)
-    ? (r.shifts as Array<Record<string, unknown>>).map((s) => String(s.worker_name ?? "")).filter(Boolean)
-    : [];
+  const rows = Array.isArray(r.shifts) ? (r.shifts as Array<Record<string, unknown>>) : [];
+  const workers = rows.map((s) => String(s.worker_name ?? "")).filter(Boolean);
+  const workerIds = rows.map((s) => (s.worker_id != null ? String(s.worker_id) : "")).filter(Boolean);
+  const code = (v: unknown): string | null => (v != null && String(v).trim() ? String(v).trim() : null);
   return {
     id,
     name: String(r.name ?? ""),
@@ -30,6 +31,9 @@ export function toShift(r: Record<string, unknown>): InstaworkShift | null {
     total: num(r.total_shifts_count) ?? 0,
     locationName: r.location_name != null ? String(r.location_name) : null,
     workers,
+    workerIds,
     interestedPending: num(r.interested_pros_pending_count) ?? 0,
+    clockInCode: code(r.clock_in_code),
+    clockOutCode: code(r.clock_out_code),
   };
 }
