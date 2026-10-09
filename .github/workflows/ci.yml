@@ -1,0 +1,44 @@
+# Continuous Integration — the merge gate. Runs on every pull request (and on pushes to main) so "green"
+# actually means something: the TypeScript compiles with no errors AND the full test suite passes. This is
+# the prerequisite for ever auto-merging AI-written implementation PRs — without it, a PR with no checks is
+# vacuously "green". Fast + hermetic: no app env, no network, no DB file (tests use an in-memory SQLite).
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same branch cancels the in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck & tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # better-sqlite3@13 requires Node >=22 (EBADENGINE on 20 crashes the native addon in the test
+          # worker). Match the local toolchain.
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        # npm install (NOT npm ci) to match the Dockerfile: this project's package-lock.json omits the
+        # Linux-only @tailwindcss/oxide wasm @emnapi/* optional deps (it's generated on other platforms),
+        # which `npm ci` rejects. `npm install` resolves the correct platform tree on the runner.
+        run: npm install --include=dev --no-audit --no-fund
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Tests
+        run: npm test

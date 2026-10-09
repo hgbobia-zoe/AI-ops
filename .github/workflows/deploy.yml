@@ -1,0 +1,57 @@
+# Continuous deployment (audit gate 8). Runs ONLY after the CI workflow succeeds on main, so nothing
+# untested ever deploys. The deploy credential (FLY_API_TOKEN) lives here, in CI — never in the app or the
+# agent (audit gate 12). The live build is stamped with the git commit (GIT_COMMIT) so /api/version can
+# report it and the controller can confirm "deployed the right thing". A post-deploy health probe fails the
+# run if the new build isn't serving — surfacing a bad deploy immediately.
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {} # manual deploy from the Actions tab
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Fly
+    # Only on a GREEN CI run (or a manual dispatch).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy (stamped with the commit)
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then echo "FLY_API_TOKEN not set — skipping deploy."; exit 0; fi
+          flyctl deploy --remote-only \
+            -e GIT_COMMIT="${GITHUB_SHA}" \
+            -e DEPLOYED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Post-deploy health gate
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then echo "no token — skipped"; exit 0; fi
+          echo "Waiting for the new build to come up…"
+          ok=""
+          for i in $(seq 1 12); do
+            sleep 10
+            body=$(curl -sS https://zoe-dispatch.fly.dev/api/version || true)
+            echo "attempt $i: $body"
+            live=$(echo "$body" | grep -o '"commit":"[^"]*"' | cut -d'"' -f4)
+            case "${GITHUB_SHA}" in "$live"*) ok="yes"; break;; esac
+          done
+          if [ -z "$ok" ]; then echo "::error::new commit ${GITHUB_SHA} not serving after deploy"; exit 1; fi
+          echo "Deployed commit is live."

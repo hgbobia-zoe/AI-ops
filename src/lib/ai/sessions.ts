@@ -362,6 +362,93 @@ export function countLiveSessionsByAgent(): Record<string, number> {
   return out;
 }
 
+// ── Pending instructions (the bridge drain queue) ───────────────────────────────
+// A session is PENDING when its newest NON-NEUTRAL timeline event is an instruction a human gave it that
+// nothing has responded to yet. `started` and `state_change` (pause/resume/rename/archive) are neutral —
+// they don't count as a response and don't make a session pending on their own. This is the server-side
+// mirror of the workspace page's `awaitingInstruction` scan; it feeds the responder's drain loop
+// (GET /api/ai/bridge/pending). Oldest-pending first so the queue is FIFO-fair. Nothing here executes.
+
+/** Event kinds that count as the session having responded to (or acted on) its latest instruction. */
+export const RESPONSE_EVENT_KINDS: SessionEventKind[] = ["step", "tool_call", "message", "recommendation", "action_available", "approval_raised", "finished", "error"];
+/** Event kinds that are neutral bookkeeping — they neither make a session pending nor clear it. */
+export const NEUTRAL_EVENT_KINDS: SessionEventKind[] = ["started", "state_change"];
+
+export interface PendingInstruction {
+  sessionId: string;
+  agentId: string;
+  blade: string | null;
+  owner: string | null;
+  title: string;
+  objective: string | null;
+  instruction: string; //   the instruction text (the event's label)
+  instructionTs: string; // when it was given (also the claim idempotency anchor)
+  askedBy: string | null; // the human who gave it
+}
+
+interface PendingRow {
+  id: string;
+  agent_id: string;
+  blade: string | null;
+  owner: string | null;
+  title: string;
+  objective: string | null;
+  instruction: string | null;
+  instruction_ts: string;
+  asked_by: string | null;
+}
+
+/** Live, non-archived sessions whose newest non-neutral event is an unanswered human instruction, oldest
+ *  first. The correlated subquery pins each session's latest non-neutral event; we keep only those where
+ *  that event is an `instruction`. */
+export function listPendingInstructions(limit = 20): PendingInstruction[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT s.id, s.agent_id, s.blade, s.owner, s.title, s.objective,
+              e.label AS instruction, e.ts AS instruction_ts, e.actor AS asked_by
+         FROM ai_sessions s
+         JOIN ai_session_events e ON e.id = (
+           SELECT e2.id FROM ai_session_events e2
+           WHERE e2.session_id = s.id AND e2.kind NOT IN ('started','state_change')
+           ORDER BY e2.ts DESC, e2.rowid DESC LIMIT 1
+         )
+        WHERE COALESCE(s.archived,0)=0
+          AND s.status NOT IN ('done','failed','cancelled')
+          AND e.kind = 'instruction'
+        ORDER BY e.ts ASC, e.rowid ASC
+        LIMIT ?`,
+    )
+    .all(limit) as PendingRow[];
+  return rows.map((r) => ({
+    sessionId: r.id,
+    agentId: r.agent_id,
+    blade: r.blade,
+    owner: r.owner,
+    title: r.title,
+    objective: r.objective,
+    instruction: r.instruction ?? "",
+    instructionTs: r.instruction_ts,
+    askedBy: r.asked_by,
+  }));
+}
+
+/** Count of sessions currently holding an unanswered instruction (for the in-app queue badge). */
+export function countPendingInstructions(): number {
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS n FROM ai_sessions s
+        WHERE COALESCE(s.archived,0)=0
+          AND s.status NOT IN ('done','failed','cancelled')
+          AND (
+            SELECT e2.kind FROM ai_session_events e2
+            WHERE e2.session_id = s.id AND e2.kind NOT IN ('started','state_change')
+            ORDER BY e2.ts DESC, e2.rowid DESC LIMIT 1
+          ) = 'instruction'`,
+    )
+    .get() as { n: number };
+  return row.n;
+}
+
 /** Mark a session as awaiting a human approval (it raised a proposal). Idempotent: a terminal session
  *  is not reopened. Writes a `state_change` event. */
 export function markAwaitingApproval(id: string, actor?: string): AiSession | null {
@@ -492,6 +579,16 @@ export function addInstruction(id: string, text: string, actor?: string): AiSess
   appendEvent(id, { kind: "instruction", actor: actor ?? null, label: clean });
   if (cur.status !== "running") touch(id, "status='running'", {});
   return getSession(id);
+}
+
+/** The responder claims a pending instruction before working it. Records a `step` so (1) the human sees the
+ *  session is being worked on — not stuck — and (2) the session drops out of the pending queue, so a second
+ *  drainer can't double-handle it. Idempotent per instruction via a changeKey keyed on the instruction's ts:
+ *  a retried claim for the same instruction is a no-op (returns null). No side effect beyond the timeline. */
+export function claimInstruction(id: string, instructionTs: string, note = "Picked up by the AI responder — working on it", actor = "AI responder"): AiSessionEvent | null {
+  const cur = getSession(id);
+  if (!cur || isSessionTerminal(cur.status)) return null;
+  return appendEvent(id, { kind: "step", actor, label: note, changeKey: `claim:${instructionTs}` });
 }
 
 // ── Events (append-only timeline) ──────────────────────────────────────────────

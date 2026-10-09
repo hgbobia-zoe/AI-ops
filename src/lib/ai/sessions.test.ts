@@ -26,6 +26,9 @@ import {
   listRecentSessionCards,
   countCompletedToday,
   sessionIdForApproval,
+  listPendingInstructions,
+  countPendingInstructions,
+  claimInstruction,
 } from "./sessions";
 
 // Pure helpers — no DB.
@@ -189,5 +192,66 @@ describe("session store", () => {
     const refused = addInstruction(closed.id, "do more", "Hermann");
     expect(refused?.status).toBe("done"); // unchanged
     expect(listSessionEvents(closed.id).some((e) => e.kind === "error")).toBe(true);
+  });
+});
+
+// Pending-instruction drain queue (the bridge responder feed).
+describe("pending instructions", () => {
+  const ids = (ps: { sessionId: string }[]) => ps.map((p) => p.sessionId);
+
+  it("surfaces a session whose newest non-neutral event is an unanswered instruction", () => {
+    const s = createSession({ agentId: "scheduling-assistant", blade: "scheduling", owner: "Lisa", title: "Q", objective: "Keep crews staffed" });
+    addInstruction(s.id, "Capture route changes after schedules are done", "Hermann");
+    const pending = listPendingInstructions(100);
+    const mine = pending.find((p) => p.sessionId === s.id);
+    expect(mine).toBeTruthy();
+    expect(mine!.instruction).toBe("Capture route changes after schedules are done");
+    expect(mine!.askedBy).toBe("Hermann");
+    expect(mine!.owner).toBe("Lisa");
+    expect(mine!.blade).toBe("scheduling");
+    expect(mine!.objective).toBe("Keep crews staffed");
+  });
+
+  it("a response-kind event clears pending; a neutral event does not", () => {
+    const answered = createSession({ agentId: "outreach", title: "Answered" });
+    addInstruction(answered.id, "draft a follow-up", "Hermann");
+    appendEvent(answered.id, { kind: "message", label: "here is a draft" });
+    expect(ids(listPendingInstructions(100))).not.toContain(answered.id);
+
+    const neutral = createSession({ agentId: "outreach", title: "Neutral-after" });
+    addInstruction(neutral.id, "look into this", "Hermann");
+    pauseSession(neutral.id); // state_change — neutral, must NOT clear pending
+    expect(ids(listPendingInstructions(100))).toContain(neutral.id);
+  });
+
+  it("excludes terminal and archived sessions even with a trailing instruction", () => {
+    const term = createSession({ agentId: "outreach", title: "Terminal-pending" });
+    addInstruction(term.id, "too late", "Hermann");
+    endSession(term.id, "cancelled", {});
+    expect(ids(listPendingInstructions(100))).not.toContain(term.id);
+
+    const arch = createSession({ agentId: "outreach", title: "Archived-pending" });
+    addInstruction(arch.id, "filed away", "Hermann");
+    archiveSession(arch.id, true);
+    expect(ids(listPendingInstructions(100))).not.toContain(arch.id);
+  });
+
+  it("claim records a step, drops the session from the queue, and is idempotent per instruction", () => {
+    const s = createSession({ agentId: "dispatch-route", blade: "dispatch", title: "Claimable" });
+    addInstruction(s.id, "what changed on route 3?", "Hermann");
+    const p = listPendingInstructions(100).find((x) => x.sessionId === s.id)!;
+    expect(p).toBeTruthy();
+
+    const ev = claimInstruction(s.id, p.instructionTs);
+    expect(ev).not.toBeNull();
+    expect(ev!.kind).toBe("step");
+    // No longer pending once claimed (the step is a response-kind event).
+    expect(ids(listPendingInstructions(100))).not.toContain(s.id);
+    // Retried claim for the same instruction is a no-op (dedup by changeKey).
+    expect(claimInstruction(s.id, p.instructionTs)).toBeNull();
+  });
+
+  it("counts pending instructions consistently with the list", () => {
+    expect(countPendingInstructions()).toBe(listPendingInstructions(1000).length);
   });
 });
