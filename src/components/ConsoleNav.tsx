@@ -16,7 +16,7 @@ import {
   Gauge, ListChecks, Truck, AlertTriangle, DollarSign,
   TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
   RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator, Radar, IdCard,
-  Megaphone, Send, Upload, CalendarDays, Star,
+  Megaphone, Send, Upload, CalendarDays, CalendarCheck, Star,
   HeartHandshake, Columns3, LifeBuoy, ClipboardCheck, ClipboardList,
   Aperture, Plus, Dna,
   Headset, PhoneCall, FlaskConical,
@@ -87,6 +87,9 @@ const GROUPS: Group[] = [
     blades: [
       { href: "/ops", label: "Ops Manager", icon: ListChecks },
       { href: "/dispatch", label: "Dispatch", icon: Truck },
+      // Event Command Center + Portfolio — the whole-event lifecycle view over the deterministic engine
+      // (src/lib/event/*). Owner/admin only (manage), matching the other back-office operations blades.
+      { href: "/events", label: "Events", icon: CalendarCheck, manage: true },
       { href: "/risk", label: "Event Risk", icon: AlertTriangle },
       { href: "/scheduling", label: "Scheduling", icon: CalendarDays },
       { href: "/admin/passes", label: "Shift Passes", icon: KeyRound, manage: true },
