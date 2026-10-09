@@ -39,6 +39,8 @@ const T = {
   lossInsights: (): Tool => ({ id: "loss_insights", label: "Cluster lost-deal patterns", category: "ANALYSIS", perm: "ANALYZE", backing: "salesos/lost.ts:lossInsights" }),
   sentiment: (): Tool => ({ id: "sentiment", label: "Score call tone", category: "ANALYSIS", perm: "ANALYZE", backing: "comms/sentiment.ts:heuristicSentiment" }),
   riskScore: (): Tool => ({ id: "risk_score", label: "Score event readiness + risk", category: "ANALYSIS", perm: "ANALYZE", backing: "risk/readiness.ts, risk/engine.ts" }),
+  eventLifecycle: (): Tool => ({ id: "event_lifecycle", label: "Read event lifecycle + readiness + requirements", category: "DATA", perm: "READ", backing: "event/resolvers.ts:getEventReadiness, event/adapter.ts:getEvent" }),
+  eventBriefing: (): Tool => ({ id: "event_briefing", label: "Interpret the event into an honest briefing", category: "ANALYSIS", perm: "ANALYZE", backing: "event/manager.ts:eventBriefing (reads engine, cites records)" }),
   eta: (): Tool => ({ id: "eta", label: "Compute route ETA / risk", category: "ANALYSIS", perm: "ANALYZE", backing: "eta/*, notify/routeRisk.ts" }),
   staffingPlan: (): Tool => ({ id: "staffing_plan", label: "Compute staffing requirement + plan", category: "ANALYSIS", perm: "ANALYZE", backing: "scheduling/optimize.ts, crewRules.ts" }),
   shiftReadiness: (): Tool => ({ id: "shift_readiness", label: "Compute shift readiness + coverage", category: "ANALYSIS", perm: "ANALYZE", backing: "scheduling/readiness.ts, scheduling/coverage.ts" }),
@@ -400,6 +402,41 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     valueMeasure: "Risks caught pre-event, readiness trend",
   },
   {
+    id: "event-manager",
+    name: "Event Manager",
+    department: "ops_exec",
+    owner: "Hermann+Cindy",
+    mission: "Coordinate every event: interpret the deterministic lifecycle engine and surface the risk + the next actions, without ever moving state or writing.",
+    responsibilities: [
+      "Read the Event Lifecycle Engine (lifecycle, readiness, requirements, dependencies, timeline) and compose an honest, cited briefing per event",
+      "Name the single primary blocker and recommend the next actions, each cited to a requirement or risk finding (a recommendation, never 'done')",
+      "Answer questions strictly from the event's records, and say 'unknown' when the data can't support an answer",
+      "Flag events that are BLOCKED or ESCALATED on the readiness axis",
+    ],
+    inputs: [
+      { label: "Event briefing (interpretation)", ref: "event/manager.ts:eventBriefing", href: "/dashboard" },
+      { label: "Event readiness bundle", ref: "event/resolvers.ts:getEventReadiness" },
+      { label: "Lifecycle state", ref: "event/lifecycle.ts:deriveLifecycle" },
+      { label: "Readiness axis + requirements", ref: "event/readiness.ts:computeEventReadiness, event/requirements.ts" },
+      { label: "Dependencies + timeline", ref: "event/dependencies.ts:canAdvance, event/timeline.ts:generateTimeline" },
+    ],
+    // READ + ANALYZE + INTERPRET only. RULES CALCULATE (the engine owns state), AI INTERPRETS. There is
+    // NO state-write / EXECUTE tool at all (moving lifecycle state is FORBIDDEN → simply absent), mirroring
+    // how payroll-manager carries no payroll-write tool. The one actionable recommendation (a customer
+    // update) is only ever a customer comms tool that is APPROVAL_REQUIRED and master-switch gated; money,
+    // pricing, schedule, hiring and Instawork stay FORBIDDEN (absent). It proposes; it never executes.
+    toolbox: [T.eventLifecycle(), T.eventBriefing(), T.riskScore(), T.routes(), T.finance(), T.sendEmail()],
+    escalationRules: [
+      { when: "An event is BLOCKED or ESCALATED on the readiness axis" },
+      { when: "A booked event has an unmet blocking requirement close to its timeline deadline" },
+    ],
+    // The engine is new and real but headless (no Event Command Center UI yet — that is P6), so this is an
+    // honest "partial": the interpretation layer is live, the surfacing blade is not built yet.
+    backing: "partial",
+    valueMeasure: "Events coordinated without a dropped handoff; blockers surfaced before the event date",
+    blade: "command",
+  },
+  {
     id: "dispatch-route",
     name: "Dispatch / Route",
     department: "ops_exec",
@@ -504,7 +541,7 @@ export const BLADE_AGENTS: Record<BladeKey, string[]> = {
   "event-risk": ["event-risk", "inventory-exception"],
   finance: ["business-intelligence", "executive-briefing", "priority-exception"],
   payroll: ["payroll-manager"],
-  command: ["executive-briefing", "priority-exception", "business-intelligence"],
+  command: ["executive-briefing", "event-manager", "priority-exception", "business-intelligence"],
 };
 
 // The canonical home blade per employee (the one page that "owns" it). Drives the additive `blade` field
@@ -526,6 +563,7 @@ const CANONICAL_BLADE: Record<string, BladeKey> = {
   "campaign-analyst": "marketing",
   "competitive-intelligence": "marketing",
   "executive-briefing": "command",
+  "event-manager": "command",
   "event-risk": "event-risk",
   "dispatch-route": "dispatch",
   "inventory-exception": "event-risk",

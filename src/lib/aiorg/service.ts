@@ -34,6 +34,7 @@ import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate, getOpenExceptions, getUpcomingItemStops } from "@/lib/db/repo";
 import { listCoachableCalls, countUnanalyzedCoachableCalls } from "@/lib/db/repo";
 import { peakItemDemand } from "@/lib/inventory/inventory";
+import { eventPortfolioSignal } from "@/lib/event/manager";
 import { computeConnections, summarize as summarizeConns, type Connection } from "@/lib/health/connections";
 import { opportunityBoard } from "@/lib/opportunity/service";
 import { marketingDashboard } from "@/lib/marketing/dashboard";
@@ -192,6 +193,20 @@ export async function aiOrg(opts: { showMoney?: boolean } = {}): Promise<AiOrgOv
   }, null);
   if (dispatch) {
     signals["dispatch-route"] = { metrics: [m("Routes today", dispatch.routes), m("Exceptions", dispatch.exceptions, dispatch.exceptions ? "attention" : "default")], active: dispatch.routes > 0 || dispatch.exceptions > 0, health: healthFor(conns, "routes") };
+  }
+  // Event Manager — honest live metric over the active-event portfolio by readiness condition. Bounded
+  // (capped) + guarded + no-network weather inside eventPortfolioSignal, so one bad read never breaks it.
+  const portfolio = await safe(() => eventPortfolioSignal(), null);
+  if (portfolio) {
+    const atRisk = portfolio.atRisk + portfolio.escalated;
+    signals["event-manager"] = {
+      metrics: [
+        m("Active events", portfolio.active),
+        m("Blocked", portfolio.blocked, portfolio.blocked ? "critical" : "default"),
+        m("At risk", atRisk, atRisk ? "attention" : "default"),
+      ],
+      active: portfolio.active > 0,
+    };
   }
   const itemPeaks = safeSync(() => peakItemDemand(getUpcomingItemStops(today)), null);
   if (itemPeaks) {
