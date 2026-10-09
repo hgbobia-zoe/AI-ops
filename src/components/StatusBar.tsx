@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Phone, MapPin, Navigation, Plug, ArrowRight } from "lucide-react";
+import { MapPin, Navigation, Plug, ArrowRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export interface StatusIntegration {
@@ -35,11 +35,15 @@ const LOGO: Record<string, string> = {
   Goodshuffle: "/logos/goodshuffle.png",
   Connecteam: "/logos/connecteam.png",
   Instawork: "/logos/instawork.png",
+  // Phone is a single brand here (Quo, formerly OpenPhone), so it gets its logo like the others.
+  Quo: "/logos/quo.png",
+  "Quo (OpenPhone)": "/logos/quo.png",
+  OpenPhone: "/logos/quo.png",
 };
 
 // Category chips are provider-abstracted (not a single brand), so they keep a clean, neutral lucide icon.
+// (Phone/Quo moved to LOGO above; an un-mapped integration falls back to the generic Plug icon.)
 const ICON: Record<string, LucideIcon> = {
-  Quo: Phone,
   GPS: MapPin,
   "GPS / Ignition": Navigation,
   Ignition: Navigation,
