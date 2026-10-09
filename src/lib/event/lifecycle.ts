@@ -18,7 +18,8 @@
 
 import { deterministicState, type StateFacts } from "@/lib/salesos/state";
 import type { RouteStatus, StopState } from "@/lib/types";
-import type { EventView, LogisticsStop } from "./types";
+import type { EventView, LogisticsStop, Requirement } from "./types";
+import { isReadyGateSatisfied } from "./requirements";
 import { isLifecycleState, type LifecycleState } from "./machine";
 
 /** Extra deterministic facts the caller may resolve and pass in (the pure core never reads a DB). All
@@ -33,6 +34,11 @@ export interface LifecycleFacts {
   /** The postevent engine's verdict that the whole event (incl. follow-up) is fully closed. When true it
    *  forces CLOSED. P2 never calls the postevent engine itself — a caller may pass this if it has it. */
   posteventClosed?: boolean;
+  /** The event's resolved, data-backed requirement set (from requirements.ts). When provided AND all
+   *  BLOCKING requirements are satisfied (isReadyGateSatisfied), a booked + planned, not-yet-dispatched
+   *  event is promoted to READY. Absent/unsatisfied → the pre-dispatch ceiling stays PLANNING. READY is
+   *  NEVER fabricated: it requires the real requirement set to be gated. */
+  requirements?: Requirement[] | null;
 }
 
 /** The raw boolean/enum signals the derivation computed — surfaced so an AI layer can explain the state
@@ -70,6 +76,12 @@ export interface LifecycleSignals {
     present: boolean;
     allCompleted: boolean;
     posteventClosed: boolean;
+  };
+  readiness: {
+    /** Whether a resolved requirement set was supplied to gate READY. */
+    requirementsProvided: boolean;
+    /** Whether all blocking requirements are satisfied (the READY gate). False when none provided. */
+    readyGateMet: boolean;
   };
 }
 
@@ -170,6 +182,11 @@ export function deriveLifecycle(view: EventView, facts: LifecycleFacts = {}): Li
   const outcomePresent = view.outcome.present;
   const allCompleted = view.outcome.allCompleted === true;
 
+  // READY gate — a booked+planned event is READY only when a real requirement set is supplied AND all its
+  // blocking requirements are satisfied. Never fabricated: no requirements → gate not met → PLANNING.
+  const requirementsProvided = Array.isArray(facts.requirements);
+  const readyGateMet = requirementsProvided && isReadyGateSatisfied(facts.requirements as Requirement[]);
+
   const signals: LifecycleSignals = {
     commercial: {
       present: c.present,
@@ -192,6 +209,7 @@ export function deriveLifecycle(view: EventView, facts: LifecycleFacts = {}): Li
       phase,
     },
     outcome: { present: outcomePresent, allCompleted, posteventClosed },
+    readiness: { requirementsProvided, readyGateMet },
   };
 
   // ── Resolve the state, FACT wins, in strict precedence ───────────────────────────────────────────
@@ -208,7 +226,7 @@ export function deriveLifecycle(view: EventView, facts: LifecycleFacts = {}): Li
 /** The strict precedence resolver. Returns a LifecycleState literal (TS guarantees the union), pushing a
  *  FACT-labelled reason for each decision. */
 function resolveState(signals: LifecycleSignals, reasons: string[]): LifecycleState {
-  const { commercial, logistics, outcome } = signals;
+  const { commercial, logistics, outcome, readiness } = signals;
 
   // 1) Trip states — FACT wins over everything (an event called off / a lost quote is nothing else).
   if (commercial.cancelled) {
@@ -265,10 +283,19 @@ function resolveState(signals: LifecycleSignals, reasons: string[]): LifecycleSt
     return "DISPATCHED";
   }
 
-  // 5) Booked, not yet dispatched. READY is deferred to the Phase-3 readiness engine (we never fabricate
-  //    readiness), so the pre-dispatch ceiling is PLANNING when a route exists, else plain BOOKED.
+  // 5) Booked, not yet dispatched. A route exists → PLANNING, promoted to READY ONLY when the Phase-3
+  //    readiness gate is met (all blocking requirements satisfied). READY is never fabricated: with no
+  //    requirement set (or an unmet gate) the ceiling stays PLANNING.
   if (logistics.present && logistics.stopCount > 0) {
-    reasons.push("FACT: booked with a route planned but not yet dispatched (all stops Waiting) -> PLANNING. (READY is gated by the Phase-3 readiness engine.)");
+    if (readiness.readyGateMet) {
+      reasons.push("FACT: booked, routed, not yet dispatched, and all blocking requirements are satisfied (readiness gate met) -> READY.");
+      return "READY";
+    }
+    if (readiness.requirementsProvided) {
+      reasons.push("FACT: booked with a route planned but blocking requirements are not all satisfied -> PLANNING (READY withheld by the readiness gate).");
+    } else {
+      reasons.push("FACT: booked with a route planned but not yet dispatched; no requirement set supplied to gate READY -> PLANNING.");
+    }
     return "PLANNING";
   }
   reasons.push("FACT: booked, no route planned yet -> BOOKED.");

@@ -14,7 +14,20 @@ import type {
 import { UNVERIFIED } from "./types";
 import { deriveLifecycle, type LifecycleFacts } from "./lifecycle";
 import { isLifecycleState } from "./machine";
+import type { Requirement } from "./types";
 import type { StopState } from "@/lib/types";
+
+/** A minimal requirement factory for the READY-gate tests. */
+function req(over: Partial<Requirement> & Pick<Requirement, "id" | "blocking" | "status">): Requirement {
+  return {
+    label: over.id,
+    source: "test",
+    owner: "test",
+    deadline: null,
+    resolution: "",
+    ...over,
+  };
+}
 
 const ID = "62232" as EventId;
 
@@ -136,21 +149,79 @@ describe("deriveLifecycle — trip states (FACT wins over everything)", () => {
   });
 });
 
-describe("deriveLifecycle — planning tier (booked, pre-dispatch; READY deferred to P3)", () => {
-  it("booked with a route but all stops Waiting -> PLANNING (never READY)", () => {
+describe("deriveLifecycle — planning tier (booked, pre-dispatch; READY gated by P3)", () => {
+  it("booked with a route but all stops Waiting and NO requirement set -> PLANNING (never fabricates READY)", () => {
     const r = derive({
       commercial: { signed: true, statusLabel: "Signed" },
       stops: [stop("delivery", "Waiting", 1), stop("pickup", "Waiting", 2)],
     });
     expect(r.state).toBe("PLANNING");
-    // READY is a placeholder in P2 — it must not be fabricated.
+    // READY must not be fabricated without a real requirement set.
     expect(r.state).not.toBe("READY");
-    expect(r.reasons.join(" ")).toMatch(/Phase-3 readiness engine/);
+    expect(r.signals.readiness.requirementsProvided).toBe(false);
+    expect(r.reasons.join(" ")).toMatch(/no requirement set supplied/);
   });
 
   it("a booking-only event with no routes is BOOKED, never LIVE", () => {
     const r = derive({ commercial: { signed: true, statusLabel: "Signed" }, stops: [] });
     expect(r.state).toBe("BOOKED");
+  });
+});
+
+describe("deriveLifecycle — READY gate (P3: all blocking requirements satisfied)", () => {
+  const bookedRouted = {
+    commercial: { signed: true, statusLabel: "Signed" },
+    stops: [stop("delivery", "Waiting", 1), stop("pickup", "Waiting", 2)],
+  };
+
+  it("all blocking requirements OK -> READY", () => {
+    const requirements = [
+      req({ id: "contract_signed", blocking: true, status: "OK" }),
+      req({ id: "route_exists", blocking: true, status: "OK" }),
+      req({ id: "crew_sufficient", blocking: true, status: "OK" }),
+      req({ id: "payment_deposit", blocking: false, status: "WARNING" }), // non-blocking never withholds READY
+    ];
+    const r = derive(bookedRouted, { requirements });
+    expect(r.state).toBe("READY");
+    expect(r.signals.readiness.readyGateMet).toBe(true);
+  });
+
+  it("a BLOCKED blocking requirement withholds READY -> PLANNING", () => {
+    const requirements = [
+      req({ id: "contract_signed", blocking: true, status: "OK" }),
+      req({ id: "route_exists", blocking: true, status: "OK" }),
+      req({ id: "crew_sufficient", blocking: true, status: "BLOCKED" }),
+    ];
+    const r = derive(bookedRouted, { requirements });
+    expect(r.state).toBe("PLANNING");
+    expect(r.reasons.join(" ")).toMatch(/not all satisfied/);
+  });
+
+  it("a blocking WARNING withholds READY; UNVERIFIED (unknown) does NOT", () => {
+    const withWarning = derive(bookedRouted, {
+      requirements: [req({ id: "delivery_window", blocking: true, status: "WARNING" }), req({ id: "route_exists", blocking: true, status: "OK" })],
+    });
+    expect(withWarning.state).toBe("PLANNING");
+
+    const withUnverified = derive(bookedRouted, {
+      requirements: [req({ id: "crew_sufficient", blocking: true, status: "UNVERIFIED" }), req({ id: "route_exists", blocking: true, status: "OK" })],
+    });
+    expect(withUnverified.state).toBe("READY");
+  });
+
+  it("an empty requirement set is never READY", () => {
+    const r = derive(bookedRouted, { requirements: [] });
+    expect(r.state).toBe("PLANNING");
+    expect(r.signals.readiness.readyGateMet).toBe(false);
+  });
+
+  it("READY only applies pre-dispatch — a dispatched event ignores the gate", () => {
+    const requirements = [req({ id: "route_exists", blocking: true, status: "OK" })];
+    const r = derive(
+      { commercial: { signed: true, statusLabel: "Signed" }, stops: [stop("delivery", "EnRoute", 1)] },
+      { requirements },
+    );
+    expect(r.state).toBe("DISPATCHED");
   });
 });
 

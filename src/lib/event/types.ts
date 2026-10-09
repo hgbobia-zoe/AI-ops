@@ -10,6 +10,7 @@
 
 import type { EventId } from "./id";
 import type { StopState } from "@/lib/types";
+import type { RiskSeverity } from "@/lib/risk/types";
 
 /** A fact the data could not resolve. Phase 1 never fabricates — unresolved facts are `null`; where a
  *  status string is required, this sentinel is used so the UI can distinguish "unknown" from a value. */
@@ -141,4 +142,56 @@ export interface EventView {
   financials: FinancialsSlice;
   labor: LaborSlice;
   outcome: OutcomeSlice;
+}
+
+// ── Phase 3: readiness REQUIREMENTS + the independent readiness axis ──────────────────────────────────
+
+/**
+ * A requirement's status, computed deterministically from real data:
+ *  - OK         the data backs it and it is satisfied.
+ *  - WARNING    a real concern, but not a hard stop (e.g. no deposit yet, weather risk, driver unassigned).
+ *  - BLOCKED    a real, data-backed deficiency (e.g. no route, crew short for an event we can staff).
+ *  - UNVERIFIED we cannot verify it from data yet (e.g. roster not generated, weather beyond horizon).
+ *               NEVER a fabricated pass; always non-blocking (an unknown is not a deficiency).
+ */
+export type RequirementStatus = "OK" | "WARNING" | "BLOCKED" | "UNVERIFIED";
+
+/**
+ * One data-backed requirement for an event. Governing law: DATA-BACKED REQUIREMENTS ONLY — a requirement
+ * exists ONLY when a real system source can compute its status. Unbacked operational checks (COI, permits,
+ * venue access, final-confirmation call, surface/staking, owned-inventory over-booking) are deliberately
+ * NOT emitted (see requirements.ts) until each gets a real source.
+ */
+export interface Requirement {
+  /** Stable machine key (e.g. "contract_signed"). */
+  id: string;
+  /** Human label. */
+  label: string;
+  status: RequirementStatus;
+  /** The REAL source that backs this requirement (a repo file / table / module). */
+  source: string;
+  /** Responsible department / lead. */
+  owner: string;
+  /** When it's due. Phase 3 leaves this null (timeline/deadlines are Phase 4); documented, never faked. */
+  deadline: string | null;
+  /** True when this requirement gates READY — it must be OK for the event to become READY. */
+  blocking: boolean;
+  /** What to do to satisfy it. */
+  resolution: string;
+}
+
+/** The independent readiness axis — a SEPARATE dimension from the lifecycle state (an event can be
+ *  BOOKED + AT_RISK). Derived from requirement statuses + the EXISTING risk engine's findings. */
+export type EventCondition = "NORMAL" | "WATCH" | "AT_RISK" | "BLOCKED" | "ESCALATED";
+
+export interface EventReadinessResult {
+  condition: EventCondition;
+  /** The existing risk engine's 0-100 per-event readiness score (reused, not recomputed), when available. */
+  score?: number;
+  /** The existing risk engine's worst severity for this event (reused), or "READY" when clean. */
+  riskLevel?: RiskSeverity | "READY";
+  /** Labels of blocking requirements that are not OK (BLOCKED or a blocking WARNING). */
+  blockers: string[];
+  /** FACT/INFERENCE-labelled explanations citing requirements + risk findings. */
+  reasons: string[];
 }

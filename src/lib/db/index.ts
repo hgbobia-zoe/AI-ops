@@ -1890,6 +1890,18 @@ CREATE TABLE IF NOT EXISTS hr_payroll_approvals (
   updated_at          TEXT NOT NULL,
   PRIMARY KEY (period_start, period_end)
 );
+
+-- Event Lifecycle Engine (Phase 3) — durable geocode cache for the weather module. Addresses are
+-- STABLE, so geocodes are cached forever (Census is free but slow); resolved=0 records a KNOWN-miss so
+-- we don't re-hit Census for an address that won't geocode. Forecasts are volatile and are NEVER cached
+-- here (short in-process TTL only). Additive, isolated table.
+CREATE TABLE IF NOT EXISTS geocode_cache (
+  address_key TEXT PRIMARY KEY,          -- normalized (lowercased, single-spaced) address
+  lat         REAL,                      -- null when unresolved (resolved=0)
+  lon         REAL,
+  resolved    INTEGER NOT NULL,          -- 1 = geocoded, 0 = known-miss
+  updated_at  TEXT NOT NULL
+);
 `;
 
 type DB = InstanceType<typeof Database>;
