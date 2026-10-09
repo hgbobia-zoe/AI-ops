@@ -15,7 +15,10 @@ function gig(p: Partial<InstaworkShift> & { id: string }): InstaworkShift {
     total: p.total ?? 1,
     locationName: "ZER",
     workers: p.workers ?? [],
+    workerIds: p.workerIds ?? [],
     interestedPending: 0,
+    clockInCode: p.clockInCode ?? null,
+    clockOutCode: p.clockOutCode ?? null,
   };
 }
 
