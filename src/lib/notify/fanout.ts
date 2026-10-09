@@ -11,7 +11,6 @@ import { createTracking, expireTracking, insertMessage, insertException, insertA
 import { getSettings, renderTemplate, templateForKind, type AppSettings } from "@/lib/settings";
 import { formatClockTime } from "@/lib/dates";
 import { mintEtaLinkForStop } from "@/lib/eta/mint";
-import { chooseDepartureLink } from "@/lib/eta/etaLinkMint";
 
 export interface FanoutCtx {
   action: ActionType;
@@ -57,22 +56,28 @@ async function trackingLink(
   ctx: FanoutCtx,
   stop: Stop,
   settings: AppSettings,
-): Promise<string> {
+): Promise<string | undefined> {
   if (process.env.GS_ETALINK_LEGACY === "1") {
     const legacy = (ctx.payload?.etaLink as string | undefined) || settings.ignitionEtaLinks[ctx.truckId];
     if (legacy) return legacy;
   }
-  // Always have the working /track fallback (and the stop's token) ready; it also upgrades to Ignition.
-  const fallback = createTracking(stop.stopId, stop.routeId, ctx.baseUrl).url;
+  // The customer's "on the way" text MUST go out immediately — it is never blocked waiting on a fresh
+  // Ignition mint. (That bounded wait, added with the office-machine mint, was delaying/dropping the send:
+  // ARRIVED has no mint and kept working, departure did not.) So: use the real Ignition live-map link ONLY
+  // when it is ALREADY minted (the pre-mint tick usually has it ready by departure); otherwise send the
+  // working /track link RIGHT NOW and kick the mint off in the background — /track upgrades itself to the
+  // Ignition map the moment the mint lands, so the customer still ends up on the live map.
   try {
-    // FAST PATH: a link pre-minted earlier in the day (runtime pre-mint tick) is already waiting — use the
-    // real Ignition live map IMMEDIATELY, no wait, no dependency on the office session being live right now.
-    // The `??` short-circuits the departure mint entirely when a pre-minted link exists.
+    const fallback = createTracking(stop.stopId, stop.routeId, ctx.baseUrl).url;
     const preMinted = getMintedEtaLinkForStop(stop.stopId)?.url ?? null;
-    const ignition = preMinted ?? (await mintEtaLinkForStop(stop, ctx.truckId, truckLabel(ctx.truckId)));
-    return chooseDepartureLink({ preMintedUrl: preMinted, ignitionUrl: ignition, fallbackUrl: fallback }).url;
-  } catch {
-    return fallback; // never let a mint hiccup drop the customer's link
+    if (preMinted) return preMinted;
+    // Not minted yet → enqueue the mint WITHOUT awaiting its bounded poll (no blocking), text goes now.
+    void mintEtaLinkForStop(stop, ctx.truckId, truckLabel(ctx.truckId)).catch(() => {});
+    return fallback;
+  } catch (e) {
+    // Never let a link hiccup stop the text — send it without a link rather than not at all.
+    console.error("[fanout] trackingLink failed; sending on-the-way text without a link:", e);
+    return undefined;
   }
 }
 
