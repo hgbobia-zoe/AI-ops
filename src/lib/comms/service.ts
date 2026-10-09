@@ -12,7 +12,6 @@ import {
   markCallNoteLogged,
   getBookingByPhoneDigits,
   insertCommsEventIfNew,
-  enqueueGsOp,
   getCoachingAnalysis,
   saveCoachingAnalysis,
   type CallEventInput,
@@ -22,7 +21,8 @@ import { analyzeSentiment } from "./sentiment";
 import { getCallTranscript, getCallSummary, getCallDetails, openphoneUserInitials } from "./openphone";
 import { slackNotifyAlert } from "@/lib/notify/slack";
 import { decideCallNote } from "@/lib/salesos/callNote";
-import { initialsOf, salesOsNoteLine } from "@/lib/salesos/noteFormat";
+import { syncTouchpointNote, type CallOutcome } from "./noteSync";
+import { initialsOf } from "@/lib/salesos/noteFormat";
 import { logSalesEventBy } from "@/lib/salesos/audit";
 import { resolveAndStore, debriefCall } from "@/lib/salesos/stateService";
 import { todayInOpsTz } from "@/lib/dates";
@@ -44,6 +44,7 @@ const last10 = (phone?: string | null): string | null => {
  *  The rep initials come from Quo's user id (who handled the call) — the reliable source — else name. */
 async function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLogged: boolean, summary: string | null, booking: BookingView | null, initials: string | null): Promise<void> {
   if (alreadyLogged) return;
+  if (!booking) return; // can't attach a note to a project we can't identify
   const comment = decideCallNote({
     eventType: input.eventType ?? "",
     direction: input.direction ?? null,
@@ -51,9 +52,21 @@ async function maybeLogCallNote(rowId: string, input: IngestCallInput, alreadyLo
     summary,
   });
   if (!comment) return;
-  if (!booking) return; // can't attach a note to a project we can't identify
-  const line = salesOsNoteLine(initials, comment, todayInOpsTz());
-  enqueueGsOp({ op: "note_append", transactionId: booking.bookingId, label: "call logged", payload: { line } });
+  // Map the decision to a touchpoint outcome: a real conversation (summary present) vs. a voicemail.
+  const sum = (summary ?? "").trim();
+  const outcome: CallOutcome = sum ? "conversation" : comment === "Left voicemail" ? "voicemail_left" : "voicemail_received";
+  const res = syncTouchpointNote({
+    kind: "call",
+    callId: input.callId,
+    transactionId: booking.bookingId,
+    repInitials: initials,
+    clientName: booking.clientName,
+    direction: (input.direction as "incoming" | "outgoing" | null) ?? null,
+    outcome,
+    summary: sum || null,
+    dateYmd: todayInOpsTz(),
+  });
+  if (!res.enqueued) return; // gated off, no match, or already logged — nothing more to record
   markCallNoteLogged(rowId);
   // Sales audit trail: the call, attributed to the Quo rep who handled it.
   logSalesEventBy("CALL_LOGGED", booking.bookingId, initials ?? "Quo", { outcome: comment, direction: input.direction ?? "unknown" });
