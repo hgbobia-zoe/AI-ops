@@ -9,6 +9,10 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings, canSeeFinancials } from "@/lib/auth/roles";
 import { aiOrg } from "@/lib/aiorg/service";
+import { AI_EMPLOYEES, HUMANS } from "@/lib/aiorg/registry";
+import { authoritySplit } from "@/lib/aiorg/types";
+import { buildOrgTree, type OrgAgentInput } from "@/lib/aiorg/orgTree";
+import { OrgChart } from "@/components/aiorg/OrgChart";
 import { FigureStrip, type Figure } from "@/components/console-primitives";
 import { OrgTabs, StateDot } from "@/components/aiorg/AiOrgBits";
 
@@ -33,6 +37,32 @@ export default async function AiOrgPage(): Promise<React.JSX.Element> {
 
   const totalApprovals = org.humans.reduce((n, h) => n + h.openApprovals, 0);
 
+  // The org chart (the first thing you see here now). Same enriched tree the AI Employees tab renders, so
+  // a tile click opens the full detail panel. Real data throughout (honest backing/state carried through).
+  const cfgById = new Map(AI_EMPLOYEES.map((c) => [c.id, c]));
+  const agents: OrgAgentInput[] = org.employees.map((e) => {
+    const c = cfgById.get(e.id);
+    const split = c ? authoritySplit(c.toolbox) : { can: [], requiresApproval: [] };
+    return {
+      id: e.id,
+      name: e.name,
+      department: e.department,
+      backing: e.backing,
+      state: e.state,
+      mission: e.mission,
+      responsibilities: c?.responsibilities ?? [],
+      inputs: (c?.inputs ?? []).map((i) => ({ label: i.label, href: i.href })),
+      canCount: split.can.length,
+      approvalCount: split.requiresApproval.length,
+      metrics: e.metrics.map((m) => ({ label: m.label, value: m.value, tone: m.tone })),
+      lastRunAt: e.lastRunAt,
+      valueMeasure: c?.valueMeasure ?? "",
+      paused: e.paused,
+    };
+  });
+  const tree = buildOrgTree(HUMANS, agents);
+  const canManage = canManageSettings(role);
+
   const figures: Figure[] = [
     { label: "Live", value: org.counts.live, tone: "positive" },
     { label: "Seed", value: org.counts.seed, tone: org.counts.seed ? "attention" : "default" },
@@ -54,6 +84,11 @@ export default async function AiOrgPage(): Promise<React.JSX.Element> {
       </header>
 
       <OrgTabs active="/ai-org" />
+
+      {/* ── ORG CHART (the headline — the real top-down tree, click a tile for detail) ── */}
+      <Band title="Org chart" subtitle="Ownership, team leads, and the AI employees reporting to each — click any tile for detail">
+        <OrgChart tree={tree} canManage={canManage} />
+      </Band>
 
       {/* ── MANAGERS (per-human rollup) ── */}
       <Band title="Managers" subtitle="Each human and the AI team they own — open the agent in context from its blade">
