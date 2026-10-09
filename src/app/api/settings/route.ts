@@ -62,6 +62,8 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     smsProvider: str(b.smsProvider, current.smsProvider),
     gpsProvider: str(b.gpsProvider, current.gpsProvider),
     gpsVehicleIds: strMap(b.gpsVehicleIds, current.gpsVehicleIds),
+    // Not edited from the /admin settings form — preserve whatever the org-chart pause toggle set.
+    aiPaused: Array.isArray(current.aiPaused) ? current.aiPaused : [],
   };
 }
 

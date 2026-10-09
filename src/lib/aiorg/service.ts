@@ -41,6 +41,7 @@ import { getShiftsForDate } from "@/lib/scheduling/store";
 import { shiftGap } from "@/lib/scheduling/types";
 import { recentSalesActivity } from "@/lib/salesos/audit";
 import { runtimeStatus, type JobStatus } from "@/lib/runtime/jobs";
+import { getSettings } from "@/lib/settings";
 import { countPendingByAgent } from "./approvals";
 
 // ── Public shapes ─────────────────────────────────────────────────────────────
@@ -198,8 +199,12 @@ export async function aiOrg(opts: { showMoney?: boolean } = {}): Promise<AiOrgOv
     signals["inventory-exception"] = { metrics: [m("Items tracked", itemPeaks.length), m("Top concurrent", topPeak)], active: itemPeaks.length > 0 };
   }
 
-  // Build the derived views (coming employees get no metrics, enforced in buildEmployeeView).
-  const employees = AI_EMPLOYEES.map((e) => buildEmployeeView(e, signals[e.id] ?? {}));
+  // Build the derived views (coming employees get no metrics, enforced in buildEmployeeView). Fold in
+  // the operator's paused set (settings.aiPaused) so a paused agent reads as intentionally off.
+  const paused = new Set(safeSync(() => getSettings().aiPaused, [] as string[]) ?? []);
+  const employees = AI_EMPLOYEES.map((e) =>
+    buildEmployeeView(e, { ...(signals[e.id] ?? {}), paused: paused.has(e.id) }),
+  );
 
   // Recent AI / audit activity (sales audit is the live, attributed trail today).
   const activity = safeSync(() => recentSalesActivity(40), []) ?? [];
