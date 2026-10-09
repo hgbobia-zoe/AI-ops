@@ -85,8 +85,9 @@
     if (!cap.MembersTable && !cap.TimeTrackingDashboard) return;
     let pay = null;
     if (cap.MembersTable && payTemplate) pay = await pullPay(memberIds());
+    let posted = false;
     try {
-      await origFetch(API + "/api/payroll/gusto/import", {
+      const res = await origFetch(API + "/api/payroll/gusto/import", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -95,21 +96,14 @@
           pay,
         }),
       });
-    } catch (e) { /* best-effort — next capture/refresh retries */ }
+      posted = !!(res && res.ok);
+    } catch (e) { /* best-effort — next on-demand sync retries */ }
+    // Tell the background (via the isolated-world gusto-bridge.js, since this MAIN-world script has no
+    // chrome.* messaging) that an on-demand sync has posted, so it can close the dedicated Gusto tab.
+    try { window.postMessage({ __zoeGusto: true, type: "posted", ok: posted }, location.origin); } catch (e) { /* no-op */ }
   }
 
-  // Self-refresh: replay the captured roster/period requests verbatim so the snapshot stays fresh without
-  // the operator re-navigating; sendToZoe then re-pulls pay for the current members.
-  async function refresh() {
-    for (const op of Object.keys(cap)) {
-      const c = cap[op];
-      try {
-        const res = await origFetch(c.url, { method: "POST", headers: c.headers, body: c.body, credentials: "include" });
-        const json = await res.json().catch(() => null);
-        if (json && !json.errors) c.response = json;
-      } catch (e) { /* keep the last good response */ }
-    }
-    schedulePost();
-  }
-  setInterval(refresh, 10 * 60 * 1000);
+  // NOTE: no self-refresh timer. Gusto is now an ON-DEMAND pull (payroll is not a continuous job). The
+  // Auto-Pull worker opens one hidden tab per sync request; this script captures + posts once on load
+  // (maybeSeedNavigate → the app's reads → the fetch hook → sendToZoe), then the worker closes the tab.
 })();

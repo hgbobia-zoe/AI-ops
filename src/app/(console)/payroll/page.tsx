@@ -28,8 +28,10 @@ import {
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { readGustoSnapshot } from "@/lib/payroll/gustoSnapshot";
 import { BladeAgents } from "@/components/aiorg/BladeAgents";
+import { getLatestImportBySource } from "@/lib/pull/state";
 import { WorkerEditor, type GustoPick } from "@/components/payroll/WorkerEditor";
 import { SyncButton } from "@/components/payroll/SyncButton";
+import { SyncGustoButton } from "@/components/payroll/SyncGustoButton";
 import { ApproveButton } from "@/components/payroll/ApproveButton";
 import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 import { ExceptionActions } from "@/components/payroll/ExceptionActions";
@@ -552,6 +554,7 @@ function SettingsTab(): React.JSX.Element {
   const ctOk = connecteamConfigured();
   const guOk = gustoConfigured();
   const cfg = getPayrollConfig();
+  const gustoImport = getLatestImportBySource()["gusto"] ?? null;
   return (
     <div className="max-w-2xl space-y-3">
       <section className="surface border p-4">
@@ -559,6 +562,13 @@ function SettingsTab(): React.JSX.Element {
         <div className="space-y-2.5 text-[12.5px]">
           <ConnRow name="Connecteam" role="Operational time source of truth" ok={ctOk} detail={ctOk ? "connected (CONNECTEAM_API_KEY set)" : "not connected"} />
           <ConnRow name="Gusto" role="Payroll system of record — browser tab-replay (Auto-Pull extension)" ok={guOk} detail={guOk ? "connected — pull landed" : "not connected — open Gusto in the office browser (Auto-Pull extension)"} />
+        </div>
+        {/* Gusto is an ON-DEMAND pull (payroll isn't continuous) — trigger it here instead of the 10-min loop. */}
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-rule pt-3">
+          <p className="max-w-sm text-[11.5px] text-meta">
+            Gusto no longer syncs on the 10-minute loop. Sync it on demand: the office-browser extension opens one Gusto tab, pulls the roster + pay rates, and closes it.
+          </p>
+          <SyncGustoButton lastSyncedAt={gustoImport?.ts ?? null} lastOk={gustoImport?.ok ?? false} />
         </div>
       </section>
       <PayrollSettingsForm initial={cfg} />

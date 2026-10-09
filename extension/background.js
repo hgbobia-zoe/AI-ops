@@ -29,9 +29,10 @@ const IW_MATCH = "https://app.instawork.com/*";
 const IW_HOME = "https://app.instawork.com/";
 const IGN_MATCH = "https://ignition.zonarsystems.com/*";
 const IGN_HOME = "https://ignition.zonarsystems.com/";
-const GUSTO_MATCH = "https://app.gusto.com/*";
 const GUSTO_HOME = "https://app.gusto.com/";
 const CREATE_TIMEOUT_MS = 90_000; // reap an unclaimed/stuck create tab after this
+const GUSTO_SYNC_WATCHDOG = "zoe-gusto-watchdog";
+const GUSTO_SYNC_TIMEOUT_MS = 120_000; // reap the dedicated on-demand Gusto tab if it never posts
 
 // ── Badge ─────────────────────────────────────────────────────────────────────
 async function setBadge(text, color) {
@@ -144,26 +145,59 @@ async function ensureIgnitionTab() {
   }
 }
 
-/** Return a live app.gusto.com tab, creating a single pinned background one if none exists. Same
- *  find-or-create logic as the Instawork/Ignition tabs: the Gusto content script (gusto.js, world MAIN)
- *  replays the app's GraphQL reads + POSTs them, and self-refreshes on its own 10-min timer. We never
- *  close it. A freshly-opened background tab lands on the dashboard; gusto.js then navigates it to the
- *  People page (only when hidden) so the roster/pay queries actually fire. */
-async function ensureGustoTab() {
-  let tabs = [];
+// ── On-demand Gusto sync (NOT on the 10-min loop) ───────────────────────────────
+// Payroll is not a continuous job, so Gusto no longer rides runPullCycle. Instead, when the Zoe app asks
+// (externally_connectable {type:"zoe-gusto-sync"}), we open ONE dedicated background app.gusto.com tab.
+// gusto.js (world MAIN) auto-runs on that hidden tab: it hops to the People page, the app fires its
+// GraphQL reads, gusto.js captures + POSTs the snapshot to Zoe, then emits a window message. The isolated-
+// world bridge (gusto-bridge.js) relays that to us as {type:"zoe-gusto-posted"} and we close the exact tab
+// we opened — so nothing lingers. A watchdog reaps the tab if it never posts (e.g. Gusto signed out). We
+// track the one in-flight sync in storage.gustoSync so it survives a service-worker sleep, and guard
+// against concurrent syncs.
+async function getGustoSync() {
+  const { gustoSync } = await chrome.storage.local.get("gustoSync");
+  return gustoSync || null;
+}
+async function setGustoSync(v) {
+  if (v) await chrome.storage.local.set({ gustoSync: v });
+  else await chrome.storage.local.remove("gustoSync");
+}
+
+/** Close the dedicated on-demand Gusto tab and clear the in-flight marker + watchdog. */
+async function reapGustoSync(pending) {
   try {
-    tabs = await chrome.tabs.query({ url: GUSTO_MATCH });
+    if (pending && pending.tabId != null) await chrome.tabs.remove(pending.tabId);
   } catch (e) {
-    tabs = [];
+    /* tab already gone */
   }
-  const live = tabs.find((t) => t.id != null);
-  if (live) return { tab: live, justOpened: false };
+  await setGustoSync(null);
   try {
-    const tab = await chrome.tabs.create({ url: GUSTO_HOME, pinned: true, active: false });
-    return { tab, justOpened: true };
+    await chrome.alarms.clear(GUSTO_SYNC_WATCHDOG);
   } catch (e) {
-    return { tab: null, justOpened: false };
+    /* no-op */
   }
+}
+
+/** Trigger one on-demand Gusto sync. Guards against a concurrent sync: if one is already in flight (and
+ *  not stale), we leave it running instead of opening a second tab. */
+async function startGustoSync(reason) {
+  const pending = await getGustoSync();
+  if (pending) {
+    if (Date.now() - pending.startedAt > GUSTO_SYNC_TIMEOUT_MS) {
+      await reapGustoSync(pending); // stale — reap and start fresh below
+    } else {
+      return { ok: true, already: true };
+    }
+  }
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: GUSTO_HOME, pinned: false, active: false });
+  } catch (e) {
+    return { ok: false, reason: "no_tab" };
+  }
+  await setGustoSync({ tabId: tab.id, startedAt: Date.now(), reason });
+  chrome.alarms.create(GUSTO_SYNC_WATCHDOG, { delayInMinutes: GUSTO_SYNC_TIMEOUT_MS / 60000 });
+  return { ok: true, tabId: tab.id };
 }
 
 /** Nudge the content script in existing GS tab(s) to run a pull now. The content script watches
@@ -190,10 +224,9 @@ async function runPullCycle(reason) {
   // Keep a signed-in Ignition tab alive too, so Zonar ETA links can be minted from this office machine.
   // Its content script polls our server on its own short timer; the shared pullNow nudge also pokes it.
   const ign = await ensureIgnitionTab().catch(() => ({ justOpened: false }));
-  // Keep a signed-in Gusto tab alive too, so HR/Payroll pulls the roster + pay rates on the same 10-min
-  // cadence. gusto.js (world MAIN) can't read chrome.storage, so it isn't nudged via pullNow — it self-
-  // refreshes on its own 10-min timer in whatever Gusto tab stays open. Best-effort.
-  await ensureGustoTab().catch(() => ({ justOpened: false }));
+  // NOTE: Gusto is intentionally NOT pulled here. Payroll is not a continuous job and the old per-cycle
+  // ensureGustoTab() piled up app.gusto.com tabs. Gusto now syncs ON DEMAND only (startGustoSync, fired by
+  // the app's {type:"zoe-gusto-sync"} handshake), opening one tab and closing it when the pull posts.
   if (!tab) {
     badgeFor("no_tab");
     return { ok: false, reason: "no_tab" };
@@ -376,6 +409,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     getPending().then((p) => {
       if (p && Date.now() - p.startedAt > CREATE_TIMEOUT_MS - 1000) reapPending(p, "watchdog");
     });
+  } else if (alarm.name === GUSTO_SYNC_WATCHDOG) {
+    getGustoSync().then((p) => {
+      if (p && Date.now() - p.startedAt > GUSTO_SYNC_TIMEOUT_MS - 1000) reapGustoSync(p);
+    });
   }
 });
 
@@ -411,6 +448,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // storage live for the rest.
   if (msg.type === "zoe-config-changed") {
     ensureAlarm().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  // gusto-bridge.js (isolated world) relays gusto.js's "posted" window message → close the DEDICATED
+  // on-demand sync tab we opened (match by tab id, so a user's own Gusto tab is never closed).
+  if (msg.type === "zoe-gusto-posted") {
+    (async () => {
+      const p = await getGustoSync();
+      if (p && sender.tab && sender.tab.id === p.tabId) await reapGustoSync(p);
+      sendResponse({ ok: true });
+    })();
     return true;
   }
 
@@ -471,6 +519,16 @@ chrome.runtime.onMessageExternal.addListener((msg, _sender, sendResponse) => {
       // Only nudge a login when we have a RECENT, authoritative signed-out reading — never on unknown.
       if (ls.status === "not_logged_in" && ls.ageMs < 60 * 60 * 1000) await openLoginTab();
       sendResponse({ ok: true, pull: r, last: ls });
+    })();
+    return true;
+  }
+
+  // On-demand payroll sync: open one Gusto tab, pull once, close it when the snapshot posts. Gusto is NOT
+  // on the 10-min loop — this is the only thing that opens an app.gusto.com tab now.
+  if (msg.type === "zoe-gusto-sync") {
+    (async () => {
+      const r = await startGustoSync("handshake").catch(() => ({ ok: false, reason: "error" }));
+      sendResponse({ ok: true, sync: r });
     })();
     return true;
   }
