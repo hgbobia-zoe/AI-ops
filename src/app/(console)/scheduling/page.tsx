@@ -34,6 +34,8 @@ import { getAssignmentsForDate } from "@/lib/scheduling/assignments";
 import { isLiveAssignment } from "@/lib/scheduling/lifecycle";
 import { shiftCommsEnabled } from "@/lib/scheduling/commsFlag";
 import { ShiftReadinessExceptions, type ReadinessRow } from "@/components/scheduling/ShiftReadinessExceptions";
+import { StaffingPreCheck } from "@/components/scheduling/StaffingPreCheck";
+import { routePreChecksForDate } from "@/lib/scheduling/preCheck";
 import { ROLE_LABEL } from "@/components/scheduling/RouteStaffBoard";
 import {
   getCrewForDateSafe,
@@ -412,6 +414,11 @@ export default async function SchedulingPage({
   // Open (unassigned) Connecteam shifts + who's free to take them (folded in from the former Staffing blade).
   const openShifts = configured && coverage.ok ? openShiftsWithSuggestions(coverage.shifts, roster) : [];
 
+  // Route Staffing Pre-Check: which present routes are under-assigned IN THE APP (a Connecteam schedule is
+  // not coverage) and so have their debrief on hold, with the candidates to assign. A gap closes ONLY by
+  // assigning crew — no manual override. Composes the same crew rules + app assignments + recommendCrew.
+  const preChecks = await routePreChecksForDate(date);
+
   // Eligibility ingredients for the board labels — the raw feeds the pure classifier reads, computed once
   // and passed down so each panel can label a worker for ITS own window (route card / shift) client-side.
   const eligibilityData: WorkerDayEligibilityData = {
@@ -482,10 +489,13 @@ export default async function SchedulingPage({
         )}
       </p>
 
+      <StaffingPreCheck routes={preChecks} />
+
       <ShiftReadinessExceptions rows={readinessRows} exceptions={shiftExceptions} routeLabel={routeLabelFor} />
 
       <StaffingPlanPreview plan={staffingPlan} date={date} routeLabel={routeLabelFor} summary={planSummary} health={staffingHealth} />
 
+      <div id="staffing-board">
       <RouteStaffBoard
         date={date}
         routeCards={routeCards}
@@ -505,6 +515,7 @@ export default async function SchedulingPage({
         iwConfigured={iwOn}
         hasRoutes={routes.length > 0}
       />
+      </div>
 
       <StaffingRosterSections
         configured={configured}
