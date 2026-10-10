@@ -7,10 +7,13 @@
 // assignment. "Staffed" here counts ONLY explicit app assignments — a driver set on the route (Dispatch) or
 // an app staff_shift assignee. A route crewed only the OLD way (scheduled in Connecteam off the Goodshuffle
 // route, never assigned in the app) reads as a GAP, and the Connecteam-scheduled people surface as the
-// CANDIDATES to assign (recommendCrew / eligibilityFor) — never credited as coverage. The user either
-// assigns them or marks the route done (handled the old way / intentionally solo).
+// CANDIDATES to assign (recommendCrew / eligibilityFor) — never credited as coverage.
 //
-// RULES CALCULATE: computeRouteGap is a PURE function of (required, assigned, ack). The data gathering
+// A GAP CLOSES ONLY BY ACTUALLY ASSIGNING CREW. There is deliberately NO manual "mark done" / override: a
+// human cannot silence the hold on an unstaffed route and let its debrief go out. The status is a pure
+// function of explicit app assignments vs required crew — nothing else.
+//
+// RULES CALCULATE: computeRouteGap is a PURE function of (required, assigned). The data gathering
 // (routePreChecksForDate) composes the SAME readers the board already uses — crewForRoute (crew rules),
 // the route's app shifts + Dispatch driver (explicit assignment), and recommendCrew (candidates). No LLM.
 
@@ -20,7 +23,6 @@ import { getRoutesForDate } from "@/lib/db/repo";
 import { getShiftsForDate } from "./store";
 import { recommendCrew, type RecommendContext } from "./availability";
 import { assignmentWindowsFromShifts, getDayAvailabilityCached } from "./eligibilityInputs";
-import { getPreCheckAck, assignedSig } from "./preCheckStore";
 import { routeWindow } from "@/lib/risk/engine";
 import { DEFAULT_RISK_CONFIG, type EngineRoute } from "@/lib/risk/types";
 import {
@@ -43,12 +45,11 @@ export interface RoleCount {
   field: number;
 }
 
-export type PreCheckStatus = "ok" | "gap" | "resolved";
+export type PreCheckStatus = "ok" | "gap";
 
 /** The PURE pre-check verdict for one route. `status`:
- *   • "ok"       — required crew is fully assigned in the app (debrief sends normally).
- *   • "gap"      — under-assigned and not acked → HOLD the debrief + notify.
- *   • "resolved" — still a gap, but explicitly "marked done" (old-way / solo) → hold cleared, no alert. */
+ *   • "ok"  — required crew is fully assigned in the app (debrief sends normally).
+ *   • "gap" — under-assigned → HOLD the debrief + notify. Closes ONLY by assigning crew (no override). */
 export interface RouteGap {
   requiredByRole: RoleCount;
   assignedByRole: RoleCount;
@@ -65,8 +66,6 @@ export interface RouteGap {
 export interface RouteGapInput {
   requiredByRole: RoleCount;
   assignedByRole: RoleCount;
-  /** An explicit "mark done" ack is in force for the CURRENT assignment state (see preCheckStore). */
-  acked: boolean;
 }
 
 /** Cap assigned at required per role, then the gap is the honest remainder. */
@@ -74,7 +73,8 @@ function gapFor(required: number, assigned: number): number {
   return Math.max(0, required - Math.min(assigned, required));
 }
 
-/** Pure, deterministic gap math + status. No DB, no network, no AI. */
+/** Pure, deterministic gap math + status. No DB, no network, no AI, no override — status is purely
+ *  explicit-app-assignments vs required crew. */
 export function computeRouteGap(input: RouteGapInput): RouteGap {
   const requiredByRole = input.requiredByRole;
   const assignedByRole = input.assignedByRole;
@@ -86,21 +86,18 @@ export function computeRouteGap(input: RouteGapInput): RouteGap {
   const totalRequired = requiredByRole.driver + requiredByRole.field;
   const totalAssigned = Math.min(assignedByRole.driver, requiredByRole.driver) + Math.min(assignedByRole.field, requiredByRole.field);
   const nobody = totalRequired > 0 && totalAssigned === 0;
-  const hasGap = totalGap > 0;
-
-  const status: PreCheckStatus = !hasGap ? "ok" : input.acked ? "resolved" : "gap";
+  const status: PreCheckStatus = totalGap > 0 ? "gap" : "ok";
   return { requiredByRole, assignedByRole, gapByRole, totalGap, nobody, status, reason: reasonFor(gapByRole, nobody, status) };
 }
 
 /** A short, deterministic phrase for what's missing. */
 function reasonFor(gap: RoleCount, nobody: boolean, status: PreCheckStatus): string {
   if (status === "ok") return "Fully staffed";
-  if (nobody) return status === "resolved" ? "Nobody assigned (marked done)" : "Nobody assigned";
+  if (nobody) return "Nobody assigned";
   const parts: string[] = [];
   if (gap.driver > 0) parts.push("no driver");
   if (gap.field > 0) parts.push(`needs ${gap.field} more helper${gap.field === 1 ? "" : "s"}`);
-  const base = parts.join(", ") || "Under-assigned";
-  return status === "resolved" ? `${base} (marked done)` : base;
+  return parts.join(", ") || "Under-assigned";
 }
 
 // ── Data gathering (composes the existing readers; no gap logic lives here) ───────────────────────────
@@ -145,8 +142,8 @@ export function assignedCrewForRoute(route: Route, routeShifts: StaffShift[]): R
 }
 
 /** SYNC gate for the send path: the pure RouteGap for a shift's route, from LOCAL data only (app shifts +
- *  Dispatch driver + ack). No Connecteam — the HOLD decision never needs the candidate list, so the send
- *  path stays fast and offline-safe. Returns null when the shift isn't tied to a known present route. */
+ *  Dispatch driver). No Connecteam — the HOLD decision never needs the candidate list, so the send path
+ *  stays fast and offline-safe. Returns null when the shift isn't tied to a known present route. */
 export function preCheckGateForShift(shift: Pick<StaffShift, "routeId" | "truckId" | "date">): RouteGap | null {
   if (!shift.routeId || !shift.truckId) return null;
   const route = getRoutesForDate(shift.truckId, shift.date).find((r) => r.routeId === shift.routeId);
@@ -154,9 +151,7 @@ export function preCheckGateForShift(shift: Pick<StaffShift, "routeId" | "truckI
   const routeShifts = getShiftsForDate(shift.date).filter((s) => s.routeId === route.routeId);
   const required = requiredCrewForRoute(route);
   const assigned = assignedCrewForRoute(route, routeShifts);
-  const ack = getPreCheckAck(shift.date, route.routeId);
-  const acked = ack != null && ack.assignedSig === assignedSig(assigned);
-  return computeRouteGap({ requiredByRole: required, assignedByRole: assigned, acked });
+  return computeRouteGap({ requiredByRole: required, assignedByRole: assigned });
 }
 
 /** Enumerate present routes for a day and build the full pre-check per route (gap + Connecteam candidates).
@@ -191,9 +186,7 @@ export async function routePreChecksForDate(date: string): Promise<RoutePreCheck
     const routeShifts = shifts.filter((s) => s.routeId === route.routeId);
     const required = requiredCrewForRoute(route);
     const assigned = assignedCrewForRoute(route, routeShifts);
-    const ack = getPreCheckAck(date, route.routeId);
-    const acked = ack != null && ack.assignedSig === assignedSig(assigned);
-    const gap = computeRouteGap({ requiredByRole: required, assignedByRole: assigned, acked });
+    const gap = computeRouteGap({ requiredByRole: required, assignedByRole: assigned });
 
     // Candidates: who on the Connecteam schedule could be ASSIGNED to the open seats (never coverage). Only
     // when the gap is real and Connecteam answered — otherwise honestly empty.

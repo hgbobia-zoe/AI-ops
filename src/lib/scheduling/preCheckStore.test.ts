@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { decidePreCheckAlert, assignedSig, PRECHECK_ALERT_COOLOFF_MS } from "./preCheckStore";
+import { decidePreCheckAlert, PRECHECK_ALERT_COOLOFF_MS } from "./preCheckStore";
 
 const T0 = new Date("2026-10-10T08:00:00Z");
 const later = (ms: number): Date => new Date(T0.getTime() + ms);
@@ -51,12 +51,5 @@ describe("decidePreCheckAlert (dedupe + cool-off, mirrors recordIgnitionProbe)",
     const r = decidePreCheckAlert(prev, false, 0, later(10 * 60_000));
     expect(r.alert).toBeNull();
     expect(r.next).toBeUndefined();
-  });
-});
-
-describe("assignedSig", () => {
-  it("is a stable canonical signature of the assigned crew counts", () => {
-    expect(assignedSig({ driver: 1, field: 2 })).toBe("d:1,f:2");
-    expect(assignedSig({ driver: 0, field: 0 })).toBe("d:0,f:0");
   });
 });

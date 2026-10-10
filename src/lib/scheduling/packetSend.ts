@@ -52,15 +52,15 @@ export async function dispatchPacketTouch(args: DispatchArgs): Promise<TouchDisp
   }
 
   // ROUTE STAFFING PRE-CHECK GATE. Before sending a route's debrief/pre-brief, verify the route has its
-  // required crew ASSIGNED in the app (doc §2.2 — Connecteam schedule is not coverage). If the route has an
-  // un-acked gap, HOLD the send and ensure the notification fires (fire-and-forget; dedup prevents spam).
-  // Routes that are fully staffed, or whose gap was explicitly "marked done" (status !== "gap"), send
-  // normally. Pure/local decision — no Connecteam call in the hot path. Idempotent: a re-run holds again
-  // without sending, and the alert is deduped in recordPreCheckAlert.
+  // required crew ASSIGNED in the app (doc §2.2 — Connecteam schedule is not coverage). If the route has a
+  // gap, HOLD the send and ensure the notification fires (fire-and-forget; dedup prevents spam). The hold
+  // clears ONLY when crew is actually assigned (status flips to "ok") — there is no manual override, so a
+  // debrief can never go out to an unstaffed route. Pure/local decision — no Connecteam call in the hot
+  // path. Idempotent: a re-run holds again without sending, and the alert is deduped in recordPreCheckAlert.
   const gate = preCheckGateForShift(shift);
   if (gate && gate.status === "gap") {
     if (shift.routeId) void notifyRouteGapIfDue(shift.date, shift.routeId).catch(() => {});
-    return { touch, version, body, state: "held", gated: false, reason: `Route staffing gap: ${gate.reason}. Assign crew or mark the route done.` };
+    return { touch, version, body, state: "held", gated: false, reason: `Route staffing gap: ${gate.reason}. Assign crew to close it.` };
   }
 
   // Switch ON. Instawork has no captured contact surface -> honest skip (informed via Instawork's own app).

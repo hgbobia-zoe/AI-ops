@@ -38,13 +38,13 @@ export function formatRouteGapAlert(pc: RoutePreCheck): string {
     `Route staffing pre-check: ${where} has a gap and its debrief is on hold.`,
     `${pc.reason}. Route is ${size}.`,
     cands,
-    `Assign crew or mark it done: ${boardLink(pc.date)}`,
+    `Assign crew to close it: ${boardLink(pc.date)}`,
   ].join("\n");
 }
 
-/** The "recovered" note once a previously-alerted route clears (assigned or marked done). */
+/** The "recovered" note once a previously-alerted route clears — i.e. crew was actually assigned. */
 function formatRecovered(truckName: string, date: string): string {
-  return `Route staffing pre-check: ${truckName} on ${date} is staffed now (or marked done). Hold cleared.`;
+  return `Route staffing pre-check: ${truckName} on ${date} is staffed now. Hold cleared.`;
 }
 
 /** Evaluate ONE route and Slack if the dedupe says so. Used by the send-path gate (fire-and-forget) so a
@@ -60,8 +60,8 @@ export async function notifyRouteGapIfDue(date: string, routeId: string): Promis
   }
 }
 
-/** Decide + send (or recover) for one already-computed pre-check. "resolved" (marked done) is treated as
- *  NOT gapped for alerting — the hold is cleared, so a recovery note fires if we had alerted. */
+/** Decide + send (or recover) for one already-computed pre-check. A gap clears only when crew is actually
+ *  assigned (status flips to "ok"), which fires the recovery note if we had alerted. */
 async function emitForRoute(pc: RoutePreCheck): Promise<void> {
   const gapped = pc.status === "gap";
   const { alert } = recordPreCheckAlert(pc.date, pc.routeId, gapped, pc.totalGap);

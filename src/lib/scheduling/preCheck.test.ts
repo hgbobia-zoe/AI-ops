@@ -31,9 +31,11 @@ function shift(p: Partial<StaffShift> & { id: string; role: StaffShift["role"] }
   };
 }
 
+// Status is PURELY explicit app assignments vs required crew — there is no ack / "mark done" override, so a
+// gap can ONLY ever be "gap" or "ok".
 describe("computeRouteGap (pure gap math + status)", () => {
   it("nobody assigned → gap, nobody flag, 'Nobody assigned'", () => {
-    const g = computeRouteGap({ requiredByRole: { driver: 1, field: 1 }, assignedByRole: { driver: 0, field: 0 }, acked: false });
+    const g = computeRouteGap({ requiredByRole: { driver: 1, field: 1 }, assignedByRole: { driver: 0, field: 0 } });
     expect(g.status).toBe("gap");
     expect(g.nobody).toBe(true);
     expect(g.totalGap).toBe(2);
@@ -41,7 +43,7 @@ describe("computeRouteGap (pure gap math + status)", () => {
   });
 
   it("driver missing (helpers present) → 'no driver'", () => {
-    const g = computeRouteGap({ requiredByRole: { driver: 1, field: 1 }, assignedByRole: { driver: 0, field: 1 }, acked: false });
+    const g = computeRouteGap({ requiredByRole: { driver: 1, field: 1 }, assignedByRole: { driver: 0, field: 1 } });
     expect(g.status).toBe("gap");
     expect(g.nobody).toBe(false);
     expect(g.gapByRole).toEqual({ driver: 1, field: 0 });
@@ -49,35 +51,30 @@ describe("computeRouteGap (pure gap math + status)", () => {
   });
 
   it("short helpers → 'needs N more helpers' (pluralized)", () => {
-    const g2 = computeRouteGap({ requiredByRole: { driver: 1, field: 2 }, assignedByRole: { driver: 1, field: 0 }, acked: false });
+    const g2 = computeRouteGap({ requiredByRole: { driver: 1, field: 2 }, assignedByRole: { driver: 1, field: 0 } });
     expect(g2.gapByRole).toEqual({ driver: 0, field: 2 });
     expect(g2.reason).toBe("needs 2 more helpers");
-    const g1 = computeRouteGap({ requiredByRole: { driver: 1, field: 2 }, assignedByRole: { driver: 1, field: 1 }, acked: false });
+    const g1 = computeRouteGap({ requiredByRole: { driver: 1, field: 2 }, assignedByRole: { driver: 1, field: 1 } });
     expect(g1.reason).toBe("needs 1 more helper");
   });
 
   it("fully assigned → ok, no gap", () => {
-    const g = computeRouteGap({ requiredByRole: { driver: 1, field: 1 }, assignedByRole: { driver: 1, field: 1 }, acked: false });
+    const g = computeRouteGap({ requiredByRole: { driver: 1, field: 1 }, assignedByRole: { driver: 1, field: 1 } });
     expect(g.status).toBe("ok");
     expect(g.totalGap).toBe(0);
     expect(g.reason).toBe("Fully staffed");
   });
 
   it("over-assigned is capped (never a negative gap) and reads ok", () => {
-    const g = computeRouteGap({ requiredByRole: { driver: 1, field: 1 }, assignedByRole: { driver: 2, field: 3 }, acked: false });
+    const g = computeRouteGap({ requiredByRole: { driver: 1, field: 1 }, assignedByRole: { driver: 2, field: 3 } });
     expect(g.gapByRole).toEqual({ driver: 0, field: 0 });
     expect(g.status).toBe("ok");
   });
 
-  it("acked gap → resolved (hold cleared), reason notes it", () => {
-    const g = computeRouteGap({ requiredByRole: { driver: 1, field: 0 }, assignedByRole: { driver: 0, field: 0 }, acked: true });
-    expect(g.status).toBe("resolved");
-    expect(g.reason).toBe("Nobody assigned (marked done)");
-  });
-
-  it("acked but actually fully staffed → ok (ack is moot, never masks a real state)", () => {
-    const g = computeRouteGap({ requiredByRole: { driver: 1, field: 0 }, assignedByRole: { driver: 1, field: 0 }, acked: true });
-    expect(g.status).toBe("ok");
+  it("the ONLY way out of a gap is assigning crew (partial assignment still a gap)", () => {
+    const g = computeRouteGap({ requiredByRole: { driver: 1, field: 2 }, assignedByRole: { driver: 1, field: 1 } });
+    expect(g.status).toBe("gap");
+    expect(g.totalGap).toBe(1);
   });
 });
 
@@ -115,7 +112,7 @@ describe("assignedCrewForRoute (explicit app assignments only)", () => {
     const r = route({ stops: [stop({ sequence: 1 })] });
     const assigned = assignedCrewForRoute(r, []);
     expect(assigned).toEqual({ driver: 0, field: 0 });
-    const g = computeRouteGap({ requiredByRole: requiredCrewForRoute(r), assignedByRole: assigned, acked: false });
+    const g = computeRouteGap({ requiredByRole: requiredCrewForRoute(r), assignedByRole: assigned });
     expect(g.status).toBe("gap");
     expect(g.nobody).toBe(true);
   });
