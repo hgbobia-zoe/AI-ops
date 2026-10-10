@@ -1,13 +1,18 @@
 // Geocoding (address → lat/lng) and drive-time routing (from → to → seconds).
 //
-// Provider strategy:
-//   • GOOGLE_MAPS_API_KEY set → Google Geocoding + Directions with
-//     departure_time=now, i.e. a REAL, traffic-aware ETA. Use this in production.
-//   • otherwise → keyless OpenStreetMap services (Nominatim geocode + OSRM route).
-//     Fine for testing, but public and rate-limited (no traffic) — not for prod load.
+// GEOCODE provider order (first hit wins):
+//   1. Google Geocoding — only when GOOGLE_MAPS_API_KEY is set (best coverage; also unlocks the
+//      traffic-aware drive times below). Optional.
+//   2. US Census geocoder — keyless, free, excellent US street-address coverage. The default.
+//   3. Nominatim (OpenStreetMap) — keyless last resort (non-US). Public + rate-limited and MISSES
+//      many valid US addresses (new subdivisions etc.), so it is no longer primary: a Nominatim miss
+//      used to leave the stop with NO coordinates → no Ignition etaLink minted → the customer "on the
+//      way" text fell back to /track. Census fixes that for US addresses at no cost.
+// DRIVE TIME: Google (traffic-aware) when keyed, else keyless OSRM.
 //
-// Everything is best-effort: any failure returns null and the caller falls back
-// to the planned ETA.
+// Everything is best-effort: a total miss returns null and the caller falls back to the planned ETA /
+// the /track link. We cache ONLY successful geocodes, so a transient/one-off miss never poisons an
+// address for the rest of the process's life.
 
 import { alertOps } from "@/lib/notify/alert";
 
@@ -24,12 +29,35 @@ const cache = (g.__zoeGeocache ??= new Map<string, LatLng | null>());
 export async function geocode(address: string): Promise<LatLng | null> {
   const key = address?.trim();
   if (!key) return null;
-  if (cache.has(key)) return cache.get(key)!;
-  const result = process.env.GOOGLE_MAPS_API_KEY
-    ? await geocodeGoogle(key)
-    : await geocodeNominatim(key);
-  cache.set(key, result);
+  if (cache.has(key)) return cache.get(key)!; // only successful geocodes are ever cached (see below)
+  let result: LatLng | null = null;
+  if (process.env.GOOGLE_MAPS_API_KEY) result = await geocodeGoogle(key);
+  if (!result) result = await geocodeCensus(key);
+  if (!result) result = await geocodeNominatim(key);
+  // Cache ONLY a success. Caching a null here was a real bug: one transient miss (a rate-limit blip,
+  // or an address a provider can't resolve) stuck for the whole process, so every later send for that
+  // address silently used /track instead of the live Ignition link.
+  if (result) cache.set(key, result);
   return result;
+}
+
+// US Census geocoder — keyless, free, strong US street-address coverage (the keyless default).
+// US-only: a non-US address returns no match and falls through to Nominatim.
+async function geocodeCensus(address: string): Promise<LatLng | null> {
+  const url = new URL("https://geocoding.geo.census.gov/geocoder/locations/onelineaddress");
+  url.searchParams.set("address", address);
+  url.searchParams.set("benchmark", "Public_AR_Current");
+  url.searchParams.set("format", "json");
+  try {
+    const d = await (await fetch(url, { cache: "no-store" })).json();
+    const c = d?.result?.addressMatches?.[0]?.coordinates;
+    // Census returns x = longitude, y = latitude.
+    return c && typeof c.y === "number" && typeof c.x === "number"
+      ? { lat: Number(c.y), lng: Number(c.x) }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 async function geocodeGoogle(address: string): Promise<LatLng | null> {
