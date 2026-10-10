@@ -19,7 +19,9 @@ import { connecteamConfigured, refreshConnecteamHealth } from "@/lib/connecteam"
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { runScheduledPayrollSyncIfDue } from "@/lib/payroll/scheduler";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
+import { runPreCheckAlerts } from "@/lib/scheduling/preCheckNotify";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
+import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { logImport, getLatestImportBySource, recordInstaworkProbe, type ImportRow } from "@/lib/pull/state";
 
 export type RuntimeBucket = "server" | "browser";
@@ -106,6 +108,31 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     run: async () => {
       const r = await runScheduledPayrollSyncIfDue();
       return { ok: true, detail: r.detail }; // "waiting"/"already ran" are healthy no-ops, not failures
+    },
+  },
+  {
+    key: "route-precheck",
+    label: "Route staffing pre-check",
+    bucket: "server",
+    configured: () => true, // app-owned; a no-op (and silent) on days with no present routes to staff
+    note: "Ahead of the debrief send window, checks each present route has its required crew ASSIGNED in the app (a Connecteam schedule is not coverage). Alerts the ops channel for any gap with the candidates to assign, deduped with a 2h cool-off, and a recovered note when it clears. Never nags a day with no routes.",
+    run: async () => {
+      // Look a couple of days ahead so the alert fires with lead time to assign crew (or mark it done).
+      const today = todayInOpsTz();
+      const days = [today, shiftYmd(today, 1), shiftYmd(today, 2)];
+      let checked = 0;
+      let gaps = 0;
+      let alerted = 0;
+      let recovered = 0;
+      for (const d of days) {
+        const r = await runPreCheckAlerts(d);
+        checked += r.routesChecked;
+        gaps += r.gaps;
+        alerted += r.alerted;
+        recovered += r.recovered;
+      }
+      const detail = checked === 0 ? "no routes to staff" : `${checked} routes, ${gaps} gap${gaps === 1 ? "" : "s"}, ${alerted} alerted${recovered ? `, ${recovered} recovered` : ""}`;
+      return { ok: true, detail };
     },
   },
   {
