@@ -5,6 +5,7 @@
 
 import { closeRoute, getRouteById, type IncompleteStop } from "@/lib/db/repo";
 import { recordEventOutcome, logChange } from "@/lib/history/store";
+import { scheduleScanSoon } from "@/lib/risk/scan";
 
 export interface CloseOneResult {
   ok: boolean;
@@ -42,6 +43,16 @@ export function closeOneRoute(routeId: string): CloseOneResult {
         toValue: g.done >= g.total ? "complete" : "partial",
         changeKey: `outcome|${routeId}|${eventId}`,
       });
+    }
+
+    // The key fix for the prep-window incident: finishing today's route (office close OR the driver's
+    // ARRIVED_WAREHOUSE closeout, which routes through here) is exactly when tomorrow's prep window may
+    // open — the truck is now free. Debounced re-scan so the opportunity surfaces within seconds instead
+    // of waiting for the next scheduled sweep. Best-effort; a scan failure never fails the close.
+    try {
+      scheduleScanSoon();
+    } catch (e) {
+      console.error("[closeRoute] scheduleScanSoon threw (ignored):", e);
     }
   }
 

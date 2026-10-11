@@ -36,6 +36,7 @@ import { STATE_VISUAL } from "@/lib/stateVisual";
 import type { Route, Stop } from "@/lib/types";
 import { FigureStrip, type Figure } from "@/components/console-primitives";
 import { BladeAgents } from "@/components/aiorg/BladeAgents";
+import { PrepWindowCallout } from "@/components/PrepWindowCallout";
 
 export const dynamic = "force-dynamic";
 
@@ -67,6 +68,8 @@ export default async function DispatchPage({
         </a>
       )}
       {overdue.length > 0 && <OverdueRoutesBanner issues={overdue} canClose={canClose} />}
+      {/* Operational Opportunity: tomorrow's prep window (reads the OPPORTUNITY risk findings). */}
+      <PrepWindowCallout />
       <DispatchBoard date={date} today={today} />
     </main>
   );

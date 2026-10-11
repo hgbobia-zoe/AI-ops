@@ -64,6 +64,28 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     gpsVehicleIds: strMap(b.gpsVehicleIds, current.gpsVehicleIds),
     // Not edited from the /admin settings form — preserve whatever the org-chart pause toggle set.
     aiPaused: Array.isArray(current.aiPaused) ? current.aiPaused : [],
+    // Prep-window (Operational Opportunity) tunables — overlay well-typed numeric fields when sent,
+    // else keep current. OT policy stays "in_shift_only" (the safe default).
+    prepOpportunity: coercePrep(b.prepOpportunity, current.prepOpportunity),
+  };
+}
+
+function coercePrep(v: unknown, cur: AppSettings["prepOpportunity"]): AppSettings["prepOpportunity"] {
+  const o = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+  const n = (val: unknown, fb: number) => {
+    const x = typeof val === "number" ? val : Number(val);
+    return Number.isFinite(x) ? x : fb;
+  };
+  const closeRaw = o.warehouseCloseHour;
+  const warehouseCloseHour =
+    closeRaw === null ? null : closeRaw === undefined ? cur.warehouseCloseHour : Number.isFinite(Number(closeRaw)) ? Number(closeRaw) : cur.warehouseCloseHour;
+  return {
+    loadBaseMinutes: n(o.loadBaseMinutes, cur.loadBaseMinutes),
+    loadMinutesPerStop: n(o.loadMinutesPerStop, cur.loadMinutesPerStop),
+    loadMinutesPerItem: n(o.loadMinutesPerItem, cur.loadMinutesPerItem),
+    threatenedMinutes: n(o.threatenedMinutes, cur.threatenedMinutes),
+    warehouseCloseHour,
+    otPolicy: "in_shift_only",
   };
 }
 

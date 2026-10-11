@@ -18,6 +18,10 @@ export type RiskCategory =
   | "PICKUP"
   | "INVENTORY"
   | "SPECIAL_REQUIREMENT"
+  // Operational OPPORTUNITY — a proactive "do this now while it's still possible" window, not a
+  // deficiency. Today its only riskTypes are the prep-window family (see event/prepOpportunity.ts):
+  //   prep_window_open | prep_window_threatened | prep_window_missed.
+  | "OPPORTUNITY"
   | "OTHER";
 
 export type RiskSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
@@ -48,6 +52,12 @@ export interface RiskFinding {
   recommendedAction?: string;
   /** Where to go fix it: "connecteam" | "dispatch" | "goodshuffle". */
   actionTarget?: "connecteam" | "dispatch" | "goodshuffle";
+  /** Responsible department/lead for this finding (persisted; e.g. "Warehouse / Ops"). Set on first
+   *  detection; a human re-assignment via setRiskStatus is preserved across scans (COALESCE). */
+  owner?: string;
+  /** A hard deadline for the recommendation (ISO instant) — e.g. the latest safe start of a prep load.
+   *  Distinct from `date` (the event/route calendar day). Updated each scan as the window shrinks. */
+  deadline?: string;
   /** True = we couldn't VERIFY this area (e.g. Connecteam unreachable). An unknown, NOT a
    *  deficiency — it must never dock a readiness score or auto-resolve a real risk. */
   unverified?: boolean;

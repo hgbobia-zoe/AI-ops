@@ -59,6 +59,9 @@ const CATEGORY_TO_COMPONENT: Record<RiskCategory, Component> = {
   PAYMENT: "payment",
   SETUP: "special",
   SPECIAL_REQUIREMENT: "special",
+  // Opportunity findings are ALWAYS unverified, so computeReadiness filters them out before this map is
+  // used — but the type needs a component; warehouse is the natural home (prep/load is warehouse work).
+  OPPORTUNITY: "warehouse",
   OTHER: "schedule",
 };
 

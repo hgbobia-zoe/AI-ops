@@ -21,6 +21,8 @@ import { runScheduledPayrollSyncIfDue } from "@/lib/payroll/scheduler";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
 import { runPreCheckAlerts } from "@/lib/scheduling/preCheckNotify";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
+import { runScan } from "@/lib/risk/scan";
+import { getRiskQueue } from "@/lib/risk/store";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { logImport, getLatestImportBySource, recordInstaworkProbe, type ImportRow } from "@/lib/pull/state";
 
@@ -132,6 +134,28 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
         recovered += r.recovered;
       }
       const detail = checked === 0 ? "no routes to staff" : `${checked} routes, ${gaps} gap${gaps === 1 ? "" : "s"}, ${alerted} alerted${recovered ? `, ${recovered} recovered` : ""}`;
+      return { ok: true, detail };
+    },
+  },
+  {
+    key: "prep-opportunity",
+    label: "Tomorrow prep-window sweep",
+    bucket: "server",
+    configured: () => true, // app-owned; a silent no-op on days with no tomorrow routes
+    note: "End-of-day backstop for Operational Opportunity detection: runs the risk scan (which includes the prep-window rule, event/prepOpportunity.ts) with the real clock so a feasible-but-unloaded window for tomorrow's trucks is caught even if no route-completion trigger fired. Distinguishes open vs threatened vs missed. Never asserts a truck is unloaded (no loading telemetry) — flags the UNVERIFIED window.",
+    run: async () => {
+      const r = await runScan({ force: true });
+      const opp = getRiskQueue().filter((x) => x.category === "OPPORTUNITY");
+      const n = (t: string) => opp.filter((x) => x.riskType === t).length;
+      const open = n("prep_window_open");
+      const threatened = n("prep_window_threatened");
+      const missed = n("prep_window_missed");
+      const detail =
+        opp.length === 0
+          ? r.throttled
+            ? "scan throttled; no open prep windows"
+            : "no open prep windows for tomorrow"
+          : `${open} open, ${threatened} threatened, ${missed} missed`;
       return { ok: true, detail };
     },
   },
