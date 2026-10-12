@@ -126,21 +126,23 @@ export function reconcileRisks(
   const insert = db.prepare(
     `INSERT INTO risk_items (id, signature, risk_type, category, severity, status, title, description,
        date, event_id, route_id, truck_id, affected_entity, recommended_action, action_target,
-       metadata, first_detected_at, last_seen_at)
+       owner, deadline, metadata, first_detected_at, last_seen_at)
      VALUES (@id,@signature,@riskType,@category,@severity,'OPEN',@title,@description,
        @date,@eventId,@routeId,@truckId,@affectedEntity,@recommendedAction,@actionTarget,
-       @metadata,@now,@now)`,
+       @owner,@deadline,@metadata,@now,@now)`,
   );
+  // On update, a human re-assignment of `owner` (via setRiskStatus) is preserved (COALESCE), but the
+  // engine-computed `deadline` is refreshed each scan (e.g. a prep window's latest-safe-start shrinks).
   const updateActive = db.prepare(
     `UPDATE risk_items SET severity=@severity, title=@title, description=@description,
-       recommended_action=@recommendedAction, action_target=@actionTarget, metadata=@metadata,
-       last_seen_at=@now WHERE id=@id`,
+       recommended_action=@recommendedAction, action_target=@actionTarget, owner=COALESCE(owner,@owner),
+       deadline=@deadline, metadata=@metadata, last_seen_at=@now WHERE id=@id`,
   );
   const touch = db.prepare("UPDATE risk_items SET last_seen_at=@now WHERE id=@id");
   const reopen = db.prepare(
     `UPDATE risk_items SET status='OPEN', severity=@severity, title=@title, description=@description,
-       recommended_action=@recommendedAction, action_target=@actionTarget, metadata=@metadata,
-       last_seen_at=@now, resolved_at=NULL WHERE id=@id`,
+       recommended_action=@recommendedAction, action_target=@actionTarget, owner=COALESCE(owner,@owner),
+       deadline=@deadline, metadata=@metadata, last_seen_at=@now, resolved_at=NULL WHERE id=@id`,
   );
   const resolve = db.prepare("UPDATE risk_items SET status='RESOLVED', resolved_at=@now, last_seen_at=@now WHERE id=@id");
 
@@ -154,6 +156,8 @@ export function reconcileRisks(
         description: f.description,
         recommendedAction: f.recommendedAction ?? null,
         actionTarget: f.actionTarget ?? null,
+        owner: f.owner ?? null,
+        deadline: f.deadline ?? null,
         metadata: f.metadata ? JSON.stringify(f.metadata) : null,
         now: ts,
       };

@@ -52,6 +52,25 @@ export interface AppSettings {
    *  shows as paused in the org chart. This is an operational on/off switch — it does NOT edit the
    *  code-reviewed employee config. Owner/admin only; toggled from the org chart tile detail panel. */
   aiPaused: string[];
+  /** Operational Opportunity detection — the "tomorrow's prep window" rule (see event/prepOpportunity.ts).
+   *  Admin-tunable; conservative, honest defaults. All times are MINUTES unless noted. */
+  prepOpportunity: PrepOpportunitySettings;
+}
+
+export interface PrepOpportunitySettings {
+  /** Base minutes to prep & load ANY delivery truck, before size scaling. */
+  loadBaseMinutes: number;
+  /** Added minutes per stop on the route (size proxy). */
+  loadMinutesPerStop: number;
+  /** Added minutes per line-item across the route (finer size proxy). */
+  loadMinutesPerItem: number;
+  /** When remaining in-shift slack ≤ this, the window is THREATENED (closing), not a comfortable rec. */
+  threatenedMinutes: number;
+  /** Optional backstop: the local hour (0–23) the warehouse hard-closes; null = rely on crew shift-ends. */
+  warehouseCloseHour: number | null;
+  /** OT policy. "in_shift_only" (safe default) = never recommend loading past scheduled shift-end. A
+   *  future "flag_needs_approval" mode would surface OT as a needs-approval action rather than suppress it. */
+  otPolicy: "in_shift_only";
 }
 
 // The variables a template may reference, with a short description for the admin UI.
@@ -128,7 +147,21 @@ export function defaultSettings(): AppSettings {
     gpsProvider: process.env.GPS_PROVIDER || "zonar",
     gpsVehicleIds: {},
     aiPaused: [],
+    prepOpportunity: {
+      loadBaseMinutes: numEnv(process.env.PREP_LOAD_BASE_MIN, 45),
+      loadMinutesPerStop: numEnv(process.env.PREP_LOAD_PER_STOP_MIN, 10),
+      loadMinutesPerItem: numEnv(process.env.PREP_LOAD_PER_ITEM_MIN, 1),
+      threatenedMinutes: numEnv(process.env.PREP_THREATENED_MIN, 45),
+      warehouseCloseHour: process.env.PREP_WAREHOUSE_CLOSE_HOUR ? numEnv(process.env.PREP_WAREHOUSE_CLOSE_HOUR, 0) : null,
+      otPolicy: "in_shift_only",
+    },
   };
+}
+
+/** Parse a numeric env var, falling back to `fallback` when unset/invalid. */
+function numEnv(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 /** Pick the delivery or pickup wording for a template slot, based on the stop's kind
@@ -162,6 +195,7 @@ function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSetting
     ignitionEtaLinks: over.ignitionEtaLinks ?? base.ignitionEtaLinks,
     ignitionUnits: over.ignitionUnits ?? base.ignitionUnits,
     gpsVehicleIds: over.gpsVehicleIds ?? base.gpsVehicleIds,
+    prepOpportunity: { ...base.prepOpportunity, ...(over.prepOpportunity ?? {}) },
   };
 }
 

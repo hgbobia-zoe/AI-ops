@@ -6,7 +6,15 @@
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity, saveDerivedLabor } from "@/lib/db/repo";
 import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/history/store";
-import { getCrewForDateSafe, connecteamConfigured, getPayRates, rateForUserOn, type CrewShift, type CrewRole } from "@/lib/connecteam";
+import { getCrewForDateSafe, getUnavailabilityForDate, connecteamConfigured, getPayRates, rateForUserOn, type CrewShift, type CrewRole } from "@/lib/connecteam";
+import { getSettings } from "@/lib/settings";
+import { DISPLAY_TZ } from "@/lib/dates";
+import {
+  assessPrepOpportunities,
+  type PrepFacts,
+  type PrepTruckState,
+  type PrepTomorrowRoute,
+} from "@/lib/event/prepOpportunity";
 import { type CostEntryInput } from "@/lib/finance/allocation";
 import { attributeLabor, type AttribRoute, type WorkerShiftCost } from "@/lib/finance/laborAttribution";
 import { internalShiftCostsFromAssignments } from "@/lib/finance/internalLabor";
@@ -53,6 +61,121 @@ function latestStopUnix(routes: EngineRoute[]): number | null {
 }
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+// ── Operational Opportunity: tomorrow's prep window ──────────────────────────────────────────────────
+// Resolve the FACTS the pure rule (event/prepOpportunity.ts) needs, from existing readers only, then run
+// it with the REAL clock (NOT the noon anchor the day-grain rules use — this rule is intraday). Returns
+// [] (and never alerts) on a day with no tomorrow routes. See prepOpportunity.ts for the governing law:
+// it flags an UNVERIFIED prep window and NEVER asserts the trucks are unloaded (no loading telemetry).
+
+/** Minutes to add to a UTC instant to reach wall-clock time in `tz` (handles DST). Local copy so scan
+ *  stays self-contained; mirrors the helper in dates.ts. */
+function tzOffsetMin(tz: string, date: Date): number {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  const p = Object.fromEntries(dtf.formatToParts(date).map((x) => [x.type, x.value]));
+  const asUTC = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour === 24 ? 0 : +p.hour, +p.minute, +p.second);
+  return (asUTC - date.getTime()) / 60000;
+}
+/** The Unix-seconds instant of `hour:00` local-tz on calendar day `ymd`. */
+function localHourUnix(ymd: string, hour: number, tz: string): number {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const guess = Date.UTC(y, m - 1, d, hour, 0, 0);
+  const off = tzOffsetMin(tz, new Date(guess));
+  return Math.floor((guess - off * 60000) / 1000);
+}
+
+/** Earliest planned stop window (ISO) across a route's stops, or null when untimed. */
+function earliestWindowIso(stops: { plannedWindow?: string; eta?: string }[]): string | null {
+  const times = stops
+    .map((s) => s.plannedWindow || s.eta)
+    .filter((w): w is string => !!w && !Number.isNaN(Date.parse(w)))
+    .sort();
+  return times[0] ?? null;
+}
+
+/** Gather the prep-window facts for `tomorrow` and run the pure rule with the real clock. */
+async function resolvePrepOpportunities(today: string, tomorrow: string, nowReal: Date): Promise<RiskFinding[]> {
+  const trucks = getActiveVehicles();
+
+  // Tomorrow's routes that may need loading (never 'done'). One PrepTomorrowRoute per route/truck.
+  const routes: PrepTomorrowRoute[] = [];
+  for (const t of trucks) {
+    for (const r of getRoutesForDate(t.truckId, tomorrow)) {
+      if (r.status === "done") continue;
+      const firstStop = r.stops.find((s) => s.txId) ?? r.stops[0];
+      routes.push({
+        routeId: r.routeId,
+        truckId: r.truckId,
+        eventId: firstStop?.txId ?? undefined,
+        eventLabel: firstStop?.custName ?? undefined,
+        date: tomorrow,
+        dispatchWindow: earliestWindowIso(r.stops),
+        stopCount: r.stops.length,
+        itemCount: r.stops.reduce((n, s) => n + (s.items?.length ?? 0), 0),
+        needsLoad: r.stops.some((s) => s.kind !== "pickup"),
+        blocker: null,
+      });
+    }
+  }
+  // GATE: no tomorrow routes → nothing to evaluate, no alert (hasDeliveries-style guard).
+  if (routes.length === 0) return [];
+
+  // Per-truck "free today": ALL of today's routes done (multi-route-per-truck honored — any open route
+  // means not free), or no route today at all (never dispatched). Return is NOT verifiable server-side,
+  // so returnVerified is true only when the truck never ran today; otherwise "free" is inferred.
+  const truckStates = new Map<string, PrepTruckState>();
+  for (const t of trucks) {
+    const todayRoutes = getRoutesForDate(t.truckId, today);
+    if (todayRoutes.length === 0) {
+      truckStates.set(t.truckId, { truckId: t.truckId, freeToday: true, freeReason: "no route today (truck never dispatched)", returnVerified: true });
+      continue;
+    }
+    const allDone = todayRoutes.every((r) => r.status === "done");
+    truckStates.set(t.truckId, {
+      truckId: t.truckId,
+      freeToday: allDone,
+      freeReason: allDone ? "today's route(s) complete (return not confirmed)" : "still running today's route(s)",
+      returnVerified: false, // no reliable server-side "truck returned" signal; the tap isn't read per-route
+    });
+  }
+
+  // Today's crew still on-shift NOW, minus anyone in an unavailability block over now. Connecteam-verified.
+  const nowUnix = Math.floor(nowReal.getTime() / 1000);
+  const crewToday = await getCrewForDateSafe(today);
+  const onShift = [...shiftsForRole(crewToday.shifts, "prep"), ...shiftsForRole(crewToday.shifts, "driver")];
+  const candidateIds = [...new Set(onShift.map((s) => s.userId))];
+  const blockedNow = new Set<number>();
+  if (crewToday.ok && candidateIds.length > 0) {
+    const un = await getUnavailabilityForDate(today, candidateIds);
+    for (const [uid, blocks] of un.byUser) {
+      if (blocks.some((b) => b.startUnix <= nowUnix && nowUnix <= b.endUnix)) blockedNow.add(uid);
+    }
+  }
+  const availableUsers = new Set<number>();
+  const shiftEndUnix: number[] = [];
+  for (const s of onShift) {
+    if (blockedNow.has(s.userId) || s.endUnix <= nowUnix) continue;
+    if (!availableUsers.has(s.userId)) {
+      availableUsers.add(s.userId);
+      shiftEndUnix.push(s.endUnix);
+    }
+  }
+
+  const cfg = getSettings().prepOpportunity;
+  const warehouseCloseUnix = cfg.warehouseCloseHour != null ? localHourUnix(today, cfg.warehouseCloseHour, DISPLAY_TZ) : null;
+
+  const facts: PrepFacts = {
+    tomorrowDate: tomorrow,
+    warehouseCloseUnix,
+    displayTz: DISPLAY_TZ,
+    trucks: truckStates,
+    routes,
+    crew: { verified: crewToday.ok, availableCount: availableUsers.size, shiftEndUnix },
+  };
+  return assessPrepOpportunities(facts, cfg, nowReal);
+}
 
 /** Build the finance AttribRoute (window/raw/buffer hours from routeWindow) + the Instawork match window.
  *  `eng` drives the window (plannedWindow/eta); `rawStops` carry the grain the attributor needs
@@ -309,6 +432,19 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   saveDayCapacity(capacityResults);
   // Clean-rewrite the derived labor ledger for every scanned day (clears stale/legacy leaves too).
   saveDerivedLabor(dates, costEntries);
+
+  // Operational Opportunity: tomorrow's prep window. Run with the REAL clock (intraday), not the noon
+  // anchor. It self-gates on there being tomorrow routes, and its findings (dated tomorrow, which is in
+  // `dates` when tomorrow has routes) fold into the SAME reconcile below → dedup + lifecycle + /risk for
+  // free. Isolated: a failure here must never break the core scan.
+  try {
+    const tomorrow = shiftYmd(today, 1);
+    if (dates.includes(tomorrow)) {
+      allFindings.push(...(await resolvePrepOpportunities(today, tomorrow, new Date())));
+    }
+  } catch (e) {
+    console.error("[risk] prep-opportunity resolve failed (isolated):", e);
+  }
 
   // Persist lifecycle + readiness.
   const changes = reconcileRisks(allFindings, dates, now, unverifiedStaffingDates);
