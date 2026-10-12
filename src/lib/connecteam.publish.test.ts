@@ -84,7 +84,8 @@ describe("updatePublishedShift", () => {
     const [, init] = fn.mock.calls[0] as [string, RequestInit];
     expect(init.method).toBe("PUT");
     const sent = JSON.parse(String(init.body))[0];
-    expect(sent.id).toBe(555); // numeric id threaded into the body
+    expect(sent.shiftId).toBe("555"); // Connecteam requires the id under `shiftId` (string), not `id`
+    expect(sent.id).toBeUndefined();
     expect(sent.isPublished).toBe(true);
   });
 

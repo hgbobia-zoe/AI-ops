@@ -719,8 +719,11 @@ export interface PublishShiftResult {
   error?: string;
 }
 
-/** The shift object both create (POST) and update (PUT) send; update adds `id`. */
-function shiftBody(input: PublishShiftInput, id?: string): Record<string, unknown> {
+/** The shift object both create (POST) and update (PUT) send; update adds the shift's id. The collection
+ *  PUT requires that id under the key `shiftId` (NOT `id`) — verified against the live API, which 400s
+ *  `body.0.shiftId: "Field required"` when it is missing. Connecteam shift ids are ObjectId strings, so
+ *  no numeric coercion. (Sending `id` was the bug that made every re-publish of a sent shift fail.) */
+function shiftBody(input: PublishShiftInput, shiftId?: string): Record<string, unknown> {
   const o: Record<string, unknown> = {
     title: input.title.slice(0, 120),
     startTime: input.startUnix,
@@ -730,7 +733,7 @@ function shiftBody(input: PublishShiftInput, id?: string): Record<string, unknow
     isOpenShift: input.assignedUserIds.length === 0,
     assignedUserIds: input.assignedUserIds,
   };
-  if (id) o.id = /^\d+$/.test(id) ? Number(id) : id;
+  if (shiftId) o.shiftId = shiftId;
   return o;
 }
 
@@ -757,10 +760,10 @@ export async function createPublishedShift(input: PublishShiftInput): Promise<Pu
 }
 
 /**
- * Update an already-published Connecteam shift in place (collection-level PUT, id in the body) and
- * re-notify the crew. Used when a sent shift is edited and re-published. Honest: ok only on a real 2xx.
- * NOTE: the PUT body shape is inferred from the create schema + an `id`; on a shape mismatch Connecteam
- * returns a 4xx which we surface (no corruption — the dispatcher can adjust in Connecteam).
+ * Update an already-published Connecteam shift in place (collection-level PUT, `shiftId` in each body
+ * element) and re-notify the crew. Used when a sent shift is edited and re-published. Honest: ok only on
+ * a real 2xx. The body shape is verified against the live API (the single-shift PUT /shifts/{id} returns
+ * 405; the collection PUT with `shiftId` returns 200 and the edited times stick).
  */
 export async function updatePublishedShift(input: PublishShiftInput & { shiftId: string }): Promise<PublishShiftResult> {
   const bad = validatePublishInput(input);
