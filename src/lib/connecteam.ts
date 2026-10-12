@@ -38,7 +38,9 @@ async function ctGetOnce(path: string, timeoutMs: number): Promise<{ json: unkno
   }
 }
 
-async function ctGet(path: string, timeoutMs = 12000): Promise<unknown | null> {
+// 6s default (was 12s): a healthy Connecteam answers sub-second, so 6s is still generous, but it halves the
+// worst case (one retry → ~12.4s, not ~24.4s) when the API hangs — which is what dragged the data blades down.
+async function ctGet(path: string, timeoutMs = 6000): Promise<unknown | null> {
   if (!connecteamConfigured()) return null;
   let r = await ctGetOnce(path, timeoutMs);
   if (r.json === null && r.transient) {
