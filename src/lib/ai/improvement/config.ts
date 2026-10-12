@@ -7,6 +7,7 @@ import type { ChangeBudget } from "./types";
 
 const BUDGET_KEY = "improvement.budget";
 const ENABLED_KEY = "improvement.autonomy"; // master switches for the autonomous steps (default OFF)
+const SELF_AUDIT_KEY = "improvement.selfAudit"; // may the self-audit job auto-OPEN runs? (default OFF)
 
 /** The active change budget: the configured override merged over the defaults (bad values ignored). */
 export function improvementBudget(): ChangeBudget {
@@ -44,3 +45,15 @@ export function setAutonomyConfig(cfg: Partial<AutonomyConfig>): void {
 }
 
 export { AUTONOMY_DEFAULT };
+
+/** Whether the self-audit job may auto-OPEN scoped improvement runs from the app's own failure signals.
+ *  Default OFF — until a human opts in, the job only surfaces candidate counts; it never files runs. Opening
+ *  a run ships NOTHING (it's a human-supervised work item); this switch just controls auto-filing, distinct
+ *  from the merge/deploy autonomy above. */
+export function selfAuditAutoOpen(): boolean {
+  return getJson<{ enabled?: boolean }>(SELF_AUDIT_KEY, {}).enabled === true;
+}
+
+export function setSelfAuditAutoOpen(enabled: boolean): void {
+  setJson(SELF_AUDIT_KEY, { enabled: enabled === true });
+}

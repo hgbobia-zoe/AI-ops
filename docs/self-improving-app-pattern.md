@@ -177,9 +177,18 @@ A run is just a record; something has to open one. Sources, cheapest to richest:
 - **Scheduled self-audit** — a periodic job that proactively scans for bugs, dead code, missing tests, or
   opportunities and files low-risk runs.
 
-In the reference, direct-request is wired; signal→run and the scheduled self-audit are the next increment
-(no scheduler opens runs yet). The important design rule: a trigger only ever *opens a scoped run* — it
-never bypasses the gates.
+In the reference, all three are built (`improvement/signals.ts` + the `self-audit` runtime job):
+direct-request via the Requests backlog; **signal→run** from a deterministic scanner over recurring
+`*_FAILED` audit rows and failed server jobs; and the **scheduled self-audit** (`self-audit` in
+`RUNTIME_JOBS`) that runs the scanner each tick. The important design rules, enforced in code:
+
+- A trigger only ever *opens a scoped run* — it never bypasses the gates and ships nothing (the merge/deploy
+  autonomy stays off; opening a run just files a human-supervised work item).
+- A signal is **auto-openable only with a confident, non-forbidden scope** and only when the problem
+  recurs; otherwise it is surfaced for a human to scope. The always-forbidden check is the final net, so a
+  signal whose fix would touch the agent's own controls (e.g. a merge failure) can never be auto-opened.
+- Auto-opening is behind its own switch (`selfAuditAutoOpen`, default **off**) and is **deduped** by a
+  stable `changeKey` carried as the run's `requestId`, so a re-scan can't double-open the same problem.
 
 ---
 
@@ -234,8 +243,11 @@ and the agent runs as a least-privilege identity it cannot escape. Everything el
 - **Built + tested:** controller, state machine, scope/budget gates, validation/CI routing, deploy detect,
   post-deploy verify, rollback, the two API surfaces, the `/ai-command/improvements` UI. Autonomy defaults
   off.
+- **Triggers (Phase 2) built:** `improvement/signals.ts` (the scanner + the auto-open seam) and the
+  `self-audit` runtime job. Auto-open defaults off (`selfAuditAutoOpen`); until then the job only surfaces
+  candidate counts.
 - **Operational, to go live (office-machine Phase 1):** provision the machine-user identity + scoped PAT,
   set the secrets, and **run the responder** (a Claude Code session following `ai-bridge-responder.md`;
   see `scripts/responder/`). The human merges; nothing auto-ships yet.
-- **Next:** signal→run + scheduled self-audit triggers; then enable autonomy for low-risk changes in the
-  safe order, with auto-rollback validated once first.
+- **Next:** prove the human-supervised loop end-to-end; then enable `selfAuditAutoOpen`, and finally the
+  merge/deploy autonomy for low-risk changes in the safe order, with auto-rollback validated once first.
