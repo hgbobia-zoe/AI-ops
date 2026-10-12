@@ -15,7 +15,7 @@ import { runInstaworkMonitor } from "@/lib/instawork/monitor";
 import { slackNotify } from "@/lib/notify/slack";
 import { discover } from "@/lib/seo/discovery";
 import { configured as ubersuggestConfigured } from "@/lib/seo/ubersuggest";
-import { connecteamConfigured, refreshConnecteamHealth } from "@/lib/connecteam";
+import { connecteamConfigured, refreshConnecteamHealth, warmConnecteamCaches } from "@/lib/connecteam";
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { runScheduledPayrollSyncIfDue } from "@/lib/payroll/scheduler";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
@@ -85,9 +85,10 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     label: "Connecteam crew",
     bucket: "server",
     configured: connecteamConfigured,
-    note: "Confirms the crew schedule is reachable.",
+    note: "Confirms the crew schedule is reachable and warms the team + scheduler caches so pages and shift publishes serve from cache (no live wait).",
     run: async () => {
-      const h = await refreshConnecteamHealth();
+      // Warm the read caches (batched) alongside the health probe, so the next render/publish is instant.
+      const [h] = await Promise.all([refreshConnecteamHealth(), warmConnecteamCaches()]);
       return { ok: h.ok, detail: h.detail };
     },
   },

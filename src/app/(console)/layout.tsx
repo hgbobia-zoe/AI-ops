@@ -44,10 +44,12 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
   // Status-bar integrations — a curated few from the connections health.
   let integrations: StatusIntegration[] = [];
   if (canManage) {
-    // Live checks (TTL-cached) — same signals the Connections page reads, so the dots can't disagree.
-    // Instawork is NOT probed here: it syncs from the browser pull, so its row is freshness-based (the
-    // import ledger the ingest writes), not a server-side call.
-    await Promise.all([refreshConnecteamHealth()]);
+    // Status dots render from the LAST probe (cached), never blocking this page on a live call. Connecteam's
+    // API can stall for ~24s (12s timeout × a retry); awaiting it here froze EVERY console page while it hung.
+    // So we fire-and-forget the refresh (it's TTL-cached + single-flight + never-throws) and read whatever the
+    // previous probe left in the cache — a dot that's at most one render stale, never a hung page. Instawork is
+    // not probed here either: it's freshness-based off the browser-pull import ledger, not a server-side call.
+    void refreshConnecteamHealth();
     const conns = computeConnections();
     const pick = (key: string, name: string): StatusIntegration | null => {
       const c = conns.find((x) => x.key === key);
