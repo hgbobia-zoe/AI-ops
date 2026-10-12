@@ -98,20 +98,24 @@ export async function refreshConnecteamHealth(now: number = Date.now()): Promise
   return _ctInflight;
 }
 
-// ── TTL + single-flight read cache ────────────────────────────────────────────────────────────────
+// ── Stale-while-revalidate read cache ─────────────────────────────────────────────────────────────
 // Every SSR page (dashboard, scheduling, dispatch, risk) re-reads users/schedulers/crew on each render,
 // and getCrewForDateSafe re-reads users+schedulers internally — so ONE page load fired a dozen Connecteam
-// round-trips and took seconds (measured: /dashboard ~4s, /scheduling ~3s TTFB, all server-side). These
-// caches dedupe identical reads for a short TTL. Single Fly machine (per fly.toml) → a module-level cache
-// is shared across requests. Staleness is bounded and matches the app's existing freshness posture (health
-// 90s, runtime tick 15m). A failed/empty result is NOT cached (via `cacheable`), so a transient outage is
-// never pinned as "nobody scheduled". Single-flight collapses concurrent identical reads into one call.
+// round-trips and took seconds (measured: /dashboard ~4s, /scheduling ~3s TTFB, all server-side). Worse,
+// when a call hangs (Connecteam times out at ~6s, with a retry), the awaiting render froze for ~12s.
+//
+// STALE-WHILE-REVALIDATE fixes the "keep waiting" problem: a value in cache — FRESH or STALE — returns
+// immediately, and a stale read also kicks off ONE background refresh for next time. Only a COLD cache
+// (never fetched, or the last fetch wasn't cacheable) awaits the network, bounded by the ctGet timeout.
+// So once warmed (by the first render or the runtime tick's warmConnecteamCaches), NOTHING — no page, no
+// publish — ever blocks on a live Connecteam call again. Single Fly machine (per fly.toml) → the cache is
+// shared across requests. A failed/empty result is NOT cached (via `cacheable`), so the last good value
+// keeps serving through a transient outage and is never pinned as "nobody scheduled". Single-flight
+// collapses concurrent refreshes of the same key into one call.
 function ttlCache<T>(ttlMs: number, cacheable: (v: T) => boolean) {
   const store = new Map<string, { at: number; value: T }>();
   const inflight = new Map<string, Promise<T>>();
-  return (key: string, fetchFn: () => Promise<T>): Promise<T> => {
-    const hit = store.get(key);
-    if (hit && Date.now() - hit.at < ttlMs) return Promise.resolve(hit.value);
+  const refresh = (key: string, fetchFn: () => Promise<T>): Promise<T> => {
     const flying = inflight.get(key);
     if (flying) return flying;
     const p = fetchFn()
@@ -126,6 +130,15 @@ function ttlCache<T>(ttlMs: number, cacheable: (v: T) => boolean) {
       });
     inflight.set(key, p);
     return p;
+  };
+  return (key: string, fetchFn: () => Promise<T>): Promise<T> => {
+    const hit = store.get(key);
+    if (hit) {
+      // Stale → revalidate in the background (never let that rejection go unhandled); serve now regardless.
+      if (Date.now() - hit.at >= ttlMs) void refresh(key, fetchFn).catch(() => {});
+      return Promise.resolve(hit.value);
+    }
+    return refresh(key, fetchFn); // cold: await the first fetch
   };
 }
 
@@ -660,14 +673,35 @@ async function ctWrite(method: "POST" | "PUT", path: string, body: unknown): Pro
 /**
  * Pick the scheduler to publish into. Honors CONNECTEAM_SCHEDULER_ID; else the only one; else one named
  * like "Job"/"Schedule"; else the first. Null when Connecteam is unreachable / has no scheduler.
+ *
+ * Resilience: with SWR the scheduler list is served from cache (last-good through a blip), so publish no
+ * longer depends on a fresh live call. And when CONNECTEAM_SCHEDULER_ID is pinned, we honor it even if the
+ * list is momentarily empty (cold cache the instant after a deploy, or a Connecteam timeout) by
+ * synthesizing the scheduler from the id — so a publish never fails "no scheduler reachable" for a
+ * scheduler we already know. This is the exact failure that silently dropped shift publishes.
  */
 export async function getDefaultScheduler(): Promise<Scheduler | null> {
   const list = await getSchedulers();
-  if (list.length === 0) return null;
   const envId = Number(process.env.CONNECTEAM_SCHEDULER_ID);
-  if (envId) return list.find((s) => s.schedulerId === envId) ?? null;
+  if (envId) {
+    return (
+      list.find((s) => s.schedulerId === envId) ?? {
+        schedulerId: envId,
+        name: "Scheduler",
+        timezone: list[0]?.timezone ?? "America/New_York",
+      }
+    );
+  }
+  if (list.length === 0) return null;
   if (list.length === 1) return list[0];
   return list.find((s) => /job|schedul/i.test(s.name)) ?? list[0];
+}
+
+/** Batch-warm the Connecteam read caches (team + schedulers) so renders and publishes serve from cache
+ *  instead of waiting on a live call. Fire from the runtime tick. Never throws; empty results aren't cached. */
+export async function warmConnecteamCaches(): Promise<void> {
+  if (!connecteamConfigured()) return;
+  await Promise.allSettled([getUsers(), getSchedulers()]);
 }
 
 export interface PublishShiftInput {
