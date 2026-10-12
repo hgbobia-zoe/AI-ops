@@ -20,6 +20,8 @@ import { getPayrollConfig } from "@/lib/payroll/config";
 import { runScheduledPayrollSyncIfDue } from "@/lib/payroll/scheduler";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
 import { runPeopleLifecycleTick } from "@/lib/people/lifecycleTick";
+import { scanImprovementSignals, openFromSignal } from "@/lib/ai/improvement/signals";
+import { selfAuditAutoOpen } from "@/lib/ai/improvement/config";
 import { runPreCheckAlerts } from "@/lib/scheduling/preCheckNotify";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { runScan } from "@/lib/risk/scan";
@@ -181,6 +183,27 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     run: async () => {
       const r = await runPeopleLifecycleTick();
       return { ok: r.ok, detail: r.detail };
+    },
+  },
+  {
+    key: "self-audit",
+    label: "Self-improvement audit",
+    bucket: "server",
+    configured: () => true, // app-owned; a no-op surfacing 0 candidates when nothing is failing
+    note: "Scans the app's OWN failure signals (recurring audit-log failures, failed server jobs) and surfaces improvement candidates. Opens SCOPED, human-supervised improvement runs only when self-audit auto-open is enabled (default OFF). Never ships — the autonomy switches stay off; opening a run just files work for the responder/human, deduped so a re-scan can't double-open.",
+    run: async () => {
+      const signals = scanImprovementSignals();
+      const openable = signals.filter((s) => s.autoOpenable).length;
+      if (!selfAuditAutoOpen()) {
+        return { ok: true, detail: `${signals.length} candidate${signals.length === 1 ? "" : "s"} (${openable} auto-openable) — auto-open OFF` };
+      }
+      let opened = 0;
+      let skipped = 0;
+      for (const s of signals) {
+        if (openFromSignal(s).opened) opened++;
+        else skipped++;
+      }
+      return { ok: true, detail: `${signals.length} candidates, ${opened} opened, ${skipped} skipped` };
     },
   },
   {
