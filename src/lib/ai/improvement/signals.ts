@@ -139,6 +139,27 @@ export function scanImprovementSignals(now: Date = new Date()): ImprovementSigna
   return deriveSignals(audits, jobs);
 }
 
+/** A candidate as the operator UI needs it: the signal plus whether an active run already tracks it and
+ *  whether a human may open one now (it has a concrete, non-forbidden scope and isn't already tracked). */
+export interface CandidateView extends ImprovementSignal {
+  tracked: string | null; // the active run id tracking this signal, or null
+  canOpen: boolean; //       a human may open a run from it now
+}
+
+/** PURE: annotate signals with tracking + openability given the active runs (by requestId). A human may open
+ *  any candidate that has a concrete, non-forbidden scope — even one below the auto-open recurrence bar
+ *  (human judgment overrides the auto bar) — as long as nothing is already tracking it. */
+export function enrichCandidates(
+  signals: ImprovementSignal[],
+  activeRuns: { id: string; requestId: string | null }[],
+): CandidateView[] {
+  return signals.map((s) => {
+    const tracked = activeRuns.find((r) => r.requestId === s.changeKey)?.id ?? null;
+    const scoped = s.allowedPaths.length > 0 && !s.allowedPaths.some((p) => isAlwaysForbidden(p));
+    return { ...s, tracked, canOpen: scoped && !tracked };
+  });
+}
+
 export interface OpenFromSignalResult { opened?: ImprovementRun; skipped?: string; }
 
 /** Open a scoped improvement run from a signal. Deterministic guards, in order: must be auto-openable; its

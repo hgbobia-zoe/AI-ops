@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveSignals, openFromSignal, type ImprovementSignal } from "./signals";
+import { deriveSignals, enrichCandidates, openFromSignal, type ImprovementSignal } from "./signals";
 
 describe("deriveSignals (pure)", () => {
   it("maps a recurring SHIFT_PUBLISH failure to an auto-openable scheduling run", () => {
@@ -78,5 +78,32 @@ describe("openFromSignal (deterministic guards)", () => {
     const r = openFromSignal({ ...base, allowedPaths: ["src/lib/auth/roles.ts"] });
     expect(r.opened).toBeUndefined();
     expect(r.skipped).toMatch(/forbidden/);
+  });
+});
+
+describe("enrichCandidates (pure)", () => {
+  const scoped: ImprovementSignal = {
+    source: "audit_failure", changeKey: "signal:audit:A", blade: "scheduling", summary: "s", problem: "p",
+    allowedPaths: ["src/lib/connecteam.ts"], count: 1, lastAt: null, severity: "low", autoOpenable: false,
+  };
+  const unscoped: ImprovementSignal = { ...scoped, changeKey: "signal:audit:B", allowedPaths: [] };
+  const forbidden: ImprovementSignal = { ...scoped, changeKey: "signal:audit:C", allowedPaths: ["src/lib/auth/x.ts"] };
+
+  it("lets a human open a scoped candidate even below the auto-open bar", () => {
+    const [c] = enrichCandidates([scoped], []);
+    expect(c.canOpen).toBe(true); // autoOpenable is false, but a human may still open it
+    expect(c.tracked).toBeNull();
+  });
+
+  it("marks a candidate tracked when an active run already carries its changeKey (not openable)", () => {
+    const [c] = enrichCandidates([scoped], [{ id: "IR-1", requestId: "signal:audit:A" }]);
+    expect(c.tracked).toBe("IR-1");
+    expect(c.canOpen).toBe(false);
+  });
+
+  it("will not open an unscoped or forbidden-scope candidate", () => {
+    const [u, f] = enrichCandidates([unscoped, forbidden], []);
+    expect(u.canOpen).toBe(false);
+    expect(f.canOpen).toBe(false);
   });
 });
