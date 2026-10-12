@@ -11,7 +11,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { verifySession, SESSION_COOKIE } from "@/lib/auth/session";
-import { canSeeFinancials, canManageSettings, canSeeCoaching, canManagePayroll } from "@/lib/auth/roles";
+import { canSeeFinancials, canManageSettings, canSeeCoaching, canManagePayroll, canManageUsers } from "@/lib/auth/roles";
 import { verifyImageSig } from "@/lib/creative/assetUrl";
 
 const PUBLIC: string[] = [
@@ -110,6 +110,9 @@ const guestAllowed = (p: string): boolean => GUEST_ALLOW.some((a) => p === a || 
 const isCoaching = (p: string): boolean => p === "/coaching" || p.startsWith("/coaching/") || p.startsWith("/api/coaching");
 // HR / Payroll — worker pay, hours, Gusto sync. Sensitive money + PII, owner/admin only (canManagePayroll).
 const isPayroll = (p: string): boolean => p === "/payroll" || p.startsWith("/payroll/") || p.startsWith("/api/payroll");
+// People Lifecycle — onboarding/offboarding + access provisioning. A settings-class capability (it can
+// create/disable logins), so owner/admin only (canManageUsers), like /admin/users.
+const isPeople = (p: string): boolean => p === "/people" || p.startsWith("/people/") || p.startsWith("/api/people");
 
 export async function proxy(req: NextRequest): Promise<NextResponse> {
   const secret = process.env.APP_SESSION_TOKEN;
@@ -155,6 +158,7 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
   if (isSeo(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
   if (isCoaching(pathname) && !canSeeCoaching(session.role)) return deny(req, "forbidden");
   if (isPayroll(pathname) && !canManagePayroll(session.role)) return deny(req, "forbidden");
+  if (isPeople(pathname) && !canManageUsers(session.role)) return deny(req, "forbidden");
 
   return NextResponse.next();
 }
