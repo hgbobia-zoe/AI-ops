@@ -13,6 +13,7 @@ interface EmpRow {
   id: string;
   display_name: string;
   work_email: string | null;
+  phone: string | null;
   lifecycle_state: string;
   role: string;
   department: string | null;
@@ -34,6 +35,7 @@ function toEmployee(r: EmpRow): Employee {
     id: r.id,
     displayName: r.display_name,
     workEmail: r.work_email,
+    phone: r.phone,
     lifecycleState: r.lifecycle_state as LifecycleState,
     role: r.role as Role,
     department: r.department,
@@ -54,6 +56,7 @@ function toEmployee(r: EmpRow): Employee {
 export interface NewEmployee {
   displayName: string;
   workEmail?: string | null;
+  phone?: string | null;
   role: Role;
   department?: string | null;
   startDate?: string | null;
@@ -70,15 +73,16 @@ export function createEmployee(input: NewEmployee): Employee {
   const now = new Date().toISOString();
   getDb()
     .prepare(
-      `INSERT INTO employee (id, display_name, work_email, lifecycle_state, role, department, start_date,
+      `INSERT INTO employee (id, display_name, work_email, phone, lifecycle_state, role, department, start_date,
         user_id, hr_worker_id, connecteam_user_id, instawork_worker, openphone_user_id, gusto_id,
         ai_org_human_name, created_at, updated_at)
-       VALUES (@id,@name,@email,'HIRE',@role,@dept,@start,@userId,@hrId,@ctId,NULL,@opId,@gustoId,@aiName,@now,@now)`,
+       VALUES (@id,@name,@email,@phone,'HIRE',@role,@dept,@start,@userId,@hrId,@ctId,NULL,@opId,@gustoId,@aiName,@now,@now)`,
     )
     .run({
       id,
       name: input.displayName.trim(),
       email: input.workEmail?.trim() || null,
+      phone: input.phone?.trim() || null,
       role: input.role,
       dept: input.department ?? null,
       start: input.startDate ?? null,
@@ -114,6 +118,12 @@ export function setEmployeeEndDate(id: string, endDate: string | null): void {
 /** Link an employee to an external identity (nullable FK set). Only one column per call. */
 export function linkEmployee(id: string, field: "user_id" | "hr_worker_id" | "openphone_user_id" | "gusto_id", value: string | null): void {
   getDb().prepare(`UPDATE employee SET ${field} = ?, updated_at = ? WHERE id = ?`).run(value, new Date().toISOString(), id);
+}
+
+/** Link (or clear) the Connecteam userId — INTEGER column, so it gets its own setter. Set when the
+ *  Connecteam provisioning adapter creates the user; nulled is unused (archive keeps the id for re-activation). */
+export function setEmployeeConnecteamUserId(id: string, connecteamUserId: number | null): void {
+  getDb().prepare("UPDATE employee SET connecteam_user_id = ?, updated_at = ? WHERE id = ?").run(connecteamUserId, new Date().toISOString(), id);
 }
 
 // ── Access policies ─────────────────────────────────────────────────────────────────────────────────

@@ -12,6 +12,10 @@
 import { getSecret } from "@/lib/secrets";
 import { createInvite } from "@/lib/auth/invites";
 import { getUser, setUserActive } from "@/lib/auth/users";
+import { archiveConnecteamUser, connecteamConfigured, createConnecteamUser } from "@/lib/connecteam";
+import { enqueueProvisioningOp } from "@/lib/db/repo";
+import { setEmployeeConnecteamUserId } from "../store";
+import { hasCapturedEndpoint, PROVISION_ENDPOINTS, type ReplaySystem } from "../provisioningEndpoints";
 import type { AdapterMode, Employee, ProvisioningResult } from "../types";
 
 export interface ProvisioningAdapter {
@@ -93,6 +97,118 @@ class ZoePlatformAdapter implements ProvisioningAdapter {
   }
 }
 
+/** Split a display name into first + last for an external system that wants them separately. */
+function splitName(displayName: string): { firstName: string; lastName: string } {
+  const parts = displayName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { firstName: "", lastName: "" };
+  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+  return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
+}
+
+// ── Connecteam (REAL automation — official users API) ──────────────────────────────────────────────────
+// Connecteam is the ONE external system with an official create/archive user API, so this adapter genuinely
+// automates when the key's `users.write` scope is VERIFIED (recorded as `connecteam.provisioningScope` =
+// "verified", set after connecteamWriteProbe() returns a non-403 — a real capability check, never "a key
+// exists"). provision = create the user (NO activation SMS — sendActivation defaults false) + link the
+// returned userId onto the employee + audit via the engine. revoke = archive (reversible). A 403 at run
+// time degrades to a manual task (scopeMissing) — it never fakes a write.
+class ConnecteamAdapter implements ProvisioningAdapter {
+  id = "connecteam";
+  system = "Connecteam";
+  mode(): AdapterMode {
+    // Automated ONLY when the write scope is verified. A bare key is NOT enough.
+    return hasVerifiedProvisioningScope(this.id) ? "automated" : "manual";
+  }
+  async automate(emp: Employee): Promise<ProvisioningResult> {
+    if (emp.connecteamUserId) {
+      return { ok: true, status: "completed", externalRef: `connecteam:${emp.connecteamUserId}`, detail: `Already a Connecteam user (#${emp.connecteamUserId}).` };
+    }
+    if (!connecteamConfigured()) {
+      return { ok: false, status: "manual_required", detail: "Connecteam API key not configured — create the user by hand, then Mark Complete." };
+    }
+    if (!emp.phone) {
+      return { ok: false, status: "blocked", detail: "Phone required — add the hire's mobile (E.164) to the employee record to provision Connecteam." };
+    }
+    const { firstName, lastName } = splitName(emp.displayName);
+    const res = await createConnecteamUser(
+      [{ firstName, lastName, phoneNumber: emp.phone, userType: "user", email: emp.workEmail ?? undefined }],
+      { sendActivation: false },
+    );
+    if (res.scopeMissing) {
+      return { ok: false, status: "manual_required", detail: "Connecteam key lacks the users.write scope — enable it (or create the user by hand), then Mark Complete." };
+    }
+    if (!res.ok || res.userId == null) {
+      return { ok: false, status: "failed", detail: `Connecteam create failed: ${res.error ?? `HTTP ${res.status}`}.` };
+    }
+    setEmployeeConnecteamUserId(emp.id, res.userId);
+    return { ok: true, status: "completed", externalRef: `connecteam:${res.userId}`, detail: `Created Connecteam user #${res.userId} (no activation SMS sent).` };
+  }
+  async revoke(emp: Employee): Promise<ProvisioningResult> {
+    if (!emp.connecteamUserId) {
+      return { ok: false, status: "manual_required", detail: "No Connecteam user linked — confirm the link then revoke, or Mark Complete if none exists." };
+    }
+    if (!connecteamConfigured()) {
+      return { ok: false, status: "manual_required", detail: "Connecteam API key not configured — archive the user by hand, then Mark Complete." };
+    }
+    const res = await archiveConnecteamUser(emp.connecteamUserId);
+    if (res.scopeMissing) {
+      return { ok: false, status: "manual_required", detail: "Connecteam key lacks the users.write scope — archive the user by hand, then Mark Complete." };
+    }
+    if (!res.ok) {
+      return { ok: false, status: "failed", detail: `Connecteam archive failed: ${res.error ?? `HTTP ${res.status}`}.` };
+    }
+    return { ok: true, status: "completed", detail: `Archived Connecteam user #${emp.connecteamUserId} (access removed; reversible).` };
+  }
+  async status(emp: Employee): Promise<{ provisioned: boolean; detail: string }> {
+    if (!emp.connecteamUserId) return { provisioned: false, detail: "No Connecteam user linked yet." };
+    return { provisioned: true, detail: `Linked to Connecteam user #${emp.connecteamUserId}.` };
+  }
+}
+
+// ── Replay adapter (Goodshuffle / Quo / Slack) — endpoint capture-pending ────────────────────────────────
+// No official create-user API exists, so the only automatable path is replaying a captured internal invite/
+// disable request from a logged-in admin session (the CLAUDE.md pattern). This adapter is the FRAMEWORK:
+//   • mode() = automated ONLY when the system's endpoint constant is captured (non-null) — else manual.
+//   • automate()/revoke() (on approval) enqueue a provision_user/revoke_user gs_outbox op for the drainer to
+//     replay; while the endpoint is uncaptured they create an honest manual task instead (never fake a write).
+// The actual same-origin replay lives in the office pull / extension drainer (src/lib/gsPull.ts), gated on
+// the SAME endpoint constant — so one capture flips both mode() and the drainer together.
+class ReplayAdapter implements ProvisioningAdapter {
+  constructor(
+    public id: string,
+    public system: string,
+    private readonly sys: ReplaySystem,
+  ) {}
+  mode(): AdapterMode {
+    // "automated" here means "replay-ready" — a captured endpoint the drainer can replay. Else manual.
+    return hasCapturedEndpoint(this.sys, "provision") ? "automated" : "manual";
+  }
+  private captureReason(kind: "provision" | "revoke"): string {
+    return `No captured ${this.system} ${kind === "provision" ? "invite" : "disable"} endpoint yet — do it by hand in ${this.system} (${PROVISION_ENDPOINTS[this.sys].origin}), then Mark Complete. See docs/provisioning-adapters.md to codify the replay.`;
+  }
+  private empData(emp: Employee): Record<string, unknown> {
+    const { firstName, lastName } = splitName(emp.displayName);
+    return { displayName: emp.displayName, firstName, lastName, email: emp.workEmail, phone: emp.phone, role: emp.role };
+  }
+  async automate(emp: Employee): Promise<ProvisioningResult> {
+    if (!hasCapturedEndpoint(this.sys, "provision")) {
+      return { ok: false, status: "manual_required", detail: this.captureReason("provision") };
+    }
+    const op = enqueueProvisioningOp({ kind: "provision", system: this.sys, employeeId: emp.id, label: `invite ${emp.displayName} to ${this.system}`, data: this.empData(emp) });
+    return { ok: true, status: "in_progress", externalRef: `gs_outbox:${op.id}`, detail: `Queued for the logged-in ${this.system} session to replay the invite; completes when the drainer acks.` };
+  }
+  async revoke(emp: Employee): Promise<ProvisioningResult> {
+    if (!hasCapturedEndpoint(this.sys, "revoke")) {
+      return { ok: false, status: "manual_required", detail: this.captureReason("revoke") };
+    }
+    const op = enqueueProvisioningOp({ kind: "revoke", system: this.sys, employeeId: emp.id, label: `disable ${emp.displayName} in ${this.system}`, data: this.empData(emp) });
+    return { ok: true, status: "in_progress", externalRef: `gs_outbox:${op.id}`, detail: `Queued for the logged-in ${this.system} session to replay the disable; completes when the drainer acks.` };
+  }
+  async status(): Promise<{ provisioned: boolean; detail: string }> {
+    return { provisioned: false, detail: `No read-back — ${this.system} access is tracked via the lifecycle task.` };
+  }
+}
+
 // ── Generic manual / future adapter ───────────────────────────────────────────────────────────────────
 // No admin API wired. It never fakes a write: automate()/revoke() return a manual_required result carrying
 // a human instruction, and the engine creates a tracked task with a "Mark Complete" action (which records
@@ -127,21 +243,15 @@ class ManualAdapter implements ProvisioningAdapter {
   }
 }
 
-// The registry. Scaffold adapters carry an honest reason; Connecteam's notes the Tasks-API flip path.
+// The registry. Connecteam is REAL automation (official API, gated on a verified write scope). Goodshuffle/
+// Quo/Slack are the replay FRAMEWORK (automated once their endpoint is captured, else manual). Gusto/Google
+// stay `future` (no mechanism exists at all).
 const ADAPTERS: Record<string, ProvisioningAdapter> = {
   zoe_platform: new ZoePlatformAdapter(),
-  connecteam: new ManualAdapter(
-    "connecteam",
-    "Connecteam",
-    "manual",
-    // DEFERRED (decision 3): the Tasks API (POST /tasks/v1/taskboards/{board}/tasks) could later auto-CREATE
-    // an onboarding TASK — not a user. User create/deactivate is not wired and the key's scope is unverified,
-    // so this stays manual until the board id + users/tasks scope are confirmed.
-    "Connecteam has no wired user-provisioning API; the Tasks-API onboarding-task automation is deferred",
-  ),
-  quo: new ManualAdapter("quo", "Quo (OpenPhone)", "manual", "OpenPhone exposes no member-provisioning API — invite/disable the seat in the Quo dashboard"),
-  slack: new ManualAdapter("slack", "Slack", "manual", "Slack invite/deactivate needs admin.users/SCIM scopes we do not hold — use the Slack admin console"),
-  goodshuffle: new ManualAdapter("goodshuffle", "Goodshuffle Pro", "manual", "Goodshuffle has no public API; invite/revoke is a hand action in GSPRO"),
+  connecteam: new ConnecteamAdapter(),
+  quo: new ReplayAdapter("quo", "Quo (OpenPhone)", "quo"),
+  slack: new ReplayAdapter("slack", "Slack", "slack"),
+  goodshuffle: new ReplayAdapter("goodshuffle", "Goodshuffle Pro", "goodshuffle"),
   gusto: new ManualAdapter("gusto", "Gusto", "future", "Gusto onboarding/termination is a human flow in Gusto; no admin-provisioning path exists in the app"),
   google: new ManualAdapter("google", "Google Workspace / SSO", "future", "No Google identity/SSO/SCIM is implemented anywhere in the app"),
 };

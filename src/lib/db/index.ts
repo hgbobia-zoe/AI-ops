@@ -1913,6 +1913,7 @@ CREATE TABLE IF NOT EXISTS employee (
   id                 TEXT PRIMARY KEY,     -- "E-"+uuid
   display_name       TEXT NOT NULL,
   work_email         TEXT,                 -- the natural cross-system join key; kept off the users table
+  phone              TEXT,                 -- E.164 mobile; needed to provision a Connecteam user (createConnecteamUser)
   lifecycle_state    TEXT NOT NULL,        -- HIRE | ONBOARD | READY | ACTIVE | OFFBOARD | OFFBOARDED
   role               TEXT NOT NULL,        -- mirrors auth Role (owner|admin|member) — the console login role
   department         TEXT,                 -- access_policy.id (sales|warehouse|driver|operations|admin|manager)
@@ -2080,6 +2081,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Per-day crew ratio for the Command Center capacity strip ("X/Y" = drivers scheduled / needed).
   { table: "day_capacity", column: "scheduled_drivers", type: "INTEGER" },
   { table: "day_capacity", column: "drivers_needed", type: "INTEGER" },
+  // People Lifecycle: the new hire's E.164 mobile — required to provision a real Connecteam user. Additive
+  // for employee rows created before the provisioning adapters landed (DBs from PR #29).
+  { table: "employee", column: "phone", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {

@@ -33,6 +33,7 @@ export interface Employee {
   id: string;
   displayName: string;
   workEmail: string | null;
+  phone: string | null; // E.164 mobile — needed to provision a Connecteam user
   lifecycleState: LifecycleState;
   role: Role;
   department: string | null; // access_policy.id

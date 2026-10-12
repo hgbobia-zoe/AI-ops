@@ -68,20 +68,24 @@ function initialStatus(mode: LifecycleTask["mode"]): LifecycleTask["status"] {
 export function materializeOnboardingTasks(emp: Employee): LifecycleTask[] {
   const policy = emp.department ? getPolicy(emp.department) : null;
   const rules = policy?.rules ?? [];
-  return rules.map((r) =>
-    insertTaskIfAbsent({
+  return rules.map((r) => {
+    // Snapshot the adapter's LIVE capability (not the static seed mode): a system is automated here only if
+    // its adapter can truly act right now — Connecteam once its write scope is verified, a replay system
+    // once its endpoint is captured. The policy rule still owns `required`.
+    const mode = getAdapter(r.adapterId).mode();
+    return insertTaskIfAbsent({
       employeeId: emp.id,
       adapterId: r.adapterId,
       system: r.system,
       kind: "provision",
       title: `Provision ${r.system}`,
-      status: initialStatus(r.mode),
-      mode: r.mode,
+      status: initialStatus(mode),
+      mode,
       required: r.required,
-      source: r.mode === "automated" ? "automated" : "manual",
+      source: mode === "automated" ? "automated" : "manual",
       changeKey: `${emp.id}:provision:${r.adapterId}`,
-    }),
-  );
+    });
+  });
 }
 
 export function materializeOffboardingTasks(emp: Employee): LifecycleTask[] {
@@ -89,20 +93,21 @@ export function materializeOffboardingTasks(emp: Employee): LifecycleTask[] {
   const rules = policy?.rules ?? [];
   const provisioned = new Set(listTasks(emp.id, "provision").filter((t) => t.status === "completed").map((t) => t.adapterId));
   // Revoke every system the policy covers; a system that was actually provisioned is the priority grant.
-  return rules.map((r) =>
-    insertTaskIfAbsent({
+  return rules.map((r) => {
+    const mode = getAdapter(r.adapterId).mode();
+    return insertTaskIfAbsent({
       employeeId: emp.id,
       adapterId: r.adapterId,
       system: r.system,
       kind: "revoke",
       title: `Revoke ${r.system}`,
-      status: initialStatus(r.mode),
-      mode: r.mode,
+      status: initialStatus(mode),
+      mode,
       required: provisioned.has(r.adapterId) || r.required,
-      source: r.mode === "automated" ? "automated" : "manual",
+      source: mode === "automated" ? "automated" : "manual",
       changeKey: `${emp.id}:revoke:${r.adapterId}`,
-    }),
-  );
+    });
+  });
 }
 
 // ── Lifecycle transitions ──────────────────────────────────────────────────────────────────────────

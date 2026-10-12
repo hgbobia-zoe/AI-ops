@@ -2069,6 +2069,27 @@ export function enqueueGsOp(op: {
   return toGsItem(getDb().prepare("SELECT * FROM gs_outbox WHERE id = ?").get(id) as GsOutboxRow);
 }
 
+/**
+ * Queue a user provision/revoke for a logged-in admin session to replay (People Lifecycle). Mirrors the
+ * existing gs_outbox write ops; the op carries { system, employeeId, data } so the drainer can look the
+ * captured endpoint up by system and build the request. `op` is "provision_user" | "revoke_user".
+ * NOTE: enqueuing is NOT the write — the drainer performs it, and only when the system's endpoint has been
+ * captured (else it no-ops). Every enqueue is gated upstream by the People approval card + audit.
+ */
+export function enqueueProvisioningOp(input: {
+  kind: "provision" | "revoke";
+  system: string;
+  employeeId: string;
+  label?: string;
+  data?: unknown;
+}): GsOutboxItem {
+  return enqueueGsOp({
+    op: input.kind === "provision" ? "provision_user" : "revoke_user",
+    label: input.label ?? `${input.kind} ${input.system}`,
+    payload: { system: input.system, employeeId: input.employeeId, data: input.data ?? null },
+  });
+}
+
 // The "Warehouse Desktop" Crew user in Zoe's Goodshuffle account — added to every SIGNED project's
 // team so the warehouse tablet/workstation sees it in its queue. Id + linkType captured live from
 // GSPRO's addNewTeamMember call (POST /app/project/addNewTeamMember: transactionID, userID, linkType).
