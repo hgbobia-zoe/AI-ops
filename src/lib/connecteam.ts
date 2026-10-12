@@ -631,7 +631,7 @@ export function shiftClock(unix: number, tz: string): string {
 
 /** One write attempt (POST/PUT; mirrors ctGetOnce). `transient` = worth retrying (network/timeout/5xx/429). */
 async function ctWriteOnce(
-  method: "POST" | "PUT",
+  method: "POST" | "PUT" | "DELETE",
   path: string,
   body: unknown,
   timeoutMs: number,
@@ -643,7 +643,7 @@ async function ctWriteOnce(
       method,
       headers: { "X-API-KEY": process.env.CONNECTEAM_API_KEY!, accept: "application/json", "content-type": "application/json" },
       cache: "no-store",
-      body: JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: ctrl.signal,
     });
     const json = await res.json().catch(() => null);
@@ -661,7 +661,7 @@ async function ctWriteOnce(
 }
 
 /** Write with one retry on a transient failure. */
-async function ctWrite(method: "POST" | "PUT", path: string, body: unknown): Promise<{ json: unknown | null; status: number }> {
+async function ctWrite(method: "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<{ json: unknown | null; status: number }> {
   let r = await ctWriteOnce(method, path, body, 12000);
   if (r.json === null && r.transient) {
     await new Promise((res) => setTimeout(res, 400));
@@ -805,4 +805,89 @@ function extractErr(json: unknown): string | null {
   const o = json as Record<string, unknown>;
   const m = o.message ?? o.error ?? (o.data as Record<string, unknown> | undefined)?.message;
   return typeof m === "string" ? m : null;
+}
+
+// ── User provisioning: create + archive (the REAL People-Lifecycle automation) ─────────────────────
+// Connecteam has an OFFICIAL users API, so onboarding/offboarding a crew member is a true server-side
+// REST write (no Cloudflare/session replay). Needs the `users.write` scope on the API key — a 403 means
+// the key lacks it (surfaced as scopeMissing so the People adapter degrades to a manual task, never fakes
+// success). Verified request shapes (Connecteam API reference):
+//   CREATE  POST   /users/v1/users[?sendActivation=true]   body = JSON ARRAY of users (even for one)
+//   ARCHIVE DELETE /users/v1/users/{userId}?deletionType=archive   (archive = revoke access, REVERSIBLE)
+// Never throws; always returns a structured result.
+
+export interface NewConnecteamUser {
+  firstName: string;
+  lastName: string;
+  phoneNumber: string; // +E.164 — Connecteam's primary identifier for a user
+  userType: "user";
+  email?: string;
+}
+
+export interface ConnecteamUserWriteResult {
+  ok: boolean;
+  userId?: number; // the created Connecteam userId (parsed from data.results)
+  status: number; // HTTP status (0 = network/timeout)
+  scopeMissing?: boolean; // true on 403 — the key lacks users.write
+  error?: string;
+}
+
+/** Pull the created userId out of Connecteam's create response (data.results[0].userId, shape-tolerant). */
+function firstCreatedUserId(json: unknown): number | undefined {
+  for (const it of findArray(json, ["results", "users"])) {
+    const id = num((it as Record<string, unknown>).userId ?? (it as Record<string, unknown>).id);
+    if (id != null) return id;
+  }
+  return undefined;
+}
+
+/**
+ * Create one or more Connecteam users. Body is a JSON ARRAY even for a single user. `sendActivation`
+ * DEFAULTS TO FALSE so a provisioning run (or a test) never sends an activation SMS unless asked — the
+ * activation is a separate, deliberate step. Honest: ok only on a real 2xx that returns a userId.
+ */
+export async function createConnecteamUser(
+  users: NewConnecteamUser[],
+  opts?: { sendActivation?: boolean },
+): Promise<ConnecteamUserWriteResult> {
+  if (!connecteamConfigured()) return { ok: false, status: 0, error: "Connecteam not configured" };
+  if (!users.length) return { ok: false, status: 0, error: "no users to create" };
+  const path = `/users/v1/users${opts?.sendActivation ? "?sendActivation=true" : ""}`;
+  const r = await ctWrite("POST", path, users);
+  if (r.status === 403) return { ok: false, status: 403, scopeMissing: true, error: extractErr(r.json) || "missing users.write scope" };
+  if (r.status !== 200 && r.status !== 201) return { ok: false, status: r.status, error: extractErr(r.json) || `Connecteam HTTP ${r.status || "error"}` };
+  const userId = firstCreatedUserId(r.json);
+  if (userId == null) return { ok: false, status: r.status, error: "created, but no userId returned" };
+  return { ok: true, status: r.status, userId };
+}
+
+/** Archive (deactivate) a Connecteam user — removes access, REVERSIBLE (not a permanent delete). */
+export async function archiveConnecteamUser(userId: number): Promise<ConnecteamUserWriteResult> {
+  if (!connecteamConfigured()) return { ok: false, status: 0, error: "Connecteam not configured" };
+  if (!(userId > 0)) return { ok: false, status: 0, error: "invalid userId" };
+  const r = await ctWrite("DELETE", `/users/v1/users/${userId}?deletionType=archive`);
+  if (r.status === 403) return { ok: false, status: 403, scopeMissing: true, error: extractErr(r.json) || "missing users.write scope" };
+  if (r.status !== 200 && r.status !== 204) return { ok: false, status: r.status, error: extractErr(r.json) || `Connecteam HTTP ${r.status || "error"}` };
+  return { ok: true, status: r.status, userId };
+}
+
+export interface ConnecteamWriteProbeResult {
+  ok: boolean; //          true when the write endpoint is reachable AND not scope-denied (creates NOTHING)
+  status: number;
+  scopeMissing: boolean; // true on 401/403 — the key cannot write users
+  detail: string;
+}
+
+/**
+ * Probe whether the API key carries the users.write scope WITHOUT creating anyone: POST an EMPTY array.
+ * A 403/401 means no write scope (→ the adapter stays manual). Any other response (even a 400 "no users")
+ * proves the key is ALLOWED to write — the write scope is present. Used to flip the adapter's verified
+ * flag honestly (a real capability check, not "a key exists").
+ */
+export async function connecteamWriteProbe(): Promise<ConnecteamWriteProbeResult> {
+  if (!connecteamConfigured()) return { ok: false, status: 0, scopeMissing: false, detail: "Connecteam not configured" };
+  const r = await ctWrite("POST", "/users/v1/users", []);
+  const scopeMissing = r.status === 403 || r.status === 401;
+  const ok = !scopeMissing && r.status !== 0;
+  return { ok, status: r.status, scopeMissing, detail: scopeMissing ? "users.write scope NOT granted" : ok ? "users.write scope present" : "Connecteam unreachable" };
 }

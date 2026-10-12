@@ -161,7 +161,24 @@ function zoePull(apiBase) {
       const noteOps = all.filter((o) => o.op === "note_append" && o.transactionId && o.payload && o.payload.line);
       const teamOps = all.filter((o) => o.op === "add_team_member" && o.transactionId && o.payload && o.payload.userID);
       const feeOps = all.filter((o) => o.op === "set_delivery_fee" && o.transactionId && o.payload && o.payload.amount != null);
-      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, chain = Promise.resolve();
+      const provOps = all.filter((o) => (o.op === "provision_user" || o.op === "revoke_user") && o.payload && o.payload.system);
+      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, provisioned = 0, chain = Promise.resolve();
+      // provision_user / revoke_user: People Lifecycle access provisioning via REPLAY. Mirrors
+      // src/lib/gsPull.ts — gated on the captured endpoint (src/lib/people/provisioningEndpoints.ts). This
+      // content script runs ONLY on pro.goodshuffle.com, so it can replay the GOODSHUFFLE invite/disable once
+      // that endpoint is captured; Quo/Slack drain from their own logged-in session. CAPTURE-PENDING: both
+      // are null until the internal request is recorded once from a logged-in GSPRO admin session and the
+      // endpoint+body are filled in provisioningEndpoints.ts (keep this constant in sync).
+      const GS_PROVISION = { provision: null, revoke: null };
+      provOps.forEach((o) => { chain = chain.then(() => {
+        if (o.payload.system !== "goodshuffle") return; // only Goodshuffle shares this origin; skip others
+        const ep = (o.op === "provision_user") ? GS_PROVISION.provision : GS_PROVISION.revoke;
+        if (!ep || !ep.path) return; // CAPTURE-PENDING: no-op until the endpoint is captured (leave pending)
+        const data = o.payload.data || {}; const headers = { "x-requested-with": "XMLHttpRequest", accept: "application/json" }; let body;
+        if (ep.bodyType === "form") { headers["content-type"] = "application/x-www-form-urlencoded"; body = new URLSearchParams(data).toString(); }
+        else { headers["content-type"] = "application/json"; body = JSON.stringify(data); }
+        return fetch(ep.path, { method: ep.method, headers, credentials: "include", body: (ep.method === "DELETE" ? undefined : body) }).then((r) => r.ok).then((ok) => { if (ok) provisioned++; else failed++; return ackOp(o.id, ok, o.op + "_failed"); }).catch(() => { failed++; return ackOp(o.id, false, o.op + "_error"); });
+      }); });
       // add_team_member: add a GSPRO user (e.g. Warehouse Desktop) to the project's team.
       teamOps.forEach((o) => { chain = chain.then(() => {
         const body = new URLSearchParams({ transactionID: String(o.transactionId), userID: String(o.payload.userID), linkType: String(o.payload.linkType || "OTHER") });
@@ -197,8 +214,8 @@ function zoePull(apiBase) {
           return gchain.then(() => { if (!legs.length) throw "no_delivery_line"; let s = Promise.resolve(true); legs.forEach((L) => { s = s.then((ok) => ok ? saveLeg(L.gid, L.n) : false); }); return s; });
         }).then((ok) => { if (ok) fees++; else failed++; return ackOp(o.id, ok, "set_delivery_fee_failed"); }).catch((e) => { failed++; return ackOp(o.id, false, "set_delivery_fee_" + (typeof e === "string" ? e : "error")); });
       }); });
-      return chain.then(() => ({ pushed, failed, notes, team, fees }));
-    }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0, fees: 0 }));
+      return chain.then(() => ({ pushed, failed, notes, team, fees, provisioned }));
+    }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0, fees: 0, provisioned: 0 }));
   }
 
   return loggedInProbe().then((ok) => {

@@ -8,6 +8,8 @@
 // The office account has financial access the driver/tablet account lacks, so this path also
 // captures contract totals (revenue) + customer identity. Shows an on-page banner (a human clicks it).
 
+import { PROVISION_ENDPOINTS } from "@/lib/people/provisioningEndpoints";
+
 /** Build the office pull IIFE. `apiBase` is the absolute Zoe Ops origin (e.g. https://zoe-dispatch.fly.dev).
  *  `publishToken` (when the KIOSK_PUBLISH_TOKEN secret is set) is sent as x-publish-token so the
  *  now-gated ingest endpoints accept the write — only logged-in users can see /admin/pull, so the
@@ -15,10 +17,13 @@
 export function buildOfficePullScript(apiBase: string, publishToken?: string, autoMs = 0, skipCreate = false): string {
   const API = JSON.stringify(apiBase.replace(/\/+$/, ""));
   const PUB = JSON.stringify(publishToken ?? "");
+  // The replay-provisioning endpoint registry (capture-pending constants). Serialized in so the drainer
+  // gates on the SAME source of truth the People adapters do — one capture flips both.
+  const PROV = JSON.stringify(PROVISION_ENDPOINTS);
   const AUTO = Math.max(0, Math.floor(autoMs)); // >0 → self-repeating auto-pull (no more manual clicks)
   const SKIP = skipCreate ? "true" : "false"; // true → leave create_project ops for a native (Playwright) drainer
   return `(function(){
-    var PUB=${PUB}; var AUTO=${AUTO}; var SKIP_CREATE=${SKIP};
+    var PUB=${PUB}; var AUTO=${AUTO}; var SKIP_CREATE=${SKIP}; var PROVISION_EP=${PROV};
     function POSTH(){ return PUB ? {"content-type":"application/json","x-publish-token":PUB} : {"content-type":"application/json"}; }
   function banner(msg,color){ try{ var id="__zoePull"; var e=document.getElementById(id); if(!e){e=document.createElement("div");e.id=id;e.style.cssText="position:fixed;z-index:2147483647;top:14px;right:14px;padding:11px 15px;border-radius:8px;font:600 13px system-ui,sans-serif;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:360px";document.body.appendChild(e);} e.style.background=color; e.textContent=msg; }catch(x){} }
   function done(){ setTimeout(function(){var e=document.getElementById("__zoePull");if(e)e.remove();},7000); }
@@ -180,6 +185,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var emailOps=all.filter(function(o){ return o.op==="email_send" && o.transactionId && o.payload && o.payload.content; });
         var feeOps=all.filter(function(o){ return o.op==="set_delivery_fee" && o.transactionId && o.payload && o.payload.amount!=null; });
         var taskOps=all.filter(function(o){ return o.op==="create_gs_task" && o.transactionId && o.payload && o.payload.title; });
+        var provOps=all.filter(function(o){ return (o.op==="provision_user"||o.op==="revoke_user") && o.payload && o.payload.system; });
         var createOps=all.filter(function(o){ return o.op==="create_project" && o.payload && o.payload.intakeId; });
         if(SKIP_CREATE) createOps=[]; // a standalone Playwright runner drains creates by navigation instead of a popup
         // Goodshuffle only CREATES a project on a real navigation (a fetch just returns the SPA shell), so we
@@ -192,7 +198,25 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var createPopup=null;
         if(createOps.length){ try{ createPopup=window.open("/app/project/createNewProject","gscreate","width=520,height=640,left=40,top=40"); }catch(e){ createPopup=null; } }
         function popNewId(w){ return new Promise(function(resolve){ if(!w){ resolve(null); return; } var n=0; var iv=setInterval(function(){ n++; var got=null; try{ var h=w.location.href; if(h && h.indexOf("about:blank")<0){ var m=h.match(/[?&]id=(\\d+)/); if(m) got=m[1]; } }catch(e){} if(got){ clearInterval(iv); resolve(got); } else if(n>80){ clearInterval(iv); resolve(null); } }, 250); }); }
-        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, chain=Promise.resolve();
+        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, provisioned=0, chain=Promise.resolve();
+        // provision_user / revoke_user: People Lifecycle access provisioning via REPLAY. For a system whose
+        // internal invite/disable endpoint has been CAPTURED (see src/lib/people/provisioningEndpoints.ts),
+        // replay it same-origin from this logged-in session; while the endpoint is null (capture-pending) we
+        // NO-OP the op (leave it pending, never invent a request). Only replays in the system's OWN origin
+        // (credentials:"include" reaches same-origin only) — Goodshuffle drains here; Quo/Slack from their own
+        // logged-in session. CAPTURE-PENDING: record the invite/disable request once from the logged-in admin
+        // UI, then fill endpoint+body in provisioningEndpoints.ts; this handler starts replaying it then.
+        provOps.forEach(function(o){ chain=chain.then(function(){
+          var sys=PROVISION_EP[o.payload.system]; if(!sys) return; // unknown system → skip (leave pending)
+          var ep=(o.op==="provision_user")?sys.provision:sys.revoke;
+          if(!ep||!ep.path) return; // CAPTURE-PENDING: endpoint not captured yet → no-op this system
+          var host=String(sys.origin||"").replace(/^https?:\\/\\//,"");
+          if(host && location.host.indexOf(host)<0) return; // wrong origin → its own session will drain it
+          var data=o.payload.data||{}; var headers={"x-requested-with":"XMLHttpRequest",accept:"application/json"}; var body;
+          if(ep.bodyType==="form"){ headers["content-type"]="application/x-www-form-urlencoded"; body=new URLSearchParams(data).toString(); }
+          else { headers["content-type"]="application/json"; body=JSON.stringify(data); }
+          return fetch(ep.path,{method:ep.method,headers:headers,credentials:"include",body:(ep.method==="DELETE"?undefined:body)}).then(function(r){ return r.ok; }).then(function(ok){ if(ok)provisioned++; else failed++; return ackOp(o.id,ok,o.op+"_failed"); }).catch(function(){ failed++; return ackOp(o.id,false,o.op+"_error"); });
+        }); });
         // add_team_member: add a GSPRO user (Warehouse Desktop) to the project team on a signed project.
         teamOps.forEach(function(o){ chain=chain.then(function(){
           var body=new URLSearchParams({ transactionID:String(o.transactionId), userID:String(o.payload.userID), linkType:String(o.payload.linkType||"OTHER") });
@@ -366,8 +390,8 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             });
           });
         });
-        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, created:created, fees:fees, tasks:tasks}; });
-      }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0, created:0, fees:0, tasks:0}; });
+        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, created:created, fees:fees, tasks:tasks, provisioned:provisioned}; });
+      }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0, created:0, fees:0, tasks:0, provisioned:0}; });
     }
 
     // Finish a cycle: one-shot fades the banner; auto keeps a persistent status with the last-run time.
