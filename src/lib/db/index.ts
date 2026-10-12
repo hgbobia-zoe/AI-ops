@@ -1902,6 +1902,81 @@ CREATE TABLE IF NOT EXISTS geocode_cache (
   resolved    INTEGER NOT NULL,          -- 1 = geocoded, 0 = known-miss
   updated_at  TEXT NOT NULL
 );
+
+-- ── People Lifecycle / Onboarding & Offboarding engine ────────────────────────────────────────────────
+-- The canonical Employee SPINE: a thin linking entity that spans the six disjoint person representations
+-- (console login, hr_workers, Connecteam, Instawork, Quo, Gusto, AI-org human). It does NOT fold into
+-- users/hr_workers — every FK is nullable and references them. Work email lives HERE (not on the
+-- CODEOWNERS-protected users table). Lifecycle state is authoritative; it only ever changes through the
+-- pure guarded machine in src/lib/people/machine.ts.
+CREATE TABLE IF NOT EXISTS employee (
+  id                 TEXT PRIMARY KEY,     -- "E-"+uuid
+  display_name       TEXT NOT NULL,
+  work_email         TEXT,                 -- the natural cross-system join key; kept off the users table
+  lifecycle_state    TEXT NOT NULL,        -- HIRE | ONBOARD | READY | ACTIVE | OFFBOARD | OFFBOARDED
+  role               TEXT NOT NULL,        -- mirrors auth Role (owner|admin|member) — the console login role
+  department         TEXT,                 -- access_policy.id (sales|warehouse|driver|operations|admin|manager)
+  start_date         TEXT,                 -- YYYY-MM-DD (fires onboarding on/after this day)
+  end_date           TEXT,                 -- YYYY-MM-DD effective termination (immediate OR future-dated)
+  -- Links (ALL nullable): the same person across populations. A link is only set once a human confirms it.
+  user_id            TEXT,                 -- users.id (console login)
+  hr_worker_id       TEXT,                 -- hr_workers.id (field-staff backbone)
+  connecteam_user_id INTEGER,              -- Connecteam userId
+  instawork_worker   TEXT,                 -- Instawork name handle
+  openphone_user_id  TEXT,                 -- Quo / OpenPhone user id
+  gusto_id           TEXT,                 -- Gusto employee/contractor id
+  ai_org_human_name  TEXT,                 -- AI-org HUMANS roster name
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_employee_state ON employee(lifecycle_state);
+
+-- A named access policy per role/department ("Sales Rep", "Driver"). EXTENDS roles.ts (which governs the
+-- app only) to cover EXTERNAL systems. Seeded from code (seeded=1) and admin-extensible later.
+CREATE TABLE IF NOT EXISTS access_policy (
+  id         TEXT PRIMARY KEY,             -- stable slug (sales | warehouse | driver | operations | admin | manager)
+  name       TEXT NOT NULL,                -- display label
+  seeded     INTEGER NOT NULL DEFAULT 0,   -- 1 = came from the code seed (never silently overwritten)
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- One rule per system in a policy: which adapter, whether it is required for READY, and the adapter's mode
+-- (automated|partial|manual|future). Modes/systems come from HERE, never hard-coded in the UI.
+CREATE TABLE IF NOT EXISTS access_policy_rule (
+  id         TEXT PRIMARY KEY,
+  policy_id  TEXT NOT NULL,
+  adapter_id TEXT NOT NULL,                -- zoe_platform|google|slack|quo|goodshuffle|connecteam|gusto
+  system     TEXT NOT NULL,                -- display label for the system
+  required   INTEGER NOT NULL DEFAULT 1,   -- 1 = must be completed before READY
+  mode       TEXT NOT NULL,                -- automated | partial | manual | future
+  UNIQUE(policy_id, adapter_id)
+);
+
+-- A provisioning / de-provisioning action for one employee against one system. This is BOTH the onboarding
+-- checklist item and the grant/revoke record ("why does X have Y access?"). Idempotent on change_key so a
+-- re-run of materialization never duplicates. approval_id links to the ai_approvals governance card.
+CREATE TABLE IF NOT EXISTS lifecycle_task (
+  id           TEXT PRIMARY KEY,           -- "LT-"+uuid
+  employee_id  TEXT NOT NULL,
+  adapter_id   TEXT NOT NULL,
+  system       TEXT NOT NULL,              -- display label
+  kind         TEXT NOT NULL,              -- provision | revoke
+  title        TEXT NOT NULL,
+  status       TEXT NOT NULL,              -- pending|in_progress|completed|failed|manual_required|skipped|blocked
+  mode         TEXT NOT NULL,              -- adapter mode snapshot at materialize time
+  required     INTEGER NOT NULL DEFAULT 1, -- snapshot of the policy rule's required flag
+  source       TEXT NOT NULL,              -- automated | manual (who/what can complete it)
+  change_key   TEXT NOT NULL UNIQUE,       -- <employeeId>:<kind>:<adapterId> — idempotency
+  external_ref TEXT,                       -- e.g. the minted /join invite link, or a system handle
+  error        TEXT,                       -- last failure detail (for a failed task)
+  retryable    INTEGER NOT NULL DEFAULT 1,
+  approval_id  TEXT,                       -- → ai_approvals.id (the governance card), nullable
+  actor        TEXT,                       -- who completed / executed it
+  created_at   TEXT NOT NULL,
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_task_emp ON lifecycle_task(employee_id, kind);
 `;
 
 type DB = InstanceType<typeof Database>;

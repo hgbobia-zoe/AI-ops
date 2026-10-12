@@ -19,6 +19,7 @@ import { connecteamConfigured, refreshConnecteamHealth } from "@/lib/connecteam"
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { runScheduledPayrollSyncIfDue } from "@/lib/payroll/scheduler";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
+import { runPeopleLifecycleTick } from "@/lib/people/lifecycleTick";
 import { runPreCheckAlerts } from "@/lib/scheduling/preCheckNotify";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
@@ -143,6 +144,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     note: "Mints Ignition customer-tracking links for upcoming stops ahead of departure (while the office Ignition session is fresh), and alerts if that session has lapsed. The extension drains the queued mints — no extension change.",
     run: async () => {
       const r = await runEtaPreMintTick();
+      return { ok: r.ok, detail: r.detail };
+    },
+  },
+  {
+    key: "people-lifecycle",
+    label: "People lifecycle (onboarding / offboarding)",
+    bucket: "server",
+    configured: () => true, // app-owned; a silent no-op when no employee needs onboarding/offboarding today
+    note: "Fires start-date onboarding, executes future-dated terminations (auto-revokes the Zoe login only), and escalates overdue manual access tasks to Slack. Never auto-completes a manual revoke — OFFBOARDED never implies access removed.",
+    run: async () => {
+      const r = await runPeopleLifecycleTick();
       return { ok: r.ok, detail: r.detail };
     },
   },

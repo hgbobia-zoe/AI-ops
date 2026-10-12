@@ -104,6 +104,9 @@ const GROUPS: Group[] = [
     label: "People",
     icon: UsersRound,
     blades: [
+      // People Lifecycle — onboarding / offboarding + access provisioning. Owner/admin only (manage);
+      // the proxy gates /people by canManageUsers, matching Admin → Team.
+      { href: "/people", label: "People Lifecycle", icon: Contact, manage: true },
       { href: "/payroll", label: "HR / Payroll", icon: Wallet, financial: true },
     ],
   },
