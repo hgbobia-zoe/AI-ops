@@ -32,6 +32,28 @@ Phase 1 the responder is a **Claude Code session on the office machine**.
 5. Then classify (`question` / `operational` / `feature`) and act per the contract. For code changes: a new
    branch off `origin/main` in a worktree, tests green, open a PR, record it — **stop there. A human merges.**
 
+## One-command start (Windows)
+
+`start.ps1` loads the bridge token for you (so you don't paste it each time) and runs a cycle:
+
+```powershell
+.\scripts\responder\start.ps1
+```
+
+It takes the token from `$env:AI_BRIDGE_TOKEN` if set, else from `~/.zoe-responder/bridge.token`. **One-time
+setup** (generates a fresh token, sets it on Fly, makes it persist in every new shell, and saves it locally):
+
+```powershell
+$tok = node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+flyctl secrets set AI_BRIDGE_TOKEN=$tok -a zoe-dispatch
+[Environment]::SetEnvironmentVariable('AI_BRIDGE_TOKEN', $tok, 'User')   # every NEW shell now has it
+New-Item -ItemType Directory -Force (Split-Path $HOME\.zoe-responder\bridge.token) | Out-Null
+$tok | Out-File -NoNewline -Encoding ascii $HOME\.zoe-responder\bridge.token
+```
+
+After the `SetEnvironmentVariable` line, new shells (and a restarted Claude Code) already have the token — so
+the responder session just works. The token file is a fallback for a shell that doesn't inherit it.
+
 ## What this helper is NOT
 
 It is not an autonomous worker. The intelligence is the Claude Code session reading this output and the
