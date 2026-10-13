@@ -12,6 +12,7 @@ import { NextResponse } from "next/server";
 import { setBridgeConnected, bridgeConnected, activeAiProviderId, bridgeTokenValid } from "@/lib/ai/provider";
 import { setSessionResult, appendEvent, endSession, getSession, claimInstruction } from "@/lib/ai/sessions";
 import { notifyRequester } from "@/lib/ai/notify";
+import { slackPostMessage } from "@/lib/notify/slack";
 import { currentActor, viewerRole } from "@/lib/auth/getSession";
 import { canManageAi } from "@/lib/auth/roles";
 
@@ -57,14 +58,22 @@ export async function POST(req: Request): Promise<NextResponse> {
     setSessionResult(sid, body.result);
     appendEvent(sid, { kind: "message", actor, label: "Result posted by the connected session" });
     if (body.end) endSession(sid, "done", { result: body.result, actor });
-    // Let the person who owns the session know a reply landed (DM when possible, else a channel post that
-    // names them). Fire-and-forget — a slow/failed Slack must never block the responder's post. Email is
-    // null until the app stores user emails, so this currently falls back to a channel post.
-    void notifyRequester({
-      name: session.owner ?? session.startedBy,
-      email: null,
-      text: `Your AI session "${session.title}" has a reply. Open the AI Command Center to see it.`,
-    }).catch(() => {});
+    // Deliver the reply. A Viktor (Slack) session is answered IN the Slack thread AS the bot, so the person
+    // sees it where they asked; any other session notifies its owner to open the Command Center. Both are
+    // fire-and-forget — a slow/failed Slack must never block the responder's post.
+    const slack = ((session.input as { source?: string; slack?: { channel?: string; threadTs?: string | null } } | null)?.source === "slack")
+      ? (session.input as { slack?: { channel?: string; threadTs?: string | null } }).slack
+      : null;
+    if (slack?.channel) {
+      const replyText = typeof (body.result as { text?: unknown }).text === "string" ? String((body.result as { text?: unknown }).text).trim() : "";
+      if (replyText) void slackPostMessage(slack.channel, replyText, slack.threadTs ?? null).catch(() => {});
+    } else {
+      void notifyRequester({
+        name: session.owner ?? session.startedBy,
+        email: null,
+        text: `Your AI session "${session.title}" has a reply. Open the AI Command Center to see it.`,
+      }).catch(() => {});
+    }
   }
 
   return NextResponse.json({ ok: true, connected: bridgeConnected() });

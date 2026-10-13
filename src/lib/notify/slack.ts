@@ -93,3 +93,16 @@ export async function slackDmByEmail(email: string, text: string): Promise<Slack
   const sent = await slackApi("chat.postMessage", { channel: userId, text });
   return sent.ok ? { ok: true } : { ok: false, error: `post: ${sent.error}` };
 }
+
+/** Post a message to a Slack channel/DM (optionally in a thread) AS THE BOT (Viktor) — used to deliver
+ *  Viktor's answer back into the thread it was asked in. Skipped (no-op) when no bot token is set. */
+export async function slackPostMessage(channel: string, text: string, threadTs?: string | null): Promise<SlackResult> {
+  if (!slackBotConfigured()) return { ok: false, skipped: true };
+  const ch = channel.trim();
+  const msg = text.trim();
+  if (!ch || !msg) return { ok: false, error: "missing_channel_or_text" };
+  const body: Record<string, unknown> = { channel: ch, text: msg };
+  if (threadTs) body.thread_ts = threadTs;
+  const sent = await slackApi("chat.postMessage", body);
+  return sent.ok ? { ok: true } : { ok: false, error: `post: ${sent.error}` };
+}

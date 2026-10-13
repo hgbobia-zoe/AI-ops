@@ -109,9 +109,10 @@ Some pending instructions come from **Slack** (the "Viktor" bot): a person @ment
 Handle a Viktor instruction exactly like any other (classify question / operational / feature), with these
 Slack specifics:
 
-- **Answer IN the Slack thread, using your Slack tool** (post to `slack.channel`, in `thread_ts = slack.threadTs`).
-  Then also POST the result back to the bridge as usual (for the app's record/timeline). The app does NOT post
-  to Slack for you — you do, so you can read docs first and format the reply.
+- **Answer by posting your result to the bridge** (`POST /api/ai/bridge {sessionId, result:{text, type:"question"}}`).
+  For a Viktor/Slack session the APP delivers your `result.text` into the Slack thread (`slack.channel` /
+  `slack.threadTs`) **as the Viktor bot** — do NOT post to Slack yourself (that would double-reply, and as you
+  rather than Viktor). Read Confluence + app data first, then put the formatted reply in `result.text`.
 - **Read "our docs" from Confluence** (your Atlassian/Confluence tool) plus the app's own read endpoints — not
   Whimsical. Cite what you used.
 - **An operational ask** → raise an approval (as always); your Slack reply is "Raised approval `AP-…` — approve
