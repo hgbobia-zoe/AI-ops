@@ -22,6 +22,15 @@ interface AlertRecord {
 
 interface PreCheckState {
   alerts?: Record<string, AlertRecord>;
+  /** The schedule → route NUDGE dedupe (keyed by date): see decideScheduledUnroutedNudge. Separate from
+   *  `alerts` so the route-gap alert behavior is completely unchanged. */
+  nudges?: Record<string, NudgeRecord>;
+}
+
+interface NudgeRecord {
+  firstSeenAt: string; // ISO the scheduled-but-unrouted condition was first seen
+  lastNudgedAt?: string; // ISO we last Slacked the nudge for this day
+  lastCount: number; // the count at the last nudge (to detect growth)
 }
 
 function routeKey(date: string, routeId: string): string {
@@ -64,6 +73,43 @@ export function decidePreCheckAlert(
     return { alert: null, next: { firstGapAt, lastAlertedAt: prev?.lastAlertedAt, lastTotalGap: prev?.lastTotalGap ?? totalGap } };
   }
   return { alert: "gap", next: { firstGapAt, lastAlertedAt: now.toISOString(), lastTotalGap: totalGap } };
+}
+
+/** The PURE nudge decision (unit-tested) for the schedule → route bridge: "N crew scheduled in Connecteam
+ *  aren't on a route yet." Day-level, mirroring decidePreCheckAlert's cool-off:
+ *    • count > 0 → nudge when never nudged, OR the count GREW, OR the cool-off elapsed. Otherwise quiet.
+ *    • count === 0 → forget the record (no "recovered" note — this is a soft prompt, not a hold). */
+export function decideScheduledUnroutedNudge(
+  prev: NudgeRecord | undefined,
+  count: number,
+  now: Date,
+  cooloffMs: number = PRECHECK_ALERT_COOLOFF_MS,
+): { nudge: boolean; next: NudgeRecord | undefined } {
+  if (count <= 0) return { nudge: false, next: undefined };
+  const firstSeenAt = prev?.firstSeenAt ?? now.toISOString();
+  const nudgedAgoMs = prev?.lastNudgedAt ? now.getTime() - Date.parse(prev.lastNudgedAt) : Infinity;
+  const grew = prev != null && count > prev.lastCount;
+  const cooledOff = nudgedAgoMs > cooloffMs;
+  const shouldNudge = prev?.lastNudgedAt == null || grew || cooledOff;
+  if (!shouldNudge) {
+    return { nudge: false, next: { firstSeenAt, lastNudgedAt: prev?.lastNudgedAt, lastCount: prev?.lastCount ?? count } };
+  }
+  return { nudge: true, next: { firstSeenAt, lastNudgedAt: now.toISOString(), lastCount: count } };
+}
+
+/** Apply decideScheduledUnroutedNudge against the persisted store for one day; the caller does the Slack. */
+export function recordScheduledUnroutedNudge(
+  date: string,
+  count: number,
+  now: Date = new Date(),
+): { nudge: boolean } {
+  const s = read();
+  s.nudges = s.nudges ?? {};
+  const { nudge, next } = decideScheduledUnroutedNudge(s.nudges[date], count, now);
+  if (next) s.nudges[date] = next;
+  else delete s.nudges[date];
+  write(s);
+  return { nudge };
 }
 
 /** Apply decidePreCheckAlert against the persisted store for one route, and return the decision. The caller

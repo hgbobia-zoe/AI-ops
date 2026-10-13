@@ -121,7 +121,7 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     label: "Route staffing pre-check",
     bucket: "server",
     configured: () => true, // app-owned; a no-op (and silent) on days with no present routes to staff
-    note: "Ahead of the debrief send window, checks each present route has its required crew ASSIGNED in the app (a Connecteam schedule is not coverage). Alerts the ops channel for any gap with the candidates to assign, deduped with a 2h cool-off, and a recovered note when it clears. Never nags a day with no routes.",
+    note: "Ahead of the debrief send window, checks each present route has its required crew ASSIGNED in the app (a Connecteam schedule is not coverage). Alerts the ops channel for any gap with the candidates to assign, deduped with a 2h cool-off, and a recovered note when it clears. Additively nudges when crew scheduled in Connecteam aren't on a route yet (assign them in Scheduling), deduped day-level with the same cool-off. Never nags a day with no routes.",
     run: async () => {
       // Look a couple of days ahead so the alert fires with lead time to assign crew (or mark it done).
       const today = todayInOpsTz();
@@ -130,14 +130,18 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
       let gaps = 0;
       let alerted = 0;
       let recovered = 0;
+      let scheduledUnrouted = 0;
+      let nudged = 0;
       for (const d of days) {
         const r = await runPreCheckAlerts(d);
         checked += r.routesChecked;
         gaps += r.gaps;
         alerted += r.alerted;
         recovered += r.recovered;
+        scheduledUnrouted += r.scheduledUnrouted;
+        nudged += r.nudged;
       }
-      const detail = checked === 0 ? "no routes to staff" : `${checked} routes, ${gaps} gap${gaps === 1 ? "" : "s"}, ${alerted} alerted${recovered ? `, ${recovered} recovered` : ""}`;
+      const detail = checked === 0 ? "no routes to staff" : `${checked} routes, ${gaps} gap${gaps === 1 ? "" : "s"}, ${alerted} alerted${recovered ? `, ${recovered} recovered` : ""}${scheduledUnrouted ? `, ${scheduledUnrouted} scheduled-unrouted${nudged ? ` (${nudged} nudged)` : ""}` : ""}`;
       return { ok: true, detail };
     },
   },

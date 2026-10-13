@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { decidePreCheckAlert, PRECHECK_ALERT_COOLOFF_MS } from "./preCheckStore";
+import { decidePreCheckAlert, decideScheduledUnroutedNudge, PRECHECK_ALERT_COOLOFF_MS } from "./preCheckStore";
 
 const T0 = new Date("2026-10-10T08:00:00Z");
 const later = (ms: number): Date => new Date(T0.getTime() + ms);
@@ -50,6 +50,42 @@ describe("decidePreCheckAlert (dedupe + cool-off, mirrors recordIgnitionProbe)",
     const prev = { firstGapAt: T0.toISOString(), lastTotalGap: 0 }; // seen but never alerted
     const r = decidePreCheckAlert(prev, false, 0, later(10 * 60_000));
     expect(r.alert).toBeNull();
+    expect(r.next).toBeUndefined();
+  });
+});
+
+describe("decideScheduledUnroutedNudge (schedule → route bridge, day-level dedupe)", () => {
+  it("first sight of scheduled-unrouted crew nudges and records the baseline", () => {
+    const r = decideScheduledUnroutedNudge(undefined, 3, T0);
+    expect(r.nudge).toBe(true);
+    expect(r.next?.lastCount).toBe(3);
+    expect(r.next?.lastNudgedAt).toBe(T0.toISOString());
+  });
+
+  it("a repeat within the cool-off stays quiet (keeps the clock)", () => {
+    const prev = { firstSeenAt: T0.toISOString(), lastNudgedAt: T0.toISOString(), lastCount: 3 };
+    const r = decideScheduledUnroutedNudge(prev, 3, later(30 * 60_000));
+    expect(r.nudge).toBe(false);
+    expect(r.next?.lastNudgedAt).toBe(T0.toISOString());
+  });
+
+  it("re-nudges when the count GROWS, even inside the cool-off", () => {
+    const prev = { firstSeenAt: T0.toISOString(), lastNudgedAt: T0.toISOString(), lastCount: 2 };
+    const r = decideScheduledUnroutedNudge(prev, 4, later(5 * 60_000));
+    expect(r.nudge).toBe(true);
+    expect(r.next?.lastCount).toBe(4);
+  });
+
+  it("re-nudges once the cool-off elapses", () => {
+    const prev = { firstSeenAt: T0.toISOString(), lastNudgedAt: T0.toISOString(), lastCount: 2 };
+    const r = decideScheduledUnroutedNudge(prev, 2, later(PRECHECK_ALERT_COOLOFF_MS + 1));
+    expect(r.nudge).toBe(true);
+  });
+
+  it("count 0 forgets the record and stays silent (soft prompt, no recovered note)", () => {
+    const prev = { firstSeenAt: T0.toISOString(), lastNudgedAt: T0.toISOString(), lastCount: 2 };
+    const r = decideScheduledUnroutedNudge(prev, 0, later(10 * 60_000));
+    expect(r.nudge).toBe(false);
     expect(r.next).toBeUndefined();
   });
 });
