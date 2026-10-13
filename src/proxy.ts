@@ -114,6 +114,23 @@ const isPayroll = (p: string): boolean => p === "/payroll" || p.startsWith("/pay
 // create/disable logins), so owner/admin only (canManageUsers), like /admin/users.
 const isPeople = (p: string): boolean => p === "/people" || p.startsWith("/people/") || p.startsWith("/api/people");
 
+// The endpoints a headless responder may reach with a valid x-bridge-token (each validates the token in its
+// own handler; the ones that don't accept it still reject it there). PURE. Kept narrow on purpose.
+export function isHeadlessTokenPath(pathname: string): boolean {
+  return (
+    pathname === "/api/ai/bridge" || pathname.startsWith("/api/ai/bridge/") ||
+    pathname === "/api/ai/improvement" || pathname.startsWith("/api/ai/improvement/")
+  );
+}
+
+// Inline token check (constant comparison against AI_BRIDGE_TOKEN) — intentionally NOT imported from the
+// provider module so the proxy/middleware stays free of DB/node imports and Edge-safe. Mirrors
+// bridgeTokenValid. PURE given the env.
+export function bridgeTokenOk(token: string | null | undefined): boolean {
+  const expected = process.env.AI_BRIDGE_TOKEN;
+  return !!expected && typeof token === "string" && token.length > 0 && token === expected;
+}
+
 export async function proxy(req: NextRequest): Promise<NextResponse> {
   const secret = process.env.APP_SESSION_TOKEN;
   if (!secret) return NextResponse.next(); // gate disabled until provisioned
@@ -137,6 +154,18 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
   // Driver truck-picker → kiosk reads its assigned route here. EXACT GET only, so the dispatcher write
   // actions under /api/route/* (close, reopen, driver, stop/remove) stay authenticated.
   if (pathname === "/api/route" && req.method === "GET") return NextResponse.next();
+
+  // Headless responder path. The session-bridge (/api/ai/bridge*) and the self-improvement controller
+  // (/api/ai/improvement*) are built to be driven by a headless agent that authenticates with the shared
+  // x-bridge-token — exactly like the token-gated ingest endpoints, which validate their own token. Those
+  // routes sit under the owner/admin "settings" gate, so a token-only request (no cookie) would be denied
+  // here BEFORE the route's own token check ever ran — which is what blocked the responder entirely. Let a
+  // request carrying a VALID token through so the route-level check runs. This widens nothing the controller
+  // protects: the routes that do NOT accept the token (improvement config + candidates — owner/admin only)
+  // still reject it at the handler, so the agent can never change its own budget/autonomy via the token.
+  if (isHeadlessTokenPath(pathname) && bridgeTokenOk(req.headers.get("x-bridge-token"))) {
+    return NextResponse.next();
+  }
 
   const session = await verifySession(req.cookies.get(SESSION_COOKIE)?.value, secret);
   if (!session) return deny(req, "auth");
