@@ -12,6 +12,8 @@ import type { RunScope } from "./types";
 export const ALWAYS_FORBIDDEN_PATHS: string[] = [
   ".github/", //                       CI/CD + CODEOWNERS + the merge gate
   "src/lib/auth/", //                  authn/authz
+  "src/proxy.ts", //                   the request auth gate (the proxy/middleware) — the agent must never
+  //                                   be able to open its own front door (what the bridge-token episode showed)
   "src/lib/aiorg/approvals.ts", //     the execution gate
   "src/lib/ai/provider.ts", //         the AI provider seam
   "src/lib/ai/improvement/", //        the self-improvement controller itself (scope/budget/machine/service)
