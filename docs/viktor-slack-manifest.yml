@@ -1,0 +1,43 @@
+# Viktor — Slack app manifest (Phase 1: a STANDARD Events API app, not the "AI agent"/Assistant type).
+#
+# Create the app from this manifest, no click-through of settings:
+#   • Slack CLI:  slack app create --manifest docs/viktor-slack-manifest.yml   (after `slack login`)
+#                 (or `slack manifest validate` / `slack app install` to install into a workspace)
+#   • Dashboard:  https://api.slack.com/apps → Create New App → "From an app manifest" → paste this.
+#
+# ORDER MATTERS: deploy the app FIRST (so https://zoe-dispatch.fly.dev/api/slack/events is live), THEN
+# create/update the Slack app — Slack sends the url_verification challenge to request_url at that moment,
+# and the route answers it. SLACK_SIGNING_SECRET may still be UNSET on Fly at this point (the route
+# fail-opens during the setup window); set it (and SLACK_BOT_TOKEN) right after, to lock down the webhook.
+#
+# After creating: Install to Workspace → copy the Bot User OAuth token (xoxb-…) and the Signing Secret, then
+#   flyctl secrets set SLACK_SIGNING_SECRET=<signing secret> SLACK_BOT_TOKEN=<xoxb-…> -a zoe-dispatch
+
+display_information:
+  name: Viktor
+  description: Zoe's AI assistant — answers from the docs + live data, and tees up gated actions.
+  background_color: "#1f2733"
+
+features:
+  bot_user:
+    display_name: Viktor
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read # see @Viktor mentions
+      - chat:write #        reply in channels/threads + DMs
+      - im:history #        read the DM it's in
+      - im:read #           open/know its DMs
+      - users:read #        resolve who asked (display name)
+
+settings:
+  event_subscriptions:
+    request_url: https://zoe-dispatch.fly.dev/api/slack/events
+    bot_events:
+      - app_mention # someone @mentions Viktor
+      - message.im #  someone DMs Viktor
+  org_deploy_enabled: false
+  socket_mode_enabled: false # we use the Events API HTTP webhook, not Socket Mode
+  token_rotation_enabled: false
