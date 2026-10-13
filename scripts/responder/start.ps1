@@ -14,7 +14,8 @@ $tokenFile = Join-Path $HOME ".zoe-responder\bridge.token"
 
 if ([string]::IsNullOrWhiteSpace($env:AI_BRIDGE_TOKEN)) {
   if (Test-Path $tokenFile) {
-    $env:AI_BRIDGE_TOKEN = (Get-Content -Raw $tokenFile).Trim()
+    $raw = Get-Content -Raw $tokenFile   # $null on an empty file — guard before .Trim()
+    if (-not [string]::IsNullOrWhiteSpace($raw)) { $env:AI_BRIDGE_TOKEN = $raw.Trim() }
   }
 }
 
