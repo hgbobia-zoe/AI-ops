@@ -56,6 +56,8 @@ describe("scope gate", () => {
     expect(pathInScope("src/lib/aiorg/approvals.ts", sneaky)).toBe(false);
     expect(pathInScope("src/lib/ai/improvement/machine.ts", sneaky)).toBe(false);
     expect(pathInScope("vitest.config.ts", sneaky)).toBe(false);
+    expect(isAlwaysForbidden("src/proxy.ts")).toBe(true); // the agent can't edit its own auth gate
+    expect(pathInScope("src/proxy.ts", sneaky)).toBe(false);
   });
 
   it("checkScope classifies every violation", () => {
