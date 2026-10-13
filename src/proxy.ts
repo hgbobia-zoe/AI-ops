@@ -120,7 +120,11 @@ const isPeople = (p: string): boolean => p === "/people" || p.startsWith("/peopl
 export function isHeadlessTokenPath(pathname: string): boolean {
   return (
     pathname === "/api/ai/bridge" || pathname.startsWith("/api/ai/bridge/") ||
-    pathname === "/api/ai/improvement" || pathname.startsWith("/api/ai/improvement/")
+    pathname === "/api/ai/improvement" || pathname.startsWith("/api/ai/improvement/") ||
+    // The responder raises an approval CARD here for an operational ask. Self-token-authed exactly like
+    // /api/ai/bridge; it only CREATES a pending approval (decide/execute stays human-only via
+    // /api/ai/approvals/decide), so admitting a valid-token request widens nothing the governance gate owns.
+    pathname === "/api/ai/propose"
   );
 }
 

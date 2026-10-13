@@ -12,6 +12,8 @@ import { verifySlackSignature, slackChallenge, extractSlackEvent } from "@/lib/s
 import { markSlackEventSeen } from "@/lib/slack/store";
 import { createSession, addInstruction } from "@/lib/ai/sessions";
 import { insertAudit } from "@/lib/db/repo";
+import { responderHealthNow, recordReactiveAlert, formatAge } from "@/lib/ai/responderHealth";
+import { slackNotify } from "@/lib/notify/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +66,18 @@ export async function POST(req: Request): Promise<NextResponse> {
       idempotencyKey: `slack:${ev.channel}:${ev.threadTs ?? ev.eventId}`,
     });
     addInstruction(session.id, ev.text, ev.user);
+
+    // Fail LOUD: the instruction is queued, but if the office-machine responder hasn't heartbeated recently
+    // then nothing is draining the queue — the person will get silence. Ping the ops channel so a human
+    // starts the responder. Deduped with a short cool-off so a burst of Slack messages doesn't spam. Pure
+    // best-effort: a slow/failed Slack must never block the fast-ACK (we've already recorded the work).
+    const health = responderHealthNow();
+    if (!health.alive && recordReactiveAlert().alert) {
+      const since = health.state === "never" ? "ever" : `in ${formatAge(health.ageMs)}`;
+      void slackNotify(
+        `⚠️ Viktor got a Slack message but the responder is DOWN (no heartbeat ${since}). It's queued and will be answered once the responder is running. Start it: a Claude Code session running scripts/responder/loop.md via /loop 60s.`,
+      ).catch(() => {});
+    }
   } catch {
     // Still ACK 200 so Slack doesn't retry-storm; a failure here is logged by the DB layer, not user-facing.
   }
