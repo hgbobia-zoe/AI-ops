@@ -35,7 +35,9 @@ import { isLiveAssignment } from "@/lib/scheduling/lifecycle";
 import { shiftCommsEnabled } from "@/lib/scheduling/commsFlag";
 import { ShiftReadinessExceptions, type ReadinessRow } from "@/components/scheduling/ShiftReadinessExceptions";
 import { StaffingPreCheck } from "@/components/scheduling/StaffingPreCheck";
+import { ScheduledToRoutePrompt, type ScheduledToRouteView } from "@/components/scheduling/ScheduledToRoutePrompt";
 import { routePreChecksForDate } from "@/lib/scheduling/preCheck";
+import { scheduledUnroutedForDate } from "@/lib/scheduling/scheduledUnrouted";
 import { ROLE_LABEL } from "@/components/scheduling/RouteStaffBoard";
 import {
   getCrewForDateSafe,
@@ -419,6 +421,23 @@ export default async function SchedulingPage({
   // assigning crew — no manual override. Composes the same crew rules + app assignments + recommendCrew.
   const preChecks = await routePreChecksForDate(date);
 
+  // Schedule → Route bridge: crew scheduled in Connecteam today who aren't on ANY route yet, each with the
+  // route gap they could fill. The PROMPT offers a one-click assign through the normal assign path (it never
+  // credits a Connecteam schedule as coverage — the gap above clears only when a real assignment is made).
+  const scheduledUnrouted = await scheduledUnroutedForDate(date);
+  const CREW_ROLE_LABEL: Record<string, string> = { driver: "Driver", prep: "Warehouse", other: "Other" };
+  const scheduledUnroutedViews: ScheduledToRouteView[] = scheduledUnrouted.people.map((p) => ({
+    userId: p.userId,
+    name: p.name,
+    roleLabel: CREW_ROLE_LABEL[p.role] ?? p.role,
+    fillRole: p.fillRole,
+    startTime: p.window ? new Date(p.window.start * 1000).toISOString() : null,
+    endTime: p.window ? new Date(p.window.end * 1000).toISOString() : null,
+    windowKnown: p.window != null,
+    suggestedRouteId: p.suggestedRouteId,
+    eligibleRouteIds: p.eligibleRouteIds,
+  }));
+
   // Eligibility ingredients for the board labels — the raw feeds the pure classifier reads, computed once
   // and passed down so each panel can label a worker for ITS own window (route card / shift) client-side.
   const eligibilityData: WorkerDayEligibilityData = {
@@ -490,6 +509,8 @@ export default async function SchedulingPage({
       </p>
 
       <StaffingPreCheck routes={preChecks} />
+
+      <ScheduledToRoutePrompt date={date} people={scheduledUnroutedViews} routeCards={routeCards} shifts={shifts} />
 
       <ShiftReadinessExceptions rows={readinessRows} exceptions={shiftExceptions} routeLabel={routeLabelFor} />
 

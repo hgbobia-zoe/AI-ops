@@ -93,9 +93,9 @@ export function computeRouteGap(input: RouteGapInput): RouteGap {
 /** A short, deterministic phrase for what's missing. */
 function reasonFor(gap: RoleCount, nobody: boolean, status: PreCheckStatus): string {
   if (status === "ok") return "Fully staffed";
-  if (nobody) return "Nobody assigned";
+  if (nobody) return "No crew assigned in the app";
   const parts: string[] = [];
-  if (gap.driver > 0) parts.push("no driver");
+  if (gap.driver > 0) parts.push("No driver assigned in the app");
   if (gap.field > 0) parts.push(`needs ${gap.field} more helper${gap.field === 1 ? "" : "s"}`);
   return parts.join(", ") || "Under-assigned";
 }
@@ -225,7 +225,7 @@ export async function routePreChecksForDate(date: string): Promise<RoutePreCheck
 
 /** The route's assign window — a built shift's hand-tuned window wins, else the route's own stop-derived
  *  window (so recommendCrew can overlap-check even before any shift exists). */
-function routeAssignWindow(route: Route, routeShifts: StaffShift[]): { start: string | null; end: string | null; known: boolean } {
+export function routeAssignWindow(route: Route, routeShifts: StaffShift[]): { start: string | null; end: string | null; known: boolean } {
   const withWin = routeShifts.filter((s) => s.windowKnown && s.startTime);
   if (withWin.length > 0) {
     let start = withWin[0].startTime!;

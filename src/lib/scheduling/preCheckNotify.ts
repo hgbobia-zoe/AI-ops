@@ -11,7 +11,8 @@
 
 import { slackNotify } from "@/lib/notify/slack";
 import { routePreChecksForDate, type RoutePreCheck } from "./preCheck";
-import { recordPreCheckAlert } from "./preCheckStore";
+import { recordPreCheckAlert, recordScheduledUnroutedNudge } from "./preCheckStore";
+import { scheduledUnroutedForDate } from "./scheduledUnrouted";
 
 /** The board link for a day. This runs request-less (send-path / runtime tick), so it uses the explicit
  *  PUBLIC_BASE_URL (the same env publicOrigin prefers); without it, a relative path (still clickable in-app). */
@@ -69,11 +70,43 @@ async function emitForRoute(pc: RoutePreCheck): Promise<void> {
   else if (alert === "recovered") await slackNotify(formatRecovered(pc.truckName, pc.date)).catch(() => {});
 }
 
+/** The schedule → route NUDGE body: crew scheduled in Connecteam who aren't on a route yet. Additive to the
+ *  gap alert — this points the staffer at the one-click assign (it never implies the schedule is coverage). */
+export function formatScheduledUnroutedNudge(date: string, count: number): string {
+  const base = process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "") ?? "";
+  const path = `/scheduling?date=${date}`;
+  const link = base ? `${base}${path}` : path;
+  const who = `${count} ${count === 1 ? "person" : "people"}`;
+  return [
+    `Schedule to route: ${who} scheduled in Connecteam on ${date} ${count === 1 ? "is" : "are"} not yet on a route.`,
+    `A Connecteam schedule is not route coverage. Assign them to a route in Scheduling: ${link}`,
+  ].join("\n");
+}
+
+/** Evaluate the schedule → route nudge for a day and Slack if the dedupe says so. Honesty-gated: only when
+ *  Connecteam actually answered (reachable), never on an outage. Deduped day-level with the same cool-off. */
+export async function runScheduledUnroutedNudge(date: string): Promise<{ scheduledUnrouted: number; nudged: number }> {
+  try {
+    const res = await scheduledUnroutedForDate(date);
+    if (!res.reachable) return { scheduledUnrouted: 0, nudged: 0 };
+    const count = res.people.length;
+    const { nudge } = recordScheduledUnroutedNudge(date, count);
+    if (nudge) await slackNotify(formatScheduledUnroutedNudge(date, count)).catch(() => {});
+    return { scheduledUnrouted: count, nudged: nudge ? 1 : 0 };
+  } catch (e) {
+    console.error("[precheck] runScheduledUnroutedNudge failed (isolated):", e);
+    return { scheduledUnrouted: 0, nudged: 0 };
+  }
+}
+
 export interface PreCheckAlertRun {
   routesChecked: number;
   gaps: number;
   alerted: number;
   recovered: number;
+  /** Schedule → route bridge (additive): crew scheduled in Connecteam but not on a route, and nudges sent. */
+  scheduledUnrouted: number;
+  nudged: number;
 }
 
 /** Scan a day's present routes and fire due alerts/recoveries. The runtime tick calls this for a lead-time
@@ -95,5 +128,7 @@ export async function runPreCheckAlerts(date: string): Promise<PreCheckAlertRun>
       await slackNotify(formatRecovered(pc.truckName, pc.date)).catch(() => {});
     }
   }
-  return { routesChecked: checks.length, gaps, alerted, recovered };
+  // Additive schedule → route nudge (own dedupe; does not affect the gap-alert bookkeeping above).
+  const su = await runScheduledUnroutedNudge(date);
+  return { routesChecked: checks.length, gaps, alerted, recovered, scheduledUnrouted: su.scheduledUnrouted, nudged: su.nudged };
 }

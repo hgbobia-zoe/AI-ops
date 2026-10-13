@@ -34,20 +34,20 @@ function shift(p: Partial<StaffShift> & { id: string; role: StaffShift["role"] }
 // Status is PURELY explicit app assignments vs required crew — there is no ack / "mark done" override, so a
 // gap can ONLY ever be "gap" or "ok".
 describe("computeRouteGap (pure gap math + status)", () => {
-  it("nobody assigned → gap, nobody flag, 'Nobody assigned'", () => {
+  it("nobody assigned → gap, nobody flag, 'No crew assigned in the app'", () => {
     const g = computeRouteGap({ requiredByRole: { driver: 1, field: 1 }, assignedByRole: { driver: 0, field: 0 } });
     expect(g.status).toBe("gap");
     expect(g.nobody).toBe(true);
     expect(g.totalGap).toBe(2);
-    expect(g.reason).toBe("Nobody assigned");
+    expect(g.reason).toBe("No crew assigned in the app");
   });
 
-  it("driver missing (helpers present) → 'no driver'", () => {
+  it("driver missing (helpers present) → 'No driver assigned in the app'", () => {
     const g = computeRouteGap({ requiredByRole: { driver: 1, field: 1 }, assignedByRole: { driver: 0, field: 1 } });
     expect(g.status).toBe("gap");
     expect(g.nobody).toBe(false);
     expect(g.gapByRole).toEqual({ driver: 1, field: 0 });
-    expect(g.reason).toBe("no driver");
+    expect(g.reason).toBe("No driver assigned in the app");
   });
 
   it("short helpers → 'needs N more helpers' (pluralized)", () => {
