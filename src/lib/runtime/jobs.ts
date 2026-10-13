@@ -26,6 +26,8 @@ import { runPreCheckAlerts } from "@/lib/scheduling/preCheckNotify";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { runScan } from "@/lib/risk/scan";
 import { getRiskQueue } from "@/lib/risk/store";
+import { responderHealthNow, recordJobAlert, formatAge } from "@/lib/ai/responderHealth";
+import { countPendingInstructions } from "@/lib/ai/sessions";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { logImport, getLatestImportBySource, recordInstaworkProbe, type ImportRow } from "@/lib/pull/state";
 
@@ -208,6 +210,34 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
         else skipped++;
       }
       return { ok: true, detail: `${signals.length} candidates, ${opened} opened, ${skipped} skipped` };
+    },
+  },
+  {
+    key: "responder-health",
+    label: "AI responder health (fail-loud)",
+    bucket: "server",
+    configured: () => true, // app-owned; a silent no-op when the responder is healthy or has no pending work
+    note: "Backstop for the Slack-reactive alert: each tick, if the office-machine responder has gone stale (no recent heartbeat) AND there is pending Viktor/session work waiting, Slack the ops channel so someone starts it. Deduped with a 2h cool-off, with a one-shot recovered note when it comes back. Never alarms when the queue is empty (nothing is waiting) or the responder is alive.",
+    run: async () => {
+      const health = responderHealthNow();
+      const pending = countPendingInstructions();
+      // Only "down" when the responder is not alive AND work is actually waiting — a stale responder with an
+      // empty queue is harmless (nothing is being dropped), so we never nag about it.
+      const down = !health.alive && pending > 0;
+      const { alert } = recordJobAlert(down);
+      if (alert === "down") {
+        void slackNotify(
+          `⚠️ AI responder is DOWN with work waiting: ${pending} instruction${pending === 1 ? "" : "s"} queued and no heartbeat in ${formatAge(health.ageMs)}. Start the responder (a Claude Code session running scripts/responder/loop.md via /loop 60s).`,
+        );
+      } else if (alert === "recovered") {
+        void slackNotify("✅ AI responder is back (heartbeating again). The queued instructions will drain.");
+      }
+      const detail = health.alive
+        ? "responder alive"
+        : pending > 0
+          ? `responder ${health.state} (last ${formatAge(health.ageMs)}), ${pending} pending`
+          : `responder ${health.state} but queue empty`;
+      return { ok: health.alive || pending === 0, detail };
     },
   },
   {

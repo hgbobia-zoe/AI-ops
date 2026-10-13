@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeJobStatus, RUNTIME_STALE_HOURS, type RuntimeJob } from "./jobs";
+import { computeJobStatus, RUNTIME_STALE_HOURS, RUNTIME_JOBS, type RuntimeJob } from "./jobs";
 import type { ImportRow } from "@/lib/pull/state";
 
 function row(source: string, ok: boolean, ageHours: number): ImportRow {
@@ -56,5 +56,15 @@ describe("computeJobStatus", () => {
     const jobs = [browser("route")];
     // Even with a fresh successful ledger row, the runtime can't run it server-side yet.
     expect(computeJobStatus({ route: row("route", true, 1) }, Date.now(), jobs)[0].state).toBe("browser_pending");
+  });
+});
+
+describe("responder-health job registration", () => {
+  it("is registered as an always-configured server job with a runner", () => {
+    const job = RUNTIME_JOBS.find((j) => j.key === "responder-health");
+    expect(job).toBeDefined();
+    expect(job!.bucket).toBe("server");
+    expect(job!.configured()).toBe(true);
+    expect(typeof job!.run).toBe("function");
   });
 });

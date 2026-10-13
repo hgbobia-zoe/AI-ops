@@ -54,6 +54,30 @@ $tok | Out-File -NoNewline -Encoding ascii $HOME\.zoe-responder\bridge.token
 After the `SetEnvironmentVariable` line, new shells (and a restarted Claude Code) already have the token — so
 the responder session just works. The token file is a fallback for a shell that doesn't inherit it.
 
+## Auto-run with `/loop`
+
+The cycle above can run itself. In **one dedicated Claude Code session** on the office machine, point
+Claude Code's `/loop` at the loop prompt so it executes every ~60 seconds, hands-free:
+
+```
+/loop 60s scripts/responder/loop.md
+```
+
+Each tick, the session runs `scripts/responder/loop.md`: it heartbeats + polls (`poll.mjs`), then for each
+pending item (oldest first) claims it, classifies it (question / operational / feature), and acts —
+**questions are answered automatically**; an **operational** ask is drafted and raised as an **approval**
+(`POST /api/ai/propose`) for a human to OK in `/ai-org/approvals`, never executed from the message; a
+**feature** ask is filed to Requests. The heartbeat alone (even on an empty queue) is what keeps the
+fail-loud alarm quiet.
+
+- Use **one** responder session only — a second would race on the queue (claims are idempotent, but keep it
+  to one).
+- **Keep the machine on and this session running.** If it stops, the app notices: an inbound Viktor message
+  while the responder is stale pings the ops channel immediately, and the `responder-health` runtime job
+  re-pings (deduped) whenever the responder is down with work waiting. **Staleness threshold: 3.5 minutes**
+  (≈3 missed 60s beats), so one slow cycle never false-alarms.
+- Stop it with `/loop` off (or end the session). The next inbound message then raises the down alarm.
+
 ## What this helper is NOT
 
 It is not an autonomous worker. The intelligence is the Claude Code session reading this output and the

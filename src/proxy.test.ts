@@ -17,6 +17,9 @@ describe("isHeadlessTokenPath (pure)", () => {
     expect(isHeadlessTokenPath("/api/ai/bridge/pending")).toBe(true);
     expect(isHeadlessTokenPath("/api/ai/improvement")).toBe(true);
     expect(isHeadlessTokenPath("/api/ai/improvement/IR-1/report")).toBe(true);
+    expect(isHeadlessTokenPath("/api/ai/propose")).toBe(true);
+    // Only the exact propose path — the responder can't reach anything else under /api/ai via the token.
+    expect(isHeadlessTokenPath("/api/ai/propose/x")).toBe(false);
     expect(isHeadlessTokenPath("/api/ai/approvals")).toBe(false);
     expect(isHeadlessTokenPath("/api/ai/sessions")).toBe(false);
     expect(isHeadlessTokenPath("/api/ai/config")).toBe(false);
@@ -60,6 +63,16 @@ describe("proxy — headless bridge token", () => {
 
   it("rejects /api/ai/bridge with a WRONG token as 401", async () => {
     const res = await proxy(reqFor("/api/ai/bridge", "wrong"));
+    expect(res.status).toBe(401);
+  });
+
+  it("lets a VALID token reach /api/ai/propose (route then checks it)", async () => {
+    const res = await proxy(reqFor("/api/ai/propose", "bridge-secret"));
+    expect(res.status).toBe(200);
+  });
+
+  it("rejects /api/ai/propose with NO token (no cookie) as 401", async () => {
+    const res = await proxy(reqFor("/api/ai/propose"));
     expect(res.status).toBe(401);
   });
 
