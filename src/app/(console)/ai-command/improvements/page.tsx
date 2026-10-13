@@ -9,6 +9,7 @@ import { canViewAi, canManageAi } from "@/lib/auth/roles";
 import { listRuns, countRunsByState } from "@/lib/ai/improvement/store";
 import { ImprovementRunsBoard } from "@/components/aiorg/ImprovementRunsBoard";
 import { ImprovementGovernance } from "@/components/aiorg/ImprovementGovernance";
+import { ImprovementCandidates } from "@/components/aiorg/ImprovementCandidates";
 import { PrReviewPanel } from "@/components/aiorg/PrReviewPanel";
 import { DeployStatusCard } from "@/components/ops/DeployStatusCard";
 
@@ -37,6 +38,7 @@ export default async function ImprovementsPage(): Promise<React.JSX.Element> {
         <div className="mb-4 space-y-4">
           <DeployStatusCard />
           <PrReviewPanel />
+          <ImprovementCandidates />
           <ImprovementGovernance />
         </div>
       )}

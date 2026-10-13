@@ -30,6 +30,7 @@ export function ImprovementGovernance(): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [budget, setBudget] = useState<ChangeBudget | null>(null);
   const [autonomy, setAutonomy] = useState<Autonomy | null>(null);
+  const [selfAudit, setSelfAudit] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,15 +39,15 @@ export function ImprovementGovernance(): React.JSX.Element {
     if (!open || budget) return;
     void fetch("/api/ai/improvement/config")
       .then((r) => r.json())
-      .then((j) => { if (j.budget) setBudget(j.budget); if (j.autonomy) setAutonomy(j.autonomy); })
+      .then((j) => { if (j.budget) setBudget(j.budget); if (j.autonomy) setAutonomy(j.autonomy); if (typeof j.selfAudit === "boolean") setSelfAudit(j.selfAudit); })
       .catch(() => setError("Could not load settings."));
   }, [open, budget]);
 
-  const save = useCallback(async (next: { budget?: ChangeBudget; autonomy?: Autonomy }) => {
+  const save = useCallback(async (next: { budget?: ChangeBudget; autonomy?: Autonomy; selfAudit?: boolean }) => {
     setBusy(true); setError(null); setSaved(false);
     try {
       const res = await fetch("/api/ai/improvement/config", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(next) });
-      if (res.ok) { const j = await res.json(); setBudget(j.budget); setAutonomy(j.autonomy); setSaved(true); setTimeout(() => setSaved(false), 1500); }
+      if (res.ok) { const j = await res.json(); setBudget(j.budget); setAutonomy(j.autonomy); if (typeof j.selfAudit === "boolean") setSelfAudit(j.selfAudit); setSaved(true); setTimeout(() => setSaved(false), 1500); }
       else setError("Save failed.");
     } catch { setError("Could not reach the server."); } finally { setBusy(false); }
   }, []);
@@ -83,6 +84,23 @@ export function ImprovementGovernance(): React.JSX.Element {
                     </label>
                   ))}
                 </div>
+              </div>
+
+              <div>
+                <h3 className="mb-1.5 text-[11px] uppercase tracking-wide text-meta">Self-audit trigger</h3>
+                <label className="flex cursor-pointer items-start gap-2.5 rounded border border-border px-2.5 py-1.5">
+                  <input
+                    type="checkbox"
+                    checked={selfAudit ?? false}
+                    disabled={busy || selfAudit === null}
+                    onChange={(e) => save({ selfAudit: e.target.checked })}
+                    className="mt-0.5 size-4 accent-[var(--gold)]"
+                  />
+                  <span className="min-w-0 text-[12px]">
+                    <span className="font-medium text-foreground">Auto-open runs from app signals</span>
+                    <span className="block text-[11px] text-meta">When on, the self-audit job files a scoped improvement run for each recurring failure it detects (deduped, never touching forbidden paths). Off = it only surfaces candidates below. Opening a run ships nothing — the autonomy switches above still gate merge/deploy.</span>
+                  </span>
+                </label>
               </div>
 
               <div>
