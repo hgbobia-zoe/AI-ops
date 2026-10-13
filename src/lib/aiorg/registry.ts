@@ -518,6 +518,29 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     backing: "live",
     valueMeasure: "Fewer, higher-signal interruptions (noise reduction)",
   },
+
+  // ───────────────────────── Viktor — Slack assistant ─────────────────────────
+  {
+    id: "viktor",
+    name: "Viktor (Slack)",
+    department: "ops_exec",
+    owner: "Hermann+Cindy",
+    mission: "Answer questions and tee up gated actions from Slack — a front door onto the AI workforce.",
+    responsibilities: [
+      "Answer questions in Slack from the docs (Confluence) + live app data",
+      "Turn an operational ask into an approval a human OKs (never execute from a message)",
+      "File a feature ask to the Requests backlog",
+    ],
+    inputs: [
+      { label: "Slack inbound", ref: "app/api/slack/events/route.ts", href: "/ai-command?blade=ops" },
+      { label: "AI session + bridge", ref: "ai/sessions.ts:addInstruction, api/ai/bridge" },
+      { label: "Docs", ref: "Confluence (Atlassian MCP, read by the responder)" },
+    ],
+    toolbox: [T.bookingHistory(), T.routes(), T.finance(), T.commsLog(), T.draftComms(), T.postNote(), T.sendEmail(), T.createTask(), T.raiseException(), T.recordAudit()],
+    escalationRules: [{ when: "An asked-for action is in a FORBIDDEN category (money/pricing/schedule/hiring/Instawork)" }],
+    backing: "live",
+    valueMeasure: "Questions answered + actions correctly gated, from Slack",
+  },
 ];
 
 /** One employee by id, or undefined. */
@@ -541,7 +564,7 @@ export const BLADE_AGENTS: Record<BladeKey, string[]> = {
   "event-risk": ["event-risk", "inventory-exception"],
   finance: ["business-intelligence", "executive-briefing", "priority-exception"],
   payroll: ["payroll-manager"],
-  command: ["executive-briefing", "event-manager", "priority-exception", "business-intelligence"],
+  command: ["executive-briefing", "event-manager", "priority-exception", "business-intelligence", "viktor"],
 };
 
 // The canonical home blade per employee (the one page that "owns" it). Drives the additive `blade` field
@@ -569,6 +592,7 @@ const CANONICAL_BLADE: Record<string, BladeKey> = {
   "inventory-exception": "event-risk",
   "business-intelligence": "finance",
   "priority-exception": "command",
+  viktor: "command",
 };
 
 // Stamp the additive `blade` field onto each config from the canonical map (kept here so the per-agent

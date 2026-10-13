@@ -53,6 +53,7 @@ const PUBLIC: string[] = [
   "/api/pull/heartbeat", // Auto-Pull extension status ping; own token (fail-open), CORS-open
   "/api/runtime/tick", // Cloud runtime heartbeat; RUNTIME_TOKEN-gated (503 until set), hit by GitHub Actions (not a session)
   "/api/openphone/webhook", // OpenPhone → us; authenticates by HMAC signature, not a session
+  "/api/slack/events", // Viktor (Slack bot) inbound; authenticates by Slack's HMAC signature, not a session
   "/api/communications/events", // Comms adapter ingress (Quo/Sona → us); COMMS_INGEST_TOKEN (fail-open), CORS-locked — NOT a session. Only this exact path is public; the rest of /api/communications stays session-gated.
   "/api/creative/callback", // n8n → us; authenticates by a per-generation callback token, not a session
   "/api/coach", // Custodian live-coach bridge; authenticates by COACH_API_TOKEN bearer, not a session

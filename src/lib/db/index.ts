@@ -104,6 +104,13 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at TEXT NOT NULL
 );
 
+-- Viktor (Slack bot) — dedup Slack event deliveries (Slack retries the same event_id on a slow/failed ACK,
+-- so we record what we've handled and skip repeats). event_id is Slack's unique per-delivery id.
+CREATE TABLE IF NOT EXISTS slack_events (
+  event_id TEXT PRIMARY KEY,
+  ts       TEXT NOT NULL
+);
+
 -- Provider credentials (API keys/tokens + non-secret provider config like from-numbers).
 -- Read only server-side; secret fields are never returned to the client in plaintext.
 CREATE TABLE IF NOT EXISTS secrets (

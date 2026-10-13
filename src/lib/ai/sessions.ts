@@ -384,6 +384,8 @@ export interface PendingInstruction {
   instruction: string; //   the instruction text (the event's label)
   instructionTs: string; // when it was given (also the claim idempotency anchor)
   askedBy: string | null; // the human who gave it
+  /** For a Slack-sourced (Viktor) session: where the responder should post its reply. Null otherwise. */
+  slack?: { channel: string; threadTs: string | null; user: string | null } | null;
 }
 
 interface PendingRow {
@@ -393,9 +395,22 @@ interface PendingRow {
   owner: string | null;
   title: string;
   objective: string | null;
+  input_json: string | null;
   instruction: string | null;
   instruction_ts: string;
   asked_by: string | null;
+}
+
+/** Pull the Slack reply target out of a session's input_json, if it was a Slack-sourced (Viktor) session. */
+function slackTargetFrom(inputJson: string | null): PendingInstruction["slack"] {
+  if (!inputJson) return null;
+  try {
+    const v = JSON.parse(inputJson) as { source?: string; slack?: { channel?: string; threadTs?: string | null; user?: string | null } };
+    if (v?.source !== "slack" || !v.slack?.channel) return null;
+    return { channel: v.slack.channel, threadTs: v.slack.threadTs ?? null, user: v.slack.user ?? null };
+  } catch {
+    return null;
+  }
 }
 
 /** Live, non-archived sessions whose newest non-neutral event is an unanswered human instruction, oldest
@@ -404,7 +419,7 @@ interface PendingRow {
 export function listPendingInstructions(limit = 20): PendingInstruction[] {
   const rows = getDb()
     .prepare(
-      `SELECT s.id, s.agent_id, s.blade, s.owner, s.title, s.objective,
+      `SELECT s.id, s.agent_id, s.blade, s.owner, s.title, s.objective, s.input_json,
               e.label AS instruction, e.ts AS instruction_ts, e.actor AS asked_by
          FROM ai_sessions s
          JOIN ai_session_events e ON e.id = (
@@ -429,6 +444,7 @@ export function listPendingInstructions(limit = 20): PendingInstruction[] {
     instruction: r.instruction ?? "",
     instructionTs: r.instruction_ts,
     askedBy: r.asked_by,
+    slack: slackTargetFrom(r.input_json),
   }));
 }
 
