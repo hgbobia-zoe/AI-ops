@@ -5,24 +5,29 @@ import {
   triageViktorMessage,
   handleViktorFastPath,
   ROUTE_ACK,
+  ROUTE_ACK_DEGRADED,
 } from "./viktorFastPath";
 import { chat, llmConfigured } from "@/lib/llm";
 import { slackBotConfigured, slackPostMessage } from "@/lib/notify/slack";
+import { responderHealthNow } from "@/lib/ai/responderHealth";
 import { createSession, addInstruction, appendEvent, listSessionEvents, getSession, NEUTRAL_EVENT_KINDS } from "@/lib/ai/sessions";
 
 vi.mock("@/lib/llm", () => ({ chat: vi.fn(), llmConfigured: vi.fn() }));
 vi.mock("@/lib/notify/slack", () => ({ slackBotConfigured: vi.fn(), slackPostMessage: vi.fn() }));
+vi.mock("@/lib/ai/responderHealth", () => ({ responderHealthNow: vi.fn() }));
 
 const mockChat = vi.mocked(chat);
 const mockConfigured = vi.mocked(llmConfigured);
 const mockBot = vi.mocked(slackBotConfigured);
 const mockPost = vi.mocked(slackPostMessage);
+const mockHealth = vi.mocked(responderHealthNow);
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockConfigured.mockReturnValue(true);
   mockBot.mockReturnValue(true);
   mockPost.mockResolvedValue({ ok: true });
+  mockHealth.mockReturnValue({ state: "alive", alive: true, ageMs: 1000, lastHeartbeatAt: new Date().toISOString() });
 });
 
 /** The newest event that actually counts (a session is "pending" when this is an instruction). */
@@ -138,6 +143,16 @@ describe("handleViktorFastPath", () => {
     expect(out).toBe("routed");
     expect(mockPost).toHaveBeenCalledWith("C1", ROUTE_ACK, "100.1");
     expect(latestNonNeutral(s.id)?.kind).toBe("instruction"); // still pending for the responder
+  });
+
+  it("routes with an HONEST ack when the responder is down (no false 'in a moment' promise)", async () => {
+    mockChat.mockResolvedValue({ ok: true, text: '{"mode":"route","answer":null}' });
+    mockHealth.mockReturnValue({ state: "never", alive: false, ageMs: null, lastHeartbeatAt: null });
+    const s = slackSession();
+    const out = await handleViktorFastPath({ sessionId: s.id, text: "text the friday crew", channel: "C1", threadTs: "100.1" });
+    expect(out).toBe("routed");
+    expect(mockPost).toHaveBeenCalledWith("C1", ROUTE_ACK_DEGRADED, "100.1");
+    expect(latestNonNeutral(s.id)?.kind).toBe("instruction"); // still pending for when it recovers
   });
 
   it("does not record the answer if the Slack post fails (stays pending for Tier 2)", async () => {

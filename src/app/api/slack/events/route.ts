@@ -10,7 +10,7 @@
 import { NextResponse } from "next/server";
 import { verifySlackSignature, slackChallenge, extractSlackEvent } from "@/lib/slack/verify";
 import { markSlackEventSeen } from "@/lib/slack/store";
-import { createSession, addInstruction } from "@/lib/ai/sessions";
+import { createSession, addInstruction, getSessionByIdempotencyKey } from "@/lib/ai/sessions";
 import { insertAudit } from "@/lib/db/repo";
 import { responderHealthNow, recordReactiveAlert, formatAge } from "@/lib/ai/responderHealth";
 import { slackNotify } from "@/lib/notify/slack";
@@ -49,14 +49,25 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (challenge) return NextResponse.json({ challenge });
 
   const ev = extractSlackEvent(payload);
-  if (!ev) return NextResponse.json({ ok: true, ignored: true }); // not a mention/DM we act on
+  if (!ev) return NextResponse.json({ ok: true, ignored: true }); // not a mention/DM/thread reply we act on
 
-  // Dedup Slack retries so we don't double-record the instruction.
-  if (!markSlackEventSeen(ev.eventId)) return NextResponse.json({ ok: true, deduped: true });
+  // One session per Slack thread. A mention or DM opens (or continues) it; a plain thread reply
+  // (channel_message, no mention) only counts when Viktor is ALREADY in this thread — i.e. a session
+  // exists for this key. That is how "mention once at the top, then just keep replying" works without
+  // Viktor answering unrelated channel chatter.
+  const threadKey = `slack:${ev.channel}:${ev.threadTs ?? ev.eventId}`;
+  if (ev.kind === "channel_message" && !getSessionByIdempotencyKey(threadKey)) {
+    return NextResponse.json({ ok: true, ignored: "not_a_viktor_thread" });
+  }
+
+  // Dedup by the MESSAGE identity (channel+ts): a mentioned thread reply is delivered twice — as
+  // app_mention AND as message.* — with different event ids but the same ts, and Slack also retries the
+  // same event. Keying on ts collapses all of those to a single handling.
+  if (!markSlackEventSeen(`msg:${ev.channel}:${ev.ts}`)) return NextResponse.json({ ok: true, deduped: true });
 
   try {
-    // One session per Slack thread (idempotencyKey), so a follow-up in the same thread continues the same
-    // session. The `slack` input carries the reply target the responder needs to answer in-thread.
+    // The `slack` input carries the reply target the responder needs to answer in-thread. createSession is
+    // idempotent on the key, so a follow-up continues the same session.
     const session = createSession({
       agentId: "viktor",
       owner: ev.user,
@@ -64,7 +75,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       title: `Slack: ${ev.text.slice(0, 60)}`,
       provider: "session-bridge",
       input: { source: "slack", slack: { channel: ev.channel, threadTs: ev.threadTs, user: ev.user } },
-      idempotencyKey: `slack:${ev.channel}:${ev.threadTs ?? ev.eventId}`,
+      idempotencyKey: threadKey,
     });
     addInstruction(session.id, ev.text, ev.user);
 

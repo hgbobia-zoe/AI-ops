@@ -1,0 +1,45 @@
+# Viktor — Slack app manifest.
+#
+# Paste this at https://api.slack.com/apps -> your app -> App Manifest (or "Create New App -> From a
+# manifest"). After changing scopes or event subscriptions you MUST reinstall the app to the workspace so
+# the new permissions take effect (Slack: Install App -> Reinstall).
+#
+# Thread-following (added for "mention once at the top, then keep replying"):
+#   - scopes  channels:history + groups:history  let Viktor RECEIVE replies in public/private channels it is in
+#   - events  message.channels + message.groups  deliver those replies
+# The app only ACTS on a channel reply when it is inside a thread Viktor is already in (a session exists for
+# that channel+thread); every other channel message is ignored. Mentions (app_mention) and DMs (message.im)
+# work as before. Request URL must verify with SLACK_SIGNING_SECRET set on the server.
+
+display_information:
+  name: Viktor
+  description: Zoe's AI assistant — answers from the app and tees up gated actions.
+  background_color: "#1a1d29"
+
+features:
+  bot_user:
+    display_name: Viktor
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read   # receive @Viktor mentions
+      - chat:write          # post replies as Viktor
+      - im:history          # read DMs to Viktor
+      - im:read             # DM channel metadata
+      - channels:history    # receive replies in PUBLIC channels Viktor is in (thread-follow)
+      - groups:history      # receive replies in PRIVATE channels Viktor is in (thread-follow)
+      - users:read          # resolve user ids (optional, for future DM-by-email)
+
+settings:
+  event_subscriptions:
+    request_url: https://zoe-dispatch.fly.dev/api/slack/events
+    bot_events:
+      - app_mention         # @Viktor ... (starts or continues a thread)
+      - message.im          # a direct message to Viktor (no mention needed)
+      - message.channels    # a reply in a public channel (gated to Viktor's own threads)
+      - message.groups      # a reply in a private channel (gated to Viktor's own threads)
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
