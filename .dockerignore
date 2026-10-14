@@ -11,5 +11,6 @@ goodshuffle-auth.json
 **/*.test.ts
 vitest.config.ts
 kiosk-shell
+android
 **/*.md
 !SETUP.md

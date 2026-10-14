@@ -15,6 +15,7 @@ import { chat, llmConfigured } from "@/lib/llm";
 import { humanize } from "@/lib/salesos/outreach";
 import { slackBotConfigured, slackPostMessage } from "@/lib/notify/slack";
 import { appendEvent, getSession, listSessionEvents, setSessionResult, NEUTRAL_EVENT_KINDS } from "@/lib/ai/sessions";
+import { responderHealthNow } from "@/lib/ai/responderHealth";
 
 export type TriageMode = "answer" | "route";
 
@@ -25,8 +26,12 @@ export interface TriageResult {
 }
 
 /** What Viktor tells the person while a real task is handed to the capable responder. Deterministic, so a
- *  routing ack never depends on the model and never carries a stray dash/emoji. */
+ *  routing ack never depends on the model and never carries a stray dash/emoji. ROUTE_ACK is the normal
+ *  (responder alive) ack; ROUTE_ACK_DEGRADED is used when the remote responder is down, so Viktor is honest
+ *  about the delay instead of promising a reply "in a moment" it may not be able to keep. */
 export const ROUTE_ACK = "On it. Let me pull that together and I will reply here in a moment.";
+export const ROUTE_ACK_DEGRADED =
+  "I will work on this, but my backend is having an issue right now. I will respond here as soon as everything is back up.";
 
 // The triage brief. Viktor's identity + the ONE decision + the strict output contract. Deliberately
 // conservative: answer only evergreen, no-data, no-action questions; everything else routes.
@@ -138,9 +143,11 @@ export async function handleViktorFastPath(params: FastPathParams): Promise<Fast
       return "answered";
     }
 
-    // Routed to Tier 2: a courtesy ack only. Do NOT record a response event — the instruction stays
-    // pending so the capable responder picks it up.
-    void slackPostMessage(params.channel, ROUTE_ACK, params.threadTs).catch(() => {});
+    // Routed to Tier 2: acknowledge so the thread never feels dropped. Be honest about the backend — if the
+    // responder is alive, promise a reply shortly; if it is down, say so rather than over-promising. Either
+    // way do NOT record a response event: the instruction stays pending for the responder to pick up.
+    const ack = responderHealthNow().alive ? ROUTE_ACK : ROUTE_ACK_DEGRADED;
+    void slackPostMessage(params.channel, ack, params.threadTs).catch(() => {});
     return "routed";
   } catch {
     return "skipped"; // any failure: Tier 2 still has the pending instruction

@@ -61,16 +61,25 @@ export function slackChallenge(payload: unknown): string | null {
 }
 
 export interface SlackInbound {
-  kind: "app_mention" | "message_im";
+  // app_mention / message_im always act. A channel_message is a thread REPLY (no mention) in a public or
+  // private channel — it only acts when Viktor is already in that thread (the route checks a session
+  // exists for channel+threadTs); otherwise it is unrelated channel chatter and is ignored.
+  kind: "app_mention" | "message_im" | "channel_message";
   eventId: string;
   user: string; //      the Slack user id who spoke
   text: string; //      the message, @mention stripped
   channel: string;
-  threadTs: string | null; // the thread to reply in (existing thread, else the message ts)
+  ts: string; //        the message's OWN ts — used for message-identity dedup (a mentioned thread reply is
+  //                    delivered twice, as app_mention AND message.*, with different event ids but one ts)
+  threadTs: string | null; // the thread to reply in / the session key anchor
 }
 
-/** Extract an actionable inbound message (a mention or a DM) from a Slack event_callback, or null to
- *  ignore it. Ignores the bot's OWN messages and any bot/subtype message so Viktor can't loop on itself. */
+/** Extract an actionable inbound message from a Slack event_callback, or null to ignore it. Three kinds:
+ *  a mention (app_mention), a DM (message.im), or a THREAD REPLY in a public/private channel
+ *  (message.channels / message.groups with a thread_ts) — the last lets Viktor follow a thread it was
+ *  mentioned into without a re-mention on every reply; the route gates it on an existing session so it
+ *  never answers unrelated channel chatter. Ignores the bot's OWN messages and any bot/subtype message so
+ *  Viktor can't loop on itself. */
 export function extractSlackEvent(payload: unknown): SlackInbound | null {
   const env = payload as SlackEnvelope | null;
   if (!env || env.type !== "event_callback" || !env.event) return null;
@@ -79,10 +88,19 @@ export function extractSlackEvent(payload: unknown): SlackInbound | null {
   const eventId = String(env.event_id ?? "").trim();
   const user = String(e.user ?? "").trim();
   const channel = String(e.channel ?? "").trim();
+  const ts = e.ts ? String(e.ts) : "";
   const text = String(e.text ?? "").replace(/<@[^>]+>/g, "").trim(); // strip @mentions (incl. the @Viktor one)
   const threadTs = e.thread_ts ? String(e.thread_ts) : e.ts ? String(e.ts) : null;
-  if (!eventId || !user || !channel || !text) return null;
-  if (e.type === "app_mention") return { kind: "app_mention", eventId, user, text, channel, threadTs };
-  if (e.type === "message" && e.channel_type === "im") return { kind: "message_im", eventId, user, text, channel, threadTs };
+  if (!eventId || !user || !channel || !ts || !text) return null;
+  if (e.type === "app_mention") return { kind: "app_mention", eventId, user, text, channel, ts, threadTs };
+  if (e.type === "message") {
+    if (e.channel_type === "im") return { kind: "message_im", eventId, user, text, channel, ts, threadTs };
+    // A reply inside a thread (public "channel" or private "group"). Only a real thread reply qualifies
+    // (thread_ts present); the thread root itself arrives as its own top-level message and is ignored here
+    // unless it mentions Viktor (which comes through as app_mention).
+    if ((e.channel_type === "channel" || e.channel_type === "group") && e.thread_ts) {
+      return { kind: "channel_message", eventId, user, text, channel, ts, threadTs: String(e.thread_ts) };
+    }
+  }
   return null;
 }
