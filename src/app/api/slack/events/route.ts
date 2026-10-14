@@ -14,6 +14,7 @@ import { createSession, addInstruction } from "@/lib/ai/sessions";
 import { insertAudit } from "@/lib/db/repo";
 import { responderHealthNow, recordReactiveAlert, formatAge } from "@/lib/ai/responderHealth";
 import { slackNotify } from "@/lib/notify/slack";
+import { handleViktorFastPath } from "@/lib/ai/viktorFastPath";
 
 export const dynamic = "force-dynamic";
 
@@ -67,17 +68,29 @@ export async function POST(req: Request): Promise<NextResponse> {
     });
     addInstruction(session.id, ev.text, ev.user);
 
-    // Fail LOUD: the instruction is queued, but if the office-machine responder hasn't heartbeated recently
-    // then nothing is draining the queue — the person will get silence. Ping the ops channel so a human
-    // starts the responder. Deduped with a short cool-off so a burst of Slack messages doesn't spam. Pure
-    // best-effort: a slow/failed Slack must never block the fast-ACK (we've already recorded the work).
-    const health = responderHealthNow();
-    if (!health.alive && recordReactiveAlert().alert) {
-      const since = health.state === "never" ? "ever" : `in ${formatAge(health.ageMs)}`;
-      void slackNotify(
-        `⚠️ Viktor got a Slack message but the responder is DOWN (no heartbeat ${since}). It's queued and will be answered once the responder is running. Start it: a Claude Code session running scripts/responder/loop.md via /loop 60s.`,
-      ).catch(() => {});
-    }
+    // Tier 1 (the snappy fast path) + the fail-loud alarm, kicked off AFTER we ACK so Slack still gets its
+    // 200 inside 3s. The app is a long-lived Node server on Fly, so this void promise runs to completion.
+    // Fast path triages the message: a basic question it answers itself here (no office machine needed); a
+    // real task it leaves on the bridge for the Claude Code responder (Tier 2) with a short ack.
+    const sessionId = session.id;
+    const fastText = ev.text;
+    const channel = ev.channel;
+    const threadTs = ev.threadTs;
+    void (async () => {
+      const outcome = await handleViktorFastPath({ sessionId, text: fastText, channel, threadTs });
+      // Only alarm when the message actually needs Tier 2 (routed, or fast path unavailable). A question
+      // Tier 1 already answered must NOT trigger a false "responder is DOWN" alert. Deduped with a short
+      // cool-off so a burst of Slack messages doesn't spam.
+      if (outcome !== "answered") {
+        const health = responderHealthNow();
+        if (!health.alive && recordReactiveAlert().alert) {
+          const since = health.state === "never" ? "ever" : `in ${formatAge(health.ageMs)}`;
+          void slackNotify(
+            `⚠️ Viktor has a task that needs the responder, but it is DOWN (no heartbeat ${since}). It's queued and will be handled once the responder is running. Start it: a Claude Code session running scripts/responder/loop.md via /loop 60s.`,
+          ).catch(() => {});
+        }
+      }
+    })().catch(() => {});
   } catch {
     // Still ACK 200 so Slack doesn't retry-storm; a failure here is logged by the DB layer, not user-facing.
   }
