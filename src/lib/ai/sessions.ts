@@ -272,6 +272,14 @@ export function getSession(id: string): AiSession | null {
   return r ? toSession(r) : null;
 }
 
+/** Look a session up by its idempotency key (e.g. a Slack thread key `slack:{channel}:{threadTs}`). Used to
+ *  tell whether Viktor is already in a thread before treating an unmentioned reply as a follow-up. */
+export function getSessionByIdempotencyKey(key: string): AiSession | null {
+  if (!key) return null;
+  const r = getDb().prepare("SELECT * FROM ai_sessions WHERE idempotency_key = ?").get(key) as SessionRow | undefined;
+  return r ? toSession(r) : null;
+}
+
 /** Live sessions (running + awaiting_approval + paused), newest first. Excludes archived. */
 export function listLiveSessions(limit = 100): AiSession[] {
   return (
