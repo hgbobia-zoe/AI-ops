@@ -192,7 +192,7 @@ export function RouteStaffBoard({
         <div className="space-y-6">
           {/* Route cards — one per truck route, like Dispatch. */}
           {routeCards.length > 0 && (
-            <section className="grid gap-4 lg:grid-cols-2">
+            <section className="space-y-3">
               {routeCards.map((rc) => (
                 <RouteCard
                   key={rc.routeId}
