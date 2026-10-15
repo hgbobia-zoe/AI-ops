@@ -1,19 +1,20 @@
 "use client";
 
-// Route-centric scheduling board — mirrors Dispatch's layout: one card per route (truck header, the
-// route window + stop count + event, then the PEOPLE on the route as a single list — not grouped by role)
-// with a per-route "Add worker" flow. Shifts still live in the staff_shifts model (one per route+role);
-// this view just groups them by route and renders people, remaining need, and the Instawork gap.
+// Route staffing board — STRICT PER-FIELD COLUMNS (doc §16). Each route is a compact collapsed row with
+// aligned columns [Route | Window | Required | Assigned | Gap | Readiness | Action] that EXPANDS to reveal
+// the full detail (stops, the people on the route, the proposed plan, remaining need, Instawork context, the
+// shift chips, and the Add-worker / Override controls). Required / Assigned / Gap come from the SHARED
+// selector (lib/scheduling/routeStaffing.ts) — the same pre-check math Dispatch reads — so the two blades
+// agree by construction. Readiness is the AUTHORITATIVE per-route readiness level (not derived from coverage).
 //
 // FACTS ONLY: a shift with no known window shows "Set time"; Instawork workers are the ACTUAL booked temp
-// workers from matched gigs (never fabricated); a gig isn't truck-specific, so it's labelled an
-// availability match (it can show under more than one route). The ShiftEditor (edit / Connecteam publish /
-// delete) is kept — clicking a role chip opens it; "Add worker" is the new per-route assignment path.
+// workers from matched gigs (never fabricated). The page HEADER now owns Auto Staff / Refresh / Add Shift
+// (SchedulingHeaderActions); this board owns the per-route planning surface.
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, RefreshCw, Plus, Truck as TruckIcon, UserPlus, Users, ArrowRight, Wand2, MapPin, SlidersHorizontal } from "lucide-react";
+import { Loader2, Truck as TruckIcon, UserPlus, Users, ArrowRight, Wand2, MapPin, SlidersHorizontal, ChevronRight } from "lucide-react";
 import { SidePanelOverlay } from "@/components/SidePanelOverlay";
 import { ShiftEditor } from "@/components/scheduling/ShiftEditor";
 import { AddWorkerPanel } from "@/components/scheduling/AddWorkerPanel";
@@ -28,13 +29,13 @@ import type { ShiftReadinessLevel } from "@/lib/scheduling/readiness";
 import type { MoveEligibility, MoveFit } from "@/lib/scheduling/planView";
 import type { WorkerDayEligibilityData } from "@/lib/scheduling/eligibilityLabel";
 import type { InstaworkRoleSummary } from "@/lib/instawork/reconcile";
+import type { RouteStaffingState } from "@/lib/scheduling/routeStaffing";
+import type { RoleCount } from "@/lib/scheduling/preCheck";
 
 export type { WorkerDayEligibilityData } from "@/lib/scheduling/eligibilityLabel";
 
 const BTN =
   "inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50 disabled:pointer-events-none";
-const PRIMARY =
-  "inline-flex items-center gap-1.5 rounded border border-foreground bg-foreground/[0.08] px-3.5 py-1.5 text-[12.5px] font-medium text-foreground transition-colors hover:bg-foreground/[0.14] disabled:opacity-50 disabled:pointer-events-none";
 
 /** A compact stop descriptor surfaced on the route card (from the Route already in hand — no new fetch). */
 export interface RouteStopBrief {
@@ -44,6 +45,7 @@ export interface RouteStopBrief {
 }
 
 export const ROLE_LABEL: Record<ShiftRole, string> = { driver: "Driver", field: "Field", prep: "Prep" };
+const ROLE_SHORT: Record<ShiftRole, string> = { driver: "Drv", field: "Fld", prep: "Prp" };
 const ROLE_ORDER: ShiftRole[] = ["driver", "field", "prep"];
 
 /** An Instawork gig matched to a route (availability, not allocation). */
@@ -70,7 +72,11 @@ export interface RouteCardData {
   roles: ShiftRole[]; // roles this route staffs (drives Instawork gig matching)
   gigs: MatchedGig[];
   stops: RouteStopBrief[]; // the route's stops (customer/kind/address) for a richer card
-  readiness: ShiftReadinessLevel | null; // worst readiness across the route's shifts (day-of chip)
+  readiness: ShiftReadinessLevel | null; // worst readiness across the route's shifts (authoritative)
+  /** Shared-selector staffing state (Required / Assigned / Gap) — the same math Dispatch reads. */
+  staffing: RouteStaffingState;
+  /** This route has a two-way-sync conflict awaiting review (drives the "Resolve Sync" action). */
+  hasSyncConflict: boolean;
 }
 
 export type RouteRecs = Record<string, Partial<Record<ShiftRole, CrewRecommendation[]>>>;
@@ -88,6 +94,41 @@ function windowLabel(start: string | null, end: string | null, known: boolean): 
   const s = formatClockTime(start);
   const e = end ? formatClockTime(end) : "";
   return e ? `${s} – ${e}` : s;
+}
+
+// Column template shared by the header and every row, so the per-field columns line up exactly.
+const COLS = "grid grid-cols-[minmax(170px,1.5fr)_120px_118px_118px_96px_104px_132px] items-center gap-3";
+
+const READINESS_CHIP: Record<ShiftReadinessLevel, { label: string; cls: string }> = {
+  READY: { label: "Ready", cls: "border-positive/40 text-positive" },
+  BLOCKED: { label: "Blocked", cls: "border-critical/50 text-critical" },
+  UNVERIFIED: { label: "Unverified", cls: "border-attention/40 text-attention" },
+};
+
+/** Render a RoleCount as compact role chips (driver + field), dimming a zero. */
+function RoleCounts({ counts, tone }: { counts: RoleCount; tone: "default" | "attention" }): React.JSX.Element {
+  const roles: ShiftRole[] = ["driver", "field"];
+  const nonZero = roles.filter((r) => counts[r as "driver" | "field"] > 0);
+  if (nonZero.length === 0) return <span className="text-[12px] text-meta">—</span>;
+  return (
+    <span className="flex flex-wrap items-center gap-1" title={nonZero.map((r) => `${counts[r as "driver" | "field"]} ${ROLE_LABEL[r]}`).join(", ")}>
+      {nonZero.map((r) => (
+        <span key={r} className={`tabular-nums text-[12.5px] ${tone === "attention" ? "text-attention" : "text-foreground"}`}>
+          {counts[r as "driver" | "field"]} {ROLE_SHORT[r]}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** The single contextual action for a collapsed row (doc §16). */
+function rowAction(card: RouteCardData): { label: string; kind: "add" | "expand" | "sync" } {
+  const s = card.staffing;
+  if (s.requiresCrew && s.nobody) return { label: "Assign Worker", kind: "add" };
+  if (s.totalGap > 0) return { label: "Fill Gap", kind: "add" };
+  if (card.hasSyncConflict) return { label: "Resolve Sync", kind: "sync" };
+  if (card.readiness && card.readiness !== "READY") return { label: "Review Readiness", kind: "expand" };
+  return { label: "View Details", kind: "expand" };
 }
 
 export function RouteStaffBoard({
@@ -127,62 +168,25 @@ export function RouteStaffBoard({
   iwConfigured: boolean;
   hasRoutes: boolean;
 }): React.JSX.Element {
-  const router = useRouter();
-  const [generating, setGenerating] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-  const [editing, setEditing] = useState<StaffShift | "new" | null>(null);
+  const [editing, setEditing] = useState<StaffShift | null>(null);
   const [adding, setAdding] = useState<RouteCardData | null>(null);
   const [overriding, setOverriding] = useState<RouteCardData | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const nameOf = (userId: number): CrewMember | undefined => roster.find((m) => m.userId === userId);
-
-  // AUTO STAFF (propose): refresh demand from routes, then let the server recompute + render the proposed
-  // optimizer plan. This PROPOSES only; committing is the dispatcher's explicit Approve in the plan card.
-  async function autoStaff(): Promise<void> {
-    setGenerating(true);
-    setNote(null);
-    try {
-      const res = await fetch("/api/scheduling/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date }),
-      });
-      const j = (await res.json()) as { shifts?: StaffShift[]; note?: string };
-      if (!res.ok) setNote("Couldn't build the plan from routes.");
-      else if (j.note === "no routes") setNote("No routes for this day — nothing to build.");
-      else setNote(`Proposed a plan over ${j.shifts?.length ?? 0} shift${(j.shifts?.length ?? 0) === 1 ? "" : "s"}. Review and approve below.`);
-      router.refresh();
-      // Scroll to the proposed plan once it has rendered (it sits above the board).
-      setTimeout(() => document.getElementById("staffing-plan")?.scrollIntoView({ behavior: "smooth", block: "start" }), 350);
-    } catch {
-      setNote("Couldn't build the plan from routes.");
-    } finally {
-      setGenerating(false);
-    }
-  }
+  const toggle = (routeId: string): void =>
+    setExpanded((cur) => {
+      const next = new Set(cur);
+      if (next.has(routeId)) next.delete(routeId);
+      else next.add(routeId);
+      return next;
+    });
 
   return (
     <>
-      {/* Toolbar — AUTO STAFF is the headline action (propose the best internal-first plan). */}
-      <div className="mb-1.5 flex flex-wrap items-center gap-2">
-        <button onClick={autoStaff} disabled={generating} className={PRIMARY} title="Build the day's demand from routes and propose the best internal-first plan. Review and approve to commit.">
-          {generating ? <Loader2 className="size-3.5 animate-spin" /> : <Wand2 className="size-3.5" />} Auto staff
-        </button>
-        <button onClick={autoStaff} disabled={generating} className={BTN} title="Rebuild demand from the latest routes.">
-          <RefreshCw className="size-3.5" /> Refresh from routes
-        </button>
-        <button onClick={() => setEditing("new")} className={BTN}>
-          <Plus className="size-3.5" /> Add shift
-        </button>
-        {note && <span className="text-[12px] text-meta">{note}</span>}
-      </div>
-      <p className="mb-4 text-[11.5px] text-meta">
-        Auto staff proposes an internal-first plan for the day. It never commits on its own — you approve it in the proposed-plan card.
-      </p>
-
       {!hasRoutes && (
         <p className="mb-4 rounded border border-border bg-[var(--row-hover)]/40 px-3 py-2.5 text-[12.5px] text-tertiary-text">
-          No routes for this day — pull routes first, or add a shift manually.
+          No routes for this day — pull routes first, or add a shift from the header.
         </p>
       )}
 
@@ -190,23 +194,37 @@ export function RouteStaffBoard({
         <p className="text-[13px] text-meta">No shifts built for this day yet.</p>
       ) : (
         <div className="space-y-6">
-          {/* Route cards — one per truck route, like Dispatch. */}
+          {/* Route staffing board — strict per-field columns, one row per route; click to expand. */}
           {routeCards.length > 0 && (
-            <section className="space-y-3">
-              {routeCards.map((rc) => (
-                <RouteCard
-                  key={rc.routeId}
-                  card={rc}
-                  shifts={shifts.filter((s) => s.routeId === rc.routeId)}
-                  coverage={coverage}
-                  proposed={proposedByRoute[rc.routeId] ?? []}
-                  nameOf={nameOf}
-                  iwConfigured={iwConfigured}
-                  onEdit={(s) => setEditing(s)}
-                  onAdd={() => setAdding(rc)}
-                  onOverride={() => setOverriding(rc)}
-                />
-              ))}
+            <section className="overflow-x-auto rounded-lg border border-border" aria-label="Route staffing board">
+              <div className="min-w-[940px]">
+                {/* Column header */}
+                <div className={`${COLS} border-b border-border bg-background px-4 py-2 text-[10.5px] font-medium uppercase tracking-[0.08em] text-meta`}>
+                  <span>Route</span>
+                  <span>Window</span>
+                  <span>Required</span>
+                  <span>Assigned</span>
+                  <span>Gap</span>
+                  <span>Readiness</span>
+                  <span className="text-right">Action</span>
+                </div>
+                {routeCards.map((rc) => (
+                  <RouteRow
+                    key={rc.routeId}
+                    card={rc}
+                    expanded={expanded.has(rc.routeId)}
+                    onToggle={() => toggle(rc.routeId)}
+                    shifts={shifts.filter((s) => s.routeId === rc.routeId)}
+                    coverage={coverage}
+                    proposed={proposedByRoute[rc.routeId] ?? []}
+                    nameOf={nameOf}
+                    iwConfigured={iwConfigured}
+                    onEdit={(s) => setEditing(s)}
+                    onAdd={() => setAdding(rc)}
+                    onOverride={() => setOverriding(rc)}
+                  />
+                ))}
+              </div>
             </section>
           )}
 
@@ -243,11 +261,11 @@ export function RouteStaffBoard({
       {editing !== null && (
         <SidePanelOverlay onClose={() => setEditing(null)}>
           <ShiftEditor
-            shift={editing === "new" ? null : editing}
+            shift={editing}
             date={date}
             roster={roster}
             eligibilityData={eligibilityData}
-            recommendations={editing !== "new" && editing ? recommendations[editing.id] ?? [] : []}
+            recommendations={recommendations[editing.id] ?? []}
             onClose={() => setEditing(null)}
           />
         </SidePanelOverlay>
@@ -283,6 +301,342 @@ export function RouteStaffBoard({
         </SidePanelOverlay>
       )}
     </>
+  );
+}
+
+// ── Route row (collapsed per-field columns + expandable detail) ──────────────────────────────────
+function RouteRow({
+  card,
+  expanded,
+  onToggle,
+  shifts,
+  coverage,
+  proposed,
+  nameOf,
+  iwConfigured,
+  onEdit,
+  onAdd,
+  onOverride,
+}: {
+  card: RouteCardData;
+  expanded: boolean;
+  onToggle: () => void;
+  shifts: StaffShift[];
+  coverage: Record<string, ShiftCoverage>;
+  proposed: PlannedAssignment[];
+  nameOf: (userId: number) => CrewMember | undefined;
+  iwConfigured: boolean;
+  onEdit: (s: StaffShift) => void;
+  onAdd: () => void;
+  onOverride: () => void;
+}): React.JSX.Element {
+  const win = windowLabel(card.startTime, card.endTime, card.windowKnown);
+  const s = card.staffing;
+  const action = rowAction(card);
+
+  function onAction(): void {
+    if (action.kind === "add") onAdd();
+    else if (action.kind === "sync") document.getElementById("sync-conflicts")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    else if (!expanded) onToggle();
+  }
+
+  return (
+    <div className="border-t border-[var(--row-rule)] first:border-t-0">
+      {/* Collapsed row — click anywhere (except the action) to expand. */}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
+        className={`${COLS} cursor-pointer px-4 py-2.5 text-[13px] transition-colors hover:bg-[var(--row-hover)] ${expanded ? "bg-[var(--row-hover)]/60" : ""}`}
+      >
+        {/* Route (vehicle + id) */}
+        <span className="flex min-w-0 items-center gap-2">
+          <ChevronRight className={`size-3.5 shrink-0 text-meta transition-transform ${expanded ? "rotate-90" : ""}`} aria-hidden />
+          <TruckIcon className="size-4 shrink-0 text-tertiary-text" aria-hidden />
+          <span className="min-w-0">
+            <span className="block truncate font-medium text-foreground">{card.truckName}</span>
+            <span className="block truncate text-[11px] text-meta">
+              {card.stopCount} stop{card.stopCount === 1 ? "" : "s"}
+              {card.eventLabel ? ` · ${card.eventLabel}` : ""}
+            </span>
+          </span>
+        </span>
+
+        {/* Window (ET) */}
+        <span className="tabular-nums text-[12.5px]">
+          {win ? win : <span className="text-attention">Set time</span>}
+        </span>
+
+        {/* Required (by role) */}
+        <RoleCounts counts={s.requiredByRole} tone="default" />
+
+        {/* Assigned (actual) */}
+        <RoleCounts counts={s.assignedByRole} tone="default" />
+
+        {/* Gap (unfilled) */}
+        <span>
+          {s.totalGap > 0 ? <RoleCounts counts={s.gapByRole} tone="attention" /> : <span className="text-[12.5px] text-positive">None</span>}
+        </span>
+
+        {/* Readiness (authoritative) */}
+        <span>
+          {card.readiness ? (
+            <span className={`inline-block rounded border px-1.5 py-px text-[10px] font-medium uppercase tracking-[0.06em] ${READINESS_CHIP[card.readiness].cls}`}>
+              {READINESS_CHIP[card.readiness].label}
+            </span>
+          ) : (
+            <span className="text-[11px] text-meta">—</span>
+          )}
+        </span>
+
+        {/* Action (contextual) */}
+        <span className="flex justify-end">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onAction(); }}
+            className="inline-flex items-center gap-1 rounded border border-border px-2.5 py-1 text-[11.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground"
+          >
+            {action.label}
+          </button>
+        </span>
+      </div>
+
+      {/* Expanded detail — the full existing route detail. */}
+      {expanded && (
+        <RouteDetail
+          card={card}
+          shifts={shifts}
+          coverage={coverage}
+          proposed={proposed}
+          nameOf={nameOf}
+          iwConfigured={iwConfigured}
+          onEdit={onEdit}
+          onAdd={onAdd}
+          onOverride={onOverride}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Expanded route detail (preserves all prior RouteCard functionality) ──────────────────────────
+function RouteDetail({
+  card,
+  shifts,
+  coverage,
+  proposed,
+  nameOf,
+  iwConfigured,
+  onEdit,
+  onAdd,
+  onOverride,
+}: {
+  card: RouteCardData;
+  shifts: StaffShift[];
+  coverage: Record<string, ShiftCoverage>;
+  proposed: PlannedAssignment[];
+  nameOf: (userId: number) => CrewMember | undefined;
+  iwConfigured: boolean;
+  onEdit: (s: StaffShift) => void;
+  onAdd: () => void;
+  onOverride: () => void;
+}): React.JSX.Element {
+  const deliveries = card.stops.filter((st) => st.kind === "delivery").length;
+  const pickups = card.stops.filter((st) => st.kind === "pickup").length;
+  const firstVenue = card.stops.find((st) => st.address || st.custName) ?? null;
+
+  // People on the route: explicit internal assignees (deduped), the Connecteam crew the coverage engine
+  // auto-credits, and the actual Instawork workers from matched gigs. One list — not grouped by role.
+  const seen = new Set<number>();
+  const internal: { key: string; name: string; role: ShiftRole; title: string | null; status: StaffShift["status"] }[] = [];
+  for (const sh of shifts) {
+    for (const uid of sh.assignees) {
+      if (seen.has(uid)) continue;
+      seen.add(uid);
+      const m = nameOf(uid);
+      internal.push({ key: `a-${uid}`, name: m?.name ?? `#${uid}`, role: sh.role, title: m?.title ?? null, status: sh.status });
+    }
+  }
+  const scheduledNames = new Map<string, ShiftRole>();
+  for (const sh of shifts) {
+    const c = coverage[sh.id];
+    for (const n of c?.scheduledNames ?? []) if (!scheduledNames.has(n)) scheduledNames.set(n, sh.role);
+  }
+  const gigWorkers = new Map<string, string>(); // name → position
+  for (const g of card.gigs) for (const w of g.workers) if (!gigWorkers.has(w)) gigWorkers.set(w, g.position);
+
+  // Remaining need per role (from coverage): "needs N more Driver".
+  const needByRole = ROLE_ORDER.map((role) => {
+    const roleShifts = shifts.filter((sh) => sh.role === role);
+    if (roleShifts.length === 0) return null;
+    const headcount = roleShifts.reduce((n, sh) => n + sh.headcount, 0);
+    const covered = roleShifts.reduce((n, sh) => n + (coverage[sh.id]?.covered ?? sh.assignees.length), 0);
+    const gap = roleShifts.reduce((n, sh) => n + (coverage[sh.id]?.gap ?? shiftGap(sh)), 0);
+    return { role, headcount, covered, gap };
+  }).filter((x): x is { role: ShiftRole; headcount: number; covered: number; gap: number } => x !== null);
+
+  const totalGap = needByRole.reduce((n, r) => n + r.gap, 0);
+  const booked = card.gigs.reduce((n, g) => n + g.filled, 0);
+  const pending = card.gigs.reduce((n, g) => n + g.pending, 0);
+  const peopleCount = internal.length + scheduledNames.size + gigWorkers.size;
+
+  return (
+    <div className="space-y-3 border-t border-[var(--row-rule)] bg-[var(--row-hover)]/20 px-4 py-4">
+      {/* Stops / destination + per-route actions */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 text-xs text-muted-foreground">
+          {(deliveries > 0 || pickups > 0) && (
+            <span>
+              {deliveries > 0 ? `${deliveries} delivery` : ""}
+              {deliveries > 0 && pickups > 0 ? ", " : ""}
+              {pickups > 0 ? `${pickups} pickup` : ""}
+            </span>
+          )}
+          {firstVenue && (firstVenue.address || firstVenue.custName) && (
+            <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-meta">
+              <MapPin className="size-3 shrink-0" />
+              <span className="truncate">{firstVenue.address || firstVenue.custName}</span>
+            </div>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button onClick={onAdd} className={BTN}>
+            <UserPlus className="size-3.5" /> Add worker
+          </button>
+          <button onClick={onOverride} className={BTN} title="Override the plan: remove, replace, move or assign a worker (reason required).">
+            <SlidersHorizontal className="size-3.5" /> Override
+          </button>
+        </div>
+      </div>
+
+      {/* People on the route (one list, not grouped by role) */}
+      {peopleCount === 0 ? (
+        <p className="text-[12.5px] text-meta">No one assigned yet.</p>
+      ) : (
+        <ul className="space-y-1">
+          {internal.map((p) => (
+            <li key={p.key} className="flex items-center justify-between gap-2 text-[13px]">
+              <span className="min-w-0 truncate">
+                <span className="font-medium text-foreground">{p.name}</span>
+                <span className="ml-1.5 text-[11px] text-meta">{ROLE_LABEL[p.role]}{p.title ? ` · ${p.title}` : ""}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <span className="text-[11px] text-positive">Connecteam</span>
+                {p.status !== "draft" && (
+                  <span className="rounded border border-border px-1.5 py-px text-[10px] uppercase tracking-[0.06em] text-meta">{p.status}</span>
+                )}
+              </span>
+            </li>
+          ))}
+          {[...scheduledNames].map(([name, role]) => (
+            <li key={`s-${name}`} className="flex items-center justify-between gap-2 text-[13px]">
+              <span className="min-w-0 truncate">
+                <span className="font-medium text-foreground">{name}</span>
+                <span className="ml-1.5 text-[11px] text-meta">{ROLE_LABEL[role]}</span>
+              </span>
+              <span className="shrink-0 text-[11px] text-positive">Connecteam · scheduled</span>
+            </li>
+          ))}
+          {[...gigWorkers].map(([name, position]) => (
+            <li key={`g-${name}`} className="flex items-center justify-between gap-2 text-[13px]">
+              <span className="min-w-0 truncate">
+                <span className="font-medium text-foreground">{name}</span>
+                <span className="ml-1.5 text-[11px] text-meta">{position}</span>
+              </span>
+              <span className="shrink-0 text-[11px] text-attention">Instawork · booked</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Proposed plan overlay — what Auto staff would place on this route (internal ✓ / open ○). */}
+      {proposed.length > 0 && (
+        <div className="border-t border-[var(--row-rule)] pt-2.5">
+          <div className="mb-1 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.08em] text-meta">
+            <Wand2 className="size-3" /> Proposed
+            <span className="font-normal normal-case">
+              {proposed.filter((p) => p.kind === "internal").length} internal / {proposed.length} seat{proposed.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <ul className="space-y-0.5">
+            {proposed.map((p, i) => (
+              <li
+                key={`${p.shiftId}-${i}`}
+                title={p.kind === "temp" ? p.whyTemp ?? "" : p.whyThisRoute}
+                className="flex items-center gap-1.5 text-[12px]"
+              >
+                {p.kind === "internal" ? (
+                  <>
+                    <span className="text-positive">&#10003;</span>
+                    <span className="truncate text-foreground">{p.name}</span>
+                    <span className="text-[10.5px] uppercase tracking-[0.05em] text-meta">{ROLE_LABEL[p.role]}</span>
+                    {p.moved && <span className="text-[10.5px] text-attention">moved here</span>}
+                  </>
+                ) : (
+                  <>
+                    <span className="text-attention">&#9675;</span>
+                    <span className="text-meta">Open seat</span>
+                    <span className="text-[10.5px] uppercase tracking-[0.05em] text-attention">{ROLE_LABEL[p.role]} · Instawork</span>
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Remaining need per role + Instawork gap */}
+      {(needByRole.some((r) => r.gap > 0) || totalGap > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-[var(--row-rule)] pt-2.5">
+          {needByRole
+            .filter((r) => r.gap > 0)
+            .map((r) => (
+              <span key={r.role} className="rounded border border-attention/40 px-1.5 py-px text-[11px] text-attention">
+                needs {r.gap} more {ROLE_LABEL[r.role]}
+              </span>
+            ))}
+          {totalGap > 0 && (
+            <span className="rounded border border-attention/40 px-1.5 py-px text-[11px] text-attention">
+              Gap → Instawork: {totalGap}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Instawork context for the route */}
+      {iwConfigured && card.gigs.length > 0 && (
+        <p className="text-[11.5px] text-meta">
+          Instawork (matched by day + role + time):{" "}
+          <span className="text-positive">{booked} booked</span>
+          {pending > 0 && <span className="text-attention"> · {pending} pending</span>}
+          {" "}across {card.gigs.length} gig{card.gigs.length === 1 ? "" : "s"}.
+        </p>
+      )}
+
+      {/* Role shift chips — click to edit a shift (ShiftEditor: time, headcount, publish, delete). */}
+      <div className="flex flex-wrap items-center gap-1.5 border-t border-[var(--row-rule)] pt-2.5">
+        <span className="text-[11px] uppercase tracking-[0.08em] text-meta">Shifts</span>
+        {shifts.length === 0 ? (
+          <span className="text-[12px] text-meta">none — use “Add worker”</span>
+        ) : (
+          ROLE_ORDER.filter((role) => shifts.some((sh) => sh.role === role)).map((role) => {
+            const roleShifts = shifts.filter((sh) => sh.role === role);
+            const headcount = roleShifts.reduce((n, sh) => n + sh.headcount, 0);
+            return (
+              <button
+                key={role}
+                onClick={() => onEdit(roleShifts[0])}
+                className="rounded border border-border px-2 py-0.5 text-[12px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground"
+              >
+                {ROLE_LABEL[role]} ×{headcount}
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -444,252 +798,6 @@ function WarehousePrepSection({
       </div>
       {error && <p className="mt-2 text-[12.5px] text-critical">{error}</p>}
     </section>
-  );
-}
-
-const READINESS_CHIP: Record<ShiftReadinessLevel, { label: string; cls: string }> = {
-  READY: { label: "Ready", cls: "border-positive/40 text-positive" },
-  BLOCKED: { label: "Blocked", cls: "border-critical/50 text-critical" },
-  UNVERIFIED: { label: "Unverified", cls: "border-attention/40 text-attention" },
-};
-
-// ── Route card ────────────────────────────────────────────────────────────────
-function RouteCard({
-  card,
-  shifts,
-  coverage,
-  proposed,
-  nameOf,
-  iwConfigured,
-  onEdit,
-  onAdd,
-  onOverride,
-}: {
-  card: RouteCardData;
-  shifts: StaffShift[];
-  coverage: Record<string, ShiftCoverage>;
-  proposed: PlannedAssignment[];
-  nameOf: (userId: number) => CrewMember | undefined;
-  iwConfigured: boolean;
-  onEdit: (s: StaffShift) => void;
-  onAdd: () => void;
-  onOverride: () => void;
-}): React.JSX.Element {
-  const win = windowLabel(card.startTime, card.endTime, card.windowKnown);
-  const deliveries = card.stops.filter((s) => s.kind === "delivery").length;
-  const pickups = card.stops.filter((s) => s.kind === "pickup").length;
-  const firstVenue = card.stops.find((s) => s.address || s.custName) ?? null;
-
-  // People on the route: explicit internal assignees (deduped by userId), plus the Connecteam crew the
-  // coverage engine auto-credits (scheduled that day, not explicitly assigned), plus the actual Instawork
-  // workers from matched gigs. One list — not grouped by role.
-  const seen = new Set<number>();
-  const internal: { key: string; name: string; role: ShiftRole; title: string | null; status: StaffShift["status"] }[] = [];
-  for (const s of shifts) {
-    for (const uid of s.assignees) {
-      if (seen.has(uid)) continue;
-      seen.add(uid);
-      const m = nameOf(uid);
-      internal.push({ key: `a-${uid}`, name: m?.name ?? `#${uid}`, role: s.role, title: m?.title ?? null, status: s.status });
-    }
-  }
-  const scheduledNames = new Map<string, ShiftRole>();
-  for (const s of shifts) {
-    const c = coverage[s.id];
-    for (const n of c?.scheduledNames ?? []) if (!scheduledNames.has(n)) scheduledNames.set(n, s.role);
-  }
-  const gigWorkers = new Map<string, string>(); // name → position
-  for (const g of card.gigs) for (const w of g.workers) if (!gigWorkers.has(w)) gigWorkers.set(w, g.position);
-
-  // Remaining need per role (from coverage): "needs N more Driver".
-  const needByRole = ROLE_ORDER.map((role) => {
-    const roleShifts = shifts.filter((s) => s.role === role);
-    if (roleShifts.length === 0) return null;
-    const headcount = roleShifts.reduce((n, s) => n + s.headcount, 0);
-    const covered = roleShifts.reduce((n, s) => n + (coverage[s.id]?.covered ?? s.assignees.length), 0);
-    const gap = roleShifts.reduce((n, s) => n + (coverage[s.id]?.gap ?? shiftGap(s)), 0);
-    return { role, headcount, covered, gap };
-  }).filter((x): x is { role: ShiftRole; headcount: number; covered: number; gap: number } => x !== null);
-
-  const totalGap = needByRole.reduce((n, r) => n + r.gap, 0);
-  const booked = card.gigs.reduce((n, g) => n + g.filled, 0);
-  const pending = card.gigs.reduce((n, g) => n + g.pending, 0);
-  const peopleCount = internal.length + scheduledNames.size + gigWorkers.size;
-
-  return (
-    <div className="surface space-y-3 border border-border p-5">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded border border-border text-tertiary-text">
-            <TruckIcon className="size-4" />
-          </span>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-[14px] font-medium">{card.truckName}</span>
-              {card.readiness && (
-                <span className={`rounded border px-1.5 py-px text-[10px] font-medium uppercase tracking-[0.06em] ${READINESS_CHIP[card.readiness].cls}`}>
-                  {READINESS_CHIP[card.readiness].label}
-                </span>
-              )}
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {card.stopCount} stop{card.stopCount === 1 ? "" : "s"}
-              {(deliveries > 0 || pickups > 0) && (
-                <span>
-                  {" "}({deliveries > 0 ? `${deliveries} delivery` : ""}
-                  {deliveries > 0 && pickups > 0 ? ", " : ""}
-                  {pickups > 0 ? `${pickups} pickup` : ""})
-                </span>
-              )}
-              {win ? ` · ${win}` : " · "}
-              {!win && <span className="text-attention">Set time</span>}
-            </div>
-            {card.eventLabel && <div className="mt-0.5 truncate text-[11.5px] text-meta">{card.eventLabel}</div>}
-            {firstVenue && (firstVenue.address || firstVenue.custName) && (
-              <div className="mt-0.5 flex items-center gap-1 truncate text-[11px] text-meta">
-                <MapPin className="size-3 shrink-0" />
-                <span className="truncate">{firstVenue.address || firstVenue.custName}</span>
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <button onClick={onAdd} className={BTN}>
-            <UserPlus className="size-3.5" /> Add worker
-          </button>
-          <button onClick={onOverride} className={BTN} title="Override the plan: remove, replace, move or assign a worker (reason required).">
-            <SlidersHorizontal className="size-3.5" /> Override
-          </button>
-        </div>
-      </div>
-
-      {/* People on the route (one list, not grouped by role) */}
-      {peopleCount === 0 ? (
-        <p className="text-[12.5px] text-meta">No one assigned yet.</p>
-      ) : (
-        <ul className="space-y-1">
-          {internal.map((p) => (
-            <li key={p.key} className="flex items-center justify-between gap-2 text-[13px]">
-              <span className="min-w-0 truncate">
-                <span className="font-medium text-foreground">{p.name}</span>
-                <span className="ml-1.5 text-[11px] text-meta">{ROLE_LABEL[p.role]}{p.title ? ` · ${p.title}` : ""}</span>
-              </span>
-              <span className="flex shrink-0 items-center gap-1.5">
-                <span className="text-[11px] text-positive">Connecteam</span>
-                {p.status !== "draft" && (
-                  <span className="rounded border border-border px-1.5 py-px text-[10px] uppercase tracking-[0.06em] text-meta">{p.status}</span>
-                )}
-              </span>
-            </li>
-          ))}
-          {[...scheduledNames].map(([name, role]) => (
-            <li key={`s-${name}`} className="flex items-center justify-between gap-2 text-[13px]">
-              <span className="min-w-0 truncate">
-                <span className="font-medium text-foreground">{name}</span>
-                <span className="ml-1.5 text-[11px] text-meta">{ROLE_LABEL[role]}</span>
-              </span>
-              <span className="shrink-0 text-[11px] text-positive">Connecteam · scheduled</span>
-            </li>
-          ))}
-          {[...gigWorkers].map(([name, position]) => (
-            <li key={`g-${name}`} className="flex items-center justify-between gap-2 text-[13px]">
-              <span className="min-w-0 truncate">
-                <span className="font-medium text-foreground">{name}</span>
-                <span className="ml-1.5 text-[11px] text-meta">{position}</span>
-              </span>
-              <span className="shrink-0 text-[11px] text-attention">Instawork · booked</span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {/* Proposed plan overlay — what Auto staff would place on this route (internal ✓ / open ○). */}
-      {proposed.length > 0 && (
-        <div className="border-t border-[var(--row-rule)] pt-2.5">
-          <div className="mb-1 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.08em] text-meta">
-            <Wand2 className="size-3" /> Proposed
-            <span className="font-normal normal-case">
-              {proposed.filter((p) => p.kind === "internal").length} internal / {proposed.length} seat{proposed.length === 1 ? "" : "s"}
-            </span>
-          </div>
-          <ul className="space-y-0.5">
-            {proposed.map((p, i) => (
-              <li
-                key={`${p.shiftId}-${i}`}
-                title={p.kind === "temp" ? p.whyTemp ?? "" : p.whyThisRoute}
-                className="flex items-center gap-1.5 text-[12px]"
-              >
-                {p.kind === "internal" ? (
-                  <>
-                    <span className="text-positive">&#10003;</span>
-                    <span className="truncate text-foreground">{p.name}</span>
-                    <span className="text-[10.5px] uppercase tracking-[0.05em] text-meta">{ROLE_LABEL[p.role]}</span>
-                    {p.moved && <span className="text-[10.5px] text-attention">moved here</span>}
-                  </>
-                ) : (
-                  <>
-                    <span className="text-attention">&#9675;</span>
-                    <span className="text-meta">Open seat</span>
-                    <span className="text-[10.5px] uppercase tracking-[0.05em] text-attention">{ROLE_LABEL[p.role]} · Instawork</span>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Remaining need per role + Instawork gap */}
-      {(needByRole.some((r) => r.gap > 0) || totalGap > 0) && (
-        <div className="flex flex-wrap items-center gap-1.5 border-t border-[var(--row-rule)] pt-2.5">
-          {needByRole
-            .filter((r) => r.gap > 0)
-            .map((r) => (
-              <span key={r.role} className="rounded border border-attention/40 px-1.5 py-px text-[11px] text-attention">
-                needs {r.gap} more {ROLE_LABEL[r.role]}
-              </span>
-            ))}
-          {totalGap > 0 && (
-            <span className="rounded border border-attention/40 px-1.5 py-px text-[11px] text-attention">
-              Gap → Instawork: {totalGap}
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Instawork context for the route */}
-      {iwConfigured && card.gigs.length > 0 && (
-        <p className="text-[11.5px] text-meta">
-          Instawork (matched by day + role + time):{" "}
-          <span className="text-positive">{booked} booked</span>
-          {pending > 0 && <span className="text-attention"> · {pending} pending</span>}
-          {" "}across {card.gigs.length} gig{card.gigs.length === 1 ? "" : "s"}.
-        </p>
-      )}
-
-      {/* Role shift chips — click to edit a shift (ShiftEditor: time, headcount, publish, delete). */}
-      <div className="flex flex-wrap items-center gap-1.5 border-t border-[var(--row-rule)] pt-2.5">
-        <span className="text-[11px] uppercase tracking-[0.08em] text-meta">Shifts</span>
-        {shifts.length === 0 ? (
-          <span className="text-[12px] text-meta">none — use “Add worker”</span>
-        ) : (
-          ROLE_ORDER.filter((role) => shifts.some((s) => s.role === role)).map((role) => {
-            const roleShifts = shifts.filter((s) => s.role === role);
-            const headcount = roleShifts.reduce((n, s) => n + s.headcount, 0);
-            return (
-              <button
-                key={role}
-                onClick={() => onEdit(roleShifts[0])}
-                className="rounded border border-border px-2 py-0.5 text-[12px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground"
-              >
-                {ROLE_LABEL[role]} ×{headcount}
-              </button>
-            );
-          })
-        )}
-      </div>
-    </div>
   );
 }
 
