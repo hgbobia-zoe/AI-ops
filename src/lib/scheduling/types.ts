@@ -18,8 +18,15 @@ export type ShiftStatus =
   | "sent" // pushed to Connecteam and/or posted to Instawork
   | "cancelled";
 
-/** How the shift originated. */
-export type ShiftSource = "derived" | "manual";
+/** How the shift originated. "connecteam" = ingested from a Connecteam shift by the two-way-sync importer
+ *  (the app did not author it; its linked Connecteam shift is the same record). */
+export type ShiftSource = "derived" | "manual" | "connecteam";
+
+/** Reconciliation state of an app shift against its linked Connecteam shift (two-way sync). null = not
+ *  linked / not yet reconciled; "synced" = app and Connecteam agree as of connecteamSyncedAt; "needs_review"
+ *  = a divergence a human must resolve (both sides edited and we can't safely pick a winner, or the
+ *  Connecteam copy vanished). We NEVER silently clobber on needs_review. */
+export type ShiftSyncStatus = "synced" | "needs_review";
 
 /** A suggested shift the demand generator emits from routes — not yet persisted. */
 export interface DemandShift {
@@ -59,10 +66,16 @@ export interface StaffShift {
   instaworkHeadcount: number;
   /** Hourly rate for the Instawork gig (dollars). */
   payRate: number | null;
-  // External linkage (set when the shift is pushed out).
+  // External linkage (set when the shift is pushed out OR ingested — it is the SAME Connecteam record).
   connecteamShiftId: string | null;
   connecteamSchedulerId: number | null;
   connecteamPublishedAt: string | null;
+  // Two-way-sync reconciliation bookkeeping (see docs/connecteam-two-way-sync.md).
+  connecteamContentHash: string | null; // hash of the Connecteam shift content as of the last reconcile
+  connecteamSyncedAt: string | null;    // ISO of the last successful reconcile for this shift
+  connecteamLastModified: string | null;// ISO last-modified FROM Connecteam when exposed (else null)
+  syncStatus: ShiftSyncStatus | null;
+  syncNote: string | null;
   instaworkGigId: string | null;
   instaworkPostedAt: string | null;
   // Lifecycle + logistics (additive; lifecycleState authoritative going forward, derived from status when null).

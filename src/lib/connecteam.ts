@@ -223,6 +223,15 @@ export interface CrewShift {
   title: string;
   jobId?: string;
   address?: string;
+  /** Whether Connecteam reports this shift as published. undefined = the payload carried no such flag
+   *  (the endpoint may only return published shifts anyway — see the two-way-sync feasibility note). */
+  isPublished?: boolean;
+  /** Last-modified instant (Unix SECONDS) IF Connecteam's shift payload exposes one. Captured
+   *  shape-tolerantly from any of several likely keys; undefined when the payload has none. This is the
+   *  signal the two-way-sync "last-edit-wins" rule needs — and it is NOT confirmed to exist (no public API
+   *  docs, and the pre-existing reader never captured it). The importer treats it as best-effort: it uses
+   *  it when present, and falls back to content-hash conflict detection when absent. NEVER fabricated. */
+  lastModifiedUnix?: number;
   /** Resolved assignee names (falls back to a user id when a name is missing). */
   assignees: CrewMember[];
 }
@@ -293,6 +302,21 @@ async function getShifts(sched: Scheduler, startUnix: number, endUnix: number): 
   );
 }
 
+/** Best-effort last-modified (Unix SECONDS) from a raw Connecteam shift. Connecteam has no public API docs
+ *  and the shift payload is loosely typed, so we probe the keys a REST resource most commonly uses for this
+ *  and coerce tolerantly (a bare number, or an {unix}/{timestamp}/… object via unixOf). Returns null when
+ *  none is present — we NEVER synthesize one (a fabricated edit time would silently corrupt last-edit-wins).
+ *  Values that look like milliseconds (> ~3e10) are scaled down to seconds. */
+function shiftLastModifiedUnix(s: Record<string, unknown>): number | null {
+  const keys = ["updatedAt", "lastModified", "modifiedAt", "updateTime", "lastModifiedAt", "modificationTime", "updatedTime", "editedAt", "lastUpdated"];
+  for (const k of keys) {
+    if (!(k in s)) continue;
+    const u = unixOf(s[k]);
+    if (u != null && u > 0) return u > 3e10 ? Math.floor(u / 1000) : u;
+  }
+  return null;
+}
+
 /** `YYYY-MM-DD` for a Unix-seconds instant in timezone `tz`. */
 function localYmd(unix: number, tz: string): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -351,6 +375,8 @@ async function getCrewForDateSafeUncached(date: string): Promise<CrewDayResult> 
         title: (s.title as string) || "",
         jobId: (s.jobId as string) || undefined,
         address: loc?.gps?.address || undefined,
+        isPublished: typeof s.isPublished === "boolean" ? (s.isPublished as boolean) : undefined,
+        lastModifiedUnix: shiftLastModifiedUnix(s) ?? undefined,
         assignees: ids.map(
           (id): CrewMember => users.get(id) ?? { userId: id, name: `#${id}`, role: "other" },
         ),

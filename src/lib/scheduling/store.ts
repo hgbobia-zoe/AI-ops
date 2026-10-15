@@ -28,6 +28,11 @@ interface Row {
   connecteam_shift_id: string | null;
   connecteam_scheduler_id: number | null;
   connecteam_published_at: string | null;
+  connecteam_content_hash: string | null;
+  connecteam_synced_at: string | null;
+  connecteam_last_modified: string | null;
+  sync_status: string | null;
+  sync_note: string | null;
   instawork_gig_id: string | null;
   instawork_posted_at: string | null;
   lifecycle_state: string | null;
@@ -73,6 +78,11 @@ function toStaffShift(r: Row): StaffShift {
     connecteamShiftId: r.connecteam_shift_id,
     connecteamSchedulerId: r.connecteam_scheduler_id,
     connecteamPublishedAt: r.connecteam_published_at,
+    connecteamContentHash: r.connecteam_content_hash,
+    connecteamSyncedAt: r.connecteam_synced_at,
+    connecteamLastModified: r.connecteam_last_modified,
+    syncStatus: (r.sync_status as StaffShift["syncStatus"]) ?? null,
+    syncNote: r.sync_note,
     instaworkGigId: r.instawork_gig_id,
     instaworkPostedAt: r.instawork_posted_at,
     lifecycleState: (r.lifecycle_state as StaffShift["lifecycleState"]) ?? null,
@@ -97,6 +107,23 @@ export function getShiftsForDate(date: string): StaffShift[] {
 export function getShiftById(id: string): StaffShift | null {
   const r = getDb().prepare("SELECT * FROM staff_shifts WHERE id = ?").get(id) as Row | undefined;
   return r ? toStaffShift(r) : null;
+}
+
+/** The app shift linked to a Connecteam shift id (the two-way-sync join key), or null. One app shift per
+ *  Connecteam id by construction (publish sets it once; the importer matches on it before creating). */
+export function getShiftByConnecteamId(connecteamShiftId: string): StaffShift | null {
+  const r = getDb()
+    .prepare("SELECT * FROM staff_shifts WHERE connecteam_shift_id = ? LIMIT 1")
+    .get(connecteamShiftId) as Row | undefined;
+  return r ? toStaffShift(r) : null;
+}
+
+/** All shifts whose date is in [startDate,endDate] inclusive (YYYY-MM-DD). For the reconcile sweep. */
+export function getShiftsForDateRange(startDate: string, endDate: string): StaffShift[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM staff_shifts WHERE date >= ? AND date <= ? ORDER BY date, start_time IS NULL, start_time, role")
+    .all(startDate, endDate) as Row[];
+  return rows.map(toStaffShift);
 }
 
 /** Distinct dates that already have built shifts, newest first (for the board's day rail). */
@@ -158,6 +185,63 @@ export function createShift(s: NewShift): StaffShift {
   return getShiftById(id)!;
 }
 
+/** A shift INGESTED from Connecteam by the two-way-sync importer. It carries the Connecteam linkage and
+ *  reconcile bookkeeping from birth (source='connecteam', status='sent' — it is already live in Connecteam
+ *  and the crew are notified there), so the two directions reconcile to the SAME record instead of
+ *  duplicating. Day-level role; never attached to a route (the importer does not guess route assignments). */
+export interface IngestedShift {
+  date: string;
+  role: StaffShift["role"];
+  headcount: number;
+  startTime: string | null;
+  endTime: string | null;
+  windowKnown: boolean;
+  location: string | null;
+  eventLabel: string | null;
+  assignees: number[];
+  connecteamShiftId: string;
+  connecteamSchedulerId: number | null;
+  connecteamContentHash: string;
+  connecteamLastModified: string | null;
+  connecteamSyncedAt: string;
+}
+
+export function createIngestedShift(s: IngestedShift): StaffShift {
+  const now = new Date().toISOString();
+  const id = `SH-${randomUUID()}`;
+  getDb()
+    .prepare(
+      `INSERT INTO staff_shifts
+       (id, date, role, headcount, start_time, end_time, window_known, location, route_id, truck_id,
+        event_label, reasons, notes, source, status, assignees, instawork_headcount, pay_rate,
+        connecteam_shift_id, connecteam_scheduler_id, connecteam_published_at, connecteam_content_hash,
+        connecteam_synced_at, connecteam_last_modified, sync_status, created_at, updated_at)
+       VALUES (@id, @date, @role, @headcount, @start_time, @end_time, @window_known, @location, NULL, NULL,
+        @event_label, '[]', NULL, 'connecteam', 'sent', @assignees, 0, NULL,
+        @connecteam_shift_id, @connecteam_scheduler_id, @connecteam_synced_at, @connecteam_content_hash,
+        @connecteam_synced_at, @connecteam_last_modified, 'synced', @now, @now)`,
+    )
+    .run({
+      id,
+      date: s.date,
+      role: s.role,
+      headcount: s.headcount,
+      start_time: s.startTime ?? null,
+      end_time: s.endTime ?? null,
+      window_known: s.windowKnown ? 1 : 0,
+      location: s.location ?? null,
+      event_label: s.eventLabel ?? null,
+      assignees: JSON.stringify(s.assignees ?? []),
+      connecteam_shift_id: s.connecteamShiftId,
+      connecteam_scheduler_id: s.connecteamSchedulerId ?? null,
+      connecteam_content_hash: s.connecteamContentHash,
+      connecteam_synced_at: s.connecteamSyncedAt,
+      connecteam_last_modified: s.connecteamLastModified ?? null,
+      now,
+    });
+  return getShiftById(id)!;
+}
+
 /** Patchable fields on an existing shift. External-linkage fields are set by the push path. */
 export interface ShiftPatch {
   role?: StaffShift["role"];
@@ -175,6 +259,11 @@ export interface ShiftPatch {
   connecteamShiftId?: string | null;
   connecteamSchedulerId?: number | null;
   connecteamPublishedAt?: string | null;
+  connecteamContentHash?: string | null;
+  connecteamSyncedAt?: string | null;
+  connecteamLastModified?: string | null;
+  syncStatus?: StaffShift["syncStatus"];
+  syncNote?: string | null;
   instaworkGigId?: string | null;
   instaworkPostedAt?: string | null;
 }
@@ -195,6 +284,11 @@ const COLS: Record<keyof ShiftPatch, string> = {
   connecteamShiftId: "connecteam_shift_id",
   connecteamSchedulerId: "connecteam_scheduler_id",
   connecteamPublishedAt: "connecteam_published_at",
+  connecteamContentHash: "connecteam_content_hash",
+  connecteamSyncedAt: "connecteam_synced_at",
+  connecteamLastModified: "connecteam_last_modified",
+  syncStatus: "sync_status",
+  syncNote: "sync_note",
   instaworkGigId: "instawork_gig_id",
   instaworkPostedAt: "instawork_posted_at",
 };
