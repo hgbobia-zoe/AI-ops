@@ -126,6 +126,25 @@ export function getShiftsForDateRange(startDate: string, endDate: string): Staff
   return rows.map(toStaffShift);
 }
 
+/** Shifts flagged needs_review on a given day (two-way-sync conflicts / vanished Connecteam copies). The
+ *  surface the dispatcher resolves from. Earliest window first, same ordering as getShiftsForDate. */
+export function listNeedsReview(date: string): StaffShift[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM staff_shifts WHERE date = ? AND sync_status = 'needs_review' ORDER BY start_time IS NULL, start_time, role")
+    .all(date) as Row[];
+  return rows.map(toStaffShift);
+}
+
+/** Shifts flagged needs_review across [startDate,endDate] inclusive — the near-window conflict list. */
+export function listNeedsReviewRange(startDate: string, endDate: string): StaffShift[] {
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM staff_shifts WHERE date >= ? AND date <= ? AND sync_status = 'needs_review' ORDER BY date, start_time IS NULL, start_time, role",
+    )
+    .all(startDate, endDate) as Row[];
+  return rows.map(toStaffShift);
+}
+
 /** Distinct dates that already have built shifts, newest first (for the board's day rail). */
 export function getShiftDates(): string[] {
   const rows = getDb().prepare("SELECT DISTINCT date FROM staff_shifts ORDER BY date DESC").all() as { date: string }[];

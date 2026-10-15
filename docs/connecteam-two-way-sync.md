@@ -136,5 +136,98 @@ by **re-publishing** — the importer does not auto-push app edits.
 - **Unpublish reads as vanished.** Un-publishing a shift in Connecteam currently surfaces as a
   `needs_review` "copy vanished" flag (it leaves the published set). That is intentional — it is no longer an
   active published shift — but worth knowing.
-- **Follow-up (not in this PR):** a `needs_review` surface in the `/scheduling` UI so Lisa sees flagged shifts
-  without reading the audit log. The data + audit trail are in place for it.
+- **Follow-up (now shipped, see §9):** a `needs_review` surface in `/scheduling` so Lisa sees + resolves
+  flagged shifts without reading the audit log.
+
+## 8. Route auto-sync (BOTH directions, automatic) — `routeAutoAssign.ts` + `routeAutoSync.ts`
+
+PR #48 syncs **day-level** Connecteam shifts ↔ app shifts. This layer makes the **Dispatch route roster** and
+the **Connecteam schedule** auto-stay-consistent both ways. It runs server-side in the runtime tick as the
+**`connecteam-route-sync`** job (RUNTIME_TOKEN-gated), sweeping today..+14 days, and is gated by its own kill
+switch **`CONNECTEAM_AUTOSYNC_DISABLED=1`** (mirrors `CONNECTEAM_IMPORT_DISABLED`).
+
+### 8.1 Connecteam → route: AUTO-ASSIGN (not just prompt)
+Reuses `scheduledUnrouted.ts` (PR #43), which already computes who is scheduled-but-unrouted, each person's
+fillable route seat (driver/field), their eligible routes, and a suggested route. The pure
+`planRouteAutoAssign` then decides per person:
+
+| Case | Action |
+| --- | --- |
+| Exactly **one** eligible route (unambiguous) | **AUTO-ASSIGN** to it |
+| **More than one** eligible route (ambiguous) | **Fall back to the one-click prompt** (`ScheduledToRoutePrompt`) |
+| Prep not tied to a route | stays day-level (existing design; the detector never surfaces it as a route seat) |
+
+Auto-assign performs a **real app assignment** through the **same store path** the one-click prompt uses
+(find/create the route+role shift, add the assignee, dual-write the per-worker `shift_assignments` row). The
+staffing gate (`preCheck.ts`) stays honest — a Connecteam schedule is never credited as coverage; the gap
+clears only because an actual assignment now exists. **This is not locked:** a dispatcher can move/remove the
+person afterward and #48's reconcile + last-edit-wins apply as before.
+
+### 8.2 App route → Connecteam: AUTO-CREATE, **silently**
+Enforces the invariant *"nobody on a Dispatch route without being in Connecteam."* For each **route** app
+shift (has `routeId`, role driver/field, ≥1 assignee), the pure `planRouteConnecteamCreate` decides using the
+set of users who have **any** Connecteam shift that day (`connecteamUserIds`, from the live crew read):
+
+| Presence of the shift's assignees in Connecteam | Action |
+| --- | --- |
+| **None** are in Connecteam | **CREATE** one Connecteam shift for the shift (all its assignees), **`notifyUsers=false`** |
+| **All** are already in Connecteam | **skip** — the invariant is already satisfied (no duplicate shift) |
+| **Mixed** (some are, some aren't) | **flag `needs_review`** — creating one shift could duplicate or drop people; a human decides |
+
+Already-linked shifts (`connecteam_shift_id` set), `needs_review` shifts, and cancelled shifts are skipped
+(idempotent). A create with **no time window** is **deferred** (retried later; never a fabricated time). The
+returned Connecteam id is stored (`connecteam_shift_id` + scheduler + `connecteam_published_at`, like the
+publish path), so #48's reconcile **baselines** it next cycle and never re-imports a duplicate. The content
+hash is left null so the baseline records it — avoiding a hash-mismatch re-flag.
+
+**This changes the prior design** (PR #48 §4, where pushing to Connecteam was a separate human *publish*
+step). The human publish path is unchanged and still available; auto-create is the additional automatic path,
+and it is **always silent** so no crew is ever spammed by a sync.
+
+### 8.3 Guardrails (maximum care — this auto-writes real employee data)
+- **Silent:** every auto-create/update uses `notifyUsers=false` (new `PublishOpts` on
+  `createPublishedShift`/`updatePublishedShift`; the human publish path still defaults to `notifyUsers=true`).
+- **Idempotent / no duplicates:** dedupe strictly by `connecteam_shift_id`. Once linked, create never fires
+  again; once a person is on a route app shift, auto-assign never re-surfaces them. No create-then-delete
+  thrash. An accepted create that returns **no id** is flagged `needs_review` (so a re-run can't duplicate).
+- **Outage-safe:** Connecteam unreachable → the day is **skipped**, nothing written. Auto-assign uses
+  `scheduledUnroutedForDate` (reachable:false on outage); auto-create additionally requires the live crew
+  read (to know who is already in Connecteam) — if it can't read it, it does **not** create blind.
+- **Uncertain → record-only:** the mixed-presence case is flagged, never auto-written.
+- **Kill switch:** `CONNECTEAM_AUTOSYNC_DISABLED=1`.
+
+## 9. The `needs_review` conflict panel (`/scheduling`) + resolve
+
+`needsReview.ts` + `NeedsReviewPanel.tsx` + `ResolveSyncButtons.tsx` + the owner/admin route
+`POST /api/scheduling/shift/[id]/resolve-sync`.
+
+- **Readers:** `listNeedsReview(date)` / `listNeedsReviewRange(start,end)` on the store.
+- **Panel (server component):** lists every shift flagged `needs_review` for the selected date, each rendered
+  **APP vs CONNECTEAM side by side** — role/title, window (start/end), assignees — with each side's **edit
+  time** (app `updated_at` vs Connecteam `updateTime`/last-modified), the **newer** side marked, and the
+  `sync_note`. `buildConflictViews` is pure (matches each flagged shift to its live Connecteam shift by id).
+- **Resolve:** per shift, **Keep app version** or **Keep Connecteam version**.
+  - *Keep Connecteam* → **pull** the live Connecteam content onto the app shift (same write as the reconcile
+    update), or, for a linked-but-vanished copy, **accept the removal** (cancel + unlink the app shift).
+  - *Keep app* → **push** the app version into Connecteam **silently** (`notifyUsers=false`): update the
+    linked shift, or create one if unlinked. On success, clears `sync_status` back to `synced`.
+  - `planResolve` is pure; the write apply (`applyResolveAction`) takes injectable publishers for testing.
+- **Honest-when-unreachable:** if Connecteam is down the panel shows the **stored snapshot** (link id,
+  last-modified, synced-at, note) and **disables** the resolve actions (we won't guess the authoritative
+  version, and keep-app would need to write to a down Connecteam). Every resolve audits its outcome and
+  clears the flag **only after the required write succeeds**.
+
+### Honest caveats (route auto-sync + panel)
+- **A person scheduled day-level in Connecteam and then auto-assigned to a route** keeps their day-level
+  Connecteam shift; auto-create does **not** add a second (route) Connecteam shift for them, because they are
+  already in Connecteam (the "all present → skip" rule). The route assignment lives app-side; this is correct
+  and stable (no thrash).
+- **The Goodshuffle driverId ≠ Connecteam userId gap (PR #43) still stands:** a route's Dispatch-assigned
+  driver is matched to Connecteam crew by the app-shift assignee (a Connecteam userId), not by Goodshuffle's
+  driver id. Auto-assign operates on Connecteam-scheduled people (userIds), so it is unaffected — but a route
+  "driver" set only in Goodshuffle is not a Connecteam person and won't auto-create.
+- **Publish-required-in-Connecteam** and **last-modified unverified** (§1, §7) are unchanged: shifts created
+  by auto-sync are published (`isPublished=true`), and last-edit-wins still activates only if Connecteam
+  exposes an edit time.
+- **Near-window conflicts:** the panel resolves the **selected date** (so the live match is exact);
+  `listNeedsReviewRange` is available for a future multi-day roll-up.

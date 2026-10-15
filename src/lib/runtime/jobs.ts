@@ -20,6 +20,7 @@ import { getPayrollConfig } from "@/lib/payroll/config";
 import { runScheduledPayrollSyncIfDue } from "@/lib/payroll/scheduler";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
 import { runConnecteamImportTick, connecteamImportEnabled } from "@/lib/scheduling/connecteamReconcile";
+import { runRouteAutoSyncTick, connecteamAutosyncEnabled } from "@/lib/scheduling/routeAutoSync";
 import { runPeopleLifecycleTick } from "@/lib/people/lifecycleTick";
 import { scanImprovementSignals, openFromSignal } from "@/lib/ai/improvement/signals";
 import { selfAuditAutoOpen } from "@/lib/ai/improvement/config";
@@ -105,6 +106,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     note: "Reconciles Connecteam shifts INTO Dispatch (Lisa's workflow): creates an app shift for each published Connecteam shift with no app copy, updates linked ones when Connecteam changed, and flags a both-sides conflict or a vanished Connecteam copy for review. Idempotent + honest: a Connecteam outage skips the day (never wipes app shifts). No new Connecteam writes — the app->Connecteam push stays the human-gated publish path.",
     run: async () => {
       const r = await runConnecteamImportTick();
+      return { ok: r.ok, detail: r.detail };
+    },
+  },
+  {
+    key: "connecteam-route-sync",
+    label: "Connecteam route auto-sync (assign + create)",
+    bucket: "server",
+    configured: connecteamAutosyncEnabled,
+    note: "Keeps the Dispatch route roster and the Connecteam schedule consistent BOTH ways. Connecteam->route: a person scheduled for a route role is AUTO-ASSIGNED to the matching route when the match is unambiguous (one eligible route); ambiguous matches fall back to the one-click prompt. Route->Connecteam: a route assignee with no Connecteam shift that day gets one created SILENTLY (notifyUsers=false), its id stored so the import reconcile adopts it (no duplicate). Idempotent (dedupe by connecteam_shift_id), outage-safe (unreachable -> skip, never wipe/duplicate), kill-switchable (CONNECTEAM_AUTOSYNC_DISABLED=1). A mixed-presence route shift is flagged needs_review, never auto-written.",
+    run: async () => {
+      const r = await runRouteAutoSyncTick();
       return { ok: r.ok, detail: r.detail };
     },
   },

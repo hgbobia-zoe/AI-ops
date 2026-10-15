@@ -19,7 +19,9 @@ import {
 } from "@/components/scheduling/RouteStaffBoard";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate } from "@/lib/db/repo";
-import { getShiftsForDate } from "@/lib/scheduling/store";
+import { getShiftsForDate, listNeedsReview } from "@/lib/scheduling/store";
+import { buildConflictViews } from "@/lib/scheduling/needsReview";
+import { NeedsReviewPanel } from "@/components/scheduling/NeedsReviewPanel";
 import { computeCoverage } from "@/lib/scheduling/coverage";
 import { recommendCrew, type CrewRecommendation, type RecommendContext } from "@/lib/scheduling/availability";
 import { assignmentWindowsFromShifts, getDayAvailabilityCached } from "@/lib/scheduling/eligibilityInputs";
@@ -425,6 +427,17 @@ export default async function SchedulingPage({
   // assigning crew — no manual override. Composes the same crew rules + app assignments + recommendCrew.
   const preChecks = await routePreChecksForDate(date);
 
+  // Two-way-sync conflicts to resolve: shifts flagged needs_review for this day, rendered app-vs-Connecteam
+  // so Lisa can pick a winner. Matched to the live Connecteam read (coverage); when unreachable, the stored
+  // snapshot shows and the "keep Connecteam" apply is disabled (NeedsReviewPanel / resolve route).
+  const nameByUser = new Map<number, string>(roster.map((m) => [m.userId, m.name]));
+  const conflictViews = buildConflictViews({
+    flagged: listNeedsReview(date),
+    crewShifts: coverage.shifts,
+    reachable: coverage.ok,
+    nameOf: (uid) => nameByUser.get(uid) ?? null,
+  });
+
   // Schedule → Route bridge: crew scheduled in Connecteam today who aren't on ANY route yet, each with the
   // route gap they could fill. The PROMPT offers a one-click assign through the normal assign path (it never
   // credits a Connecteam schedule as coverage — the gap above clears only when a real assignment is made).
@@ -516,6 +529,8 @@ export default async function SchedulingPage({
       </p>
 
       <StaffingPreCheck routes={preChecks} />
+
+      <NeedsReviewPanel views={conflictViews} />
 
       <ScheduledToRoutePrompt date={date} people={scheduledUnroutedViews} routeCards={routeCards} shifts={shifts} />
 
