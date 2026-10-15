@@ -107,3 +107,51 @@ export function endOfOpsDayISO(ymd: string): string {
   const offsetMin = tzOffsetMinutes(tz, new Date(guess));
   return new Date(guess - offsetMin * 60000).toISOString();
 }
+
+/**
+ * ISO instant → the value a `<input type="datetime-local">` wants (local wall-clock, no tz suffix),
+ * rendered in the OPERATING timezone (America/New_York by default). This exists because the obvious
+ * `d.getFullYear()/getHours()` approach reads the HOST/BROWSER timezone, so a Dispatch user whose machine
+ * isn't on Eastern would see — and save — shift times shifted by their own tz offset. Pinning ET here makes
+ * a shift show (and round-trip) the SAME wall-clock Connecteam shows, regardless of the viewer's device.
+ */
+export function isoToOpsLocalInput(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: DISPLAY_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+      .formatToParts(d)
+      .map((x) => [x.type, x.value]),
+  );
+  const hour = p.hour === "24" ? "00" : p.hour; // some engines render midnight as 24
+  return `${p.year}-${p.month}-${p.day}T${hour}:${p.minute}`;
+}
+
+/**
+ * Inverse of isoToOpsLocalInput: interpret a `datetime-local` wall time (no tz) in the OPERATING timezone
+ * and return the absolute UTC ISO instant. Never `new Date("<local>")` — that reads the string in the
+ * host/browser tz and silently shifts the shift's time (the exact bug this replaces). Returns null on blank.
+ */
+export function opsLocalInputToIso(local: string | null): string | null {
+  if (!local || !local.trim()) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(local.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const da = Number(m[3]);
+  const h = Number(m[4]);
+  const mi = Number(m[5]);
+  // Guess the instant as if the wall time were UTC, then correct by the tz offset at that instant.
+  const guess = Date.UTC(y, mo - 1, da, h, mi, 0, 0);
+  const offsetMin = tzOffsetMinutes(DISPLAY_TZ, new Date(guess));
+  return new Date(guess - offsetMin * 60000).toISOString();
+}

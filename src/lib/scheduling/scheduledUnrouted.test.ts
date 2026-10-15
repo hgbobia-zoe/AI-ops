@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { detectScheduledUnrouted, type ScheduledUnroutedInput } from "./scheduledUnrouted";
+import { collapseScheduledPeople, detectScheduledUnrouted, type ScheduledUnroutedInput } from "./scheduledUnrouted";
 import type { ScheduledPerson, UnroutedRouteCandidate } from "./scheduledUnrouted";
+import type { CrewShift } from "@/lib/connecteam";
 
 // Windows in Unix seconds. A simple 9am–5pm-ish day for overlap math.
 const H = 3600;
@@ -112,6 +113,67 @@ describe("detectScheduledUnrouted (pure)", () => {
     expect(r.people[0].reasons.join(" ")).toContain("overlap not checked");
   });
 
+});
+
+// ── collapseScheduledPeople: each person shows their OWN real shift window, never a cross-shift span ──────
+describe("collapseScheduledPeople (pure) — the '7:30a – 2:30a' bug", () => {
+  // Saturday 10/17/2026 ET epochs (EDT, UTC-4).
+  const U = (iso: string): number => Math.floor(Date.parse(iso) / 1000);
+  const T0730 = U("2026-10-17T07:30:00-04:00"); // Joseph's shift start
+  const T1300 = U("2026-10-17T13:00:00-04:00"); // Joseph's shift end (1:00 PM)
+  const T1530 = U("2026-10-17T15:30:00-04:00"); // Marquis's shift start (3:30 PM)
+  const T1800 = U("2026-10-17T18:00:00-04:00"); // shared evening shift start
+  const T0230 = U("2026-10-18T02:30:00-04:00"); // shared evening shift end (2:30 AM next day)
+
+  function shift(id: string, start: number, end: number, assignees: Array<{ userId: number; name: string }>): CrewShift {
+    return {
+      id,
+      schedulerId: 1,
+      schedulerName: "Drivers",
+      startUnix: start,
+      endUnix: end,
+      timezone: "America/New_York",
+      isOpen: false,
+      title: "Driver",
+      assignees: assignees.map((a) => ({ userId: a.userId, name: a.name, role: "driver" as const })),
+    };
+  }
+
+  it("shows each driver's OWN earliest shift, not a span merged across a shared late shift", () => {
+    const joseph = { userId: 101, name: "Joseph Hewitt" };
+    const marquis = { userId: 102, name: "Marquis Crossen" };
+    const people = collapseScheduledPeople([
+      shift("s1", T0730, T1300, [joseph]), // Joseph 7:30a – 1:00p
+      shift("s2", T1530, T1800, [marquis]), // Marquis 3:30p – 6:00p
+      shift("s3", T1800, T0230, [joseph, marquis]), // shared evening shift ending 2:30a
+    ]);
+
+    const j = people.find((p) => p.userId === 101)!;
+    const m = people.find((p) => p.userId === 102)!;
+    // Before the fix both ended at 2:30a (T0230); now each keeps its own earliest shift's real window.
+    expect(j.window).toEqual({ start: T0730, end: T1300 });
+    expect(m.window).toEqual({ start: T1530, end: T1800 });
+    // The fabricated "end of day" 2:30a span must not appear on anyone.
+    expect(j.window!.end).not.toBe(T0230);
+    expect(m.window!.end).not.toBe(T0230);
+  });
+
+  it("drops a shift with no usable window to null, not a bogus zero-length window", () => {
+    const [p] = collapseScheduledPeople([shift("s1", T0730, T0730, [{ userId: 1, name: "A" }])]);
+    expect(p.window).toBeNull();
+  });
+});
+
+describe("detectScheduledUnrouted (pure) — unreachable", () => {
+  function person(p: Partial<ScheduledPerson> & { userId: number; role: ScheduledPerson["role"] }): ScheduledPerson {
+    return { name: `U${p.userId}`, title: null, window: { start: BASE, end: BASE + 8 * H }, ...p };
+  }
+  function routeCand(p: Partial<UnroutedRouteCandidate> & { routeId: string }): UnroutedRouteCandidate {
+    return { truckId: "E450", truckName: `Truck ${p.routeId}`, window: { start: BASE + H, end: BASE + 6 * H }, gapByRole: { driver: 0, field: 0 }, ...p };
+  }
+  function input(p: Partial<ScheduledUnroutedInput>): ScheduledUnroutedInput {
+    return { reachable: true, scheduled: [], routeAssignedUserIds: [], routes: [], ...p };
+  }
   it("Connecteam unreachable → honest unknown (reachable:false, no people), never fabricated", () => {
     const r = detectScheduledUnrouted(
       input({
