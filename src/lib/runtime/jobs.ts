@@ -25,6 +25,7 @@ import { runPeopleLifecycleTick } from "@/lib/people/lifecycleTick";
 import { scanImprovementSignals, openFromSignal } from "@/lib/ai/improvement/signals";
 import { selfAuditAutoOpen } from "@/lib/ai/improvement/config";
 import { runPreCheckAlerts } from "@/lib/scheduling/preCheckNotify";
+import { runWorkerPacketsTick } from "@/lib/scheduling/workerPackets";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { runScan } from "@/lib/risk/scan";
 import { runSalesAiJob, salesAiEnabled } from "@/lib/salesos/salesAiJob";
@@ -274,6 +275,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
           ? `responder ${health.state} (last ${formatAge(health.ageMs)}), ${pending} pending`
           : `responder ${health.state} but queue empty`;
       return { ok: health.alive || pending === 0, detail };
+    },
+  },
+  {
+    key: "worker-packets",
+    label: "Auto worker debriefs (shift packets)",
+    bucket: "server",
+    configured: () => true, // app-owned; a healthy no-op until AUTO_PACKET_ENABLED is set (see detail)
+    note: "Fires the DUE, UNSENT shift-packet touches (on_assign / day_before / refresher) to each live assignment, so a worker's debrief no longer waits on a human tapping Send. OFF BY DEFAULT: requires its own master switch AUTO_PACKET_ENABLED=true ON TOP OF SHIFT_COMMS_ENABLED and SMS_SEND_ENABLED; with any off it sends nothing. Strictly idempotent — each touch is sent at most once ever per assignment (per-(assignment,touch) change_key), so the 15-min tick never re-texts. Respects the Route Staffing Pre-Check (an unstaffed route's debrief is HELD) and only sends when a touch is actually due (on_assign once provisioned; day_before ~18h out; refresher ~1h out), never for past/cancelled shifts. Instawork temps have no captured phone, so they are skipped (never auto-texted, never a silent failure).",
+    run: async () => {
+      const r = await runWorkerPacketsTick();
+      return { ok: r.ok, detail: r.detail };
     },
   },
   {
