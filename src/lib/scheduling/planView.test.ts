@@ -19,10 +19,10 @@ function plan(p: Partial<StaffingPlan> & { assignments: PlannedAssignment[] }): 
 }
 
 function internal(shiftId: string, routeId: string): PlannedAssignment {
-  return { shiftId, routeId, role: "driver", kind: "internal", userId: 1, name: "A", hours: 8, whyThisRoute: "", whyTemp: null, wasCommitted: true, moved: false, fromRouteId: null };
+  return { shiftId, routeId, role: "driver", kind: "internal", userId: 1, name: "A", hours: 8, startTime: null, endTime: null, whyThisRoute: "", whyTemp: null, wasCommitted: true, moved: false, fromRouteId: null };
 }
 function temp(shiftId: string, routeId: string): PlannedAssignment {
-  return { shiftId, routeId, role: "field", kind: "temp", userId: null, name: "Temp", hours: 6, whyThisRoute: "", whyTemp: "Internal crew exhausted for this window", wasCommitted: false, moved: false, fromRouteId: null };
+  return { shiftId, routeId, role: "field", kind: "temp", userId: null, name: "Temp", hours: 6, startTime: null, endTime: null, whyThisRoute: "", whyTemp: "Internal crew exhausted for this window", wasCommitted: false, moved: false, fromRouteId: null };
 }
 
 describe("summarizePlan", () => {

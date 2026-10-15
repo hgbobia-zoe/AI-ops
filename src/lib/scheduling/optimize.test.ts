@@ -108,6 +108,35 @@ describe("optimizeStaffing", () => {
     expect(plan.tempHoursSaved).toBe(8);
   });
 
+  it("surfaces the seat's wall-clock window and a clear placement reason on each assignment", () => {
+    const long = shift({ id: "L", role: "driver", startTime: L_START, endTime: L_END });
+    const short = shift({ id: "S", role: "driver", startTime: S_START, endTime: S_END });
+    const plan = optimizeStaffing(
+      input({ shifts: [long, short], coverage: cov({ L: { gap: 1 }, S: { gap: 1 } }), roster: [crew(1, "Driver A", "driver")] }),
+    );
+    const onLong = plan.assignments.find((a) => a.routeId === "L")!;
+    const onShort = plan.assignments.find((a) => a.routeId === "S")!;
+    // Window threaded straight through from the shift (ISO), so the card can format it in ET.
+    expect(onLong.startTime).toBe(L_START);
+    expect(onLong.endTime).toBe(L_END);
+    expect(onShort.startTime).toBe(S_START);
+    expect(onShort.endTime).toBe(S_END);
+    // The single internal lands on the long route with the route-aware reason; the short falls to a temp.
+    expect(onLong.kind).toBe("internal");
+    expect(onLong.whyThisRoute).toMatch(/longest feasible route/i);
+    expect(onShort.kind).toBe("temp");
+    expect(onShort.whyTemp).toMatch(/internal crew exhausted/i);
+  });
+
+  it("labels a committed internal with an 'already assigned' reason", () => {
+    const s = shift({ id: "L", role: "driver", startTime: L_START, endTime: L_END, assignees: [7] });
+    const plan = optimizeStaffing(
+      input({ shifts: [s], coverage: cov({ L: { gap: 0, assigned: 1, covered: 1 } }), roster: [crew(7, "Driver G", "driver")] }),
+    );
+    expect(plan.assignments[0].kind).toBe("internal");
+    expect(plan.assignments[0].whyThisRoute).toMatch(/already assigned to this route/i);
+  });
+
   it("steers the single internal onto the LONGEST route, temp falls to the short one", () => {
     const long = shift({ id: "L", role: "driver", startTime: L_START, endTime: L_END });
     const short = shift({ id: "S", role: "driver", startTime: S_START, endTime: S_END });

@@ -55,6 +55,8 @@ export interface PlannedAssignment {
   userId: number | null; // internal only
   name: string; // internal: worker name; temp: "Temp (<role>)"
   hours: number | null; // seat hours (route window)
+  startTime: string | null; // ISO; the seat's wall-clock shift window start (null when unknown — never fabricated)
+  endTime: string | null; // ISO; the seat's shift window end
   whyThisRoute: string; // deterministic reason
   whyTemp: string | null; // temp only
   wasCommitted: boolean; // internal already assigned on this shift (a fixed point in the current plan)
@@ -106,6 +108,8 @@ interface Seat {
   routeId: string | null;
   role: ShiftRole;
   hours: number; // known window hours (seats with unknown windows are not placed — see below)
+  startTime: string; // ISO window start (planShifts filter guarantees it is present)
+  endTime: string; // ISO window end
   startMs: number;
   endMs: number;
   assignedUserId: number | null; // null = temp
@@ -178,6 +182,8 @@ export function optimizeStaffing(input: OptimizeInput): StaffingPlan {
         routeId: s.routeId,
         role: s.role,
         hours,
+        startTime: s.startTime!,
+        endTime: s.endTime!,
         startMs,
         endMs,
         assignedUserId: committedUserId,
@@ -311,10 +317,12 @@ export function optimizeStaffing(input: OptimizeInput): StaffingPlan {
         userId: uid,
         name: nameOf(uid),
         hours: seat.hours,
+        startTime: seat.startTime,
+        endTime: seat.endTime,
         whyThisRoute:
           moved || placedFresh
-            ? "Internal placed on the longest feasible route (avoids the most temp hours)"
-            : "Already assigned here",
+            ? "Longest feasible route, avoids the most temp hours"
+            : "Already assigned to this route",
         whyTemp: null,
         wasCommitted: committedHere,
         moved,
@@ -333,6 +341,8 @@ export function optimizeStaffing(input: OptimizeInput): StaffingPlan {
       userId: null,
       name: `Temp (${seat.role})`,
       hours: seat.hours,
+      startTime: seat.startTime,
+      endTime: seat.endTime,
       whyThisRoute: "Shortest eligible route (internal steered to longer routes first)",
       whyTemp,
       wasCommitted: false,
