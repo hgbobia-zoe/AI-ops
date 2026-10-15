@@ -43,14 +43,21 @@ export function buildTriageSystem(): string {
     "Decide EXACTLY ONE of two modes and reply with STRICT JSON, nothing else:",
     '  {"mode":"answer","answer":"<your full reply>"}   OR   {"mode":"route","answer":null}',
     "",
+    "You can ONLY answer or route. You CANNOT perform any action yourself: you cannot file, log, create,",
+    "send, schedule, assign, change, or do anything. So you must NEVER claim you did any of those. Never say",
+    'things like "I have logged your feature request" or "I sent that" or "I created it". If the person asks',
+    "you to DO, MAKE, FILE, LOG, CREATE, SEND, ADD, UPDATE, CHANGE, MOVE, or CANCEL anything (a feature",
+    "request, a bug report, a text, an email, a note, a task, a schedule change), choose route so the capable",
+    "responder actually does it.",
+    "",
     'Choose "answer" ONLY when you can fully and safely answer from general knowledge of what Viktor and',
     "the platform are and do, with NO live company data and NO action. Examples: what can you do, what tools",
-    "do you have, how does something work in general, a greeting, a definition.",
+    "do you have, how does something work in general, a greeting, a definition. An answer only gives",
+    "information, it never reports an action as done.",
     "",
     'Choose "route" for anything that needs CURRENT company data (schedules, routes, who is working, crew',
     "availability, finances, revenue, specific leads, quotes, events, counts, statuses, this week, today) OR",
-    'any ACTION (text a crew, send an email, add a note, create a task, change or move anything). When in',
-    'any doubt, choose "route". Never invent data. Never promise to do an action yourself.',
+    "any action or request to do something. When in any doubt, choose route. Never invent data.",
     "",
     "When you answer: be natural, short, and plain. Do not use dashes as punctuation. No emojis. Do not claim",
     "to read Confluence. If asked what you can do, cover: answer questions from the app data, set up actions",
@@ -78,6 +85,35 @@ export function parseTriageResult(raw: string | undefined | null): TriageResult 
     return answer ? { mode: "answer", answer } : { mode: "route", answer: null };
   }
   return { mode: "route", answer: null };
+}
+
+/** Does the message read as a request to DO something (an imperative action) rather than a question? Tier 1
+ *  can only answer or route, never act, so any action request MUST go to Tier 2 that actually performs it.
+ *  This is a deterministic safety net ON TOP of the model, so a mis-classification can never let Viktor
+ *  fabricate "I did it" for something it cannot do. Over-routing a borderline question is harmless (Tier 2
+ *  just answers it); under-routing an action is the real harm. PURE. */
+const ACTION_VERBS = new Set([
+  "make", "file", "log", "create", "add", "send", "text", "email", "schedule", "book", "update",
+  "change", "move", "remove", "delete", "assign", "draft", "post", "notify", "remind", "cancel",
+  "approve", "reject", "submit", "record", "register", "open", "raise", "report", "build", "set",
+]);
+export function looksLikeAction(text: string): boolean {
+  let t = (text || "").toLowerCase().trim();
+  if (!t) return false;
+  // Peel leading politeness / framing so the real verb surfaces ("ok, please make a ..." -> "make a ...").
+  for (let i = 0; i < 3; i++) {
+    const stripped = t.replace(
+      /^(hey|hi|ok|okay|so|and|well|please|pls|just|can you|could you|would you|will you|i want you to|i'?d like you to|i would like you to|i need you to|let'?s|go ahead and)\b[\s,]*/i,
+      "",
+    );
+    if (stripped === t) break;
+    t = stripped.trim();
+  }
+  const first = t.split(/[\s,]+/)[0] ?? "";
+  if (ACTION_VERBS.has(first)) return true;
+  // Common action phrasing anywhere in the message.
+  if (/\b(feature request|bug report)\b/.test(t) && /\b(make|file|log|create|submit|open|add|raise|put in)\b/.test(t)) return true;
+  return false;
 }
 
 /** Call the fast model to triage one message. Returns the parsed result, or a safe "route" on any failure
@@ -133,7 +169,11 @@ export async function handleViktorFastPath(params: FastPathParams): Promise<Fast
 
     const triage = await triageViktorMessage(params.text);
 
-    if (triage.mode === "answer" && triage.answer) {
+    // Safety net: Tier 1 can only answer or route, never act. If the message is clearly a request to DO
+    // something, route it even if the model wanted to answer, so Viktor never fabricates "I did it".
+    const mode: TriageMode = triage.mode === "answer" && looksLikeAction(params.text) ? "route" : triage.mode;
+
+    if (mode === "answer" && triage.answer) {
       // Re-check just before delivering: Tier 2 (or a prior run) may have answered during triage.
       if (!stillUnanswered(params.sessionId)) return "skipped";
       const text = humanize(triage.answer);
