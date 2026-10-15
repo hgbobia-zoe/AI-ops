@@ -93,3 +93,37 @@ describe("splitCoOwners", () => {
     expect(splitCoOwners("Jessie")).toEqual(["Jessie"]);
   });
 });
+
+describe("registry capability honesty", () => {
+  it("every employee declares an honest rules|ai capability", () => {
+    for (const e of AI_EMPLOYEES) {
+      expect(["rules", "ai"]).toContain(e.capability);
+    }
+  });
+
+  it("the sales employees carry the capability the audit found (not implied by backing)", () => {
+    const cap = (id: string) => AI_EMPLOYEES.find((e) => e.id === id)!.capability;
+    // LLM-backed (have a wired LLM path in their current flow).
+    expect(cap("quote-analyst")).toBe("ai");
+    expect(cap("lost-quote")).toBe("ai");
+    expect(cap("outreach")).toBe("ai");
+    expect(cap("sales-coach")).toBe("ai");
+    // Deterministic — must NOT read as AI (the UI must not imply an AI is working).
+    expect(cap("lead-intelligence")).toBe("rules");
+  });
+
+  it("the Quote Analyst input ref points at the real quoteReview module (not the broken salesos path)", () => {
+    const qa = AI_EMPLOYEES.find((e) => e.id === "quote-analyst")!;
+    const refs = qa.inputs.map((i) => i.ref);
+    expect(refs).toContain("quoteReview.ts:reviewQuote");
+    expect(refs.some((r) => r.includes("salesos/quoteReview.ts"))).toBe(false);
+  });
+
+  it("a rules-only employee never reads as llmReachable, even when a model is configured", () => {
+    const rulesEmp = AI_EMPLOYEES.find((e) => e.capability === "rules" && e.backing !== "coming")!;
+    expect(buildEmployeeView(rulesEmp, { llmReachable: true }).llmReachable).toBe(false);
+    const aiEmp = AI_EMPLOYEES.find((e) => e.capability === "ai")!;
+    expect(buildEmployeeView(aiEmp, { llmReachable: true }).llmReachable).toBe(true);
+    expect(buildEmployeeView(aiEmp, { llmReachable: false }).llmReachable).toBe(false);
+  });
+});

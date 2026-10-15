@@ -27,6 +27,7 @@ import { selfAuditAutoOpen } from "@/lib/ai/improvement/config";
 import { runPreCheckAlerts } from "@/lib/scheduling/preCheckNotify";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { runScan } from "@/lib/risk/scan";
+import { runSalesAiJob, salesAiEnabled } from "@/lib/salesos/salesAiJob";
 import { getRiskQueue } from "@/lib/risk/store";
 import { responderHealthNow, recordJobAlert, formatAge } from "@/lib/ai/responderHealth";
 import { countPendingInstructions } from "@/lib/ai/sessions";
@@ -234,6 +235,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
         else skipped++;
       }
       return { ok: true, detail: `${signals.length} candidates, ${opened} opened, ${skipped} skipped` };
+    },
+  },
+  {
+    key: "sales-ai",
+    label: "Sales AI (Jessie's team)",
+    bucket: "server",
+    configured: () => true, // app-owned; a healthy no-op until SALES_AI_ENABLED is flipped on
+    note: "Proactive, LLM-backed sales work on the RUNTIME_TOKEN cadence, gated by SALES_AI_ENABLED (default OFF). When on: the Quote/Opportunity Analyst runs the LLM reviewQuote over the top open quotes (records insights, Slacks flagged ones); Lost Quote + Outreach produce human-gated APPROVAL CARDS from their LLM drafts; Lead Intelligence Slacks a deduped nudge for hot high-value act-now leads; Sales Coach drains the call-recap backlog. ANALYSIS/DRAFTS/PROPOSALS only — every send/price/commit stays behind ai_approvals -> gs_outbox + EMAIL_SEND_ENABLED/SMS_SEND_ENABLED. Bounded (top-N + thresholds), self-throttled to a few runs/day, Slack-deduped (2h). Honest: skips + logs when the LLM is unreachable.",
+    run: async () => {
+      const r = await runSalesAiJob();
+      return { ok: r.ok, detail: salesAiEnabled() ? r.detail : "SALES_AI_ENABLED off — inert" };
     },
   },
   {

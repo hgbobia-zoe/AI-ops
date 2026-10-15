@@ -11,7 +11,7 @@ import { aiOrg } from "@/lib/aiorg/service";
 import { AI_EMPLOYEES, HUMANS } from "@/lib/aiorg/registry";
 import { authoritySplit } from "@/lib/aiorg/types";
 import { buildOrgTree, type OrgAgentInput } from "@/lib/aiorg/orgTree";
-import { BackingBadge, HealthMark, MetricRow, OrgTabs, StateDot } from "@/components/aiorg/AiOrgBits";
+import { BackingBadge, CapabilityBadge, HealthMark, MetricRow, OrgTabs, StateDot } from "@/components/aiorg/AiOrgBits";
 import { OrgChart } from "@/components/aiorg/OrgChart";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +72,9 @@ export default async function AiEmployeesPage(): Promise<React.JSX.Element> {
         <span className="inline-flex items-center gap-1.5"><BackingBadge backing="seed" /> seed data</span>
         <span className="inline-flex items-center gap-1.5"><BackingBadge backing="partial" /> partial</span>
         <span className="inline-flex items-center gap-1.5"><BackingBadge backing="coming" /> not wired yet</span>
+        <span className="text-[var(--bar)]">·</span>
+        <span className="inline-flex items-center gap-1.5"><CapabilityBadge capability="rules" llmReachable={false} /> deterministic</span>
+        <span className="inline-flex items-center gap-1.5"><CapabilityBadge capability="ai" llmReachable={true} /> LLM-backed</span>
       </div>
 
       {/* ── FULL ROSTER (per owner, with today's metrics + data-source health) ── */}
@@ -87,7 +90,10 @@ export default async function AiEmployeesPage(): Promise<React.JSX.Element> {
                 <Link key={e.id} href={`/ai-org/${e.id}`} className="bg-panel p-4 transition-colors hover:bg-[var(--row-hover)]">
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-2 text-[14px] font-medium text-foreground"><StateDot state={e.state} /> {e.name}</span>
-                    <BackingBadge backing={e.backing} />
+                    <span className="flex items-center gap-1.5">
+                      <CapabilityBadge capability={e.capability} llmReachable={e.llmReachable} />
+                      <BackingBadge backing={e.backing} />
+                    </span>
                   </div>
                   <div className="mt-1 text-[11px] uppercase tracking-[0.06em] text-meta">{DEPT_LABEL[e.department]}</div>
                   <p className="mt-1.5 line-clamp-2 text-[12.5px] text-meta">{e.mission}</p>
@@ -104,3 +110,4 @@ export default async function AiEmployeesPage(): Promise<React.JSX.Element> {
     </main>
   );
 }
+

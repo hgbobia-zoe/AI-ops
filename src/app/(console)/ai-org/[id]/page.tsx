@@ -9,7 +9,7 @@ import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings, canSeeFinancials } from "@/lib/auth/roles";
 import { aiEmployeeDetail } from "@/lib/aiorg/service";
 import { authoritySplit, type Tool } from "@/lib/aiorg/types";
-import { BackingBadge, HealthMark, MetricRow, OrgTabs, StateDot } from "@/components/aiorg/AiOrgBits";
+import { BackingBadge, CapabilityBadge, HealthMark, MetricRow, OrgTabs, StateDot } from "@/components/aiorg/AiOrgBits";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +53,7 @@ export default async function AiEmployeePage({ params }: { params: Promise<{ id:
       <header className="mt-2 mb-5 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="flex items-center gap-2.5 text-[22px] font-medium tracking-tight">
-            <StateDot state={view.state} /> {view.name} <BackingBadge backing={view.backing} />
+            <StateDot state={view.state} /> {view.name} <BackingBadge backing={view.backing} /> <CapabilityBadge capability={view.capability} llmReachable={view.llmReachable} />
           </h1>
           <p className="mt-1 max-w-[640px] text-[13px] text-meta">{config.mission}</p>
           <p className="mt-1 text-[12px] text-meta">Owner: <span className="text-tertiary-text">{config.owner}</span> · Last run: <span className="tabular-nums text-tertiary-text">{ago(view.lastRunAt)}</span></p>
