@@ -770,14 +770,26 @@ function validatePublishInput(input: PublishShiftInput): string | null {
   return null;
 }
 
+/** Publish options. `notifyUsers` DEFAULTS TO TRUE — the human-gated publish path alerts the crew. The
+ *  route auto-sync passes `false` so an automatic create/update never spams anyone (house rule: silent). */
+export interface PublishOpts {
+  notifyUsers?: boolean;
+}
+
+/** Resolve the notifyUsers query value (default true; explicit false → "false"). */
+function notifyParam(opts?: PublishOpts): "true" | "false" {
+  return opts?.notifyUsers === false ? "false" : "true";
+}
+
 /**
- * Create a PUBLISHED shift in Connecteam and notify the assigned crew. Reports ok ONLY when Connecteam
- * actually accepted it and returned a shift — never fakes success. One retry on a transient failure.
+ * Create a PUBLISHED shift in Connecteam and (by default) notify the assigned crew. Reports ok ONLY when
+ * Connecteam actually accepted it and returned a shift — never fakes success. One retry on a transient
+ * failure. Pass `{ notifyUsers: false }` for a SILENT create (route auto-sync) that alerts no one.
  */
-export async function createPublishedShift(input: PublishShiftInput): Promise<PublishShiftResult> {
+export async function createPublishedShift(input: PublishShiftInput, opts?: PublishOpts): Promise<PublishShiftResult> {
   const bad = validatePublishInput(input);
   if (bad) return { ok: false, error: bad };
-  const path = `/scheduler/v1/schedulers/${input.schedulerId}/shifts?notifyUsers=true`;
+  const path = `/scheduler/v1/schedulers/${input.schedulerId}/shifts?notifyUsers=${notifyParam(opts)}`;
   const r = await ctWrite("POST", path, [shiftBody(input)]);
   if (r.status !== 200 && r.status !== 201) {
     return { ok: false, error: extractErr(r.json) || `Connecteam HTTP ${r.status || "error"}` };
@@ -791,10 +803,10 @@ export async function createPublishedShift(input: PublishShiftInput): Promise<Pu
  * a real 2xx. The body shape is verified against the live API (the single-shift PUT /shifts/{id} returns
  * 405; the collection PUT with `shiftId` returns 200 and the edited times stick).
  */
-export async function updatePublishedShift(input: PublishShiftInput & { shiftId: string }): Promise<PublishShiftResult> {
+export async function updatePublishedShift(input: PublishShiftInput & { shiftId: string }, opts?: PublishOpts): Promise<PublishShiftResult> {
   const bad = validatePublishInput(input);
   if (bad) return { ok: false, error: bad };
-  const path = `/scheduler/v1/schedulers/${input.schedulerId}/shifts?notifyUsers=true`;
+  const path = `/scheduler/v1/schedulers/${input.schedulerId}/shifts?notifyUsers=${notifyParam(opts)}`;
   const r = await ctWrite("PUT", path, [shiftBody(input, input.shiftId)]);
   if (r.status !== 200 && r.status !== 201) {
     return { ok: false, error: extractErr(r.json) || `Connecteam HTTP ${r.status || "error"}` };
