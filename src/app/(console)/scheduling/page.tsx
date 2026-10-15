@@ -120,6 +120,7 @@ function syntheticShift(date: string, role: ShiftRole, win: { start: string | nu
     location: null, routeId: null, truckId: null, eventLabel: null, reasons: [], notes: null,
     source: "derived", status: "draft", assignees, instaworkHeadcount: 0, payRate: null,
     connecteamShiftId: null, connecteamSchedulerId: null, connecteamPublishedAt: null,
+    connecteamContentHash: null, connecteamSyncedAt: null, connecteamLastModified: null, syncStatus: null, syncNote: null,
     instaworkGigId: null, instaworkPostedAt: null,
     lifecycleState: null, supervisorUserId: null, reportLocation: null, reportTime: null, equipment: [], instructions: null,
     createdAt: "", updatedAt: "",

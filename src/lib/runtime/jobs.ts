@@ -19,6 +19,7 @@ import { connecteamConfigured, refreshConnecteamHealth, warmConnecteamCaches } f
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { runScheduledPayrollSyncIfDue } from "@/lib/payroll/scheduler";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
+import { runConnecteamImportTick, connecteamImportEnabled } from "@/lib/scheduling/connecteamReconcile";
 import { runPeopleLifecycleTick } from "@/lib/people/lifecycleTick";
 import { scanImprovementSignals, openFromSignal } from "@/lib/ai/improvement/signals";
 import { selfAuditAutoOpen } from "@/lib/ai/improvement/config";
@@ -94,6 +95,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
       // Warm the read caches (batched) alongside the health probe, so the next render/publish is instant.
       const [h] = await Promise.all([refreshConnecteamHealth(), warmConnecteamCaches()]);
       return { ok: h.ok, detail: h.detail };
+    },
+  },
+  {
+    key: "connecteam-sync",
+    label: "Connecteam two-way sync (import)",
+    bucket: "server",
+    configured: connecteamImportEnabled,
+    note: "Reconciles Connecteam shifts INTO Dispatch (Lisa's workflow): creates an app shift for each published Connecteam shift with no app copy, updates linked ones when Connecteam changed, and flags a both-sides conflict or a vanished Connecteam copy for review. Idempotent + honest: a Connecteam outage skips the day (never wipes app shifts). No new Connecteam writes — the app->Connecteam push stays the human-gated publish path.",
+    run: async () => {
+      const r = await runConnecteamImportTick();
+      return { ok: r.ok, detail: r.detail };
     },
   },
   {

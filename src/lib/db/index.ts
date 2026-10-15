@@ -2091,6 +2091,14 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // People Lifecycle: the new hire's E.164 mobile — required to provision a real Connecteam user. Additive
   // for employee rows created before the provisioning adapters landed (DBs from PR #29).
   { table: "employee", column: "phone", type: "TEXT" },
+  // Connecteam TWO-WAY sync (Lisa's workflow): bookkeeping so the importer can reconcile an app shift
+  // against its linked Connecteam shift idempotently, detect which side changed (content hash), and flag a
+  // divergence for a human instead of clobbering. All additive + nullable. See docs/connecteam-two-way-sync.md.
+  { table: "staff_shifts", column: "connecteam_content_hash", type: "TEXT" }, // hash of the last-synced Connecteam shift content (change detection)
+  { table: "staff_shifts", column: "connecteam_synced_at", type: "TEXT" },    // ISO of the last successful reconcile for this shift
+  { table: "staff_shifts", column: "connecteam_last_modified", type: "TEXT" },// ISO last-modified captured FROM Connecteam, when the API exposes one (else null — see the feasibility note)
+  { table: "staff_shifts", column: "sync_status", type: "TEXT" },             // null | synced | needs_review (divergence / vanished Connecteam copy)
+  { table: "staff_shifts", column: "sync_note", type: "TEXT" },               // human explanation when sync_status = needs_review
 ];
 
 function migrate(db: DB): void {
