@@ -98,6 +98,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.salesWorklist(), T.bookingHistory(), T.commsLog(), T.scoreLeads(), T.raiseException(), T.recordAudit()],
     escalationRules: [{ when: "High-value lead (>= $10k) just replied and is still untouched" }],
     backing: "live",
+    capability: "rules", // deterministic scoring/NBA only (calc.ts/nba.ts) — no LLM
     valueMeasure: "Worklist coverage, time-to-first-touch",
     healthKey: "bookings",
   },
@@ -114,11 +115,12 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     ],
     inputs: [
       { label: "Bid review", ref: "salesos/bidReview.ts:bidReview", href: "/salesos/bid" },
-      { label: "Quote event-risk", ref: "salesos/quoteReview.ts" },
+      { label: "Quote event-risk (LLM)", ref: "quoteReview.ts:reviewQuote" },
     ],
     toolbox: [T.bookingHistory(), T.bidReview(), T.draftComms(), T.changePrice(), T.recordAudit()],
     escalationRules: [{ when: "Quote stale past threshold on a large deal" }],
     backing: "live",
+    capability: "ai", // runs the LLM reviewQuote pass over open quotes (sales-ai job) + an LLM draft path
     valueMeasure: "Quote-review turnaround, win-rate on reviewed quotes",
     healthKey: "bookings",
   },
@@ -140,6 +142,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.bookingHistory(), T.lossInsights(), T.draftComms(), T.sendSms(), T.recordAudit()],
     escalationRules: [{ when: "Pattern of the same loss reason on high-value deals" }],
     backing: "live",
+    capability: "ai", // deterministic loss analytics PLUS an LLM win-back draft (draftLeadOutreach)
     valueMeasure: "Win-back contact rate, re-engaged revenue",
     healthKey: "bookings",
   },
@@ -161,6 +164,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.salesWorklist(), T.commsLog(), T.draftComms(), T.sendSms(), T.sendEmail(), T.recordAudit()],
     escalationRules: [{ when: "A draft implies a customer commitment" }],
     backing: "live",
+    capability: "ai", // history-aware LLM drafting (draftLeadOutreach), deterministic template floor
     valueMeasure: "Reply rate, drafts accepted vs edited",
     healthKey: "openphone",
   },
@@ -182,6 +186,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.commsLog(), T.sentiment(), T.draftCoachNote(), T.postNote(), T.recordAudit()],
     escalationRules: [{ when: "Negative-tone call on an active deal" }],
     backing: "live",
+    capability: "ai", // LLM call recaps (generateRecap) + LLM sentiment when CALL_SENTIMENT_LLM is on
     valueMeasure: "Coaching coverage, call-tone trend",
     healthKey: "openphone",
   },
@@ -205,6 +210,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.crew(), T.staffingPlan(), T.publishSchedule(), T.postGig(), T.recordAudit()],
     escalationRules: [{ when: "A coverage gap cannot be filled internally" }],
     backing: "partial",
+    capability: "rules", // deterministic staffing optimizer + crew rules — no LLM
     valueMeasure: "Temp hours avoided, coverage %",
     healthKey: "connecteam",
   },
@@ -227,6 +233,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.crew(), T.shiftReadiness(), T.publishSchedule(), T.postGig(), T.recordAudit()],
     escalationRules: [{ when: "A shift is unready at start (RED)" }],
     backing: "partial",
+    capability: "rules", // deterministic readiness/coverage/exception engine — no LLM
     valueMeasure: "Shift readiness %, open-shift count",
     healthKey: "connecteam",
   },
@@ -241,6 +248,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.recordAudit()],
     escalationRules: [],
     backing: "coming",
+    capability: "rules", // nothing wired yet — no LLM path
     valueMeasure: "Not wired yet",
   },
   {
@@ -263,6 +271,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.payrollReview(), T.payrollReconcile(), T.raiseException(), T.recordAudit()],
     escalationRules: [{ when: "A pay period has blocking issues (no Gusto mapping / no pay rate) before payday" }],
     backing: "coming", // the deterministic engine is live; the AI interpretation layer is the foundation
+    capability: "rules", // deterministic payroll review today; the LLM interpretation layer is not wired
     valueMeasure: "Payroll-ready %, blockers resolved before payday, time-to-approve",
   },
   {
@@ -282,6 +291,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.connHealth(), T.changeSettings(), T.recordAudit()],
     escalationRules: [{ when: "An integration is OFF or needs ATTENTION" }],
     backing: "partial",
+    capability: "rules", // deterministic connection-health + admin surfacing — no LLM
     valueMeasure: "Connections healthy %, setup completeness",
   },
 
@@ -304,6 +314,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.opportunities(), T.oppScore(), T.draftComms(), T.sendEmail(), T.recordAudit()],
     escalationRules: [{ when: "A high-score opportunity is near its deadline" }],
     backing: "seed",
+    capability: "ai", // deterministic opportunity scoring PLUS an LLM outreach-draft path
     valueMeasure: "Opportunities surfaced -> pursued, pipeline added",
   },
   {
@@ -324,6 +335,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.marketing(), T.draftComms(), T.publishContent(), T.recordAudit()],
     escalationRules: [{ when: "Overdue content on a live campaign" }],
     backing: "partial",
+    capability: "ai", // deterministic cadence tracking PLUS an LLM copy-draft path (Creative/artDirector)
     valueMeasure: "Content cadence kept, overdue count",
   },
   {
@@ -344,6 +356,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.marketing(), T.financeTrend(), T.changePrice(), T.recordAudit()],
     escalationRules: [{ when: "Spend is up with no result movement" }],
     backing: "partial",
+    capability: "rules", // deterministic spend-vs-result aggregation — no LLM
     valueMeasure: "Campaigns with recorded ROI, win-by-source",
   },
   {
@@ -357,6 +370,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.recordAudit()],
     escalationRules: [{ when: "A new competitor appears on a target keyword" }],
     backing: "coming",
+    capability: "rules", // placeholder — no LLM path wired
     valueMeasure: "Competitor coverage tracked",
   },
 
@@ -378,6 +392,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.briefCompose(), T.finance(), T.recordAudit()],
     escalationRules: [{ when: "Day status RED or the critical count rises" }],
     backing: "live",
+    capability: "rules", // composes the deterministic daily brief from existing aggregates — no LLM
     valueMeasure: "Brief accuracy, owner time saved",
   },
   {
@@ -399,6 +414,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.routes(), T.crew(), T.riskScore(), T.raiseException(), T.recordAudit()],
     escalationRules: [{ when: "A CRITICAL risk or CONSTRAINED capacity day" }],
     backing: "live",
+    capability: "rules", // deterministic readiness + risk engine — no LLM
     valueMeasure: "Risks caught pre-event, readiness trend",
   },
   {
@@ -433,6 +449,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     // The engine is new and real but headless (no Event Command Center UI yet — that is P6), so this is an
     // honest "partial": the interpretation layer is live, the surfacing blade is not built yet.
     backing: "partial",
+    capability: "rules", // interprets the deterministic lifecycle engine (no chat() in event/manager) — no LLM
     valueMeasure: "Events coordinated without a dropped handoff; blockers surfaced before the event date",
     blade: "command",
   },
@@ -455,6 +472,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.routes(), T.exceptions(), T.eta(), T.statusSync(), T.recordAudit()],
     escalationRules: [{ when: "A stop exception or a route running behind" }],
     backing: "live",
+    capability: "rules", // deterministic route/ETA/exception monitoring — no LLM
     valueMeasure: "On-time %, exceptions resolved",
     healthKey: "routes",
   },
@@ -473,6 +491,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.inventoryDemand(), T.raiseException(), T.recordAudit()],
     escalationRules: [{ when: "Peak demand spikes on a date" }],
     backing: "partial",
+    capability: "rules", // deterministic peak-concurrency calc — no LLM
     valueMeasure: "Concurrency conflicts flagged (not over-booking)",
   },
   {
@@ -494,6 +513,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.finance(), T.financeTrend(), T.recordAudit()],
     escalationRules: [{ when: "Labor is over plan past the alert threshold" }],
     backing: "live",
+    capability: "rules", // deterministic finance/labor/contribution trend calc — no LLM
     valueMeasure: "Trend accuracy, variance caught",
     healthKey: "connecteam",
   },
@@ -516,6 +536,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.attentionRank(), T.exceptions(), T.raiseException(), T.recordAudit()],
     escalationRules: [{ when: "Critical / high remains after filtering" }],
     backing: "live",
+    capability: "rules", // deterministic rank/dedupe of the attention feed — no LLM
     valueMeasure: "Fewer, higher-signal interruptions (noise reduction)",
   },
 
@@ -539,6 +560,7 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     toolbox: [T.bookingHistory(), T.routes(), T.finance(), T.commsLog(), T.draftComms(), T.postNote(), T.sendEmail(), T.createTask(), T.raiseException(), T.recordAudit()],
     escalationRules: [{ when: "An asked-for action is in a FORBIDDEN category (money/pricing/schedule/hiring/Instawork)" }],
     backing: "live",
+    capability: "ai", // the LLM Slack brain (session bridge / provider) — LLM-backed
     valueMeasure: "Questions answered + actions correctly gated, from Slack",
   },
 ];

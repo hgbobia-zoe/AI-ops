@@ -28,6 +28,8 @@ import {
 // Real module reads (every one already ships; AI Org only composes them).
 import { salesLeads } from "@/lib/salesos/service";
 import { lostQuotesOverview } from "@/lib/salesos/lostService";
+import { quoteInsightSummary } from "@/lib/salesos/quoteInsights";
+import { llmConfigured } from "@/lib/llm";
 import { opsOverview } from "@/lib/ops/service";
 import { getRiskQueue } from "@/lib/risk/store";
 import { getActiveVehicles } from "@/lib/vehicles";
@@ -112,6 +114,9 @@ export async function aiOrg(opts: { showMoney?: boolean } = {}): Promise<AiOrgOv
   const showMoney = opts.showMoney ?? false;
 
   const conns = computeConnections();
+  // Is the LLM key actually set? Threaded into every view so an `ai`-capability employee reads honestly
+  // as "AI (key off)" when no model is configured, instead of implying an AI is working. Guarded.
+  const llmReachable = safeSync(() => llmConfigured(), false) ?? false;
 
   // Shared, slightly heavier reads — resolved once and shared across the employees that need them.
   const ops = await safe(() => opsOverview(), null);
@@ -124,7 +129,19 @@ export async function aiOrg(opts: { showMoney?: boolean } = {}): Promise<AiOrgOv
   if (leads) {
     signals["lead-intelligence"] = { metrics: [m("Open leads", leads.totalOpen), m("Act now", leads.actNowCount, leads.actNowCount ? "attention" : "default")], active: leads.totalOpen > 0, health: healthFor(conns, "bookings") };
     const openQuotes = leads.counts.awaiting + leads.counts.follow_up;
-    signals["quote-analyst"] = { metrics: [m("Open quotes", openQuotes), m("Unsent", leads.counts.unsent, leads.counts.unsent ? "attention" : "default")], active: openQuotes + leads.counts.unsent > 0, health: healthFor(conns, "bookings") };
+    // The AI pass (sales-ai job) records what it reviewed + flagged; surface it honestly on the card.
+    const qi = safeSync(() => quoteInsightSummary(), null);
+    const quoteMetrics: AiMetric[] = [m("Open quotes", openQuotes), m("Unsent", leads.counts.unsent, leads.counts.unsent ? "attention" : "default")];
+    if (qi && qi.total > 0) quoteMetrics.push(m("AI flags", qi.flagged, qi.flagged ? "attention" : "positive"));
+    signals["quote-analyst"] = {
+      metrics: quoteMetrics,
+      active: openQuotes + leads.counts.unsent > 0,
+      health: healthFor(conns, "bookings"),
+      lastDetail:
+        qi && qi.latest
+          ? `AI reviewed ${qi.total} quote${qi.total === 1 ? "" : "s"}, flagged ${qi.flagged}. Latest: ${qi.latest.clientName || qi.latest.leadId}${qi.latest.flagged && qi.latest.risks[0] ? ` — ${qi.latest.risks[0]}` : qi.latest.flagged ? " — flagged" : " — no risks"}.`
+          : undefined,
+    };
     signals["outreach"] = { metrics: [m("Draftable now", leads.actNowCount, leads.actNowCount ? "attention" : "default"), m("Comms", leads.hasCommsIntegration ? "wired" : "off", leads.hasCommsIntegration ? "positive" : "default")], active: leads.actNowCount > 0, health: healthFor(conns, "openphone") };
   }
   const lost = safeSync(() => lostQuotesOverview(), null);
@@ -218,7 +235,7 @@ export async function aiOrg(opts: { showMoney?: boolean } = {}): Promise<AiOrgOv
   // the operator's paused set (settings.aiPaused) so a paused agent reads as intentionally off.
   const paused = new Set(safeSync(() => getSettings().aiPaused, [] as string[]) ?? []);
   const employees = AI_EMPLOYEES.map((e) =>
-    buildEmployeeView(e, { ...(signals[e.id] ?? {}), paused: paused.has(e.id) }),
+    buildEmployeeView(e, { ...(signals[e.id] ?? {}), paused: paused.has(e.id), llmReachable }),
   );
 
   // Recent AI / audit activity (sales audit is the live, attributed trail today).

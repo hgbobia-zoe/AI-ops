@@ -30,6 +30,13 @@ export type BladeKey =
  *  - coming:  no real data source yet — ship as a placeholder, NEVER with fabricated metrics */
 export type AiBacking = "live" | "seed" | "partial" | "coming";
 
+/** HONEST capability signal, distinct from `backing`. Derived from the CODE, not hand-waved:
+ *  - rules: deterministic only — this employee NEVER invokes an LLM (its analysis/drafts are pure
+ *           arithmetic/templates). The UI must not imply an AI is "reviewing" anything.
+ *  - ai:    has a wired LLM path in its current flow (reviewQuote / draftLeadOutreach / recap / etc.).
+ *           Reachability (is the LLM key actually set?) is resolved at runtime (llmReachable). */
+export type AiCapability = "rules" | "ai";
+
 // ── Toolbox + permissions (§4 of the design doc) ──────────────────────────────
 /** Per-tool, per-employee authority. FORBIDDEN tools are simply ABSENT from a toolbox. */
 export type PermLevel =
@@ -81,6 +88,9 @@ export interface AIEmployee {
   toolbox: Tool[]; // the ONLY tools this employee may use
   escalationRules: EscalationRule[];
   backing: AiBacking;
+  /** HONEST rules-vs-LLM signal (see AiCapability). Set per employee from the code reality, not from
+   *  the hand-picked `backing` label. */
+  capability: AiCapability;
   /** How the value of this employee is measured (shown on the detail page). */
   valueMeasure: string;
   /** The runtime-job / audit key used to derive lastRun, when wired to one. */
@@ -113,6 +123,12 @@ export interface AiEmployeeView {
   owner: string;
   mission: string;
   backing: AiBacking;
+  /** HONEST rules-vs-LLM signal (static, from the config). */
+  capability: AiCapability;
+  /** For an `ai`-capability employee: is the LLM path actually reachable right now (key configured)?
+   *  Always false for a `rules` employee (it never calls an LLM). Lets the UI say "AI (key off)" truthfully
+   *  instead of implying an AI is working when no model is configured. */
+  llmReachable: boolean;
   /** Derived liveness dot. "coming" employees are always "coming" (no metrics). */
   state: AiLiveState;
   /** Headline metrics for the command center + detail (empty for "coming"). */
@@ -151,6 +167,9 @@ export interface EmployeeSignal {
   /** When the backing is live/partial/seed: does the source have anything to show right now? Drives
    *  the idle-vs-ok dot. Defaults to true. */
   active?: boolean;
+  /** Runtime: is the LLM key configured? Only meaningful for an `ai`-capability employee. Defaults false
+   *  (honest: no model ⇒ the LLM path is not reachable). */
+  llmReachable?: boolean;
   /** Operator paused this employee from the org chart (settings.aiPaused). A paused employee reads as
    *  intentionally off (state "idle" + a Paused flag) and its proposer produces nothing. Does NOT edit
    *  the code-reviewed config — it is an operational on/off switch only. */
@@ -178,6 +197,10 @@ export function buildEmployeeView(emp: AIEmployee, signal: EmployeeSignal = {}):
     owner: emp.owner,
     mission: emp.mission,
     backing: emp.backing,
+    capability: emp.capability,
+    // An `ai` employee's LLM path is reachable only when a model is actually configured; a `rules`
+    // employee never calls an LLM, so this is always false (the UI shows "RULES", not "AI key off").
+    llmReachable: emp.capability === "ai" ? signal.llmReachable === true : false,
     state,
     metrics,
     lastRunAt: coming ? null : signal.lastRunAt ?? null,

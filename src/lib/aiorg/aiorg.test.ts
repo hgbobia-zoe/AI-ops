@@ -24,6 +24,7 @@ const base = (over: Partial<AIEmployee> = {}): AIEmployee => ({
   toolbox: [],
   escalationRules: [],
   backing: "live",
+  capability: "rules",
   valueMeasure: "v",
   ...over,
 });

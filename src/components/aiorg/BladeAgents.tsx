@@ -12,7 +12,7 @@ import { canSeeFinancials } from "@/lib/auth/roles";
 import { bladeAgents } from "@/lib/aiorg/service";
 import { countLiveSessionsByBlade } from "@/lib/ai/sessions";
 import type { BladeKey } from "@/lib/aiorg/types";
-import { BackingBadge, StateDot } from "./AiOrgBits";
+import { BackingBadge, CapabilityBadge, StateDot } from "./AiOrgBits";
 
 const SIGNAL_TONE: Record<string, string> = {
   critical: "text-critical",
@@ -74,6 +74,7 @@ export async function BladeAgents({ blade, className }: { blade: BladeKey; class
               <span className="flex items-center gap-2">
                 <span className="truncate text-[13px] font-medium text-foreground">{view.name}</span>
                 <BackingBadge backing={view.backing} />
+                <CapabilityBadge capability={view.capability} llmReachable={view.llmReachable} />
               </span>
               <span className="mt-0.5 block text-[11.5px] text-meta">
                 {view.backing === "coming" || !keySignal ? (

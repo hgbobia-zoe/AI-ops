@@ -3,7 +3,7 @@
 
 import type React from "react";
 import Link from "next/link";
-import type { AiBacking, AiLiveState, AiMetric } from "@/lib/aiorg/types";
+import type { AiBacking, AiCapability, AiLiveState, AiMetric } from "@/lib/aiorg/types";
 
 const TABS: { href: string; label: string }[] = [
   { href: "/ai-org", label: "Command Center" },
@@ -55,6 +55,28 @@ export function BackingBadge({ backing }: { backing: AiBacking }): React.JSX.Ele
   return (
     <span className={`rounded border px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.08em] ${BACKING_TONE[backing]}`}>
       {BACKING_LABEL[backing]}
+    </span>
+  );
+}
+
+/** HONEST capability tag, distinct from the backing badge: RULES = deterministic only (never calls an
+ *  LLM), AI = has a wired LLM path. For an AI employee with no model configured we say "AI · key off" so
+ *  the UI never implies an AI is working when it can't. */
+export function CapabilityBadge({ capability, llmReachable }: { capability: AiCapability; llmReachable: boolean }): React.JSX.Element {
+  if (capability === "rules") {
+    return (
+      <span className="rounded border border-border px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.08em] text-meta" title="Deterministic rules only — this employee never calls an LLM.">
+        Rules
+      </span>
+    );
+  }
+  const tone = llmReachable ? "border-accent/40 text-accent" : "border-border text-meta";
+  return (
+    <span
+      className={`rounded border px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.08em] ${tone}`}
+      title={llmReachable ? "LLM-backed — an AI model is configured and reachable." : "LLM-backed, but no model is configured right now (ANTHROPIC_API_KEY / LLM_BASE_URL unset)."}
+    >
+      {llmReachable ? "AI" : "AI · key off"}
     </span>
   );
 }
