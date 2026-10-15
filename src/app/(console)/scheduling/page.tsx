@@ -22,6 +22,10 @@ import { getRoutesForDate } from "@/lib/db/repo";
 import { getShiftsForDate, listNeedsReview } from "@/lib/scheduling/store";
 import { buildConflictViews } from "@/lib/scheduling/needsReview";
 import { NeedsReviewPanel } from "@/components/scheduling/NeedsReviewPanel";
+import { buildRouteStaffingStates, type RouteStaffingState } from "@/lib/scheduling/routeStaffing";
+import { buildStaffingQueue, type ScheduledUnroutedLite, type RouteMeta, type ShiftMeta } from "@/lib/scheduling/staffingQueue";
+import { StaffingReadinessQueue } from "@/components/scheduling/StaffingReadinessQueue";
+import { SchedulingHeaderActions } from "@/components/scheduling/SchedulingHeaderActions";
 import { computeCoverage } from "@/lib/scheduling/coverage";
 import { recommendCrew, type CrewRecommendation, type RecommendContext } from "@/lib/scheduling/availability";
 import { assignmentWindowsFromShifts, getDayAvailabilityCached } from "@/lib/scheduling/eligibilityInputs";
@@ -61,7 +65,7 @@ import { StaffingRosterSections } from "@/components/scheduling/StaffingRosterSe
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
 import { ConnectInstaworkButton } from "@/components/ConnectInstaworkButton";
 import { summarizeInstaworkByRole, instaworkShiftsForDate, instaworkGigsForRoute } from "@/lib/instawork/reconcile";
-import { todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
+import { todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
 import { routeWindow } from "@/lib/risk/engine";
 import { DEFAULT_RISK_CONFIG, type EngineRoute } from "@/lib/risk/types";
@@ -335,6 +339,17 @@ export default async function SchedulingPage({
     if (cur == null || READINESS_RANK[r.level] < READINESS_RANK[cur]) readinessByRoute[r.routeId] = r.level;
   }
 
+  // ── Shared route-staffing state (Required / Assigned / Gap) — the SAME selector Dispatch reads, so the
+  // board's per-field columns agree with Dispatch by construction (never a second, drifting calculation). ──
+  const staffingStates = buildRouteStaffingStates(routes, shifts, assignmentsByShift, commsWired, truckName);
+  const staffingByRoute: Record<string, RouteStaffingState> = {};
+  for (const st of staffingStates) staffingByRoute[st.routeId] = st;
+
+  // Routes with an unresolved two-way-sync conflict this day — drives the row's "Resolve Sync" action.
+  const syncConflictRouteIds = new Set<string>(
+    listNeedsReview(date).map((s) => s.routeId).filter((x): x is string => Boolean(x)),
+  );
+
   // ── Route-centric board data ──────────────────────────────────────────────
   // Group the day's shifts by route. Each active route becomes a card; shifts not tied to a route (the
   // day-before prep shift, manual shifts) fall into "other". Instawork gigs are matched to each route by
@@ -370,6 +385,8 @@ export default async function SchedulingPage({
       gigs,
       stops: route.stops.map((s) => ({ custName: s.custName, kind: s.kind ?? "delivery", address: s.address ?? null })),
       readiness: readinessByRoute[route.routeId] ?? null,
+      staffing: staffingByRoute[route.routeId]!,
+      hasSyncConflict: syncConflictRouteIds.has(route.routeId),
     };
   });
 
@@ -469,6 +486,47 @@ export default async function SchedulingPage({
   const money = (n: number | null): string => (n == null ? "n/a" : `$${Math.round(n).toLocaleString()}`);
   const pct = (n: number | null): string => (n == null ? "n/a" : `${Math.round(n * 100)}%`);
 
+  // ── STAFFING & READINESS queue (doc §15) — ONE consolidated, ordered list merging the day's existing
+  // authoritative signals (pre-check gaps, shift readiness/exceptions, sync conflicts, scheduled-but-unrouted
+  // prompts). Pure merge; the detail panels below remain the action targets each row scrolls to. ──
+  const fmtWin = (start: string | null, end: string | null, known: boolean): string | null => {
+    if (!known || !start) return null;
+    const s = formatClockTime(start);
+    const e = end ? formatClockTime(end) : "";
+    return e ? `${s} – ${e}` : s;
+  };
+  const routeMeta: Record<string, RouteMeta> = {};
+  for (const rc of routeCards) {
+    routeMeta[rc.routeId] = {
+      label: rc.truckName,
+      windowLabel: fmtWin(rc.startTime, rc.endTime, rc.windowKnown),
+      startMs: rc.startTime ? Date.parse(rc.startTime) : null,
+    };
+  }
+  const shiftMeta: Record<string, ShiftMeta> = {};
+  for (const s of shifts) {
+    shiftMeta[s.id] = {
+      routeLabel: s.routeId ? routeLabelFor(s.routeId) : "Prep / other",
+      windowLabel: fmtWin(s.startTime, s.endTime, s.windowKnown),
+      startMs: s.windowKnown && s.startTime ? Date.parse(s.startTime) : null,
+    };
+  }
+  const scheduledUnroutedLite: ScheduledUnroutedLite[] = scheduledUnroutedViews.map((p) => ({
+    userId: p.userId,
+    name: p.name,
+    roleLabel: p.roleLabel,
+    windowLabel: fmtWin(p.startTime, p.endTime, p.windowKnown),
+    startMs: p.startTime ? Date.parse(p.startTime) : null,
+  }));
+  const queueItems = buildStaffingQueue({
+    preChecks,
+    exceptions: shiftExceptions,
+    conflicts: conflictViews,
+    scheduledUnrouted: scheduledUnroutedLite,
+    routeMeta,
+    shiftMeta,
+  });
+
   // ── Header metrics, grouped DEMAND | COVERAGE | READINESS (doc §14). Unknown stays unknown (never 0):
   // TEMP BOOKED is "n/a" when Instawork is unavailable (not "0 booked"); OPEN SEATS is the engine's gap.
   const tempBooked: number | null = iwOn && iw?.ok ? iwDayShifts.reduce((n, s) => n + s.filled, 0) : null;
@@ -496,9 +554,12 @@ export default async function SchedulingPage({
             Workforce allocation · {formatYmdLong(date)} · {routes.length} route{routes.length === 1 ? "" : "s"}
           </p>
         </div>
-        <div className="flex items-end gap-6">
-          <FigureStrip figures={figures} />
-          <DateNav date={date} today={today} />
+        <div className="flex flex-col items-end gap-3">
+          <div className="flex items-end gap-6">
+            <FigureStrip figures={figures} />
+            <DateNav date={date} today={today} />
+          </div>
+          <SchedulingHeaderActions date={date} roster={roster} eligibilityData={eligibilityData} />
         </div>
       </header>
 
@@ -528,11 +589,9 @@ export default async function SchedulingPage({
         )}
       </div>
 
-      {/* ── Actionable staffing & readiness queue — the day's state + routes needing action, up top. ── */}
-      <StaffingPreCheck routes={preChecks} />
-      <NeedsReviewPanel views={conflictViews} />
-      <ScheduledToRoutePrompt date={date} people={scheduledUnroutedViews} routeCards={routeCards} shifts={shifts} />
-      <ShiftReadinessExceptions rows={readinessRows} exceptions={shiftExceptions} routeLabel={routeLabelFor} />
+      {/* ── STAFFING & READINESS — the ONE consolidated queue (doc §15). Every row scrolls to the detail
+          panel below that owns its workflow; all-clear shows a compact line, not an empty card. ── */}
+      <StaffingReadinessQueue items={queueItems} />
 
       {/* ── Route staffing board — the primary planning workspace. ── */}
       <div id="staffing-board">
@@ -555,6 +614,21 @@ export default async function SchedulingPage({
         iwConfigured={iwOn}
         hasRoutes={routes.length > 0}
       />
+      </div>
+
+      {/* ── Detail panels — the workflows the queue above points at (each the scroll target for its rows).
+          They render only when they have something to show, keeping the page quiet when all is clear. ── */}
+      <div id="scheduled-to-route" className="mt-6">
+        <ScheduledToRoutePrompt date={date} people={scheduledUnroutedViews} routeCards={routeCards} shifts={shifts} />
+      </div>
+      <div id="sync-conflicts">
+        <NeedsReviewPanel views={conflictViews} />
+      </div>
+      <div id="shift-readiness">
+        <ShiftReadinessExceptions rows={readinessRows} exceptions={shiftExceptions} routeLabel={routeLabelFor} />
+      </div>
+      <div id="precheck">
+        <StaffingPreCheck routes={preChecks} />
       </div>
 
       {/* ── Proposed staffing plan — a decision point, kept visually distinct from committed assignments. ── */}
