@@ -10,9 +10,24 @@ import type { StaffingPlan, PlannedAssignment } from "@/lib/scheduling/optimize"
 import type { PlanSummary, StaffingHealth } from "@/lib/scheduling/planView";
 import { STAFFING_HEALTH_LABEL } from "@/lib/scheduling/planView";
 import { ApplyPlanButton } from "@/components/scheduling/ApplyPlanButton";
+import { formatClockTime } from "@/lib/dates";
 
 function hours(n: number | null): string {
   return n == null ? "n/a" : `${n}h`;
+}
+
+// The seat's wall-clock shift window in Eastern Time (formatClockTime is pinned to America/New_York).
+// Honest when unknown: no window → "time not set", never a fabricated or misleading span.
+function shiftWindow(a: PlannedAssignment): string {
+  const start = formatClockTime(a.startTime);
+  const end = formatClockTime(a.endTime);
+  if (!start || !end) return "time not set";
+  return `${start} to ${end}`;
+}
+
+// One clear, human reason for the placement (which person on this route, and why).
+function placementReason(a: PlannedAssignment): string {
+  return a.kind === "temp" ? (a.whyTemp ?? a.whyThisRoute) : a.whyThisRoute;
 }
 
 const HEALTH_TONE: Record<StaffingHealth, string> = {
@@ -97,11 +112,12 @@ export function StaffingPlanPreview({
                     <span className={`size-1.5 rounded-full ${a.kind === "internal" ? "bg-positive" : "bg-attention"}`} aria-hidden />
                     <span className="text-foreground">{a.name}</span>
                     <span className="text-meta">
-                      {a.kind === "internal" ? "Internal" : "Temp"} · {hours(a.hours)}
+                      {a.kind === "internal" ? "Internal" : "Temp"} · {shiftWindow(a)}
+                      {a.hours != null && ` · ${hours(a.hours)}`}
                     </span>
                   </span>
                   <div className="ml-3 mt-0.5 text-[11px] text-meta">
-                    {a.kind === "temp" ? a.whyTemp : a.whyThisRoute}
+                    {placementReason(a)}
                     {a.moved && <span className="text-attention"> · moved to a longer route</span>}
                   </div>
                 </li>
