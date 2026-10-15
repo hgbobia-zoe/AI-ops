@@ -27,6 +27,15 @@ RUN npm install --include=dev --no-audit --no-fund
 COPY . .
 RUN npm run build
 
+# Build identity baked into the image so /api/version reports the live commit at runtime (the CD
+# post-deploy health gate and external monitoring read it). Placed AFTER the build so a changing commit
+# only busts this tiny layer, never the npm install / build cache. Immune to a later unstamped deploy
+# dropping a runtime env var, because it travels inside the image.
+ARG GIT_COMMIT=unknown
+ARG DEPLOYED_AT=
+ENV GIT_COMMIT=$GIT_COMMIT
+ENV DEPLOYED_AT=$DEPLOYED_AT
+
 ENV PORT=3000
 ENV DATABASE_PATH=/data/dispatch.db
 EXPOSE 3000
