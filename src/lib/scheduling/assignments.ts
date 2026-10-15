@@ -261,6 +261,14 @@ export function logShiftEvent(e: ShiftEventInput, now: Date = new Date()): boole
   return info.changes > 0;
 }
 
+/** Has an event with this exact change_key already been written? The idempotency probe for callers that
+ *  must CHECK-then-act (e.g. the auto-packet job sends only when the per-(assignment,touch) key is absent,
+ *  so a touch is never re-sent). Mirrors the UNIQUE(change_key) dedup logShiftEvent relies on. */
+export function hasShiftEvent(changeKey: string): boolean {
+  const r = getDb().prepare("SELECT 1 FROM shift_assignment_events WHERE change_key = ? LIMIT 1").get(changeKey);
+  return r != null;
+}
+
 export interface ShiftEventRow {
   id: string;
   ts: string;
