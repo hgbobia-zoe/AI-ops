@@ -36,6 +36,8 @@ import { shiftCommsEnabled } from "@/lib/scheduling/commsFlag";
 import { ShiftReadinessExceptions, type ReadinessRow } from "@/components/scheduling/ShiftReadinessExceptions";
 import { StaffingPreCheck } from "@/components/scheduling/StaffingPreCheck";
 import { ScheduledToRoutePrompt, type ScheduledToRouteView } from "@/components/scheduling/ScheduledToRoutePrompt";
+import { ConnecteamScheduleMirror } from "@/components/scheduling/ConnecteamScheduleMirror";
+import { summarizeConnecteamSchedule, connecteamScheduleHeadline } from "@/lib/scheduling/connecteamSchedule";
 import { routePreChecksForDate } from "@/lib/scheduling/preCheck";
 import { scheduledUnroutedForDate } from "@/lib/scheduling/scheduledUnrouted";
 import { ROLE_LABEL } from "@/components/scheduling/RouteStaffBoard";
@@ -154,10 +156,11 @@ export default async function SchedulingPage({
     ? await Promise.all([getCrewForDateSafe(date), getUsersList(), getPayRates(date, date), getCrewForDate(dayBefore), getCrewForDate(nextDay)])
     : [{ ok: false, shifts: [] as CrewShift[] }, [] as CrewMember[], new Map<number, PayRate[]>(), [] as CrewShift[], [] as CrewShift[]];
 
-  // Distinct crew already on the Connecteam schedule this day (dedup by userId).
-  const scheduledCrew = dedupCrew(coverage.shifts.flatMap((s) => s.assignees));
-  const driverScheduled = scheduledCrew.filter((a) => a.role === "driver");
-  const prepScheduled = scheduledCrew.filter((a) => a.role === "prep");
+  // Accurate, role-agnostic mirror of the whole Connecteam schedule for the day (every role, including the
+  // catch-all "other" — the old headline counted only driver + prep, so office/unusual-title crew Lisa put
+  // on the day were silently dropped and Dispatch read as "pulling inaccurately"). Never credits coverage.
+  const ctSchedule = summarizeConnecteamSchedule(coverage);
+  const ctTimezone = coverage.shifts[0]?.timezone ?? "America/New_York";
 
   // The REAL availability feed (Connecteam time-off / unavailability), pulled once for the roster and
   // TTL-cached so a render doesn't fire one call per worker. ok:false → availability UNVERIFIED for the
@@ -480,14 +483,17 @@ export default async function SchedulingPage({
 
       <BladeAgents blade="scheduling" className="mb-5" />
 
-      {/* Connecteam coverage context — what's ALREADY scheduled internally that day. */}
+      {/* Connecteam coverage context — what's ALREADY scheduled internally that day (accurate across ALL
+          roles, so nothing a coordinator entered in Connecteam is dropped from the count). */}
       <p className="mb-5 text-[12.5px] text-meta">
         {!configured
           ? "Connecteam isn't connected — no internal coverage to compare against."
-          : !coverage.ok
-            ? "Connecteam coverage unverified — couldn't reach it, so this is not “nobody scheduled.”"
-            : `Connecteam today: ${driverScheduled.length} driver${driverScheduled.length === 1 ? "" : "s"}, ${prepScheduled.length} prep already scheduled.`}
+          : connecteamScheduleHeadline(ctSchedule)}
       </p>
+
+      {/* Full Connecteam schedule mirror — exactly who Lisa scheduled in Connecteam today, every role, with
+          their work windows. Answers "Dispatch isn't pulling accurately" by reflecting Connecteam 1:1. */}
+      {configured && <ConnecteamScheduleMirror summary={ctSchedule} timezone={ctTimezone} />}
 
       {/* Instawork context — temp labor already booked/pending for this day. */}
       <p className="mb-5 text-[12.5px] text-meta">
@@ -553,12 +559,6 @@ export default async function SchedulingPage({
       />
     </main>
   );
-}
-
-function dedupCrew(crew: CrewMember[]): CrewMember[] {
-  const m = new Map<number, CrewMember>();
-  for (const a of crew) m.set(a.userId, a);
-  return [...m.values()];
 }
 
 function DateNav({ date, today }: { date: string; today: string }): React.JSX.Element {
