@@ -26,7 +26,7 @@ import {
   type RouteCrewRole,
   type RoleCount,
 } from "./preCheck";
-import { getCrewForDateSafe, connecteamConfigured, type CrewRole } from "@/lib/connecteam";
+import { getCrewForDateSafe, connecteamConfigured, type CrewRole, type CrewShift } from "@/lib/connecteam";
 
 /** A person on the Connecteam schedule for the day, collapsed to one row (userId) with their widest work
  *  window across the day's shifts. Windows are Unix seconds; null when the shift carried no usable time. */
@@ -147,6 +147,35 @@ export function detectScheduledUnrouted(input: ScheduledUnroutedInput): Schedule
   return { reachable: true, people };
 }
 
+/**
+ * Collapse a day's Connecteam shifts to one row per assigned person. PURE (testable without DB/network).
+ *
+ * The displayed window is the person's OWN EARLIEST Connecteam shift — NOT a min/max span across all their
+ * shifts. The old span was the bug behind "7:30 AM – 2:30 AM": a driver on a morning shift (7:30a–1:00p)
+ * who is ALSO an assignee on a shared late/evening shift (…–2:30a) had their window widened to cover the
+ * dead time between them, and every person on that shared late shift ended up showing the SAME 2:30 AM end
+ * while keeping their own start. A person's real shift hours are a real shift, never an invented span.
+ */
+export function collapseScheduledPeople(shifts: CrewShift[]): ScheduledPerson[] {
+  const byUser = new Map<number, ScheduledPerson>();
+  for (const cs of shifts) {
+    const win =
+      Number.isFinite(cs.startUnix) && Number.isFinite(cs.endUnix) && cs.endUnix > cs.startUnix
+        ? { start: cs.startUnix, end: cs.endUnix }
+        : null;
+    for (const a of cs.assignees) {
+      const prev = byUser.get(a.userId);
+      if (!prev) {
+        byUser.set(a.userId, { userId: a.userId, name: a.name, role: a.role, title: a.title ?? null, window: win });
+      } else if (win && (!prev.window || win.start < prev.window.start)) {
+        // Keep the person's earliest real shift window — do NOT span across separate shifts.
+        prev.window = win;
+      }
+    }
+  }
+  return [...byUser.values()];
+}
+
 // ── Thin wrapper: the DB + Connecteam reads, then the pure detector ──────────────────────────────────────
 
 /** Convert an ISO window (routeAssignWindow) to Unix seconds, or null when unknown. */
@@ -176,21 +205,9 @@ export async function scheduledUnroutedForDate(date: string): Promise<ScheduledU
   // Everyone on a route-tied app shift today (the real "on a route" signal — never a Connecteam schedule).
   const routeAssignedUserIds = shifts.filter((s) => s.routeId).flatMap((s) => s.assignees);
 
-  // Collapse the day's Connecteam shifts to one row per person, with their widest work window.
-  const byUser = new Map<number, ScheduledPerson>();
-  for (const cs of crew.shifts) {
-    const win = Number.isFinite(cs.startUnix) && Number.isFinite(cs.endUnix) ? { start: cs.startUnix, end: cs.endUnix } : null;
-    for (const a of cs.assignees) {
-      const prev = byUser.get(a.userId);
-      if (!prev) {
-        byUser.set(a.userId, { userId: a.userId, name: a.name, role: a.role, title: a.title ?? null, window: win });
-      } else if (win) {
-        prev.window = prev.window
-          ? { start: Math.min(prev.window.start, win.start), end: Math.max(prev.window.end, win.end) }
-          : win;
-      }
-    }
-  }
+  // Collapse the day's Connecteam shifts to one row per person, each showing their own real shift window
+  // (earliest shift — never a fabricated span across separate shifts). See collapseScheduledPeople.
+  const scheduled = collapseScheduledPeople(crew.shifts);
 
   const routeCandidates: UnroutedRouteCandidate[] = routes.map((route) => {
     const routeShifts = shifts.filter((s) => s.routeId === route.routeId);
@@ -209,7 +226,7 @@ export async function scheduledUnroutedForDate(date: string): Promise<ScheduledU
 
   return detectScheduledUnrouted({
     reachable: true,
-    scheduled: [...byUser.values()],
+    scheduled,
     routeAssignedUserIds,
     routes: routeCandidates,
   });

@@ -17,6 +17,7 @@ import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import { shiftGap, type ShiftRole, type ShiftStatus, type StaffShift } from "@/lib/scheduling/types";
 import { classifyWorkerFor, eligibilityView, dayTz, type WorkerDayEligibilityData } from "@/lib/scheduling/eligibilityLabel";
 import { ELIG_BADGE } from "@/components/scheduling/AddWorkerPanel";
+import { isoToOpsLocalInput, opsLocalInputToIso } from "@/lib/dates";
 
 const INPUT = "w-full rounded border border-border bg-background px-2.5 py-1.5 text-[13px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 const BTN = "inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50 disabled:pointer-events-none";
@@ -34,20 +35,11 @@ const STATUSES: { value: ShiftStatus; label: string }[] = [
   { value: "cancelled", label: "Cancelled" },
 ];
 
-// ISO instant → the value a <input type="datetime-local"> wants (local wall-clock, no tz suffix).
-function isoToLocalInput(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number): string => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-// datetime-local value (local wall-clock) → ISO instant, or null when blank.
-function localInputToIso(v: string): string | null {
-  if (!v.trim()) return null;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
-}
+// ISO instant ↔ <input type="datetime-local"> value, anchored to the OPERATING timezone (ET), NOT the
+// viewer's browser tz. Using the browser tz (getHours / new Date("<local>")) shifted a shift's wall-clock by
+// the device's own offset for any user not on Eastern — so Dispatch disagreed with Connecteam. See dates.ts.
+const isoToLocalInput = isoToOpsLocalInput;
+const localInputToIso = opsLocalInputToIso;
 
 interface Draft {
   role: ShiftRole;
