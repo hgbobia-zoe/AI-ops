@@ -18,6 +18,9 @@ describe("isHeadlessTokenPath (pure)", () => {
     expect(isHeadlessTokenPath("/api/ai/improvement")).toBe(true);
     expect(isHeadlessTokenPath("/api/ai/improvement/IR-1/report")).toBe(true);
     expect(isHeadlessTokenPath("/api/ai/propose")).toBe(true);
+    // The responder files + manages backlog requests here (a tracked record, never an execution).
+    expect(isHeadlessTokenPath("/api/ai/requests")).toBe(true);
+    expect(isHeadlessTokenPath("/api/ai/requests/manage")).toBe(true);
     // Only the exact propose path — the responder can't reach anything else under /api/ai via the token.
     expect(isHeadlessTokenPath("/api/ai/propose/x")).toBe(false);
     expect(isHeadlessTokenPath("/api/ai/approvals")).toBe(false);

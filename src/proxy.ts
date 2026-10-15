@@ -124,7 +124,12 @@ export function isHeadlessTokenPath(pathname: string): boolean {
     // The responder raises an approval CARD here for an operational ask. Self-token-authed exactly like
     // /api/ai/bridge; it only CREATES a pending approval (decide/execute stays human-only via
     // /api/ai/approvals/decide), so admitting a valid-token request widens nothing the governance gate owns.
-    pathname === "/api/ai/propose"
+    pathname === "/api/ai/propose" ||
+    // The responder FILES a backlog request here (a feature idea / tracked ask) and records a PR on one via
+    // /api/ai/requests/manage. The route is built to accept the x-bridge-token; without this the proxy 401s
+    // it before the route runs, so the responder could never file a request. A request is a tracked record,
+    // never a production change, so admitting a valid-token request is safe.
+    pathname === "/api/ai/requests" || pathname.startsWith("/api/ai/requests/")
   );
 }
 

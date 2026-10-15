@@ -4,6 +4,7 @@ import {
   buildTriageSystem,
   triageViktorMessage,
   handleViktorFastPath,
+  looksLikeAction,
   ROUTE_ACK,
   ROUTE_ACK_DEGRADED,
 } from "./viktorFastPath";
@@ -82,6 +83,40 @@ describe("buildTriageSystem", () => {
     expect(s).toContain('"mode"');
     expect(s.toLowerCase()).toContain("doubt");
   });
+  it("forbids claiming to have performed an action and tells it to route action requests", () => {
+    const s = buildTriageSystem().toLowerCase();
+    expect(s).toContain("cannot"); // cannot perform actions
+    expect(s).toContain("never"); // never claim it did
+    expect(s).toContain("feature request"); // the exact case that regressed
+  });
+});
+
+describe("looksLikeAction", () => {
+  it("flags imperative action requests", () => {
+    for (const t of [
+      "Make a feature request for read-only access",
+      "please file a bug report about the map",
+      "can you send a text to the friday crew",
+      "schedule the crew for saturday",
+      "ok, go ahead and create a task for this",
+      "log a feature request",
+      "add Marcus to the morning route",
+    ]) {
+      expect(looksLikeAction(t)).toBe(true);
+    }
+  });
+  it("does not flag plain questions / info requests", () => {
+    for (const t of [
+      "what can you do?",
+      "what is the current revenue for the month",
+      "how does the scheduling blade work",
+      "who is working friday?",
+      "is the responder online?",
+      "",
+    ]) {
+      expect(looksLikeAction(t)).toBe(false);
+    }
+  });
 });
 
 describe("triageViktorMessage", () => {
@@ -153,6 +188,16 @@ describe("handleViktorFastPath", () => {
     expect(out).toBe("routed");
     expect(mockPost).toHaveBeenCalledWith("C1", ROUTE_ACK_DEGRADED, "100.1");
     expect(latestNonNeutral(s.id)?.kind).toBe("instruction"); // still pending for when it recovers
+  });
+
+  it("routes an action request even if the model wanted to ANSWER (never fabricates 'I did it')", async () => {
+    // The model mis-classifies "make a feature request" as answerable and writes a fake confirmation.
+    mockChat.mockResolvedValue({ ok: true, text: '{"mode":"answer","answer":"Got it, I have logged your feature request."}' });
+    const s = slackSession();
+    const out = await handleViktorFastPath({ sessionId: s.id, text: "Make a feature request for read-only access", channel: "C1", threadTs: "100.1" });
+    expect(out).toBe("routed"); // the action guard overrode the answer
+    expect(mockPost).toHaveBeenCalledWith("C1", ROUTE_ACK, "100.1"); // ack, NOT the fabricated confirmation
+    expect(latestNonNeutral(s.id)?.kind).toBe("instruction"); // left pending so Tier 2 actually files it
   });
 
   it("does not record the answer if the Slack post fails (stays pending for Tier 2)", async () => {
