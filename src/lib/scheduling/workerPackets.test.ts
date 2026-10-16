@@ -174,18 +174,36 @@ describe("runWorkerPacketsTick — due sends + no re-send", () => {
   });
 });
 
-// ── Instawork exclusion (no captured phone → never auto-texted, never a silent failure) ────────────────
-describe("runWorkerPacketsTick — Instawork temps are skipped, not blasted", () => {
-  it("never texts an Instawork worker and records no sent-touch for them", async () => {
+// ── Instawork: skipped WITHOUT a captured phone, texted WITH one ────────────────────────────────────────
+describe("runWorkerPacketsTick — Instawork temps: skipped until their phone is captured", () => {
+  it("skips an Instawork worker with no captured phone, and records no sent-touch for them", async () => {
     const m = await mods();
     const now = new Date();
     const shift = await committedShift(m, now.getTime() + 2 * 3_600_000, now.getTime() + 5 * 3_600_000);
-    const iwId = m.upsertAssignment({ shiftId: shift.id, workerKind: "instawork", instaworkWorker: "Hubert", displayName: "Hubert", role: "prep", state: "ASSIGNED" });
+    const iwId = m.upsertAssignment({ shiftId: shift.id, workerKind: "instawork", instaworkWorker: "Jamie Lee", displayName: "Jamie Lee", role: "prep", state: "ASSIGNED" });
 
     const r = await m.runWorkerPacketsTick(now);
     expect(vi.mocked(m.sms.sendSms)).not.toHaveBeenCalled();
     expect(r.detail).toMatch(/skipped/);
     // No idempotency/sent row was written for the temp — so they are NOT silently marked debriefed.
     expect(m.hasShiftEvent(m.autoPacketChangeKey(iwId, "on_assign"))).toBe(false);
+  });
+
+  it("DOES text an Instawork worker once their booked-pro phone has been captured", async () => {
+    const m = await mods();
+    const { saveInstaworkContacts } = await import("@/lib/instawork/contacts");
+    // The Auto-Pull extension captured this booked pro's phone from the timesheet view (synthetic fixture).
+    saveInstaworkContacts([{ workerId: "7000001", name: "Jordan Rivera", phone: "(301) 555-0147", capturedAt: new Date().toISOString() }]);
+
+    const now = new Date();
+    const shift = await committedShift(m, now.getTime() + 2 * 3_600_000, now.getTime() + 5 * 3_600_000);
+    const iwId = m.upsertAssignment({ shiftId: shift.id, workerKind: "instawork", instaworkWorker: "Jordan Rivera", displayName: "Jordan Rivera", role: "prep", state: "ASSIGNED" });
+
+    const r = await m.runWorkerPacketsTick(now);
+    // 2h out → on_assign + day_before due → real sends to the CAPTURED number (matched by name).
+    expect(vi.mocked(m.sms.sendSms)).toHaveBeenCalled();
+    expect(vi.mocked(m.sms.sendSms).mock.calls[0][0]).toBe("(301) 555-0147");
+    expect(r.detail).toMatch(/sent/);
+    expect(m.hasShiftEvent(m.autoPacketChangeKey(iwId, "on_assign"))).toBe(true);
   });
 });

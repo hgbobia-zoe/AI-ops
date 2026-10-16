@@ -1,8 +1,10 @@
 // Zoe Auto-Pull — Instawork content script. Declared to run on app.instawork.com (manifest content_scripts),
 // so it loads automatically with host access granted at install. It fetches the business dashboard's gig
 // groups IN this tab (same-origin, carrying the operator's Instawork session cookies) and POSTs them to the
-// Zoe ingest (/api/instawork/import), which parses + snapshots them. The Zoe server NEVER calls Instawork
-// itself (datacenter-IP block risk) — this browser pull is the only path.
+// Zoe ingest (/api/instawork/import), which parses + snapshots them. It ALSO captures each booked pro's phone
+// — the gig-groups list has none, but the per-group timesheet view does — and POSTs those to
+// /api/instawork/contacts so a shift debrief can actually reach an Instawork worker. The Zoe server NEVER
+// calls Instawork itself (datacenter-IP block risk) — this browser pull is the only path.
 //
 // Scheduling mirrors content.js (GS) BUT with one critical addition: a self-timer. GS stays fresh because
 // the operator keeps the pro.goodshuffle.com tab open all day and the service-worker alarm nudges it. The
@@ -24,6 +26,48 @@
       intervalMin: Math.max(1, Number(c.intervalMin) || DEFAULTS.intervalMin),
       enabled: c.enabled !== false,
     };
+  }
+
+  // Capture booked-pro phone numbers. The gig-groups list carries worker_id + name but NO phone; the
+  // per-group timesheet view (GET /api/partner/shifts/timesheet-v2/shift-group/<id>) DOES expose
+  // shifts[].worker_phone_number (confirmed live). For each BOOKED group we fetch that view same-origin
+  // (the operator's session) and collect {worker_id, worker, worker_phone_number}, then POST them to the Zoe
+  // contacts ingest. BEST-EFFORT: any failure here NEVER fails the main gig-groups pull. Returns a short
+  // detail suffix (", N contact(s)") on success, else "".
+  async function pullContacts(results, apiBase) {
+    const groups = (results || []).filter((g) => g && g.id && Number(g.filled_shifts_count) > 0).slice(0, 60);
+    if (!groups.length) return "";
+    const contacts = [];
+    for (const g of groups) {
+      try {
+        const r = await fetch(location.origin + "/api/partner/shifts/timesheet-v2/shift-group/" + encodeURIComponent(g.id), {
+          credentials: "include",
+          headers: { accept: "application/json" },
+          cache: "no-store",
+        });
+        if (!r.ok) continue;
+        const j = await r.json();
+        const shifts = (j && j.shifts) || [];
+        for (const s of shifts) {
+          if (s && s.worker_phone_number) {
+            contacts.push({ worker_id: s.worker_id, worker: s.worker, worker_phone_number: s.worker_phone_number });
+          }
+        }
+      } catch (e) {
+        /* skip this group; keep going */
+      }
+    }
+    if (!contacts.length) return "";
+    try {
+      const imp = await fetch(apiBase + "/api/instawork/contacts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ contacts }),
+      });
+      return imp.ok ? ", " + contacts.length + " contact(s)" : "";
+    } catch (e) {
+      return "";
+    }
   }
 
   async function cycle(reason) {
@@ -61,6 +105,15 @@
             });
             status = imp.ok ? "ok" : "error";
             detail = imp.ok ? results.length + " gig group(s)" : "import http " + imp.status;
+            // After the gig-groups snapshot lands, capture booked-pro phone numbers (best-effort; never
+            // flips the pull to error). Lets a shift debrief reach Instawork workers.
+            if (imp.ok) {
+              try {
+                detail += await pullContacts(results, apiBase);
+              } catch (e) {
+                /* best-effort — contacts capture never fails the main pull */
+              }
+            }
           } catch (e) {
             status = "error";
             detail = "import error";
