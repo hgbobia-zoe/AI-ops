@@ -8,7 +8,7 @@
 import { useState } from "react";
 import { Download, Copy, Check, Puzzle } from "lucide-react";
 
-export function PullExtensionInstall({ downloadHref }: { downloadHref: string }) {
+export function PullExtensionInstall({ downloadHref, version }: { downloadHref: string; version?: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -22,13 +22,20 @@ export function PullExtensionInstall({ downloadHref }: { downloadHref: string })
 
   return (
     <div className="space-y-3">
-      <a
-        href={downloadHref}
-        download
-        className="btn-hero inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold"
-      >
-        <Download className="size-4" /> Install extension here (download .zip)
-      </a>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <a
+          href={downloadHref}
+          download
+          className="btn-hero inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold"
+        >
+          <Download className="size-4" /> Install extension here (download .zip)
+        </a>
+        {version ? (
+          <span className="text-[12px] text-muted-foreground">
+            Latest: <b className="text-foreground">v{version}</b>
+          </span>
+        ) : null}
+      </div>
 
       <ol className="list-decimal space-y-1.5 pl-5 text-sm text-muted-foreground">
         <li>The download is <b>zoe-autopull-extension.zip</b> — <b>unzip</b> it to a folder you&apos;ll keep (e.g. Documents).</li>
