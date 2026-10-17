@@ -1,0 +1,29 @@
+# Zoe AI responder — a SEPARATE Fly app from zoe-dispatch. It runs the responder loop headless on the Claude
+# subscription (CLAUDE_CODE_OAUTH_TOKEN). No inbound HTTP (it's a worker that reaches OUT to the bridge), so
+# there is no [http_service]. Deploy from the REPO ROOT so the Docker build context is the whole repo:
+#   flyctl deploy -c deploy/responder/fly.toml
+# See deploy/responder/README.md for the full one-time setup (volume + secrets).
+
+app = "zoe-responder"
+primary_region = "iad"
+
+[build]
+  dockerfile = "deploy/responder/Dockerfile"
+
+[env]
+  # The dispatch app the loop talks to (bridge API). Overrideable, defaults match run-loop/poll.
+  APP_URL = "https://zoe-dispatch.fly.dev"
+  RESPONDER_INTERVAL_SEC = "60"
+  # HOME is set in the Dockerfile to /data (the mounted volume) so Claude Code's auth cache + transcripts
+  # survive restarts.
+
+# Claude Code state ($HOME/.claude) persists here across restarts/deploys.
+[mounts]
+  source = "responder_data"
+  destination = "/data"
+
+# One small always-on worker machine. Crashes are restarted by Fly; keep exactly one so a single bridge
+# claim is never double-handled.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
