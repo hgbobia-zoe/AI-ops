@@ -2,6 +2,8 @@
 // bookmarklet once, then click it from any logged-in (full-access) Goodshuffle tab to pull
 // today's routes — with revenue + customer identity the driver/tablet account can't see.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { headers } from "next/headers";
 import { Download, CircleCheck, AlertTriangle, Puzzle } from "lucide-react";
 import { PullBookmarklet } from "@/components/PullBookmarklet";
@@ -32,12 +34,25 @@ function minutesAgo(iso?: string): number | null {
   return Math.round((Date.now() - Date.parse(iso)) / 60_000);
 }
 
+// The shipped extension version, read from the single source of truth (extension/manifest.json, which is in
+// the deployed image). Used both to label the download and as the ?v= cache-buster, so the link always
+// points at the current build — no hand-kept version to forget. Falls back to "dev" if unreadable.
+function extensionVersion(): string {
+  try {
+    const m = JSON.parse(readFileSync(join(process.cwd(), "extension", "manifest.json"), "utf8")) as { version?: string };
+    return typeof m.version === "string" && m.version ? m.version : "dev";
+  } catch {
+    return "dev";
+  }
+}
+
 export default async function PullSetupPage(): Promise<React.JSX.Element> {
   const h = await headers();
   const host = h.get("host") ?? "zoe-dispatch.fly.dev";
   const proto = h.get("x-forwarded-proto") ?? "https";
   const base = `${proto}://${host}`;
   const script = buildOfficePullScript(base, process.env.GS_INGEST_TOKEN);
+  const extVersion = extensionVersion();
   const AUTO_MIN = 10;
   const autoScript = buildOfficePullScript(base, process.env.GS_INGEST_TOKEN, AUTO_MIN * 60 * 1000);
 
@@ -113,9 +128,9 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
           </span>
         </div>
 
-        {/* Version query busts the browser cache when the zip is rebuilt — keep in sync with
-            extension/manifest.json "version" (rebuild with scripts/build-extension-zip.ps1). */}
-        <PullExtensionInstall downloadHref="/zoe-autopull-extension.zip?v=1.6.2" />
+        {/* ?v= is the manifest version (read at render), so the link always points at the current build and
+            busts the browser/CDN cache whenever the zip is rebuilt — nothing to keep in sync by hand. */}
+        <PullExtensionInstall downloadHref={`/zoe-autopull-extension.zip?v=${extVersion}`} version={extVersion} />
 
         {/* Setup checklist for the dedicated always-on machine that runs the pull. */}
         <details className="group border border-white/10 bg-white/[0.02]">
