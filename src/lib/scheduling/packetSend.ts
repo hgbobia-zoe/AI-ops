@@ -1,9 +1,10 @@
 // The shift-packet SEND path, MASTER-SWITCHED OFF by default (SHIFT_COMMS_ENABLED, via commsFlag.ts),
 // mirroring SMS_SEND_ENABLED / EMAIL_SEND_ENABLED. Until the switch is on, this is PREVIEW / RECORD-ONLY:
 // the packet is built + persisted (so "what would this worker receive" is answerable) but NOTHING is sent
-// and packet_sent_at is NEVER set. When the switch is on, an internal worker with a known phone is texted
-// through the existing provider; a comms step is marked "sent" ONLY when the provider actually reports ok
-// (never assumed). Instawork workers have no captured contact surface, so they are honestly "skipped".
+// and packet_sent_at is NEVER set. When the switch is on, a worker with a known phone is texted through the
+// existing provider; a comms step is marked "sent" ONLY when the provider actually reports ok (never
+// assumed). A worker with no phone on file is honestly "skipped" — internal: no number; Instawork: the
+// booked-pro phone hasn't been captured yet (the Auto-Pull extension scrapes it from the timesheet view).
 
 import { shiftCommsEnabled } from "./commsFlag";
 import { buildShiftPacket, saveShiftPacket, type PacketContext } from "./packet";
@@ -63,12 +64,15 @@ export async function dispatchPacketTouch(args: DispatchArgs): Promise<TouchDisp
     return { touch, version, body, state: "held", gated: false, reason: `Route staffing gap: ${gate.reason}. Assign crew to close it.` };
   }
 
-  // Switch ON. Instawork has no captured contact surface -> honest skip (informed via Instawork's own app).
-  if (assignment.workerKind === "instawork") {
-    return { touch, version, body, state: "skipped", gated: false, reason: "Instawork worker contact not captured; informed through Instawork." };
-  }
+  // Switch ON. Send when we have a phone — internal (Connecteam) OR Instawork (the captured booked-pro phone
+  // the Auto-Pull extension scrapes from the timesheet view). No phone on file → honest skip with a
+  // kind-specific reason, never a faked send.
   if (!workerPhone) {
-    return { touch, version, body, state: "skipped", gated: false, reason: "No phone on file for this worker." };
+    const reason =
+      assignment.workerKind === "instawork"
+        ? "Instawork worker contact not captured; informed through Instawork."
+        : "No phone on file for this worker.";
+    return { touch, version, body, state: "skipped", gated: false, reason };
   }
 
   const res = await sendSms(workerPhone, body);

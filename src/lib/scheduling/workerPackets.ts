@@ -13,9 +13,10 @@
 //   • the Route Staffing Pre-Check is NOT a gap (enforced inside dispatchPacketTouch — an unstaffed
 //     route's debrief is HELD, never sent)
 // With AUTO_PACKET_ENABLED off (the default) this is a healthy no-op: it builds nothing and sends nothing.
-// Instawork temps have NO captured phone (name-only pull), so dispatchPacketTouch skips them — they are
-// never auto-texted and never silently "fail". Honest throughout: a provider/data gap is a skip, not a
-// faked send; packet_sent_at is set only on a real send (by dispatchPacketTouch).
+// Instawork temps are debriefed too WHEN their booked-pro phone has been captured (the Auto-Pull extension
+// scrapes it from the timesheet view into the contacts store); until then dispatchPacketTouch skips them —
+// never auto-texted, never a silent "fail". Honest throughout: a provider/data gap is a skip, not a faked
+// send; packet_sent_at is set only on a real send (by dispatchPacketTouch).
 
 import { getDb } from "@/lib/db";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";

@@ -10,6 +10,7 @@ import { getRoutesForDate, createShiftPass, listShiftPasses } from "@/lib/db/rep
 import { newPassToken } from "@/lib/auth/pass";
 import { readInstaworkSnapshot } from "@/lib/instawork/store";
 import { findGigForWorker } from "@/lib/instawork/reconcile";
+import { findInstaworkPhone } from "@/lib/instawork/contacts";
 import type { CrewMember } from "@/lib/connecteam";
 import type { PacketContext, PacketCoworker } from "./packet";
 import type { ShiftAssignment, StaffShift } from "./types";
@@ -92,8 +93,9 @@ export function buildSharedPacketContext(shift: StaffShift, users: Map<number, C
 }
 
 /** Per-assignment dispatch inputs: the full PacketContext (coworkers computed from the OTHER live
- *  assignees), the worker's phone (internal only — Instawork has no captured phone), and the refresher's
- *  delivery-route link. Identical for the manual send and the auto-trigger. */
+ *  assignees), the worker's phone (internal → Connecteam; Instawork → the CAPTURED booked-pro phone, if the
+ *  Auto-Pull extension has scraped it from the timesheet view — else null → honest skip downstream), and the
+ *  refresher's delivery-route link. Identical for the manual send and the auto-trigger. */
 export function assignmentPacketInputs(
   shift: StaffShift,
   a: ShiftAssignment,
@@ -109,7 +111,14 @@ export function assignmentPacketInputs(
     .map((x) => ({ name: x.displayName ?? x.instaworkWorker ?? "Worker", role: x.role }));
   const { clockInCode, clockOutCode } = instaworkCodes(a, shift.date);
   const ctx: PacketContext = { truck: shared.truck, supervisor: shared.supervisor, coworkers, route: shared.route, mapUrl: null, equipment: shift.equipment, clockInCode, clockOutCode };
-  const workerPhone = a.workerKind === "internal" && a.connecteamUserId != null ? users.get(a.connecteamUserId)?.phone ?? null : null;
+  // Internal → the Connecteam roster phone. Instawork → the captured booked-pro phone (extension-scraped),
+  // matched by name/id against the contacts store; null when not captured yet (downstream skips honestly).
+  const workerPhone =
+    a.workerKind === "internal"
+      ? a.connecteamUserId != null
+        ? users.get(a.connecteamUserId)?.phone ?? null
+        : null
+      : findInstaworkPhone({ workerName: a.instaworkWorker ?? a.displayName, workerId: null });
   const link = mintRoutePass({ name: a.displayName ?? a.instaworkWorker ?? "Worker" }, shift, shared.truck, origin, actor);
   return { ctx, workerPhone, link };
 }

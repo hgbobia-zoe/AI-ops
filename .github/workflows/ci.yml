@@ -40,5 +40,17 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      # The downloadable extension zip (public/zoe-autopull-extension.zip) is a committed artifact rebuilt
+      # from extension/ by `npm run build:extension` (also the prebuild step). The build is byte-deterministic
+      # (STORE, fixed timestamps), so if a PR changed extension/ without rebuilding the zip, this diff fails
+      # the merge — the served extension can never silently drift from source.
+      - name: Extension zip is current
+        run: |
+          npm run build:extension
+          if ! git diff --quiet -- public/zoe-autopull-extension.zip; then
+            echo "::error::public/zoe-autopull-extension.zip is stale. Run 'npm run build:extension' and commit the result."
+            exit 1
+          fi
+
       - name: Tests
         run: npm test
