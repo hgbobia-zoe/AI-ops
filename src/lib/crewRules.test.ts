@@ -30,6 +30,23 @@ describe("crewForItems", () => {
     expect(n.crew).toBe(3);
     expect(n.biggestTentSqFt).toBe(3200);
   });
+
+  it("an Event Readiness Service line needs at least 2 crew", () => {
+    const n = crewForItems([{ name: "Chiavari Chair", quantity: 50 }, { name: "Event Readiness Service" }]);
+    expect(n.crew).toBe(2);
+    expect(n.hasEventReadiness).toBe(true);
+    expect(n.reasons).toContain("Event Readiness Service → 2 crew");
+  });
+
+  it("Event Readiness never lowers a bigger tent crew", () => {
+    const n = crewForItems([{ name: "40x60 Frame Tent" }, { name: "Event Readiness" }]);
+    expect(n.crew).toBe(3); // big tent still wins
+    expect(n.hasEventReadiness).toBe(true);
+  });
+
+  it("no Event Readiness line → flag is false", () => {
+    expect(crewForItems([{ name: "8ft Banquet Table" }]).hasEventReadiness).toBe(false);
+  });
 });
 
 describe("crewForRoute", () => {
@@ -40,5 +57,14 @@ describe("crewForRoute", () => {
       [{ name: "40x60 Frame Tent" }], // 3
     ]);
     expect(need.crew).toBe(3);
+  });
+
+  it("Event Readiness on any stop floors the route at 2 crew (even off the max stop)", () => {
+    const need = crewForRoute([
+      [{ name: "Event Readiness Service" }], // 2, not the max
+      [{ name: "Chairs" }], // 1
+    ]);
+    expect(need.crew).toBe(2);
+    expect(need.hasEventReadiness).toBe(true);
   });
 });
