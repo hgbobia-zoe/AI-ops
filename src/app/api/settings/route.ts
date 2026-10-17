@@ -41,6 +41,8 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     }
     return out;
   };
+  const strList = (v: unknown, fb: string[]) =>
+    Array.isArray(v) ? Array.from(new Set(v.map((x) => String(x).trim().toLowerCase()).filter(Boolean))) : fb;
   const t = (b.templates ?? {}) as Record<string, unknown>;
   return {
     companyName: str(b.companyName, current.companyName),
@@ -67,6 +69,8 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     // Prep-window (Operational Opportunity) tunables — overlay well-typed numeric fields when sent,
     // else keep current. OT policy stays "in_shift_only" (the safe default).
     prepOpportunity: coercePrep(b.prepOpportunity, current.prepOpportunity),
+    // Specialty-item keywords for the driver seniority router (normalized to lowercase, de-duped).
+    specialtyItemKeywords: strList(b.specialtyItemKeywords, current.specialtyItemKeywords),
   };
 }
 

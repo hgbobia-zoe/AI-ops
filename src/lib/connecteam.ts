@@ -187,6 +187,10 @@ export interface CrewMember {
   userType?: string;
   /** The Connecteam "Title" custom field, e.g. "Driver", "Warehouse Associate". */
   title?: string;
+  /** Seniority anchor (ISO date) — the hire/start-date custom field if present, else the account-created
+   *  date. Earlier = more senior. null when Connecteam exposed neither (then the router treats them as the
+   *  newest, never fabricating tenure). Used by the driver seniority router (scheduling/driverSeniority.ts). */
+  seniorityDate?: string | null;
   role: CrewRole;
 }
 
@@ -204,6 +208,38 @@ function titleOf(u: Record<string, unknown>): string | undefined {
   const fields = (u.customFields as Array<{ name?: string; value?: unknown }>) ?? [];
   const f = fields.find((x) => x.name === "Title");
   return typeof f?.value === "string" ? f.value : undefined;
+}
+
+/** A value off a named custom field (case-insensitive, first match). */
+function customFieldValue(u: Record<string, unknown>, names: string[]): unknown {
+  const fields = (u.customFields as Array<{ name?: string; value?: unknown }>) ?? [];
+  const want = names.map((n) => n.toLowerCase());
+  return fields.find((x) => want.includes((x.name ?? "").toLowerCase()))?.value;
+}
+
+/** Coerce an epoch (sec or ms) or a date string to an ISO date, or null when it isn't a real date. */
+function toIsoDate(v: unknown): string | null {
+  if (v == null || v === "") return null;
+  if (typeof v === "number") {
+    const ms = v < 1e12 ? v * 1000 : v; // seconds vs milliseconds
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  if (typeof v === "string") {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  return null;
+}
+
+/** The seniority anchor for a raw Connecteam user: a hire/start-date custom field if the company set one,
+ *  otherwise the account-created date Connecteam returns. null when neither is present (never fabricated).
+ *  Defensive across field-name and value-format variants since the exact schema varies per workspace.
+ *  Exported for unit testing. */
+export function seniorityDateOf(u: Record<string, unknown>): string | null {
+  const hire = customFieldValue(u, ["Hire Date", "Start Date", "Hire date", "Start date", "Hired", "Seniority Date", "Date of Hire", "Start"]);
+  const created = u.createdAt ?? u.creationTime ?? u.createdOn ?? u.dateCreated ?? u.created;
+  return toIsoDate(hire) ?? toIsoDate(created);
 }
 
 export interface Scheduler {
@@ -268,6 +304,7 @@ async function getUsersUncached(): Promise<Map<number, CrewMember>> {
       email: u.email as string | undefined,
       userType: u.userType as string | undefined,
       title,
+      seniorityDate: seniorityDateOf(u),
       role: roleFromTitle(title),
     });
   }
