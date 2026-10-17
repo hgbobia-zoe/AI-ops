@@ -31,6 +31,7 @@ import {
   getDefaultScheduler,
   getUsers,
   createPublishedShift,
+  updatePublishedShift,
   type PublishShiftInput,
   type PublishShiftResult,
   type Scheduler,
@@ -38,7 +39,8 @@ import {
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate } from "@/lib/db/repo";
 import { insertAudit } from "@/lib/db/repo";
-import { todayInOpsTz, shiftYmd } from "@/lib/dates";
+import { todayInOpsTz, shiftYmd, DISPLAY_TZ } from "@/lib/dates";
+import { viktorAnnounce } from "@/lib/notify/slack";
 import { createShift, getShiftById, getShiftsForDate, updateShift } from "./store";
 import { syncInternalAssignments } from "./assignments";
 import { routeAssignWindow, requiredCrewForRoute, assignedCrewForRoute, computeRouteGap } from "./preCheck";
@@ -46,6 +48,7 @@ import { scheduledUnroutedForDate } from "./scheduledUnrouted";
 import { planRouteAutoAssign, type RouteAutoAssignPlan } from "./routeAutoAssign";
 import { resolveDriverSeniority, type SeniorityRouteMeta } from "./driverSeniority";
 import { routeSpecialty } from "./routeSpecialty";
+import { ratchetWindow, routeOwnWindow } from "./routeRatchet";
 import { getSettings } from "@/lib/settings";
 import type { ShiftRole, StaffShift } from "./types";
 import type { Route } from "@/lib/types";
@@ -298,6 +301,8 @@ export interface RouteAutoSyncDayResult {
   autoAssigned: number;
   /** Of autoAssigned, how many were decided by the driver SENIORITY rule (same-time specialty vs easy). */
   seniorityAssigned: number;
+  /** Shift windows GROWN because their route got longer (expand-only ratchet). */
+  windowsExpanded: number;
   promptOnly: number; // ambiguous people left for the one-click prompt
   ctCreated: number;
   mixedFlagged: number; // route shifts flagged needs_review (mixed presence / no id)
@@ -311,6 +316,7 @@ const EMPTY_DAY = (date: string): RouteAutoSyncDayResult => ({
   reachable: false,
   autoAssigned: 0,
   seniorityAssigned: 0,
+  windowsExpanded: 0,
   promptOnly: 0,
   ctCreated: 0,
   mixedFlagged: 0,
@@ -318,6 +324,92 @@ const EMPTY_DAY = (date: string): RouteAutoSyncDayResult => ({
   createFailed: 0,
   alreadyInCt: 0,
 });
+
+/** HH:MM in the ops timezone (ET) for narration; "TBD" when unknown. */
+function hhmm(iso: string | null): string {
+  if (!iso) return "TBD";
+  try {
+    return new Date(iso).toLocaleTimeString("en-US", { timeZone: DISPLAY_TZ, hour: "numeric", minute: "2-digit" });
+  } catch {
+    return "TBD";
+  }
+}
+
+/**
+ * ROUTE-CHANGE RATCHET (expand-only). For each route-tied app shift, if the route's own window now exceeds
+ * the shift's window, GROW the shift to cover it; a shorter route is held as-is (never shrink a worker's
+ * hours). For a Connecteam-linked shift the grown window is pushed to Connecteam FIRST (silent); only on a
+ * successful push is the app side expanded, so the Connecteam-wins importer can never flap it back
+ * (connecteamContentHash=null makes the next import RE-BASELINE to the grown window — no conflict, no flag).
+ * Every expansion is announced in Slack (viktorAnnounce) so a human can see it and override. Returns the
+ * count of shifts expanded. Honest-when-unreachable: a failed Connecteam push skips that shift (retry next tick).
+ */
+export async function applyRouteWindowRatchet(deps: {
+  date: string;
+  routesById: Map<string, Route>;
+  scheduler: Scheduler | null;
+  truckNameOf: (id: string) => string;
+  nameOf: (uid: number) => string | null;
+  actor: string;
+}): Promise<number> {
+  let expanded = 0;
+  const dayShifts = getShiftsForDate(deps.date);
+  for (const route of deps.routesById.values()) {
+    const rw = routeOwnWindow(route);
+    if (!rw.known) continue; // no route window to compare against — nothing to ratchet
+    const routeShifts = dayShifts.filter(
+      (s) => s.routeId === route.routeId && (s.role === "driver" || s.role === "field") && s.status !== "cancelled",
+    );
+    for (const shift of routeShifts) {
+      const out = ratchetWindow({ start: shift.startTime, end: shift.endTime, windowKnown: shift.windowKnown }, rw);
+      if (!out.changed || !out.start || !out.end) continue;
+
+      // Linked to Connecteam → push the grown window silently FIRST; only expand the app side if it sticks.
+      if (shift.connecteamShiftId) {
+        const schedulerId = shift.connecteamSchedulerId ?? deps.scheduler?.schedulerId ?? null;
+        if (schedulerId == null) continue; // no scheduler to update — retry next tick
+        const truckName = shift.truckId ? deps.truckNameOf(shift.truckId) : deps.date;
+        const res = await updatePublishedShift(
+          {
+            schedulerId,
+            shiftId: shift.connecteamShiftId,
+            title: shift.eventLabel || `${ROLE_LABEL[shift.role]} — ${truckName} ${deps.date}`,
+            startUnix: Math.floor(Date.parse(out.start) / 1000),
+            endUnix: Math.floor(Date.parse(out.end) / 1000),
+            timezone: deps.scheduler?.timezone ?? DISPLAY_TZ,
+            assignedUserIds: shift.assignees,
+          },
+          { notifyUsers: false },
+        );
+        if (!res.ok) continue; // Connecteam unreachable/rejected → never expand app alone (would flap); retry
+      }
+
+      const updated = updateShift(shift.id, {
+        startTime: out.start,
+        endTime: out.end,
+        windowKnown: true,
+        // null → the next import re-baselines to the grown Connecteam window (no conflict, no flap).
+        ...(shift.connecteamShiftId ? { connecteamContentHash: null } : {}),
+      });
+      if (!updated) continue;
+      expanded += 1;
+      audit(deps.actor, "ROUTE_SYNC_SHIFT_EXPANDED", shift.id, {
+        routeId: route.routeId,
+        from: { start: shift.startTime, end: shift.endTime },
+        to: { start: out.start, end: out.end },
+        reason: out.reason,
+        pushedToConnecteam: Boolean(shift.connecteamShiftId),
+      });
+      const who = shift.assignees.map((u) => deps.nameOf(u) || `#${u}`).join(", ") || "the crew";
+      const truck = shift.truckId ? deps.truckNameOf(shift.truckId) : "the route";
+      void viktorAnnounce(
+        `🗓️ *Scheduling bot* — Extended ${who}'s ${truck} shift to ${hhmm(out.start)}–${hhmm(out.end)} (was ${hhmm(shift.startTime)}–${hhmm(shift.endTime)}) because ${out.reason}.` +
+          `${shift.connecteamShiftId ? " Updated Connecteam so their hours/pay reflect it." : ""} Reply here if that's wrong.`,
+      ).catch(() => {});
+    }
+  }
+  return expanded;
+}
 
 /** Route metadata the driver seniority router needs: start time (for same-time clustering), open driver
  *  seats, and specialty difficulty (tents via crewRules + the configurable keyword list). Reuses the SAME
@@ -390,6 +482,14 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   out.autoAssigned = aaRes.assigned;
   out.seniorityAssigned = seniorityPlan.autoAssign.length;
 
+  // The scheduler is needed for both the route-change ratchet (silent Connecteam updates) and the auto-create
+  // below — fetch it once. Null (unreachable) → the ratchet only touches unlinked shifts; linked ones retry.
+  const scheduler = await getDefaultScheduler();
+
+  // 1b. ROUTE-CHANGE RATCHET: a route that grew expands its workers' shifts (and their Connecteam hours),
+  //     never shrinks. Announced in Slack so a human can override.
+  out.windowsExpanded = await applyRouteWindowRatchet({ date, routesById, scheduler, truckNameOf, nameOf, actor });
+
   // 2. App route -> Connecteam auto-create (silent). Needs the real Connecteam presence set; if we can't
   //    read it, skip (we must not create blind — that is how duplicates happen).
   const crew = await getCrewForDateSafe(date);
@@ -402,7 +502,6 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   out.alreadyInCt = createPlan.skipped;
   out.createDeferred = createPlan.deferred.length;
 
-  const scheduler = await getDefaultScheduler();
   const applied = await applyRouteConnecteamCreate(createPlan, { scheduler, truckNameOf, actor });
   out.ctCreated = applied.created;
   out.mixedFlagged = applied.flagged;
@@ -418,6 +517,8 @@ export interface RouteAutoSyncTickResult {
   autoAssigned: number;
   /** Of autoAssigned, how many the driver seniority rule decided (same-time specialty vs easy route). */
   seniorityAssigned: number;
+  /** Shift windows grown because their route got longer (expand-only ratchet). */
+  windowsExpanded: number;
   ctCreated: number;
   flagged: number;
   unreachableDays: number;
@@ -436,6 +537,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
       days: 0,
       autoAssigned: 0,
       seniorityAssigned: 0,
+      windowsExpanded: 0,
       ctCreated: 0,
       flagged: 0,
       unreachableDays: 0,
@@ -445,6 +547,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
   const dates = Array.from({ length: SYNC_HORIZON_DAYS }, (_, i) => shiftYmd(today, i));
   let autoAssigned = 0;
   let seniorityAssigned = 0;
+  let windowsExpanded = 0;
   let ctCreated = 0;
   let flagged = 0;
   let unreachable = 0;
@@ -459,6 +562,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
       reachableDays += 1;
       autoAssigned += r.autoAssigned;
       seniorityAssigned += r.seniorityAssigned;
+      windowsExpanded += r.windowsExpanded;
       ctCreated += r.ctCreated;
       flagged += r.mixedFlagged;
     } catch {
@@ -467,8 +571,9 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
   }
   const ok = reachableDays > 0;
   const seniorityNote = seniorityAssigned ? ` (${seniorityAssigned} by seniority)` : "";
+  const expandedNote = windowsExpanded ? `, ${windowsExpanded} shift${windowsExpanded === 1 ? "" : "s"} expanded` : "";
   const detail = reachableDays === 0
     ? `Connecteam unreachable (${unreachable}/${dates.length} days) — skipped, nothing written`
-    : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned${seniorityNote}, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent), ${flagged} flagged${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
-  return { ok, detail, days: reachableDays, autoAssigned, seniorityAssigned, ctCreated, flagged, unreachableDays: unreachable };
+    : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned${seniorityNote}${expandedNote}, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent), ${flagged} flagged${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
+  return { ok, detail, days: reachableDays, autoAssigned, seniorityAssigned, windowsExpanded, ctCreated, flagged, unreachableDays: unreachable };
 }
