@@ -106,3 +106,20 @@ export async function slackPostMessage(channel: string, text: string, threadTs?:
   const sent = await slackApi("chat.postMessage", body);
   return sent.ok ? { ok: true } : { ok: false, error: `post: ${sent.error}` };
 }
+
+/**
+ * Narrate an AI-EMPLOYEE action in Slack so a human sees WHAT it did and WHY and can override it. House rule
+ * (the user's): an AI employee never acts silently. Posts AS VIKTOR (the bot) to the AI-activity channel
+ * (SLACK_AI_CHANNEL) when the bot token + channel are set; otherwise FALLS BACK to the ops webhook so the
+ * action is still announced — never silent. Never throws. The caller passes the full message (which employee,
+ * what, why).
+ */
+export async function viktorAnnounce(text: string): Promise<SlackResult> {
+  const channel = process.env.SLACK_AI_CHANNEL?.trim();
+  if (channel && slackBotConfigured()) {
+    const r = await slackPostMessage(channel, text);
+    if (r.ok) return r; // posted as Viktor in the AI-activity channel
+    // bot token present but post failed → fall through to the webhook so the action is still surfaced
+  }
+  return slackNotify(text);
+}

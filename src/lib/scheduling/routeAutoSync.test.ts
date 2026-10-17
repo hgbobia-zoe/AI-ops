@@ -119,6 +119,44 @@ describe("driver seniority routing → real assignment (DB)", () => {
   });
 });
 
+describe("applyRouteWindowRatchet (route grew → shift grows; shorter → holds)", () => {
+  // A route whose stops span 9:00–17:00, so its own window is well past a short shift's 12:00 end.
+  const wideRoute = (routeId: string): Route =>
+    ({
+      routeId,
+      date: DATE,
+      truckId: "E450",
+      status: "planned",
+      stops: [
+        { sequence: 1, custName: "A", kind: "delivery", plannedWindow: `${DATE}T09:00:00.000Z` },
+        { sequence: 2, custName: "B", kind: "delivery", plannedWindow: `${DATE}T17:00:00.000Z` },
+      ],
+    }) as unknown as Route;
+
+  it("expands an unlinked route shift when the route runs longer, and announces it", async () => {
+    const m = await mods();
+    const { applyRouteWindowRatchet } = await import("./routeAutoSync");
+    const short = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T10:00:00.000Z`, endTime: `${DATE}T12:00:00.000Z`, windowKnown: true, routeId: "rGrow", truckId: "E450", assignees: [10], source: "manual" });
+
+    const n = await applyRouteWindowRatchet({ date: DATE, routesById: new Map([["rGrow", wideRoute("rGrow")]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" });
+    expect(n).toBe(1);
+    const after = m.getShiftById(short.id)!;
+    expect(Date.parse(after.endTime!)).toBeGreaterThan(Date.parse(`${DATE}T12:00:00.000Z`)); // grew to cover the longer route
+  });
+
+  it("HOLDS a shift that already covers the route (never shrinks)", async () => {
+    const m = await mods();
+    const { applyRouteWindowRatchet } = await import("./routeAutoSync");
+    const wide = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T06:00:00.000Z`, endTime: `${DATE}T23:00:00.000Z`, windowKnown: true, routeId: "rHold", truckId: "E450", assignees: [11], source: "manual" });
+
+    const n = await applyRouteWindowRatchet({ date: DATE, routesById: new Map([["rHold", wideRoute("rHold")]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" });
+    expect(n).toBe(0);
+    const after = m.getShiftById(wide.id)!;
+    expect(after.endTime).toBe(`${DATE}T23:00:00.000Z`); // unchanged
+    expect(after.startTime).toBe(`${DATE}T06:00:00.000Z`);
+  });
+});
+
 describe("applyRouteConnecteamCreate (silent + honest)", () => {
   it("creates a SILENT Connecteam shift and stores the returned id (idempotent link)", async () => {
     const { createShift, getShiftById, applyRouteConnecteamCreate } = await mods();
