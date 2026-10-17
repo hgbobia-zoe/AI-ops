@@ -95,6 +95,30 @@ describe("applyRouteAutoAssign (DB path, idempotent)", () => {
   });
 });
 
+describe("driver seniority routing → real assignment (DB)", () => {
+  it("commits the senior driver to the specialty route and the newer driver to the easy route", async () => {
+    const { applyRouteAutoAssign, getShiftsForDate } = await mods();
+    const { resolveDriverSeniority } = await import("./driverSeniority");
+    const T = 1_700_000_000; // same start time for both routes
+    const plan = resolveDriverSeniority(
+      [
+        { userId: 11, name: "Senior", seniorityDate: "2019-01-01", eligibleRouteIds: ["rSpec", "rEasy"] },
+        { userId: 12, name: "Newer", seniorityDate: "2024-01-01", eligibleRouteIds: ["rSpec", "rEasy"] },
+      ],
+      [
+        { routeId: "rSpec", startUnix: T, driverGap: 1, difficulty: 3, specialty: true, reasons: ["large tent"] },
+        { routeId: "rEasy", startUnix: T, driverGap: 1, difficulty: 0, specialty: false, reasons: [] },
+      ],
+    );
+    const routesById = new Map<string, Route>([["rSpec", route("rSpec")], ["rEasy", route("rEasy")]]);
+    const res = applyRouteAutoAssign({ reachable: true, autoAssign: plan.autoAssign, prompt: [] }, { date: DATE, routesById, nameOf: () => null });
+    expect(res.assigned).toBe(2);
+    const shifts = getShiftsForDate(DATE);
+    expect(shifts.find((s) => s.routeId === "rSpec" && s.role === "driver")?.assignees).toContain(11); // senior → specialty
+    expect(shifts.find((s) => s.routeId === "rEasy" && s.role === "driver")?.assignees).toContain(12); // newer → easy
+  });
+});
+
 describe("applyRouteConnecteamCreate (silent + honest)", () => {
   it("creates a SILENT Connecteam shift and stores the returned id (idempotent link)", async () => {
     const { createShift, getShiftById, applyRouteConnecteamCreate } = await mods();

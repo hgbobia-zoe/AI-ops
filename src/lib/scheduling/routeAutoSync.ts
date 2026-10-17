@@ -41,9 +41,12 @@ import { insertAudit } from "@/lib/db/repo";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { createShift, getShiftById, getShiftsForDate, updateShift } from "./store";
 import { syncInternalAssignments } from "./assignments";
-import { routeAssignWindow } from "./preCheck";
+import { routeAssignWindow, requiredCrewForRoute, assignedCrewForRoute, computeRouteGap } from "./preCheck";
 import { scheduledUnroutedForDate } from "./scheduledUnrouted";
 import { planRouteAutoAssign, type RouteAutoAssignPlan } from "./routeAutoAssign";
+import { resolveDriverSeniority, type SeniorityRouteMeta } from "./driverSeniority";
+import { routeSpecialty } from "./routeSpecialty";
+import { getSettings } from "@/lib/settings";
 import type { ShiftRole, StaffShift } from "./types";
 import type { Route } from "@/lib/types";
 
@@ -293,6 +296,8 @@ export interface RouteAutoSyncDayResult {
   /** False -> Connecteam unreachable; nothing was written (honest unknown). */
   reachable: boolean;
   autoAssigned: number;
+  /** Of autoAssigned, how many were decided by the driver SENIORITY rule (same-time specialty vs easy). */
+  seniorityAssigned: number;
   promptOnly: number; // ambiguous people left for the one-click prompt
   ctCreated: number;
   mixedFlagged: number; // route shifts flagged needs_review (mixed presence / no id)
@@ -305,6 +310,7 @@ const EMPTY_DAY = (date: string): RouteAutoSyncDayResult => ({
   date,
   reachable: false,
   autoAssigned: 0,
+  seniorityAssigned: 0,
   promptOnly: 0,
   ctCreated: 0,
   mixedFlagged: 0,
@@ -312,6 +318,31 @@ const EMPTY_DAY = (date: string): RouteAutoSyncDayResult => ({
   createFailed: 0,
   alreadyInCt: 0,
 });
+
+/** Route metadata the driver seniority router needs: start time (for same-time clustering), open driver
+ *  seats, and specialty difficulty (tents via crewRules + the configurable keyword list). Reuses the SAME
+ *  gap + window readers the pre-check/detector use, so a route's seat + time match exactly. */
+function buildSeniorityRouteMeta(date: string, routesById: Map<string, Route>): SeniorityRouteMeta[] {
+  const keywords = getSettings().specialtyItemKeywords;
+  const dayShifts = getShiftsForDate(date);
+  const out: SeniorityRouteMeta[] = [];
+  for (const route of routesById.values()) {
+    const routeShifts = dayShifts.filter((s) => s.routeId === route.routeId);
+    const gap = computeRouteGap({ requiredByRole: requiredCrewForRoute(route), assignedByRole: assignedCrewForRoute(route, routeShifts) });
+    const win = routeAssignWindow(route, routeShifts);
+    const startMs = win.known && win.start ? Date.parse(win.start) : NaN;
+    const spec = routeSpecialty(route, keywords);
+    out.push({
+      routeId: route.routeId,
+      startUnix: Number.isFinite(startMs) ? Math.floor(startMs / 1000) : null,
+      driverGap: gap.gapByRole.driver,
+      difficulty: spec.difficulty,
+      specialty: spec.specialty,
+      reasons: spec.reasons,
+    });
+  }
+  return out;
+}
 
 /**
  * Reconcile ONE day in both directions. Honest-when-unreachable: if Connecteam can't be read, returns an
@@ -326,7 +357,6 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   out.reachable = true;
 
   const aaPlan = planRouteAutoAssign(su);
-  out.promptOnly = aaPlan.prompt.length;
 
   const trucks = getActiveVehicles();
   const truckNameOf = (id: string): string => trucks.find((t) => t.truckId === id)?.name ?? id;
@@ -334,15 +364,31 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   for (const t of trucks) for (const r of getRoutesForDate(t.truckId, date)) routesById.set(r.routeId, r);
 
   let nameOf: (userId: number) => string | null = () => null;
+  let seniorityOf: (userId: number) => string | null = () => null;
   try {
     const users = await getUsers();
     nameOf = (uid) => users.get(uid)?.name ?? null;
+    seniorityOf = (uid) => users.get(uid)?.seniorityDate ?? null;
   } catch {
-    /* Connecteam roster unreachable — display_name stays null, filled on a later tick. */
+    /* Connecteam roster unreachable — names/seniority stay null, filled on a later tick. */
   }
 
-  const aaRes = applyRouteAutoAssign(aaPlan, { date, routesById, nameOf, actor });
+  // SENIORITY ROUTING: resolve the ambiguous DRIVERS (fit >= 2 same-time routes) by putting senior drivers on
+  // specialty routes and newer drivers on easier ones. These become real auto-assigns alongside the
+  // unambiguous ones; whatever the rule can't place stays in the one-click prompt (promptOnly).
+  const seniorityPlan = resolveDriverSeniority(
+    aaPlan.prompt
+      .filter((p) => p.fillRole === "driver")
+      .map((p) => ({ userId: p.userId, name: p.name, eligibleRouteIds: p.eligibleRouteIds, seniorityDate: seniorityOf(p.userId) })),
+    buildSeniorityRouteMeta(date, routesById),
+  );
+  const resolvedSet = new Set(seniorityPlan.resolvedUserIds);
+  out.promptOnly = aaPlan.prompt.filter((p) => !resolvedSet.has(p.userId)).length;
+
+  const combined: RouteAutoAssignPlan = { ...aaPlan, autoAssign: [...aaPlan.autoAssign, ...seniorityPlan.autoAssign] };
+  const aaRes = applyRouteAutoAssign(combined, { date, routesById, nameOf, actor });
   out.autoAssigned = aaRes.assigned;
+  out.seniorityAssigned = seniorityPlan.autoAssign.length;
 
   // 2. App route -> Connecteam auto-create (silent). Needs the real Connecteam presence set; if we can't
   //    read it, skip (we must not create blind — that is how duplicates happen).
@@ -370,6 +416,8 @@ export interface RouteAutoSyncTickResult {
   detail: string;
   days: number;
   autoAssigned: number;
+  /** Of autoAssigned, how many the driver seniority rule decided (same-time specialty vs easy route). */
+  seniorityAssigned: number;
   ctCreated: number;
   flagged: number;
   unreachableDays: number;
@@ -387,6 +435,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
       detail: connecteamConfigured() ? "autosync disabled" : "not configured",
       days: 0,
       autoAssigned: 0,
+      seniorityAssigned: 0,
       ctCreated: 0,
       flagged: 0,
       unreachableDays: 0,
@@ -395,6 +444,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
   const today = todayInOpsTz();
   const dates = Array.from({ length: SYNC_HORIZON_DAYS }, (_, i) => shiftYmd(today, i));
   let autoAssigned = 0;
+  let seniorityAssigned = 0;
   let ctCreated = 0;
   let flagged = 0;
   let unreachable = 0;
@@ -408,6 +458,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
       }
       reachableDays += 1;
       autoAssigned += r.autoAssigned;
+      seniorityAssigned += r.seniorityAssigned;
       ctCreated += r.ctCreated;
       flagged += r.mixedFlagged;
     } catch {
@@ -415,8 +466,9 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
     }
   }
   const ok = reachableDays > 0;
+  const seniorityNote = seniorityAssigned ? ` (${seniorityAssigned} by seniority)` : "";
   const detail = reachableDays === 0
     ? `Connecteam unreachable (${unreachable}/${dates.length} days) — skipped, nothing written`
-    : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent), ${flagged} flagged${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
-  return { ok, detail, days: reachableDays, autoAssigned, ctCreated, flagged, unreachableDays: unreachable };
+    : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned${seniorityNote}, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent), ${flagged} flagged${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
+  return { ok, detail, days: reachableDays, autoAssigned, seniorityAssigned, ctCreated, flagged, unreachableDays: unreachable };
 }

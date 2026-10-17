@@ -55,6 +55,11 @@ export interface AppSettings {
   /** Operational Opportunity detection — the "tomorrow's prep window" rule (see event/prepOpportunity.ts).
    *  Admin-tunable; conservative, honest defaults. All times are MINUTES unless noted. */
   prepOpportunity: PrepOpportunitySettings;
+  /** Item names (case-insensitive substrings) that make a route "specialty / harder", so the driver
+   *  auto-router puts SENIOR drivers on specialty routes and newer drivers on easier ones when routes start
+   *  at the same time (see scheduling/routeSpecialty.ts). Tents are ALWAYS specialty (crewRules), so this
+   *  list EXTENDS that built-in rule — it never needs "tent" in it. */
+  specialtyItemKeywords: string[];
 }
 
 export interface PrepOpportunitySettings {
@@ -155,8 +160,24 @@ export function defaultSettings(): AppSettings {
       warehouseCloseHour: process.env.PREP_WAREHOUSE_CLOSE_HOUR ? numEnv(process.env.PREP_WAREHOUSE_CLOSE_HOUR, 0) : null,
       otPolicy: "in_shift_only",
     },
+    specialtyItemKeywords: envJson<string[]>(process.env.SPECIALTY_ITEM_KEYWORDS, DEFAULT_SPECIALTY_KEYWORDS),
   };
 }
+
+/** Out-of-the-box "specialty / harder" item keywords (beyond tents, which crewRules always flags). Chosen
+ *  to be conservative event-rental signals of a harder load; the team edits this list in /admin. */
+export const DEFAULT_SPECIALTY_KEYWORDS: string[] = [
+  "dance floor",
+  "staging",
+  "stage",
+  "subfloor",
+  "flooring",
+  "chandelier",
+  "draping",
+  "truss",
+  "lighting",
+  "generator",
+];
 
 /** Parse a numeric env var, falling back to `fallback` when unset/invalid. */
 function numEnv(raw: string | undefined, fallback: number): number {
@@ -196,6 +217,7 @@ function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSetting
     ignitionUnits: over.ignitionUnits ?? base.ignitionUnits,
     gpsVehicleIds: over.gpsVehicleIds ?? base.gpsVehicleIds,
     prepOpportunity: { ...base.prepOpportunity, ...(over.prepOpportunity ?? {}) },
+    specialtyItemKeywords: over.specialtyItemKeywords ?? base.specialtyItemKeywords,
   };
 }
 
