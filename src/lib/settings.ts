@@ -282,7 +282,7 @@ export function renderTemplate(tpl: string, vars: Record<string, string | undefi
   // triple newlines. These are the templates' conditional lines — absent token means the line isn't wanted.
   out = out
     .split("\n")
-    .filter((line) => !line.includes("{link}") && !line.includes("{timingNote}") && !line.includes("{readinessNote}"))
+    .filter((line) => !line.includes("{link}") && !line.includes("{timingNote}") && !line.includes("{readinessNote}") && !line.includes("{clockLine}"))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

@@ -72,10 +72,11 @@ function crewPhrase(coworkers: ShiftPacket["assignment"]["coworkers"]): string {
   return coworkers.map((c) => `${orTbd(c.name)} (${ROLE_WORD[c.role]})`).join(", ");
 }
 
-/** The clock-in/out line, by worker kind. Internal → Connecteam personal code. Instawork → the gig's
- *  per-gig codes when captured, else the honest app fallback (never fabricate a code). */
-function clockLine(tk: ShiftPacket["timekeeping"]): string {
-  if (tk.kind === "internal") return "Clock in/out on Connecteam with your personal code.";
+/** The clock-in/out line — INSTAWORK TEMPS ONLY. Internal crew already clock in on Connecteam day to day, so
+ *  the debrief does NOT remind them (owner rule); returns undefined and the {clockLine} line drops. Instawork
+ *  temps get the gig's per-gig codes when captured, else the honest app fallback (never fabricate a code). */
+function clockLine(tk: ShiftPacket["timekeeping"]): string | undefined {
+  if (tk.kind === "internal") return undefined;
   if (tk.clockInCode && tk.clockOutCode) return `Clock in: ${tk.clockInCode}. Clock out: ${tk.clockOutCode}.`;
   return "Clock in/out through the Instawork app.";
 }

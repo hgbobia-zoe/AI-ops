@@ -162,7 +162,7 @@ describe("renderPacketTouch — locked copy", () => {
     expect(body).toContain("12712 Rock Creek Mill Rd, Unit 4A");
     expect(body).toContain("end of the cul-de-sac");
     expect(body).toContain("Truck: NPR 1.");
-    expect(body).toContain("Clock in/out on Connecteam with your personal code.");
+    expect(body).not.toContain("Clock"); // internal crew already clock in on Connecteam — no reminder line
     expect(body).toContain(`Questions: ${ZOE_DISPATCH_PHONE}`);
     expect(body).not.toMatch(/[—–]/); // no em/en dashes (house comms style)
     expect(body).not.toContain("Smith Wedding"); // event label removed
@@ -175,20 +175,26 @@ describe("renderPacketTouch — locked copy", () => {
     expect(renderPacketTouch(p, "day_before")).toContain("Working with: just you.");
   });
 
-  it("renders the Instawork clock codes when present, and the app fallback when not", () => {
+  it("shares the clock-in line with Instawork temps only, never internal crew", () => {
+    // Internal crew already clock in on Connecteam — NO clock line at all.
+    const internal = buildShiftPacket(shift(), assignment(), ctx);
+    expect(renderPacketTouch(internal, "refresher")).not.toContain("Clock");
+
+    // Instawork temp WITH captured per-gig codes → share the codes.
     const withCodes = buildShiftPacket(
       shift(),
       assignment({ workerKind: "instawork", connecteamUserId: null, instaworkWorker: "Alex P", displayName: "Alex P" }),
       { ...ctx, clockInCode: "3243", clockOutCode: "2450" },
     );
-    expect(renderPacketTouch(withCodes, "on_assign")).toContain("Clock in: 3243. Clock out: 2450.");
+    expect(renderPacketTouch(withCodes, "refresher")).toContain("Clock in: 3243. Clock out: 2450.");
 
+    // Instawork temp WITHOUT codes → the honest app fallback (never a fabricated code).
     const noCodes = buildShiftPacket(
       shift(),
       assignment({ workerKind: "instawork", connecteamUserId: null, instaworkWorker: "Alex P", displayName: "Alex P" }),
       { ...ctx, clockInCode: null, clockOutCode: null },
     );
-    expect(renderPacketTouch(noCodes, "on_assign")).toContain("Clock in/out through the Instawork app.");
+    expect(renderPacketTouch(noCodes, "refresher")).toContain("Clock in/out through the Instawork app.");
   });
 
   it("renders the delivery-route link ONLY in the refresher, and drops the line when null", () => {
