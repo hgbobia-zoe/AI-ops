@@ -8,7 +8,9 @@ app = "zoe-responder"
 primary_region = "iad"
 
 [build]
-  dockerfile = "deploy/responder/Dockerfile"
+  # Relative to THIS file's directory (deploy/responder/); the build context is the repo root (the dir you
+  # run `flyctl deploy` from), so the Dockerfile's `COPY . .` still copies the whole repo.
+  dockerfile = "Dockerfile"
 
 [env]
   # The dispatch app the loop talks to (bridge API). Overrideable, defaults match run-loop/poll.

@@ -9,6 +9,11 @@
 
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+// Repo root = two dirs up from deploy/responder/, resolved from THIS file so the CWD can't break it.
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const env = (k, d) => {
   const v = process.env[k];
@@ -42,7 +47,7 @@ const PERMISSION_MODE = env("RESPONDER_PERMISSION_MODE", "acceptEdits");
 const LIMIT_BACKOFF_MS = Number(env("RESPONDER_LIMIT_BACKOFF_SEC", "900")) * 1000; // 15m on a usage limit
 const MAX_BACKOFF_MS = Number(env("RESPONDER_MAX_BACKOFF_SEC", "1800")) * 1000; // cap other-error backoff at 30m
 
-const PROMPT = readFileSync("scripts/responder/loop.md", "utf8") + "\n\n---\nRun exactly ONE cycle of the above now, then stop.";
+const PROMPT = readFileSync(join(REPO_ROOT, "scripts", "responder", "loop.md"), "utf8") + "\n\n---\nRun exactly ONE cycle of the above now, then stop.";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Subscription usage-limit signals (so we back off until it resets instead of hammering it).
@@ -51,7 +56,7 @@ const LIMIT_RE = /(usage|session|weekly|opus|sonnet|rate)[^.\n]{0,24}limit|limit
 function runCycle() {
   return new Promise((resolve) => {
     const args = ["-p", PROMPT, "--permission-mode", PERMISSION_MODE, "--allowedTools", ALLOWED_TOOLS, "--max-turns", String(MAX_TURNS)];
-    const child = spawn("claude", args, { stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    const child = spawn("claude", args, { stdio: ["ignore", "pipe", "pipe"], env: process.env, cwd: REPO_ROOT });
     let out = "";
     const cap = (b) => {
       const s = b.toString();
