@@ -12,6 +12,7 @@ import { draftLeadOutreach } from "@/lib/salesos/outreachService";
 import { STAGE_LABEL } from "@/lib/salesos/calc";
 import { getSettings } from "@/lib/settings";
 import { approvalExistsByKey, createApproval, type ApprovalActionType, type ApprovalCard } from "./approvals";
+import { botAnnounce } from "@/lib/notify/aiBots";
 
 /** Cap per proposer run — bounded, never a flood. */
 const MAX_PER_RUN = 6;
@@ -104,7 +105,13 @@ export async function proposeOutreachApprovals(): Promise<ProposeResult> {
       idempotencyKey: key,
     });
     if (existed) skipped++;
-    else created++;
+    else {
+      created++;
+      void botAnnounce(
+        "sales",
+        `✍️ Drafted a follow-up ${channelWord(actionType)} to ${lead.clientName || "the client"} (${eventWhen}, ${money(lead.value)}) and queued it for your approval. ${lead.action.reason}`,
+      ).catch(() => {});
+    }
   }
   return { agent: "outreach", candidates: candidates.length, created, skipped };
 }
@@ -161,7 +168,13 @@ export async function proposeLostQuoteApprovals(): Promise<ProposeResult> {
       idempotencyKey: key,
     });
     if (existed) skipped++;
-    else created++;
+    else {
+      created++;
+      void botAnnounce(
+        "sales",
+        `✍️ Drafted a win-back ${channelWord(actionType)} to ${q.clientName || "the client"} (lost quote worth ${money(q.value)}) and queued it for your approval.`,
+      ).catch(() => {});
+    }
   }
   return { agent: "lost-quote", candidates: candidates.length, created, skipped };
 }
