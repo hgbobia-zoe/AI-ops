@@ -81,7 +81,7 @@ const ctx: PacketContext = {
   truck: { id: "T1", name: "NPR 1" },
   supervisor: { name: "Dana L", phone: "301-555-0100" },
   coworkers: CREW,
-  route: { stops: 3, firstStop: "Grand Ballroom" },
+  route: { stops: 3, firstStop: "Grand Ballroom", timedStops: 0 },
   mapUrl: null,
   equipment: [],
 };
@@ -194,6 +194,19 @@ describe("renderPacketTouch — locked copy", () => {
     expect(body).toContain("Report 9:30 AM ET");
     expect(body).not.toContain("2026-10-23"); // no raw ISO date/instant leaks into the message
     expect(body).not.toContain("T13:30");
+  });
+
+  it("adds the time-sensitive reminder to the debrief ONLY when the route has timed stops", () => {
+    // No timed stops (ctx.route.timedStops = 0) → no reminder line.
+    const none = renderPacketTouch(buildShiftPacket(shift(), assignment(), ctx), "refresher");
+    expect(none).not.toContain("time sensitive stops");
+    // One or more stops carry a specific delivery window → the reminder appears, with the arrival/departure ask.
+    const timed = { ...ctx, route: { stops: 3, firstStop: "Grand Ballroom", timedStops: 2 } };
+    const body = renderPacketTouch(buildShiftPacket(shift(), assignment(), timed), "refresher");
+    expect(body).toContain("this route has time sensitive stops");
+    expect(body).toContain("arrival and departure times");
+    expect(body).toContain("services the customers paid for");
+    expect(body).not.toMatch(/[—–]/); // house comms style: no em/en dashes
   });
 
   it("renders all three touches", () => {

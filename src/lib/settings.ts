@@ -260,10 +260,11 @@ export function renderTemplate(tpl: string, vars: Record<string, string | undefi
     if (v == null) continue;
     out = out.split(`{${k}}`).join(v);
   }
-  // Drop lines with a still-empty {link}; collapse the resulting triple newlines.
+  // Drop lines with a still-unfilled optional placeholder ({link}, {timingNote}); collapse the resulting
+  // triple newlines. These are the templates' conditional lines — absent token means the line isn't wanted.
   out = out
     .split("\n")
-    .filter((line) => !line.includes("{link}"))
+    .filter((line) => !line.includes("{link}") && !line.includes("{timingNote}"))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

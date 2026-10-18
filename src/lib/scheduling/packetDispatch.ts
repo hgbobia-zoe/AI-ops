@@ -85,7 +85,9 @@ export function buildSharedPacketContext(shift: StaffShift, users: Map<number, C
   let route: PacketContext["route"] = null;
   if (shift.routeId && shift.truckId) {
     const r = getRoutesForDate(shift.truckId, shift.date).find((x) => x.routeId === shift.routeId);
-    if (r) route = { stops: r.stops.length, firstStop: r.stops[0]?.custName ?? null };
+    // timedStops = stops carrying a specific delivery window (Goodshuffle plannedWindow). >0 means the route
+    // is time-sensitive, which flips on the "mind the stop timings" reminder in the debrief (see commsTemplates).
+    if (r) route = { stops: r.stops.length, firstStop: r.stops[0]?.custName ?? null, timedStops: r.stops.filter((s) => (s.plannedWindow ?? "").trim().length > 0).length };
   }
   const supUser = shift.supervisorUserId != null ? users.get(shift.supervisorUserId) : undefined;
   const supervisor = supUser ? { name: supUser.name, phone: supUser.phone ?? null } : null;
