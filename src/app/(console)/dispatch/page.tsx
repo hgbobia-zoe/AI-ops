@@ -18,6 +18,8 @@ import {
 import { findRouteHealthIssues } from "@/lib/dispatch/routeHealth";
 import { ClosePastRoutesButton } from "@/components/ClosePastRoutesButton";
 import { PullRoutesButton } from "@/components/PullRoutesButton";
+import { ResyncAllButton } from "@/components/ResyncAllButton";
+import { AutoAssignButton } from "@/components/AutoAssignButton";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 import { DISPLAY_TZ, todayInOpsTz, shiftYmd, formatYmdLong } from "@/lib/dates";
@@ -215,6 +217,12 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
           <FigureStrip figures={figures} />
           <div className="flex items-center gap-2">
             <PullRoutesButton />
+            {/* Global (all-routes) ops actions — supervisors only, and only for today/future (not history).
+                Re-sync all also needs at least one route to force onto. */}
+            {canSupervise && !(date < today) && withRoute.length > 0 && (
+              <ResyncAllButton routeIds={withRoute.map((f) => f.route!.routeId)} />
+            )}
+            {canSupervise && !(date < today) && <AutoAssignButton date={date} />}
             <DateNav date={date} today={today} />
           </div>
         </div>
