@@ -13,6 +13,7 @@
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
 import { enqueueGsOp, insertAudit } from "@/lib/db/repo";
+import { botAnnounce, botForAgent } from "@/lib/notify/aiBots";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 /** Every action an approval can carry. Only the first four are EXECUTABLE in v2 (via the proven
@@ -431,5 +432,17 @@ export function decideApproval(
     id, payload: JSON.stringify(payload), op: opId, note, by: actor, at: now,
   });
   recordAudit(current, "APPROVAL_EXECUTED", actor, { executed: true, op: plan.op, outboxOpId: opId });
+  // Confirm the send in the owning bot's channel (owner rule: no silent AI actions). Honest: it's QUEUED and
+  // goes out on the next office sync, not confirmed delivered yet.
+  void botAnnounce(botForAgent(current.agentId), {
+    emoji: "✅",
+    title: "Approved — going out next sync",
+    fields: [
+      { label: "Item", value: current.title },
+      { label: "Approved by", value: actor },
+    ],
+    body: "Queued to Goodshuffle. It sends on the next office Auto-Pull (not yet confirmed delivered).",
+    context: "Sent after your approval",
+  }).catch(() => {});
   return { approval: getApproval(id)!, outcome: "executed_queued", message: note };
 }

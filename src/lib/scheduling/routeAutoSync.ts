@@ -40,7 +40,7 @@ import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate } from "@/lib/db/repo";
 import { insertAudit } from "@/lib/db/repo";
 import { todayInOpsTz, shiftYmd, DISPLAY_TZ } from "@/lib/dates";
-import { botAnnounce } from "@/lib/notify/aiBots";
+import { botAnnounce, appUrl } from "@/lib/notify/aiBots";
 import { createShift, getShiftById, getShiftsForDate, updateShift } from "./store";
 import { syncInternalAssignments } from "./assignments";
 import { routeAssignWindow, requiredCrewForRoute, assignedCrewForRoute, computeRouteGap } from "./preCheck";
@@ -310,10 +310,19 @@ export async function applyRouteConnecteamCreate(plan: RouteCreatePlan, deps: Ro
     audit(actor, "ROUTE_SYNC_CONNECTEAM_CREATED", c.shiftId, { connecteamShiftId: res.shiftId, schedulerId: deps.scheduler.schedulerId, assignees: shift.assignees.length, notifyUsers: false });
     // Narrate (owner rule: no silent AI actions). Silent to the CREW (notifyUsers=false) but visible to US.
     const whoNames = shift.assignees.map((u) => deps.nameOf?.(u) || `#${u}`).join(", ") || "the crew";
-    void botAnnounce(
-      "scheduling",
-      `🗓️ Created a Connecteam shift for ${whoNames} on ${truckName} (${ROLE_WORD[shift.role]}, ${hhmm(shift.startTime)}–${hhmm(shift.endTime)}) so their schedule and pay match the route. Reply here if that's wrong.`,
-    ).catch(() => {});
+    void botAnnounce("scheduling", {
+      emoji: "🗓️",
+      title: "Connecteam shift created",
+      fields: [
+        { label: "Who", value: whoNames },
+        { label: "Truck", value: truckName },
+        { label: "Role", value: ROLE_WORD[shift.role] },
+        { label: "Window", value: `${hhmm(shift.startTime)}–${hhmm(shift.endTime)}` },
+      ],
+      body: "Created so their schedule and pay match the route.",
+      link: { text: "View in Scheduling", url: appUrl("/scheduling") },
+      context: "Scheduling Bot · reply here if that's wrong",
+    }).catch(() => {});
   }
 
   return { created, flagged, deferred: plan.deferred.length, failed };
@@ -429,11 +438,19 @@ export async function applyRouteWindowRatchet(deps: {
       });
       const who = shift.assignees.map((u) => deps.nameOf(u) || `#${u}`).join(", ") || "the crew";
       const truck = shift.truckId ? deps.truckNameOf(shift.truckId) : "the route";
-      void botAnnounce(
-        "scheduling",
-        `🗓️ Extended ${who}'s ${truck} shift to ${hhmm(out.start)}–${hhmm(out.end)} (was ${hhmm(shift.startTime)}–${hhmm(shift.endTime)}) because ${out.reason}.` +
-          `${shift.connecteamShiftId ? " Updated Connecteam so their hours/pay reflect it." : ""} Reply here if that's wrong.`,
-      ).catch(() => {});
+      void botAnnounce("scheduling", {
+        emoji: "🗓️",
+        title: "Shift extended",
+        fields: [
+          { label: "Who", value: who },
+          { label: "Truck", value: truck },
+          { label: "New window", value: `${hhmm(out.start)}–${hhmm(out.end)}` },
+          { label: "Was", value: `${hhmm(shift.startTime)}–${hhmm(shift.endTime)}` },
+        ],
+        body: `*Why:* ${out.reason}.${shift.connecteamShiftId ? " Updated Connecteam so their hours and pay reflect it." : ""}`,
+        link: { text: "View in Scheduling", url: appUrl("/scheduling") },
+        context: "Scheduling Bot · reply here if that's wrong",
+      }).catch(() => {});
     }
   }
   return expanded;
@@ -515,10 +532,19 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   for (const a of aaRes.assignments) {
     const truck = a.truckId ? truckNameOf(a.truckId) : "the route";
     const why = a.reasons.length ? a.reasons.join("; ") : "it was the unambiguous match";
-    void botAnnounce(
-      "scheduling",
-      `🗓️ Assigned ${a.name} as ${ROLE_WORD[a.fillRole]} on ${truck} (${a.routeStops} stop${a.routeStops === 1 ? "" : "s"}) because ${why}. Reply here if that's wrong.`,
-    ).catch(() => {});
+    void botAnnounce("scheduling", {
+      emoji: "🗓️",
+      title: "Crew assigned to a route",
+      fields: [
+        { label: "Who", value: a.name },
+        { label: "Role", value: ROLE_WORD[a.fillRole] },
+        { label: "Truck", value: truck },
+        { label: "Route", value: `${a.routeStops} stop${a.routeStops === 1 ? "" : "s"}` },
+      ],
+      body: `*Why:* ${why}`,
+      link: { text: "View in Scheduling", url: appUrl("/scheduling") },
+      context: "Scheduling Bot · reply here if that's wrong",
+    }).catch(() => {});
   }
 
   // The scheduler is needed for both the route-change ratchet (silent Connecteam updates) and the auto-create

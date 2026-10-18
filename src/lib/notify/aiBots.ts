@@ -30,6 +30,22 @@ export const BOTS: Record<BotId, BotConfig> = {
   ops: { name: "Viktor", icon: ":robot_face:", defaultChannel: "general" },
 };
 
+/** Bridge the AI-org employee/agent ids (aiorg/registry.ts) to a notify BotId, so code holding an agentId
+ *  (e.g. an approval's agentId) can route to the right channel/persona. Unknown ids fall back to "ops". */
+const AGENT_TO_BOT: Record<string, BotId> = {
+  outreach: "sales",
+  "lost-quote": "sales",
+  "quote-analyst": "sales",
+  "lead-intelligence": "sales",
+  "sales-coach": "sales",
+  "inventory-exception": "inventory",
+  "event-radar": "data",
+  hiring: "hiring",
+};
+export function botForAgent(agentId: string): BotId {
+  return AGENT_TO_BOT[agentId] ?? "ops";
+}
+
 /** The channel a bot posts to: an env override (SLACK_CHANNEL_<BOT>), else the bot's default, else the
  *  generic AI channel. Returns null only when nothing is configured at all. */
 export function channelFor(bot: BotId): string | null {
@@ -37,17 +53,70 @@ export function channelFor(bot: BotId): string | null {
   return override || BOTS[bot].defaultChannel || process.env.SLACK_AI_CHANNEL?.trim() || null;
 }
 
+/** A designed announcement, rendered as a Slack Block Kit card. Pass a plain string to botAnnounce instead
+ *  for a simple text line. Every field is optional except the title. */
+export interface BotCard {
+  /** Short header line (what happened). */
+  title: string;
+  /** Leading emoji for the header, e.g. "🗓️". */
+  emoji?: string;
+  /** A 2-column label/value grid (the facts): who / truck / value / window … */
+  fields?: { label: string; value: string }[];
+  /** A paragraph under the fields — the "why", or a drafted-message preview. mrkdwn. */
+  body?: string;
+  /** A link button ("View in app"); dropped when url is empty. */
+  link?: { text: string; url: string | null };
+  /** A small footer line (persona + an override hint). mrkdwn. */
+  context?: string;
+}
+
+/** The app's public base URL for "View in app" links, from PUBLIC_BASE_URL. Null → the link button drops. */
+export function appUrl(path: string): string | null {
+  const base = process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
+  if (!base) return null;
+  return `${base}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+/** Build Block Kit blocks for a card. Keeps within Slack's limits (10 section fields, 150-char header). */
+function cardBlocks(card: BotCard): unknown[] {
+  const blocks: unknown[] = [];
+  const header = `${card.emoji ? `${card.emoji} ` : ""}${card.title}`.slice(0, 150);
+  blocks.push({ type: "header", text: { type: "plain_text", text: header, emoji: true } });
+  if (card.fields?.length) {
+    blocks.push({ type: "section", fields: card.fields.slice(0, 10).map((f) => ({ type: "mrkdwn", text: `*${f.label}:*\n${f.value}` })) });
+  }
+  if (card.body?.trim()) blocks.push({ type: "section", text: { type: "mrkdwn", text: card.body.trim() } });
+  if (card.link?.url) {
+    blocks.push({ type: "actions", elements: [{ type: "button", text: { type: "plain_text", text: card.link.text, emoji: true }, url: card.link.url }] });
+  }
+  if (card.context?.trim()) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: card.context.trim() }] });
+  return blocks;
+}
+
+/** Flatten a card to plain text — the notification/fallback text, and what the ops webhook (no Block Kit) posts. */
+function cardToText(card: BotCard): string {
+  const lines = [`${card.emoji ? `${card.emoji} ` : ""}${card.title}`.trim()];
+  for (const f of card.fields ?? []) lines.push(`${f.label}: ${f.value}`);
+  if (card.body?.trim()) lines.push(card.body.trim());
+  if (card.link?.url) lines.push(`${card.link.text}: ${card.link.url}`);
+  if (card.context?.trim()) lines.push(card.context.trim());
+  return lines.join("\n");
+}
+
 /**
- * Announce an AI bot's action in its OWN channel, under its OWN persona. Never silent: if the bot token or
- * channel isn't available (or the post fails), falls back to the ops webhook so the action is still surfaced.
- * Never throws. `text` is the full human-readable message (what it did + why + how to override).
+ * Announce an AI bot's action in its OWN channel, under its OWN persona. Pass a plain string for a simple
+ * line, or a BotCard for a designed Block Kit card (the card also renders as text for the notification + the
+ * webhook fallback). Never silent: if the bot token or channel isn't available (or the post fails), falls
+ * back to the ops webhook so the action is still surfaced. Never throws.
  */
-export async function botAnnounce(bot: BotId, text: string): Promise<SlackResult> {
+export async function botAnnounce(bot: BotId, message: string | BotCard): Promise<SlackResult> {
+  const text = typeof message === "string" ? message : cardToText(message);
+  const blocks = typeof message === "string" ? undefined : cardBlocks(message);
   const channel = channelFor(bot);
   if (channel && slackBotConfigured()) {
-    const r = await slackPostAs(channel, BOTS[bot], text);
+    const r = await slackPostAs(channel, BOTS[bot], text, { blocks });
     if (r.ok) return r;
     // bot token present but post failed (e.g. not in that channel) → fall through so it's still surfaced
   }
-  return slackNotify(text);
+  return slackNotify(text); // webhook can't render blocks — the flattened text carries the full content
 }

@@ -32,7 +32,7 @@ import { llmConfigured } from "@/lib/llm";
 import { proposeLostQuoteApprovals, proposeOutreachApprovals } from "@/lib/aiorg/proposers";
 import { listUnanalyzedCoachableCalls } from "@/lib/db/repo";
 import { analyzeCall } from "@/lib/coach/analyze";
-import { botAnnounce } from "@/lib/notify/aiBots";
+import { botAnnounce, appUrl } from "@/lib/notify/aiBots";
 import { recordQuoteInsight } from "./quoteInsights";
 import { logSalesEventBy } from "./audit";
 import { getSettings } from "@/lib/settings";
@@ -262,10 +262,13 @@ async function runQuoteAnalyst(state: SalesAiState, now: number): Promise<string
       const lines = flaggedForSlack
         .map((f) => `• ${f.name} (${money(f.value)}): ${f.risk}`)
         .join("\n");
-      void botAnnounce(
-        "sales",
-        `🔎 Quote Analyst flagged ${flaggedForSlack.length} high-value quote${flaggedForSlack.length === 1 ? "" : "s"} to review:\n${lines}\n(Analysis only — no change was made.)`,
-      ).catch(() => {});
+      void botAnnounce("sales", {
+        emoji: "🔎",
+        title: `${flaggedForSlack.length} high-value quote${flaggedForSlack.length === 1 ? "" : "s"} to review`,
+        body: lines,
+        link: { text: "Open Sales OS", url: appUrl("/salesos") },
+        context: "Quote Analyst · analysis only, no change was made",
+      }).catch(() => {});
     }
   }
 
@@ -302,10 +305,13 @@ async function runLeadIntelligence(state: SalesAiState, now: number): Promise<st
     const lines = hot
       .map((h) => `• ${h.clientName || h.id} (${money(h.value)})${h.quoteAgeDays != null ? `, untouched ${h.quoteAgeDays}d` : ""} — ${STAGE_LABEL[h.stage]}`)
       .join("\n");
-    void botAnnounce(
-      "sales",
-      `🔥 Lead Intelligence: ${hot.length} hot lead${hot.length === 1 ? "" : "s"} over ${money(minValue)} flagged to act on now:\n${lines}`,
-    ).catch(() => {});
+    void botAnnounce("sales", {
+      emoji: "🔥",
+      title: `${hot.length} hot lead${hot.length === 1 ? "" : "s"} to act on now`,
+      body: lines,
+      link: { text: "Open Sales OS", url: appUrl("/salesos") },
+      context: `Lead Intelligence · over ${money(minValue)}`,
+    }).catch(() => {});
   }
   return `lead-intelligence: ${hot.length} hot lead${hot.length === 1 ? "" : "s"}`;
 }

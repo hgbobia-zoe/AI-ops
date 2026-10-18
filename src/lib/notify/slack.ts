@@ -115,14 +115,22 @@ export interface BotPersona {
   icon: string; // a Slack :emoji: shortcode
 }
 
-/** Post to a channel AS a named bot persona (custom display name + icon). Skipped when no bot token is set. */
-export async function slackPostAs(channel: string, persona: BotPersona, text: string, threadTs?: string | null): Promise<SlackResult> {
+/** Post to a channel AS a named bot persona (custom display name + icon). Skipped when no bot token is set.
+ *  `opts.blocks` renders a designed Block Kit card; `text` is still passed as the notification/fallback text
+ *  (and what shows if blocks can't render), so always provide a readable `text`. */
+export async function slackPostAs(
+  channel: string,
+  persona: BotPersona,
+  text: string,
+  opts?: { blocks?: unknown[]; threadTs?: string | null },
+): Promise<SlackResult> {
   if (!slackBotConfigured()) return { ok: false, skipped: true };
   const ch = channel.trim();
   const msg = text.trim();
   if (!ch || !msg) return { ok: false, error: "missing_channel_or_text" };
   const body: Record<string, unknown> = { channel: ch, text: msg, username: persona.name, icon_emoji: persona.icon };
-  if (threadTs) body.thread_ts = threadTs;
+  if (opts?.blocks?.length) body.blocks = opts.blocks;
+  if (opts?.threadTs) body.thread_ts = opts.threadTs;
   const sent = await slackApi("chat.postMessage", body);
   return sent.ok ? { ok: true } : { ok: false, error: `post: ${sent.error}` };
 }

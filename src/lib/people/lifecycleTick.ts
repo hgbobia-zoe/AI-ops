@@ -6,7 +6,7 @@
 // App-owned: safe when nothing matches (a silent no-op). No external writes beyond the proven adapters.
 
 import { slackNotify } from "@/lib/notify/slack";
-import { botAnnounce } from "@/lib/notify/aiBots";
+import { botAnnounce, appUrl } from "@/lib/notify/aiBots";
 import { todayInOpsTz } from "@/lib/dates";
 import { executeAutomatedTask, startOnboarding } from "./lifecycle";
 import { getAdapter } from "./adapters";
@@ -30,10 +30,17 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
       const r = startOnboarding(e.id, actor);
       if (r.ok) {
         onboarded++;
-        void botAnnounce(
-          "hiring",
-          `👋 Started onboarding for ${e.displayName} (${e.role ?? "role TBD"}) — their access tasks are created. Review them on /people.`,
-        ).catch(() => {});
+        void botAnnounce("hiring", {
+          emoji: "👋",
+          title: "Onboarding started",
+          fields: [
+            { label: "Who", value: e.displayName },
+            { label: "Role", value: e.role ?? "role TBD" },
+          ],
+          body: "Their access tasks are created.",
+          link: { text: "Open People", url: appUrl("/people") },
+          context: "Hiring Bot",
+        }).catch(() => {});
       }
     }
   }
@@ -49,10 +56,18 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
       const r = await executeAutomatedTask(t.id, actor);
       if (r.ok) {
         revoked++;
-        void botAnnounce(
-          "hiring",
-          `🔒 Deactivated ${e.displayName}'s ${t.system} access — offboarding effective ${e.endDate ?? today}. Any manual access removals stay open for a human.`,
-        ).catch(() => {});
+        void botAnnounce("hiring", {
+          emoji: "🔒",
+          title: "Access deactivated",
+          fields: [
+            { label: "Who", value: e.displayName },
+            { label: "System", value: t.system },
+            { label: "Effective", value: e.endDate ?? today },
+          ],
+          body: "Offboarding. Any manual access removals stay open for a human.",
+          link: { text: "Open People", url: appUrl("/people") },
+          context: "Hiring Bot",
+        }).catch(() => {});
       }
     }
   }
