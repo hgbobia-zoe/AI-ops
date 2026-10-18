@@ -52,8 +52,20 @@ behind a residential proxy" project is built. The responder does not help with C
 - **Never set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` on this app.** In headless mode they outrank the
   OAuth token and silently switch to metered API billing. The loop refuses to start if one is set.
 - **Pin the Claude Code CLI version.** The headless flags (`--permission-mode`, `--allowedTools`, the
-  `--bare` default) are version-sensitive. The Dockerfile takes `CLAUDE_CODE_VERSION` (defaults to `latest`
-  to build); set it to a pinned version once verified: `flyctl deploy -c deploy/responder/fly.toml --build-arg CLAUDE_CODE_VERSION=<x.y.z>`.
+  `--bare` default) are version-sensitive. The Dockerfile `CLAUDE_CODE_VERSION` is PINNED (currently
+  `2.1.302`), not floating `latest`. Bump it only after verifying the flags against the changelog, e.g.
+  `flyctl deploy -c deploy/responder/fly.toml --build-arg CLAUDE_CODE_VERSION=<x.y.z>`.
+- **`--allowedTools` is COMMA-separated** (`Bash,Read,Glob,Grep,WebFetch`), the documented form. A
+  space-separated string parses as one rule that matches nothing and silently denies every tool.
+- **Onboarding gate.** Headless `-p` refuses to run until `$HOME/.claude.json` has
+  `"hasCompletedOnboarding": true`; on a fresh `/data` volume it's absent. `run-loop.mjs` sets it
+  idempotently at startup (`ensureOnboarded`), so you don't have to.
+- **"Not logged in" == HTTP 401.** If a cycle fails and the output says `Not logged in · Please run /login`,
+  the token is being REJECTED by the API (bad / expired / whitespace-mangled when the secret was set), not an
+  onboarding or infra problem. `claude auth status` showing `loggedIn: true` only means a token is present,
+  not that it's accepted. Confirm with `claude -p hello --output-format json` (look for `"api_error_status":401`).
+  Fix = regenerate (`claude setup-token`) and re-set the secret with NO trailing whitespace. The loop prints a
+  pointed hint on this case instead of silently backing off.
 - **Verify the invocation once interactively** before trusting it unattended: run the `claude -p … --allowedTools … --max-turns …` from `run-loop.mjs` by hand and confirm it completes a cycle without hanging on a permission prompt. Adjust `RESPONDER_PERMISSION_MODE` / `RESPONDER_ALLOWED_TOOLS` (env) if your CLI version needs different values.
 - **Shared usage windows.** This draws from the SAME Max limits as your own interactive Claude use. If it
   competes with your usage, put the responder on its own seat.
@@ -65,6 +77,6 @@ behind a residential proxy" project is built. The responder does not help with C
 
 ## Tunables (env / Fly secrets)
 
-`RESPONDER_INTERVAL_SEC` (60), `RESPONDER_MAX_TURNS` (40), `RESPONDER_ALLOWED_TOOLS` ("Bash Read Glob Grep
-WebFetch"), `RESPONDER_PERMISSION_MODE` (acceptEdits), `RESPONDER_LIMIT_BACKOFF_SEC` (900),
+`RESPONDER_INTERVAL_SEC` (60), `RESPONDER_MAX_TURNS` (40), `RESPONDER_ALLOWED_TOOLS` ("Bash,Read,Glob,Grep,WebFetch"),
+`RESPONDER_PERMISSION_MODE` (acceptEdits), `RESPONDER_LIMIT_BACKOFF_SEC` (900),
 `RESPONDER_MAX_BACKOFF_SEC` (1800), `APP_URL` (https://zoe-dispatch.fly.dev).

@@ -14,3 +14,7 @@ kiosk-shell
 android
 **/*.md
 !SETUP.md
+# The Fly responder (deploy/responder) runs this prompt + its contract at runtime — keep them in the image.
+!scripts/responder/loop.md
+!scripts/responder/README.md
+!docs/ai-bridge-responder.md
