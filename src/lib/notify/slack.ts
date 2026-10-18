@@ -107,12 +107,35 @@ export async function slackPostMessage(channel: string, text: string, threadTs?:
   return sent.ok ? { ok: true } : { ok: false, error: `post: ${sent.error}` };
 }
 
+/** A bot's Slack identity: the display name + icon it posts under. One Slack app (Viktor) posts AS each bot
+ *  via chat:write.customize, so the team sees "Scheduling Bot", "Sales Bot", etc. without a separate app per
+ *  bot. When that scope isn't granted Slack simply ignores name/icon and posts as the app — never an error. */
+export interface BotPersona {
+  name: string;
+  icon: string; // a Slack :emoji: shortcode
+}
+
+/** Post to a channel AS a named bot persona (custom display name + icon). Skipped when no bot token is set. */
+export async function slackPostAs(channel: string, persona: BotPersona, text: string, threadTs?: string | null): Promise<SlackResult> {
+  if (!slackBotConfigured()) return { ok: false, skipped: true };
+  const ch = channel.trim();
+  const msg = text.trim();
+  if (!ch || !msg) return { ok: false, error: "missing_channel_or_text" };
+  const body: Record<string, unknown> = { channel: ch, text: msg, username: persona.name, icon_emoji: persona.icon };
+  if (threadTs) body.thread_ts = threadTs;
+  const sent = await slackApi("chat.postMessage", body);
+  return sent.ok ? { ok: true } : { ok: false, error: `post: ${sent.error}` };
+}
+
 /**
  * Narrate an AI-EMPLOYEE action in Slack so a human sees WHAT it did and WHY and can override it. House rule
  * (the user's): an AI employee never acts silently. Posts AS VIKTOR (the bot) to the AI-activity channel
  * (SLACK_AI_CHANNEL) when the bot token + channel are set; otherwise FALLS BACK to the ops webhook so the
  * action is still announced — never silent. Never throws. The caller passes the full message (which employee,
  * what, why).
+ *
+ * NOTE: prefer `botAnnounce(bot, text)` (src/lib/notify/aiBots.ts) for new code — it routes to the bot's OWN
+ * domain channel and posts under its OWN persona. This stays for callers that just want the generic AI channel.
  */
 export async function viktorAnnounce(text: string): Promise<SlackResult> {
   const channel = process.env.SLACK_AI_CHANNEL?.trim();

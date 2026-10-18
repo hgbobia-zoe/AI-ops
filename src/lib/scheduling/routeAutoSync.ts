@@ -40,7 +40,7 @@ import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate } from "@/lib/db/repo";
 import { insertAudit } from "@/lib/db/repo";
 import { todayInOpsTz, shiftYmd, DISPLAY_TZ } from "@/lib/dates";
-import { viktorAnnounce } from "@/lib/notify/slack";
+import { botAnnounce } from "@/lib/notify/aiBots";
 import { createShift, getShiftById, getShiftsForDate, updateShift } from "./store";
 import { syncInternalAssignments } from "./assignments";
 import { routeAssignWindow, requiredCrewForRoute, assignedCrewForRoute, computeRouteGap } from "./preCheck";
@@ -57,6 +57,8 @@ import type { Route } from "@/lib/types";
 const SYNC_HORIZON_DAYS = 14;
 
 const ROLE_LABEL: Record<ShiftRole, string> = { driver: "Driver", field: "Field", prep: "Prep" };
+/** Natural duty words for the Slack narration ("delivery helper", not "field"). */
+const ROLE_WORD: Record<ShiftRole, string> = { driver: "driver", field: "delivery helper", prep: "warehouse prep" };
 
 /** Enabled = Connecteam configured AND not killed by the env escape hatch (mirrors connecteamImportEnabled). */
 export function connecteamAutosyncEnabled(): boolean {
@@ -82,10 +84,25 @@ export interface AutoAssignApplyDeps {
   actor?: string;
 }
 
+/** One assign actually made this run — enough for the Slack narration (the pure apply fn COLLECTS these; the
+ *  async orchestrator announces them, so the apply stays pure + unit-testable). */
+export interface AppliedAssignment {
+  userId: number;
+  name: string;
+  routeId: string;
+  truckId: string;
+  fillRole: ShiftRole;
+  routeStops: number;
+  /** The deterministic facts behind the decision (incl. the senior→specialty reason), for the message. */
+  reasons: string[];
+}
+
 export interface AutoAssignApplyResult {
   assigned: number;
   /** Already on the seat (idempotent no-op) or the route vanished since planning. */
   skipped: number;
+  /** Details of each assign made this run, for Slack narration. */
+  assignments: AppliedAssignment[];
 }
 
 /**
@@ -97,6 +114,7 @@ export function applyRouteAutoAssign(plan: RouteAutoAssignPlan, deps: AutoAssign
   const actor = deps.actor ?? "connecteam-route-sync";
   let assigned = 0;
   let skipped = 0;
+  const assignments: AppliedAssignment[] = [];
 
   for (const d of plan.autoAssign) {
     const route = deps.routesById.get(d.routeId);
@@ -139,9 +157,10 @@ export function applyRouteAutoAssign(plan: RouteAutoAssignPlan, deps: AutoAssign
     }
     assigned += 1;
     audit(actor, "ROUTE_SYNC_AUTO_ASSIGNED", updated.id, { userId: d.userId, routeId: route.routeId, truckId: route.truckId, fillRole: d.fillRole });
+    assignments.push({ userId: d.userId, name: d.name, routeId: route.routeId, truckId: route.truckId, fillRole: d.fillRole, routeStops: route.stops.length, reasons: d.reasons });
   }
 
-  return { assigned, skipped };
+  return { assigned, skipped, assignments };
 }
 
 // ── 2. App route -> Connecteam auto-create (plan + apply) ──────────────────────────────────────────────
@@ -202,6 +221,8 @@ export function planRouteConnecteamCreate(input: { appShifts: StaffShift[]; conn
 export interface RouteCreateApplyDeps {
   scheduler: Scheduler | null;
   truckNameOf: (truckId: string) => string;
+  /** userId -> display name, for the Slack announcement (best-effort; "#id" fallback). */
+  nameOf?: (userId: number) => string | null;
   /** Injectable publisher (defaults to the real silent create). Tests pass a fake to assert notifyUsers. */
   publish?: (input: PublishShiftInput) => Promise<PublishShiftResult>;
   actor?: string;
@@ -287,6 +308,12 @@ export async function applyRouteConnecteamCreate(plan: RouteCreatePlan, deps: Ro
     });
     created += 1;
     audit(actor, "ROUTE_SYNC_CONNECTEAM_CREATED", c.shiftId, { connecteamShiftId: res.shiftId, schedulerId: deps.scheduler.schedulerId, assignees: shift.assignees.length, notifyUsers: false });
+    // Narrate (owner rule: no silent AI actions). Silent to the CREW (notifyUsers=false) but visible to US.
+    const whoNames = shift.assignees.map((u) => deps.nameOf?.(u) || `#${u}`).join(", ") || "the crew";
+    void botAnnounce(
+      "scheduling",
+      `🗓️ Created a Connecteam shift for ${whoNames} on ${truckName} (${ROLE_WORD[shift.role]}, ${hhmm(shift.startTime)}–${hhmm(shift.endTime)}) so their schedule and pay match the route. Reply here if that's wrong.`,
+    ).catch(() => {});
   }
 
   return { created, flagged, deferred: plan.deferred.length, failed };
@@ -402,8 +429,9 @@ export async function applyRouteWindowRatchet(deps: {
       });
       const who = shift.assignees.map((u) => deps.nameOf(u) || `#${u}`).join(", ") || "the crew";
       const truck = shift.truckId ? deps.truckNameOf(shift.truckId) : "the route";
-      void viktorAnnounce(
-        `🗓️ *Scheduling bot* — Extended ${who}'s ${truck} shift to ${hhmm(out.start)}–${hhmm(out.end)} (was ${hhmm(shift.startTime)}–${hhmm(shift.endTime)}) because ${out.reason}.` +
+      void botAnnounce(
+        "scheduling",
+        `🗓️ Extended ${who}'s ${truck} shift to ${hhmm(out.start)}–${hhmm(out.end)} (was ${hhmm(shift.startTime)}–${hhmm(shift.endTime)}) because ${out.reason}.` +
           `${shift.connecteamShiftId ? " Updated Connecteam so their hours/pay reflect it." : ""} Reply here if that's wrong.`,
       ).catch(() => {});
     }
@@ -482,6 +510,17 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   out.autoAssigned = aaRes.assigned;
   out.seniorityAssigned = seniorityPlan.autoAssign.length;
 
+  // Narrate EACH auto-assign in Slack (owner rule: no silent AI actions). Seniority decisions carry their
+  // "senior driver → specialty route" reason in d.reasons, so the message explains WHY, not just what.
+  for (const a of aaRes.assignments) {
+    const truck = a.truckId ? truckNameOf(a.truckId) : "the route";
+    const why = a.reasons.length ? a.reasons.join("; ") : "it was the unambiguous match";
+    void botAnnounce(
+      "scheduling",
+      `🗓️ Assigned ${a.name} as ${ROLE_WORD[a.fillRole]} on ${truck} (${a.routeStops} stop${a.routeStops === 1 ? "" : "s"}) because ${why}. Reply here if that's wrong.`,
+    ).catch(() => {});
+  }
+
   // The scheduler is needed for both the route-change ratchet (silent Connecteam updates) and the auto-create
   // below — fetch it once. Null (unreachable) → the ratchet only touches unlinked shifts; linked ones retry.
   const scheduler = await getDefaultScheduler();
@@ -502,7 +541,7 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   out.alreadyInCt = createPlan.skipped;
   out.createDeferred = createPlan.deferred.length;
 
-  const applied = await applyRouteConnecteamCreate(createPlan, { scheduler, truckNameOf, actor });
+  const applied = await applyRouteConnecteamCreate(createPlan, { scheduler, truckNameOf, nameOf, actor });
   out.ctCreated = applied.created;
   out.mixedFlagged = applied.flagged;
   out.createFailed = applied.failed;
