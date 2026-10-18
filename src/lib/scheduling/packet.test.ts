@@ -133,7 +133,7 @@ describe("renderPacketTouch — locked copy", () => {
     const p = buildShiftPacket(shift(), assignment({ role: "field", displayName: "Marcus Bell" }), ctx);
     const body = renderPacketTouch(p, "on_assign");
     expect(body).toContain("Working with: Tyrone Banks (driver), Jade Okoro (delivery helper).");
-    expect(body).toContain("Hi Marcus Bell, you're booked as delivery helper on 2026-10-04.");
+    expect(body).toContain("Hi Marcus Bell, you're booked as delivery helper on Sun, Oct 4."); // date rendered long + readable, not raw ISO
     expect(body).toContain("12712 Rock Creek Mill Rd, Unit 4A");
     expect(body).toContain("end of the cul-de-sac");
     expect(body).toContain("Truck: NPR 1.");
@@ -183,6 +183,17 @@ describe("renderPacketTouch — locked copy", () => {
     const body = renderPacketTouch(p, "on_assign");
     expect(body).toContain("Report TBD at the warehouse");
     expect(body).toContain("Truck: TBD.");
+  });
+
+  it("renders an ISO report time as readable Eastern clock time, never a raw ISO instant", () => {
+    // The Raquel bug: reportTime was a raw ISO instant ("2026-10-23T13:30:00.000Z"), unreadable in the text.
+    // reportTime null + windowKnown → the packet falls back to the shift's ISO startTime, which must still
+    // render as ET clock time. 13:30 UTC = 9:30 AM Eastern (EDT, -4).
+    const p = buildShiftPacket(shift({ reportTime: null, startTime: "2026-10-23T13:30:00.000Z", windowKnown: true }), assignment(), ctx);
+    const body = renderPacketTouch(p, "refresher");
+    expect(body).toContain("Report 9:30 AM ET");
+    expect(body).not.toContain("2026-10-23"); // no raw ISO date/instant leaks into the message
+    expect(body).not.toContain("T13:30");
   });
 
   it("renders all three touches", () => {

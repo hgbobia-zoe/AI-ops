@@ -1,14 +1,19 @@
-// The 3-touch shift-comms TEMPLATE system (not hardcoded message strings). Each touch is a named
-// template of {tokens}, rendered from the structured ShiftPacket through the same renderTemplate the
-// customer SMS templates use (settings.ts). Touches:
-//   on_assign   — full packet, fired on reaching PROVISIONED
-//   day_before  — full packet again (start - ~16h)
-//   refresher   — the essentials + the delivery-route link, start - ~45m
+// The shift-comms TEMPLATE system (not hardcoded message strings). Each touch is a named template of
+// {tokens}, rendered from the structured ShiftPacket through the same renderTemplate the customer SMS
+// templates use (settings.ts). Touches:
+//   on_assign   — full packet (manual dispatcher send only)
+//   day_before  — full packet again (manual dispatcher send only)
+//   refresher   — the essentials + the delivery-route link; THIS is the single AUTO debrief, sent ~2h
+//                 before the shift to route crew only (see workerPackets.ts dueTouches)
+// The auto trigger fires ONLY "refresher". on_assign / day_before remain available for a human to send by
+// hand from the dispatcher, and renderAllTouches still previews all three.
 // House comms style (comms-no-dashes memory rule): no em-dashes, no emoji, short, natural. A null fact
-// renders as "TBD" (never a guess). The {link} line (refresher only) is dropped by renderTemplate when
-// no link is minted. The warehouse address + cul-de-sac note are literal in the copy, not tokens.
+// renders as "TBD" (never a guess). Times render in Eastern (reportTimePhrase → "9:30 AM ET") and dates
+// long ("Thu, Oct 23") — never a raw ISO instant. The {link} line (refresher only) is dropped by
+// renderTemplate when no link is minted. The warehouse address + cul-de-sac note are literal, not tokens.
 
 import { renderTemplate } from "@/lib/settings";
+import { formatYmdLong, formatClockTime } from "@/lib/dates";
 import type { ShiftPacket } from "./packet";
 
 export type CommsTouch = "on_assign" | "day_before" | "refresher";
@@ -50,6 +55,15 @@ function orTbd(v: string | null | undefined): string {
   return v && v.trim() ? v : "TBD";
 }
 
+/** A readable report time in Eastern (e.g. "9:30 AM ET"). An ISO instant is formatted to ET clock time with
+ *  an "ET" suffix so no one reads a raw "2026-10-23T13:30:00.000Z"; free-text values ("morning") pass
+ *  through unchanged; null → "TBD". */
+function reportTimePhrase(v: string | null | undefined): string {
+  if (!v || !v.trim()) return "TBD";
+  const formatted = formatClockTime(v);
+  return formatted && formatted !== v.trim() ? `${formatted} ET` : formatted;
+}
+
 /** The crew phrase: the OTHER live assignees, each "Name (their-own-role word)", comma-joined. None → "just you". */
 function crewPhrase(coworkers: ShiftPacket["assignment"]["coworkers"]): string {
   if (!coworkers.length) return "just you";
@@ -70,8 +84,8 @@ function packetVars(p: ShiftPacket, link: string | null): Record<string, string 
   return {
     name: orTbd(p.assignment.displayName),
     role: ROLE_WORD[p.identity.role],
-    date: p.identity.date,
-    reportTime: orTbd(p.reporting.reportTime),
+    date: formatYmdLong(p.identity.date),
+    reportTime: reportTimePhrase(p.reporting.reportTime),
     truck: orTbd(p.assignment.truck?.name ?? null),
     crew: crewPhrase(p.assignment.coworkers),
     clockLine: clockLine(p.timekeeping),

@@ -63,14 +63,18 @@ async function mods() {
   return { ...wp, ...store, ...assign, ...dates, sms, db };
 }
 
-/** Create a COMMITTED (provisioned) prep shift today with a given window, and return it. No route, so the
- *  pre-check gate is a no-op and we need no route/vehicle fixtures. */
+/** Create a COMMITTED (provisioned) ROUTE shift today with a given window, and return it. Route crew only
+ *  are auto-debriefed (owner rule), so this is a DRIVER shift carrying a routeId + truckId. We create NO
+ *  route row, so preCheckGateForShift finds no present route and returns null (gate is a no-op) — the send
+ *  path proceeds without route/vehicle fixtures. */
 async function committedShift(m: Awaited<ReturnType<typeof mods>>, startMs: number | null, endMs: number | null) {
   const date = m.todayInOpsTz();
   const s = m.createShift({
     date,
-    role: "prep",
+    role: "driver",
     headcount: 1,
+    routeId: "R-TEST-1",
+    truckId: "T-TEST-1",
     startTime: startMs != null ? new Date(startMs).toISOString() : null,
     endTime: endMs != null ? new Date(endMs).toISOString() : null,
     windowKnown: startMs != null,
@@ -80,35 +84,42 @@ async function committedShift(m: Awaited<ReturnType<typeof mods>>, startMs: numb
   return m.getShiftById(s.id)!;
 }
 
-// ── Pure due-window logic ────────────────────────────────────────────────────────────────────────────
+// ── Pure due-window logic (single debrief, ~2h before, route crew only) ─────────────────────────────────
 describe("dueTouches (pure)", () => {
-  it("returns nothing for a cancelled, uncommitted, or already-ended shift", async () => {
+  it("returns nothing for a cancelled, uncommitted, already-started, or already-ended shift", async () => {
     const { dueTouches } = await import("./workerPackets");
     const now = Date.now();
     const base = { startMs: now + 3_600_000, endMs: now + 7_200_000, windowKnown: true, committed: true, cancelled: false };
     expect(dueTouches({ ...base, cancelled: true }, now)).toEqual([]);
     expect(dueTouches({ ...base, committed: false }, now)).toEqual([]);
+    // Already started (past start, before end): too late to debrief ahead of it.
+    expect(dueTouches({ startMs: now - 60_000, endMs: now + 3_600_000, windowKnown: true, committed: true, cancelled: false }, now)).toEqual([]);
+    // Already ended.
     expect(dueTouches({ startMs: now - 7_200_000, endMs: now - 3_600_000, windowKnown: true, committed: true, cancelled: false }, now)).toEqual([]);
   });
 
-  it("fires only on_assign for a committed shift well before start / with unknown window", async () => {
+  it("does not fire for a committed shift with no known start window (can't time a 2h-before debrief)", async () => {
     const { dueTouches } = await import("./workerPackets");
     const now = Date.now();
-    // 3 days out: before the day_before (18h) and refresher (1h) windows.
-    expect(dueTouches({ startMs: now + 3 * 86_400_000, endMs: now + 3 * 86_400_000 + 7_200_000, windowKnown: true, committed: true, cancelled: false }, now)).toEqual(["on_assign"]);
-    // Unknown window → only on_assign can ever be due.
-    expect(dueTouches({ startMs: null, endMs: null, windowKnown: false, committed: true, cancelled: false }, now)).toEqual(["on_assign"]);
+    expect(dueTouches({ startMs: null, endMs: null, windowKnown: false, committed: true, cancelled: false }, now)).toEqual([]);
   });
 
-  it("adds day_before inside its lead window, and refresher near start", async () => {
+  it("does not fire earlier than 2 hours before start", async () => {
     const { dueTouches } = await import("./workerPackets");
     const now = Date.now();
-    // 2h before start: day_before window open (18h..1h), refresher not yet (opens 1h before).
-    const twoHoursOut = { startMs: now + 2 * 3_600_000, endMs: now + 5 * 3_600_000, windowKnown: true, committed: true, cancelled: false };
-    expect(dueTouches(twoHoursOut, now).sort()).toEqual(["day_before", "on_assign"]);
-    // 30m before start: day_before window closed (floor 1h), refresher open.
-    const halfHourOut = { startMs: now + 30 * 60_000, endMs: now + 3 * 3_600_000, windowKnown: true, committed: true, cancelled: false };
-    expect(dueTouches(halfHourOut, now).sort()).toEqual(["on_assign", "refresher"]);
+    // 3h out: before the 2h window.
+    expect(dueTouches({ startMs: now + 3 * 3_600_000, endMs: now + 6 * 3_600_000, windowKnown: true, committed: true, cancelled: false }, now)).toEqual([]);
+    // Just over 2h out: still not due.
+    expect(dueTouches({ startMs: now + 2 * 3_600_000 + 60_000, endMs: now + 5 * 3_600_000, windowKnown: true, committed: true, cancelled: false }, now)).toEqual([]);
+  });
+
+  it("fires the single refresher inside the 2h-before window", async () => {
+    const { dueTouches } = await import("./workerPackets");
+    const now = Date.now();
+    // Exactly 2h out → due.
+    expect(dueTouches({ startMs: now + 2 * 3_600_000, endMs: now + 5 * 3_600_000, windowKnown: true, committed: true, cancelled: false }, now)).toEqual(["refresher"]);
+    // 30m out → still the single refresher (never a second touch).
+    expect(dueTouches({ startMs: now + 30 * 60_000, endMs: now + 3 * 3_600_000, windowKnown: true, committed: true, cancelled: false }, now)).toEqual(["refresher"]);
   });
 });
 
@@ -118,7 +129,7 @@ describe("runWorkerPacketsTick — master-switch gate (default OFF)", () => {
     const m = await mods();
     delete process.env.AUTO_PACKET_ENABLED; // the owner has not opted in
     await committedShift(m, Date.now() + 2 * 3_600_000, Date.now() + 5 * 3_600_000).then((s) =>
-      m.upsertAssignment({ shiftId: s.id, workerKind: "internal", connecteamUserId: 101, displayName: "Pat", role: "prep", state: "ASSIGNED" }),
+      m.upsertAssignment({ shiftId: s.id, workerKind: "internal", connecteamUserId: 101, displayName: "Pat", role: "driver", state: "ASSIGNED" }),
     );
     const r = await m.runWorkerPacketsTick(new Date());
     expect(r.ok).toBe(true);
@@ -141,24 +152,49 @@ describe("runWorkerPacketsTick — master-switch gate (default OFF)", () => {
 
 // ── Sending + strict idempotency ──────────────────────────────────────────────────────────────────────
 describe("runWorkerPacketsTick — due sends + no re-send", () => {
-  it("sends each due touch once and NEVER re-sends on a second tick", async () => {
+  it("sends the single refresher once and NEVER re-sends on a second tick", async () => {
     const m = await mods();
     const now = new Date();
-    // 2h before start → on_assign + day_before are due (refresher not yet).
+    // 2h before start → the single refresher is due.
     const shift = await committedShift(m, now.getTime() + 2 * 3_600_000, now.getTime() + 5 * 3_600_000);
-    const aId = m.upsertAssignment({ shiftId: shift.id, workerKind: "internal", connecteamUserId: 101, displayName: "Pat", role: "prep", state: "ASSIGNED" });
+    const aId = m.upsertAssignment({ shiftId: shift.id, workerKind: "internal", connecteamUserId: 101, displayName: "Pat", role: "driver", state: "ASSIGNED" });
 
     const r1 = await m.runWorkerPacketsTick(now);
-    expect(r1.detail).toMatch(/2 sent/);
-    expect(vi.mocked(m.sms.sendSms)).toHaveBeenCalledTimes(2);
-    expect(m.hasShiftEvent(m.autoPacketChangeKey(aId, "on_assign"))).toBe(true);
-    expect(m.hasShiftEvent(m.autoPacketChangeKey(aId, "day_before"))).toBe(true);
-    expect(m.hasShiftEvent(m.autoPacketChangeKey(aId, "refresher"))).toBe(false);
+    expect(r1.detail).toMatch(/1 sent/);
+    expect(vi.mocked(m.sms.sendSms)).toHaveBeenCalledTimes(1);
+    expect(m.hasShiftEvent(m.autoPacketChangeKey(aId, "refresher"))).toBe(true);
+    // The other touches are manual-only — the auto trigger never fires them.
+    expect(m.hasShiftEvent(m.autoPacketChangeKey(aId, "on_assign"))).toBe(false);
+    expect(m.hasShiftEvent(m.autoPacketChangeKey(aId, "day_before"))).toBe(false);
 
-    // Second tick (same clock): both touches already recorded → nothing re-sent.
+    // Second tick (same clock): the refresher is already recorded → nothing re-sent.
     vi.mocked(m.sms.sendSms).mockClear();
     const r2 = await m.runWorkerPacketsTick(now);
     expect(r2.detail).toMatch(/0 sent/);
+    expect(vi.mocked(m.sms.sendSms)).not.toHaveBeenCalled();
+  });
+
+  it("does not send earlier than 2 hours before the shift", async () => {
+    const m = await mods();
+    const now = new Date();
+    // 4h out → outside the 2h window → nothing due yet.
+    const shift = await committedShift(m, now.getTime() + 4 * 3_600_000, now.getTime() + 7 * 3_600_000);
+    m.upsertAssignment({ shiftId: shift.id, workerKind: "internal", connecteamUserId: 101, displayName: "Pat", role: "driver", state: "ASSIGNED" });
+    const r = await m.runWorkerPacketsTick(now);
+    expect(r.detail).toMatch(/0 sent/);
+    expect(vi.mocked(m.sms.sendSms)).not.toHaveBeenCalled();
+  });
+
+  it("does NOT debrief a non-route (warehouse prep) shift even inside the 2h window", async () => {
+    const m = await mods();
+    const now = new Date();
+    const date = m.todayInOpsTz();
+    // A committed PREP shift (no route) 1h out — owner rule: warehouse/non-route crew are not auto-debriefed.
+    const prep = m.createShift({ date, role: "prep", headcount: 1, startTime: new Date(now.getTime() + 3_600_000).toISOString(), endTime: new Date(now.getTime() + 4 * 3_600_000).toISOString(), windowKnown: true });
+    m.db.getDb().prepare("UPDATE staff_shifts SET connecteam_shift_id = ?, status = 'sent' WHERE id = ?").run(`CT-${prep.id}`, prep.id);
+    m.upsertAssignment({ shiftId: prep.id, workerKind: "internal", connecteamUserId: 101, displayName: "Pat", role: "prep", state: "ASSIGNED" });
+    const r = await m.runWorkerPacketsTick(now);
+    expect(r.detail).toMatch(/0 sent/);
     expect(vi.mocked(m.sms.sendSms)).not.toHaveBeenCalled();
   });
 
@@ -166,8 +202,8 @@ describe("runWorkerPacketsTick — due sends + no re-send", () => {
     const m = await mods();
     const now = new Date();
     const date = m.todayInOpsTz();
-    const draft = m.createShift({ date, role: "prep", headcount: 1, startTime: new Date(now.getTime() + 2 * 3_600_000).toISOString(), endTime: new Date(now.getTime() + 5 * 3_600_000).toISOString(), windowKnown: true });
-    m.upsertAssignment({ shiftId: draft.id, workerKind: "internal", connecteamUserId: 101, displayName: "Pat", role: "prep", state: "ASSIGNED" });
+    const draft = m.createShift({ date, role: "driver", headcount: 1, routeId: "R-TEST-1", truckId: "T-TEST-1", startTime: new Date(now.getTime() + 2 * 3_600_000).toISOString(), endTime: new Date(now.getTime() + 5 * 3_600_000).toISOString(), windowKnown: true });
+    m.upsertAssignment({ shiftId: draft.id, workerKind: "internal", connecteamUserId: 101, displayName: "Pat", role: "driver", state: "ASSIGNED" });
     const r = await m.runWorkerPacketsTick(now);
     expect(r.detail).toMatch(/0 sent/);
     expect(vi.mocked(m.sms.sendSms)).not.toHaveBeenCalled();
@@ -180,13 +216,13 @@ describe("runWorkerPacketsTick — Instawork temps: skipped until their phone is
     const m = await mods();
     const now = new Date();
     const shift = await committedShift(m, now.getTime() + 2 * 3_600_000, now.getTime() + 5 * 3_600_000);
-    const iwId = m.upsertAssignment({ shiftId: shift.id, workerKind: "instawork", instaworkWorker: "Jamie Lee", displayName: "Jamie Lee", role: "prep", state: "ASSIGNED" });
+    const iwId = m.upsertAssignment({ shiftId: shift.id, workerKind: "instawork", instaworkWorker: "Jamie Lee", displayName: "Jamie Lee", role: "field", state: "ASSIGNED" });
 
     const r = await m.runWorkerPacketsTick(now);
     expect(vi.mocked(m.sms.sendSms)).not.toHaveBeenCalled();
     expect(r.detail).toMatch(/skipped/);
     // No idempotency/sent row was written for the temp — so they are NOT silently marked debriefed.
-    expect(m.hasShiftEvent(m.autoPacketChangeKey(iwId, "on_assign"))).toBe(false);
+    expect(m.hasShiftEvent(m.autoPacketChangeKey(iwId, "refresher"))).toBe(false);
   });
 
   it("DOES text an Instawork worker once their booked-pro phone has been captured", async () => {
@@ -197,13 +233,13 @@ describe("runWorkerPacketsTick — Instawork temps: skipped until their phone is
 
     const now = new Date();
     const shift = await committedShift(m, now.getTime() + 2 * 3_600_000, now.getTime() + 5 * 3_600_000);
-    const iwId = m.upsertAssignment({ shiftId: shift.id, workerKind: "instawork", instaworkWorker: "Jordan Rivera", displayName: "Jordan Rivera", role: "prep", state: "ASSIGNED" });
+    const iwId = m.upsertAssignment({ shiftId: shift.id, workerKind: "instawork", instaworkWorker: "Jordan Rivera", displayName: "Jordan Rivera", role: "field", state: "ASSIGNED" });
 
     const r = await m.runWorkerPacketsTick(now);
-    // 2h out → on_assign + day_before due → real sends to the CAPTURED number (matched by name).
-    expect(vi.mocked(m.sms.sendSms)).toHaveBeenCalled();
+    // 2h out → the single refresher is due → one real send to the CAPTURED number (matched by name).
+    expect(vi.mocked(m.sms.sendSms)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(m.sms.sendSms).mock.calls[0][0]).toBe("(301) 555-0147");
-    expect(r.detail).toMatch(/sent/);
-    expect(m.hasShiftEvent(m.autoPacketChangeKey(iwId, "on_assign"))).toBe(true);
+    expect(r.detail).toMatch(/1 sent/);
+    expect(m.hasShiftEvent(m.autoPacketChangeKey(iwId, "refresher"))).toBe(true);
   });
 });

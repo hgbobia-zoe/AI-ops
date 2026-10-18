@@ -1,9 +1,15 @@
-// AUTO worker-debrief trigger — the unattended job that fires the DUE, UNSENT shift-packet touches for
-// every live assignment, so a worker's debrief no longer depends on a human tapping "Send packet". It
-// REUSES the gated send path end-to-end (packetSend.dispatchPacketTouch → packet → commsTemplates →
-// sendSms) and the same context assembly as the manual endpoint (packetDispatch) — nothing about the
-// message, the gates, or the honesty rules is re-implemented here. This file only decides WHICH touch is
-// due WHEN, and guarantees a touch is sent AT MOST ONCE, EVER (strict per-(assignment, touch) dedup).
+// AUTO worker-debrief trigger — the unattended job that fires the ONE due, unsent shift debrief for each
+// live assignment, so a worker's debrief no longer depends on a human tapping "Send packet". It REUSES the
+// gated send path end-to-end (packetSend.dispatchPacketTouch → packet → commsTemplates → sendSms) and the
+// same context assembly as the manual endpoint (packetDispatch) — nothing about the message, the gates, or
+// the honesty rules is re-implemented here. This file only decides WHO gets debriefed WHEN, and guarantees a
+// debrief is sent AT MOST ONCE, EVER (strict per-(assignment, touch) dedup).
+//
+// OWNER RULES (why this is narrow):
+//   • ROUTE CREW ONLY — a driver or field helper assigned to a ROUTE. Warehouse prep / day-level shifts are
+//     NOT auto-debriefed (they don't need a route report).
+//   • ~2 HOURS BEFORE the shift — a SINGLE debrief (the "Shift soon" touch), never on assignment and never
+//     the night before. A shift with no known start time isn't auto-debriefed (can't time it).
 //
 // SAFETY (these texts go to real workers): the job sends ONLY when ALL of the following hold —
 //   • AUTO_PACKET_ENABLED === "true"   its OWN master switch, DEFAULT OFF (autoPacketEnabled)
@@ -31,17 +37,14 @@ import { getUsers, connecteamConfigured, type CrewMember } from "@/lib/connectea
 import type { StaffShift } from "./types";
 
 /** How far ahead we look for shifts to debrief. Matches the lifecycle tick's window so the two stay in
- *  step. on_assign fires as soon as a shift is committed within this window; day_before / refresher are
- *  time-gated below so they only open at the right lead time. */
+ *  step. The single debrief is time-gated below (dueTouches), so it only fires inside the 2h-before window —
+ *  a wider lookahead here just means a shift is in scope earlier; it is not debriefed until it's due. */
 const LOOKAHEAD_DAYS = 7;
 
-/** Lead windows for the time-gated touches (deterministic, matched to commsTemplates' documented intent:
- *  day_before ≈ start − 16h, refresher ≈ start − 45m). Because each touch is sent AT MOST ONCE EVER, the
- *  first tick inside a touch's open window sends it; the window only has to be wide enough to never miss. */
-export const DAY_BEFORE_OPEN_MS = 18 * 3_600_000; // day_before opens 18h before start
-export const DAY_BEFORE_FLOOR_MS = 60 * 60_000; // …and closes 1h before start (too late → let refresher cover)
-export const REFRESHER_OPEN_MS = 60 * 60_000; // refresher opens 60m before start
-export const REFRESHER_TAIL_MS = 3 * 3_600_000; // …and (when end unknown) stays open until start + 3h
+/** How long before a shift starts the SINGLE debrief goes out. Owner rule: debrief ~2 hours before, never
+ *  earlier (no on-assign/night-before blasts). The tick runs every ~15 min, so the first tick inside the 2h
+ *  window sends it; sent at most once ever per assignment. */
+export const DEBRIEF_LEAD_MS = 2 * 3_600_000; // 2 hours
 
 /** The facts the due-window decision needs — all deterministic, all from the shift + the clock. */
 export interface DueTouchInput {
@@ -54,24 +57,19 @@ export interface DueTouchInput {
 
 /**
  * Which touches are DUE for a shift right now (PURE — no DB, no I/O). A touch being "due" is separate from
- * whether it was already sent (the caller dedups that). Rules:
- *   • nothing is due for a cancelled shift, an uncommitted (not-yet-provisioned) shift, or a shift already
- *     past its end;
- *   • on_assign is due as soon as the shift is committed (the "you're booked" touch);
- *   • day_before is due within [start − 18h, start − 1h] (needs a known window);
- *   • refresher is due from start − 60m until start + 3h / the shift end (needs a known window).
+ * whether it was already sent (the caller dedups that). Owner rule: exactly ONE debrief, ~2 hours before the
+ * shift — never on assignment and never the night before. Nothing is due for a cancelled or uncommitted
+ * shift, a shift with no known start time (can't time a 2h-before debrief), a shift already started, or one
+ * past its end. The single touch is the "Shift soon" (refresher) template — the right tone 2h out, and it
+ * carries the delivery-route link.
  */
 export function dueTouches(i: DueTouchInput, now: number): CommsTouch[] {
   if (i.cancelled || !i.committed) return [];
-  if (i.endMs != null && now >= i.endMs) return []; // the shift is over — nothing to send
-  const out: CommsTouch[] = ["on_assign"];
-  if (i.windowKnown && i.startMs != null) {
-    const s = i.startMs;
-    if (now >= s - DAY_BEFORE_OPEN_MS && now < s - DAY_BEFORE_FLOOR_MS) out.push("day_before");
-    const refresherEnd = i.endMs ?? s + REFRESHER_TAIL_MS;
-    if (now >= s - REFRESHER_OPEN_MS && now < refresherEnd) out.push("refresher");
-  }
-  return out;
+  if (!i.windowKnown || i.startMs == null) return []; // no known start → can't send a 2h-before debrief
+  if (i.endMs != null && now >= i.endMs) return []; // shift is over
+  const s = i.startMs;
+  if (now >= s) return []; // shift already started — too late to debrief ahead of it
+  return now >= s - DEBRIEF_LEAD_MS ? ["refresher"] : []; // within 2h before start → send; earlier → not yet
 }
 
 /** True only when every master switch the auto-trigger depends on is ON. When false the job is a no-op. */
@@ -79,9 +77,9 @@ export function autoPacketReady(): boolean {
   return autoPacketEnabled() && shiftCommsEnabled() && smsSendEnabled();
 }
 
-/** Has this shift been PROVISIONED (left the building), so an on_assign debrief is warranted? Published to
- *  Connecteam, posted to Instawork, the legacy status is 'sent', or the derived lifecycle has advanced to
- *  PROVISIONED+. A bare draft the human hasn't committed is deliberately NOT debriefed. */
+/** Has this shift been PROVISIONED (left the building), so a debrief is warranted? Published to Connecteam,
+ *  posted to Instawork, the legacy status is 'sent', or the derived lifecycle has advanced to PROVISIONED+.
+ *  A bare draft the human hasn't committed is deliberately NOT debriefed. */
 function shiftCommitted(s: StaffShift): boolean {
   if (s.connecteamShiftId || s.instaworkPostedAt || s.status === "sent") return true;
   const st = s.lifecycleState;
@@ -144,6 +142,9 @@ export async function runWorkerPacketsTick(now: Date = new Date()): Promise<Work
   outer: for (const date of dates) {
     for (const shift of getShiftsForDate(date)) {
       if (shift.status === "cancelled") continue;
+      // ROUTE CREW ONLY (owner rule): auto-debriefs go to people assigned to a ROUTE — a driver or field
+      // helper on a route. Warehouse prep and any non-route (day-level) shift are NOT auto-debriefed.
+      if (!shift.routeId || (shift.role !== "driver" && shift.role !== "field")) continue;
       const live = getAssignmentsForShift(shift.id).filter((a) => isLiveAssignment(a.state));
       if (live.length === 0) continue;
 
