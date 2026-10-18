@@ -11,6 +11,7 @@ import { newPassToken } from "@/lib/auth/pass";
 import { readInstaworkSnapshot } from "@/lib/instawork/store";
 import { findGigForWorker } from "@/lib/instawork/reconcile";
 import { findInstaworkPhone } from "@/lib/instawork/contacts";
+import { getSettings, DEFAULT_PREMIUM_WINDOW_KEYWORDS, DEFAULT_EVENT_READINESS_KEYWORDS } from "@/lib/settings";
 import type { CrewMember } from "@/lib/connecteam";
 import type { PacketContext, PacketCoworker } from "./packet";
 import type { ShiftAssignment, StaffShift } from "./types";
@@ -70,6 +71,36 @@ export function mintRoutePass(
   return `${origin}/pass/${pass.id}`;
 }
 
+// A stop is "premium / time-sensitive" when the CONTRACT bought a tight arrival window. Goodshuffle shows
+// this as a line item on the quote — the real Zoe products are "Premium Time (2 Hours - Delivery Arrival
+// Window)", "Exact Time (30 mins - Delivery Arrival Window)" and their Pickup / Elite Hour variants. Every
+// one carries the phrase "Arrival Window", which NO ordinary rental item does, so that is the primary match.
+// "Event Readiness Service" is the booked setup service (same item that drives the min-2-crew rule); a stop
+// with it gets named in the debrief so the crew plans setup time. BOTH are matched from line-item NAMES
+// (not plannedWindow — real pulls set that to the single scheduled arrival time, not a window width),
+// substring + case-insensitive, against the team's editable keyword lists in /admin (settings). The defaults
+// live in settings.ts (DEFAULT_PREMIUM_WINDOW_KEYWORDS / DEFAULT_EVENT_READINESS_KEYWORDS).
+
+/** PURE: does any of a stop's line items match one of `keywords` (lowercased substrings)? */
+function itemNameMatches(items: { name?: string }[] | undefined, keywords: string[]): boolean {
+  if (!items?.length) return false;
+  const kw = keywords.map((k) => k.toLowerCase()).filter(Boolean);
+  return items.some((it) => {
+    const n = (it.name || "").toLowerCase();
+    return kw.some((k) => n.includes(k));
+  });
+}
+
+/** PURE: does a stop carry a premium / exact-time arrival window (delivery or pickup)? */
+export function isPremiumWindowStop(items: { name?: string }[] | undefined, keywords: string[] = DEFAULT_PREMIUM_WINDOW_KEYWORDS): boolean {
+  return itemNameMatches(items, keywords);
+}
+
+/** PURE: does a stop carry the Event Readiness Service? */
+export function isEventReadinessStop(items: { name?: string }[] | undefined, keywords: string[] = DEFAULT_EVENT_READINESS_KEYWORDS): boolean {
+  return itemNameMatches(items, keywords);
+}
+
 /** The parts of a PacketContext shared by every assignee on a shift (truck, route summary, supervisor). */
 export interface SharedPacketContext {
   truck: { id: string; name: string } | null;
@@ -85,7 +116,20 @@ export function buildSharedPacketContext(shift: StaffShift, users: Map<number, C
   let route: PacketContext["route"] = null;
   if (shift.routeId && shift.truckId) {
     const r = getRoutesForDate(shift.truckId, shift.date).find((x) => x.routeId === shift.routeId);
-    if (r) route = { stops: r.stops.length, firstStop: r.stops[0]?.custName ?? null };
+    // premiumStops = stops whose quote carries a premium / exact-time arrival window. >0 flips on the "mind the
+    // stop timings" reminder. eventReadinessCustomers = the customers on this route with Event Readiness
+    // Service, named in the debrief so the crew plans setup time. Both match line items against the team's
+    // editable keyword lists (/admin settings).
+    const settings = getSettings();
+    const premiumKw = settings.premiumWindowKeywords ?? DEFAULT_PREMIUM_WINDOW_KEYWORDS;
+    const readinessKw = settings.eventReadinessKeywords ?? DEFAULT_EVENT_READINESS_KEYWORDS;
+    if (r)
+      route = {
+        stops: r.stops.length,
+        firstStop: r.stops[0]?.custName ?? null,
+        premiumStops: r.stops.filter((s) => isPremiumWindowStop(s.items, premiumKw)).length,
+        eventReadinessCustomers: [...new Set(r.stops.filter((s) => isEventReadinessStop(s.items, readinessKw)).map((s) => s.custName).filter((n): n is string => !!n))],
+      };
   }
   const supUser = shift.supervisorUserId != null ? users.get(shift.supervisorUserId) : undefined;
   const supervisor = supUser ? { name: supUser.name, phone: supUser.phone ?? null } : null;

@@ -6,7 +6,7 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer } from "lucide-react";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
 import { SeoCredentialSettings } from "@/components/SeoCredentialSettings";
@@ -38,6 +38,8 @@ interface Settings {
   smsProvider: string;
   gpsProvider: string;
   gpsVehicleIds: Record<string, string>;
+  premiumWindowKeywords: string[];
+  eventReadinessKeywords: string[];
 }
 
 // Each slot has a delivery and a pickup variant; the toggle picks which set is edited.
@@ -362,6 +364,27 @@ export default function AdminPage() {
             })}
           </Section>
 
+          {/* Driver debrief — the keyword lists that flip on the time-sensitive / event-readiness callouts. */}
+          <Section icon={<Timer className="size-4" />} title="Driver debrief callouts">
+            <p className="text-sm text-muted-foreground">
+              The pre-shift debrief (sent to route crew ~2 hours before start) adds extra lines when a stop&apos;s
+              Goodshuffle quote carries one of these line items. Match is by name, case-insensitive, any part of
+              the name. Separate keywords with commas.
+            </p>
+            <KeywordList
+              label="Premium / exact-time arrival window"
+              hint='Adds the "mind the stop timings" reminder. The Zoe products all contain "Arrival Window", so that one keyword catches Premium Time, Exact Time and Elite Hour (delivery and pickup).'
+              value={s.premiumWindowKeywords ?? []}
+              onChange={(v) => setS({ ...s, premiumWindowKeywords: v })}
+            />
+            <KeywordList
+              label="Event Readiness Service"
+              hint="Names the customer in the debrief so the crew plans setup time."
+              value={s.eventReadinessKeywords ?? []}
+              onChange={(v) => setS({ ...s, eventReadinessKeywords: v })}
+            />
+          </Section>
+
           <div className="flex justify-end">
             <SaveButton saving={saving} savedAt={savedAt} onClick={save} disabled={!s} />
           </div>
@@ -450,5 +473,50 @@ function TextInput({
       onChange={(e) => onChange(e.target.value)}
       className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     />
+  );
+}
+
+// A comma-separated keyword-list editor. Edits as free text (so typing a comma doesn't fight the array), and
+// only commits the parsed, trimmed, non-empty list to the parent on change. The server lowercases + de-dupes
+// on save, then the normalized list flows back on the next load.
+function KeywordList({
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  value: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const [text, setText] = useState(value.join(", "));
+  // Re-sync when the saved (normalized) value changes out from under us, but not on every keystroke.
+  useEffect(() => {
+    setText(value.join(", "));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value.join("\u0001")]);
+  return (
+    <Field label={label} hint={hint}>
+      <input
+        type="text"
+        value={text}
+        placeholder="keyword, another keyword"
+        onChange={(e) => {
+          setText(e.target.value);
+          onChange(e.target.value.split(",").map((k) => k.trim()).filter(Boolean));
+        }}
+        className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pt-1">
+          {value.map((k) => (
+            <span key={k} className="rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[11px]">
+              {k}
+            </span>
+          ))}
+        </div>
+      )}
+    </Field>
   );
 }

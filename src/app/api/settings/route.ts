@@ -71,6 +71,9 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     prepOpportunity: coercePrep(b.prepOpportunity, current.prepOpportunity),
     // Specialty-item keywords for the driver seniority router (normalized to lowercase, de-duped).
     specialtyItemKeywords: strList(b.specialtyItemKeywords, current.specialtyItemKeywords),
+    // Driver-debrief line-item keyword lists (normalized to lowercase, de-duped).
+    premiumWindowKeywords: strList(b.premiumWindowKeywords, current.premiumWindowKeywords),
+    eventReadinessKeywords: strList(b.eventReadinessKeywords, current.eventReadinessKeywords),
   };
 }
 

@@ -47,4 +47,10 @@ describe("renderTemplate", () => {
     expect(out).not.toContain("latest location");
     expect(out.trimEnd().endsWith("Thank you!")).toBe(true);
   });
+
+  it("ships editable driver-debrief keyword defaults", () => {
+    const s = defaultSettings();
+    expect(s.premiumWindowKeywords).toContain("arrival window"); // the catch-all for every window product
+    expect(s.eventReadinessKeywords).toContain("event readiness");
+  });
 });

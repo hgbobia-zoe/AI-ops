@@ -47,6 +47,8 @@ export const SHIFT_COMMS_TEMPLATES: Record<CommsTouch, string> = {
     "Shift soon: {role}. Report {reportTime} at the warehouse: 12712 Rock Creek Mill Rd, Unit 4A (lower end, end of the cul-de-sac). Truck: {truck}.\n" +
     "Working with: {crew}.\n" +
     "{clockLine}\n" +
+    "{timingNote}\n" +
+    "{readinessNote}\n" +
     "Delivery route details: {link}\n" +
     "Questions {dispatch}.",
 };
@@ -78,6 +80,25 @@ function clockLine(tk: ShiftPacket["timekeeping"]): string {
   return "Clock in/out through the Instawork app.";
 }
 
+/** The time-sensitive reminder, included ONLY when the route has a premium / exact-time delivery stop
+ *  (route.premiumStops > 0 — the contract bought a tight arrival window, shown on the quote as a premium /
+ *  exact-time delivery line item). Tells the driver to learn the stop timings and mind arrival/departure so
+ *  the paid-for windows are met. Returns undefined otherwise, so the template line drops (renderTemplate
+ *  drops the unfilled {timingNote} line, same as {link}). */
+function timingNotePhrase(route: ShiftPacket["operations"]["route"]): string | undefined {
+  if (!route || route.premiumStops <= 0) return undefined;
+  return "Heads up, this route has time sensitive stops with a guaranteed arrival window the customer paid for. Get familiar with the stop timings and mind your arrival and departure times so we deliver the service they paid for.";
+}
+
+/** The Event Readiness Service callout, included ONLY when a stop on the route booked it. Names the customers
+ *  so the crew plans setup time. Returns undefined otherwise, so the {readinessNote} template line drops. */
+function readinessNotePhrase(route: ShiftPacket["operations"]["route"]): string | undefined {
+  const names = route?.eventReadinessCustomers ?? [];
+  if (names.length === 0) return undefined;
+  const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `Event Readiness Service is booked for ${who}. Build in time to set up and get their space event ready.`;
+}
+
 /** Build the token map for a packet. Null facts become "TBD" (honest). {link} is refresher-only and
  *  dropped by renderTemplate when null. */
 function packetVars(p: ShiftPacket, link: string | null): Record<string, string | undefined> {
@@ -89,6 +110,8 @@ function packetVars(p: ShiftPacket, link: string | null): Record<string, string 
     truck: orTbd(p.assignment.truck?.name ?? null),
     crew: crewPhrase(p.assignment.coworkers),
     clockLine: clockLine(p.timekeeping),
+    timingNote: timingNotePhrase(p.operations.route),
+    readinessNote: readinessNotePhrase(p.operations.route),
     dispatch: p.dispatch.phone,
     link: link ?? undefined,
   };
