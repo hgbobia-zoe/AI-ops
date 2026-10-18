@@ -21,9 +21,24 @@ const env = (k, d) => {
 };
 
 // ── Guards (fail fast + loud) ────────────────────────────────────────────────────────────────────────────
-if (!process.env.CLAUDE_CODE_OAUTH_TOKEN) {
-  console.error("FATAL: CLAUDE_CODE_OAUTH_TOKEN is not set. Run `claude setup-token` and set it as a Fly secret on this app.");
+// Auth source: EITHER the env OAuth token (subscription, from `claude setup-token`) OR an interactive login
+// stored on the volume ($HOME/.claude/.credentials.json, created by running `claude` + /login ON the machine
+// and auto-refreshed by the CLI). One must be present. The stored-login path is the fallback for when a
+// setup-token env token is rejected by headless `-p` (HTTP 401 "Invalid bearer token"). NOTE: when BOTH
+// exist the env token takes precedence (and would 401), so to use the stored login the env secret must be
+// UNSET. An API key is refused below regardless (it would silently meter-bill).
+const CREDENTIALS_FILE = join(process.env.HOME || "/data", ".claude", ".credentials.json");
+const hasEnvToken = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
+const hasStoredLogin = existsSync(CREDENTIALS_FILE);
+if (!hasEnvToken && !hasStoredLogin) {
+  console.error(
+    `FATAL: no Claude auth available. Either set CLAUDE_CODE_OAUTH_TOKEN (run \`claude setup-token\`, set it as a Fly secret), ` +
+      `OR log in on the machine: \`flyctl ssh console -a zoe-responder\`, then \`env HOME=/data claude\` and /login (writes ${CREDENTIALS_FILE}, persists on the volume).`,
+  );
   process.exit(2);
+}
+if (hasEnvToken && hasStoredLogin) {
+  console.warn("[responder] both CLAUDE_CODE_OAUTH_TOKEN and a stored login are present — the env token OUTRANKS the file. If the env token is 401ing, unset it (flyctl secrets unset CLAUDE_CODE_OAUTH_TOKEN -a zoe-responder) to use the stored login.");
 }
 // The footgun: in headless mode an API key/auth token OUTRANKS the OAuth token and bills the metered API.
 for (const k of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) {
@@ -96,7 +111,7 @@ function runCycle() {
 
 let backoff = 0;
 async function main() {
-  console.log(`[responder] starting — interval=${INTERVAL_MS / 1000}s max-turns=${MAX_TURNS} mode=${PERMISSION_MODE} tools="${ALLOWED_TOOLS}"`);
+  console.log(`[responder] starting — auth=${hasEnvToken ? "env-token" : "stored-login"} interval=${INTERVAL_MS / 1000}s max-turns=${MAX_TURNS} mode=${PERMISSION_MODE} tools="${ALLOWED_TOOLS}"`);
   ensureOnboarded();
   for (;;) {
     const started = Date.now();
