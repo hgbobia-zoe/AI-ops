@@ -60,6 +60,13 @@ export interface AppSettings {
    *  at the same time (see scheduling/routeSpecialty.ts). Tents are ALWAYS specialty (crewRules), so this
    *  list EXTENDS that built-in rule — it never needs "tent" in it. */
   specialtyItemKeywords: string[];
+  /** Goodshuffle line-item names (case-insensitive substrings) that mark a stop as a PREMIUM / exact-time
+   *  arrival window, so the driver debrief adds the "mind the stop timings" reminder (see
+   *  scheduling/packetDispatch.ts). Default matches the real Zoe products (all carry "arrival window"). */
+  premiumWindowKeywords: string[];
+  /** Line-item names (case-insensitive substrings) that mark a stop as having the Event Readiness Service,
+   *  so the debrief names that customer for setup (see scheduling/packetDispatch.ts). */
+  eventReadinessKeywords: string[];
 }
 
 export interface PrepOpportunitySettings {
@@ -161,8 +168,17 @@ export function defaultSettings(): AppSettings {
       otPolicy: "in_shift_only",
     },
     specialtyItemKeywords: envJson<string[]>(process.env.SPECIALTY_ITEM_KEYWORDS, DEFAULT_SPECIALTY_KEYWORDS),
+    premiumWindowKeywords: envJson<string[]>(process.env.PREMIUM_WINDOW_KEYWORDS, DEFAULT_PREMIUM_WINDOW_KEYWORDS),
+    eventReadinessKeywords: envJson<string[]>(process.env.EVENT_READINESS_KEYWORDS, DEFAULT_EVENT_READINESS_KEYWORDS),
   };
 }
+
+/** Out-of-the-box premium / exact-time arrival-window line items (the real Zoe Goodshuffle products all
+ *  carry "arrival window"; the others are backups if the wording shifts). The team edits this in /admin. */
+export const DEFAULT_PREMIUM_WINDOW_KEYWORDS: string[] = ["arrival window", "premium time", "exact time", "elite hour"];
+
+/** Out-of-the-box Event Readiness Service line-item match. The team edits this in /admin. */
+export const DEFAULT_EVENT_READINESS_KEYWORDS: string[] = ["event readiness"];
 
 /** Out-of-the-box "specialty / harder" item keywords (beyond tents, which crewRules always flags). Chosen
  *  to be conservative event-rental signals of a harder load; the team edits this list in /admin. */
@@ -218,6 +234,8 @@ function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSetting
     gpsVehicleIds: over.gpsVehicleIds ?? base.gpsVehicleIds,
     prepOpportunity: { ...base.prepOpportunity, ...(over.prepOpportunity ?? {}) },
     specialtyItemKeywords: over.specialtyItemKeywords ?? base.specialtyItemKeywords,
+    premiumWindowKeywords: over.premiumWindowKeywords ?? base.premiumWindowKeywords,
+    eventReadinessKeywords: over.eventReadinessKeywords ?? base.eventReadinessKeywords,
   };
 }
 
@@ -260,10 +278,11 @@ export function renderTemplate(tpl: string, vars: Record<string, string | undefi
     if (v == null) continue;
     out = out.split(`{${k}}`).join(v);
   }
-  // Drop lines with a still-empty {link}; collapse the resulting triple newlines.
+  // Drop lines with a still-unfilled optional placeholder ({link}, {timingNote}); collapse the resulting
+  // triple newlines. These are the templates' conditional lines — absent token means the line isn't wanted.
   out = out
     .split("\n")
-    .filter((line) => !line.includes("{link}"))
+    .filter((line) => !line.includes("{link}") && !line.includes("{timingNote}") && !line.includes("{readinessNote}") && !line.includes("{clockLine}"))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

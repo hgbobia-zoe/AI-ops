@@ -1,7 +1,32 @@
 import { describe, it, expect } from "vitest";
 import { buildShiftPacket, ZOE_DISPATCH_PHONE, type PacketContext, type PacketCoworker } from "./packet";
 import { renderPacketTouch, renderAllTouches, ROLE_WORD } from "./commsTemplates";
+import { isPremiumWindowStop, isEventReadinessStop } from "./packetDispatch";
 import type { ShiftAssignment, StaffShift } from "./types";
+
+describe("isPremiumWindowStop", () => {
+  it("flags a stop whose quote booked a premium / exact-time arrival window (the real Goodshuffle items)", () => {
+    expect(isPremiumWindowStop([{ name: "Premium Time (2 Hours - Delivery Arrival Window)" }])).toBe(true);
+    expect(isPremiumWindowStop([{ name: "Exact Time (30 mins - Delivery Arrival Window)" }])).toBe(true);
+    expect(isPremiumWindowStop([{ name: "Exact Time (30 mins - Pickup Arrival Window)" }])).toBe(true);
+    expect(isPremiumWindowStop([{ name: "Elite Hour (Late Hour - Pickup Arrival Window)" }])).toBe(true);
+    expect(isPremiumWindowStop([{ name: "60in Round Table", quantity: 10 }, { name: "Premium Time (2 Hours - Delivery Arrival Window)" }])).toBe(true);
+    // Not a window product — must NOT trip.
+    expect(isPremiumWindowStop([{ name: "Rush Fee" }])).toBe(false);
+    expect(isPremiumWindowStop([{ name: "White Folding Chair" }])).toBe(false);
+    expect(isPremiumWindowStop([])).toBe(false);
+    expect(isPremiumWindowStop(undefined)).toBe(false);
+  });
+});
+
+describe("isEventReadinessStop", () => {
+  it("flags a stop that booked the Event Readiness Service", () => {
+    expect(isEventReadinessStop([{ name: "Event Readiness Service" }])).toBe(true);
+    expect(isEventReadinessStop([{ name: "6ft Banquet Table" }, { name: "Event Readiness Service" }])).toBe(true);
+    expect(isEventReadinessStop([{ name: "Rush Fee" }])).toBe(false);
+    expect(isEventReadinessStop(undefined)).toBe(false);
+  });
+});
 
 function shift(p: Partial<StaffShift> = {}): StaffShift {
   return {
@@ -81,7 +106,7 @@ const ctx: PacketContext = {
   truck: { id: "T1", name: "NPR 1" },
   supervisor: { name: "Dana L", phone: "301-555-0100" },
   coworkers: CREW,
-  route: { stops: 3, firstStop: "Grand Ballroom" },
+  route: { stops: 3, firstStop: "Grand Ballroom", premiumStops: 0, eventReadinessCustomers: [] },
   mapUrl: null,
   equipment: [],
 };
@@ -137,7 +162,7 @@ describe("renderPacketTouch — locked copy", () => {
     expect(body).toContain("12712 Rock Creek Mill Rd, Unit 4A");
     expect(body).toContain("end of the cul-de-sac");
     expect(body).toContain("Truck: NPR 1.");
-    expect(body).toContain("Clock in/out on Connecteam with your personal code.");
+    expect(body).not.toContain("Clock"); // internal crew already clock in on Connecteam — no reminder line
     expect(body).toContain(`Questions: ${ZOE_DISPATCH_PHONE}`);
     expect(body).not.toMatch(/[—–]/); // no em/en dashes (house comms style)
     expect(body).not.toContain("Smith Wedding"); // event label removed
@@ -150,20 +175,26 @@ describe("renderPacketTouch — locked copy", () => {
     expect(renderPacketTouch(p, "day_before")).toContain("Working with: just you.");
   });
 
-  it("renders the Instawork clock codes when present, and the app fallback when not", () => {
+  it("shares the clock-in line with Instawork temps only, never internal crew", () => {
+    // Internal crew already clock in on Connecteam — NO clock line at all.
+    const internal = buildShiftPacket(shift(), assignment(), ctx);
+    expect(renderPacketTouch(internal, "refresher")).not.toContain("Clock");
+
+    // Instawork temp WITH captured per-gig codes → share the codes.
     const withCodes = buildShiftPacket(
       shift(),
       assignment({ workerKind: "instawork", connecteamUserId: null, instaworkWorker: "Alex P", displayName: "Alex P" }),
       { ...ctx, clockInCode: "3243", clockOutCode: "2450" },
     );
-    expect(renderPacketTouch(withCodes, "on_assign")).toContain("Clock in: 3243. Clock out: 2450.");
+    expect(renderPacketTouch(withCodes, "refresher")).toContain("Clock in: 3243. Clock out: 2450.");
 
+    // Instawork temp WITHOUT codes → the honest app fallback (never a fabricated code).
     const noCodes = buildShiftPacket(
       shift(),
       assignment({ workerKind: "instawork", connecteamUserId: null, instaworkWorker: "Alex P", displayName: "Alex P" }),
       { ...ctx, clockInCode: null, clockOutCode: null },
     );
-    expect(renderPacketTouch(noCodes, "on_assign")).toContain("Clock in/out through the Instawork app.");
+    expect(renderPacketTouch(noCodes, "refresher")).toContain("Clock in/out through the Instawork app.");
   });
 
   it("renders the delivery-route link ONLY in the refresher, and drops the line when null", () => {
@@ -194,6 +225,35 @@ describe("renderPacketTouch — locked copy", () => {
     expect(body).toContain("Report 9:30 AM ET");
     expect(body).not.toContain("2026-10-23"); // no raw ISO date/instant leaks into the message
     expect(body).not.toContain("T13:30");
+  });
+
+  it("adds the time-sensitive reminder to the debrief ONLY when the route has a premium-delivery stop", () => {
+    // No premium stops (ctx.route.premiumStops = 0) → no reminder line.
+    const none = renderPacketTouch(buildShiftPacket(shift(), assignment(), ctx), "refresher");
+    expect(none).not.toContain("time sensitive stops");
+    // A stop's quote carries a premium / exact-time arrival window → the reminder appears, with the arrival ask.
+    const timed = { ...ctx, route: { stops: 3, firstStop: "Grand Ballroom", premiumStops: 2, eventReadinessCustomers: [] } };
+    const body = renderPacketTouch(buildShiftPacket(shift(), assignment(), timed), "refresher");
+    expect(body).toContain("this route has time sensitive stops");
+    expect(body).toContain("arrival and departure times");
+    expect(body).toContain("paid for");
+    expect(body).not.toMatch(/[—–]/); // house comms style: no em/en dashes
+  });
+
+  it("calls out Event Readiness Service by customer name, only when a stop booked it", () => {
+    // None booked → no readiness line.
+    const none = renderPacketTouch(buildShiftPacket(shift(), assignment(), ctx), "refresher");
+    expect(none).not.toContain("Event Readiness Service");
+    // One customer booked it.
+    const one = { ...ctx, route: { stops: 3, firstStop: "Grand Ballroom", premiumStops: 0, eventReadinessCustomers: ["Harrison Wedding"] } };
+    const b1 = renderPacketTouch(buildShiftPacket(shift(), assignment(), one), "refresher");
+    expect(b1).toContain("Event Readiness Service is booked for Harrison Wedding.");
+    expect(b1).toContain("set up and get their space event ready");
+    // Multiple customers are named and joined readably.
+    const many = { ...ctx, route: { stops: 3, firstStop: "Grand Ballroom", premiumStops: 0, eventReadinessCustomers: ["Harrison Wedding", "Acme Gala", "Lopez Quince"] } };
+    const b2 = renderPacketTouch(buildShiftPacket(shift(), assignment(), many), "refresher");
+    expect(b2).toContain("Event Readiness Service is booked for Harrison Wedding, Acme Gala and Lopez Quince.");
+    expect(b2).not.toMatch(/[—–]/); // house comms style: no em/en dashes
   });
 
   it("renders all three touches", () => {
