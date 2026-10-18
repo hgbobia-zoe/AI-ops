@@ -1,7 +1,19 @@
 import { describe, it, expect } from "vitest";
 import { buildShiftPacket, ZOE_DISPATCH_PHONE, type PacketContext, type PacketCoworker } from "./packet";
 import { renderPacketTouch, renderAllTouches, ROLE_WORD } from "./commsTemplates";
+import { isPremiumDeliveryStop } from "./packetDispatch";
 import type { ShiftAssignment, StaffShift } from "./types";
+
+describe("isPremiumDeliveryStop", () => {
+  it("flags a stop whose quote names a premium / exact-time delivery, by line item", () => {
+    expect(isPremiumDeliveryStop([{ name: "Premium Delivery" }])).toBe(true);
+    expect(isPremiumDeliveryStop([{ name: "Exact Time Delivery" }])).toBe(true);
+    expect(isPremiumDeliveryStop([{ name: "60in Round Table", quantity: 10 }, { name: "Timed Delivery" }])).toBe(true);
+    expect(isPremiumDeliveryStop([{ name: "White Folding Chair" }])).toBe(false);
+    expect(isPremiumDeliveryStop([])).toBe(false);
+    expect(isPremiumDeliveryStop(undefined)).toBe(false);
+  });
+});
 
 function shift(p: Partial<StaffShift> = {}): StaffShift {
   return {
@@ -81,7 +93,7 @@ const ctx: PacketContext = {
   truck: { id: "T1", name: "NPR 1" },
   supervisor: { name: "Dana L", phone: "301-555-0100" },
   coworkers: CREW,
-  route: { stops: 3, firstStop: "Grand Ballroom", timedStops: 0 },
+  route: { stops: 3, firstStop: "Grand Ballroom", premiumStops: 0 },
   mapUrl: null,
   equipment: [],
 };
@@ -196,16 +208,16 @@ describe("renderPacketTouch — locked copy", () => {
     expect(body).not.toContain("T13:30");
   });
 
-  it("adds the time-sensitive reminder to the debrief ONLY when the route has timed stops", () => {
-    // No timed stops (ctx.route.timedStops = 0) → no reminder line.
+  it("adds the time-sensitive reminder to the debrief ONLY when the route has a premium-delivery stop", () => {
+    // No premium stops (ctx.route.premiumStops = 0) → no reminder line.
     const none = renderPacketTouch(buildShiftPacket(shift(), assignment(), ctx), "refresher");
     expect(none).not.toContain("time sensitive stops");
-    // One or more stops carry a specific delivery window → the reminder appears, with the arrival/departure ask.
-    const timed = { ...ctx, route: { stops: 3, firstStop: "Grand Ballroom", timedStops: 2 } };
+    // A stop's quote carries a premium / exact-time delivery → the reminder appears, with the arrival ask.
+    const timed = { ...ctx, route: { stops: 3, firstStop: "Grand Ballroom", premiumStops: 2 } };
     const body = renderPacketTouch(buildShiftPacket(shift(), assignment(), timed), "refresher");
     expect(body).toContain("this route has time sensitive stops");
     expect(body).toContain("arrival and departure times");
-    expect(body).toContain("services the customers paid for");
+    expect(body).toContain("paid for");
     expect(body).not.toMatch(/[—–]/); // house comms style: no em/en dashes
   });
 

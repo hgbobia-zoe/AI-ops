@@ -79,13 +79,14 @@ function clockLine(tk: ShiftPacket["timekeeping"]): string {
   return "Clock in/out through the Instawork app.";
 }
 
-/** The time-sensitive reminder, included ONLY when the route has stops with a specific delivery window
- *  (route.timedStops > 0). Tells the driver to learn the stop timings and mind arrival/departure so the
- *  paid-for service windows are met. Returns undefined when nothing is time-sensitive, so the template line
- *  drops (renderTemplate drops the unfilled {timingNote} line, same as {link}). */
+/** The time-sensitive reminder, included ONLY when the route has a premium / exact-time delivery stop
+ *  (route.premiumStops > 0 — the contract bought a tight arrival window, shown on the quote as a premium /
+ *  exact-time delivery line item). Tells the driver to learn the stop timings and mind arrival/departure so
+ *  the paid-for windows are met. Returns undefined otherwise, so the template line drops (renderTemplate
+ *  drops the unfilled {timingNote} line, same as {link}). */
 function timingNotePhrase(route: ShiftPacket["operations"]["route"]): string | undefined {
-  if (!route || route.timedStops <= 0) return undefined;
-  return "Heads up, this route has time sensitive stops. Get familiar with the stop timings and mind your arrival and departure times so we deliver the services the customers paid for.";
+  if (!route || route.premiumStops <= 0) return undefined;
+  return "Heads up, this route has time sensitive stops with a guaranteed arrival window the customer paid for. Get familiar with the stop timings and mind your arrival and departure times so we deliver the service they paid for.";
 }
 
 /** Build the token map for a packet. Null facts become "TBD" (honest). {link} is refresher-only and

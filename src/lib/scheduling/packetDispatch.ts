@@ -70,6 +70,22 @@ export function mintRoutePass(
   return `${origin}/pass/${pass.id}`;
 }
 
+// A stop is "premium / time-sensitive" when the CONTRACT bought a tight arrival window — Goodshuffle shows
+// this as a line item on the quote (e.g. "Premium Delivery", "Exact Time Delivery"). We detect it from the
+// stop's line-item NAMES, not from plannedWindow (real pulls set plannedWindow to the single scheduled
+// arrival time, not a window width, so it can't tell a premium window from an ordinary one). Substring,
+// case-insensitive. Adjust the list if the team renames the line item in Goodshuffle.
+export const PREMIUM_DELIVERY_KEYWORDS = ["premium delivery", "exact time", "timed delivery", "exact delivery"];
+
+/** PURE: does any of a stop's line items name a premium / exact-time delivery? */
+export function isPremiumDeliveryStop(items: { name?: string }[] | undefined): boolean {
+  if (!items?.length) return false;
+  return items.some((it) => {
+    const n = (it.name || "").toLowerCase();
+    return PREMIUM_DELIVERY_KEYWORDS.some((k) => n.includes(k));
+  });
+}
+
 /** The parts of a PacketContext shared by every assignee on a shift (truck, route summary, supervisor). */
 export interface SharedPacketContext {
   truck: { id: string; name: string } | null;
@@ -85,9 +101,9 @@ export function buildSharedPacketContext(shift: StaffShift, users: Map<number, C
   let route: PacketContext["route"] = null;
   if (shift.routeId && shift.truckId) {
     const r = getRoutesForDate(shift.truckId, shift.date).find((x) => x.routeId === shift.routeId);
-    // timedStops = stops carrying a specific delivery window (Goodshuffle plannedWindow). >0 means the route
+    // premiumStops = stops whose quote carries a premium / exact-time delivery line item. >0 means the route
     // is time-sensitive, which flips on the "mind the stop timings" reminder in the debrief (see commsTemplates).
-    if (r) route = { stops: r.stops.length, firstStop: r.stops[0]?.custName ?? null, timedStops: r.stops.filter((s) => (s.plannedWindow ?? "").trim().length > 0).length };
+    if (r) route = { stops: r.stops.length, firstStop: r.stops[0]?.custName ?? null, premiumStops: r.stops.filter((s) => isPremiumDeliveryStop(s.items)).length };
   }
   const supUser = shift.supervisorUserId != null ? users.get(shift.supervisorUserId) : undefined;
   const supervisor = supUser ? { name: supUser.name, phone: supUser.phone ?? null } : null;
