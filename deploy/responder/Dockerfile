@@ -17,9 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
   && git config --system user.email "responder@zoe-ops.local" \
   && git config --system user.name "Zoe AI Responder"
 
-# The Claude Code CLI. PIN this deliberately — the headless flags (--permission-mode, --allowedTools, the
-# --bare default) are version-sensitive; see deploy/responder/README.md. Bump after verifying the flags.
-ARG CLAUDE_CODE_VERSION=latest
+# The Claude Code CLI. PINNED deliberately — the headless flags (--permission-mode, --allowedTools, the
+# --bare default) are version-sensitive; see deploy/responder/README.md. A floating `latest` can silently
+# change headless auth/flag behavior under us. Bump this after verifying the flags against the changelog.
+ARG CLAUDE_CODE_VERSION=2.1.302
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 WORKDIR /app
