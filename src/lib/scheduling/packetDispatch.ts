@@ -70,20 +70,33 @@ export function mintRoutePass(
   return `${origin}/pass/${pass.id}`;
 }
 
-// A stop is "premium / time-sensitive" when the CONTRACT bought a tight arrival window — Goodshuffle shows
-// this as a line item on the quote (e.g. "Premium Delivery", "Exact Time Delivery"). We detect it from the
-// stop's line-item NAMES, not from plannedWindow (real pulls set plannedWindow to the single scheduled
-// arrival time, not a window width, so it can't tell a premium window from an ordinary one). Substring,
-// case-insensitive. Adjust the list if the team renames the line item in Goodshuffle.
-export const PREMIUM_DELIVERY_KEYWORDS = ["premium delivery", "exact time", "timed delivery", "exact delivery"];
+// A stop is "premium / time-sensitive" when the CONTRACT bought a tight arrival window. Goodshuffle shows
+// this as a line item on the quote — the real Zoe products are "Premium Time (2 Hours - Delivery Arrival
+// Window)", "Exact Time (30 mins - Delivery Arrival Window)" and their Pickup / Elite Hour variants. Every
+// one carries the phrase "Arrival Window", which NO ordinary rental item does, so that is the primary match;
+// the others are belt-and-suspenders if the wording shifts. We detect from line-item NAMES, not plannedWindow
+// (real pulls set plannedWindow to the single scheduled arrival time, not a window width). Substring,
+// case-insensitive. Adjust if the team renames the line items in Goodshuffle.
+export const PREMIUM_WINDOW_KEYWORDS = ["arrival window", "premium time", "exact time", "elite hour"];
 
-/** PURE: does any of a stop's line items name a premium / exact-time delivery? */
-export function isPremiumDeliveryStop(items: { name?: string }[] | undefined): boolean {
+/** PURE: does any of a stop's line items name a premium / exact-time arrival window (delivery or pickup)? */
+export function isPremiumWindowStop(items: { name?: string }[] | undefined): boolean {
   if (!items?.length) return false;
   return items.some((it) => {
     const n = (it.name || "").toLowerCase();
-    return PREMIUM_DELIVERY_KEYWORDS.some((k) => n.includes(k));
+    return PREMIUM_WINDOW_KEYWORDS.some((k) => n.includes(k));
   });
+}
+
+// "Event Readiness Service" — a booked service where the crew sets the space up and gets it event-ready (the
+// same line item that drives the minimum-2-crew rule). When a stop has it, the debrief calls it out BY
+// CUSTOMER so the crew plans setup time. Matched on the line-item name.
+export const EVENT_READINESS_KEYWORD = "event readiness";
+
+/** PURE: does any of a stop's line items name the Event Readiness Service? */
+export function isEventReadinessStop(items: { name?: string }[] | undefined): boolean {
+  if (!items?.length) return false;
+  return items.some((it) => (it.name || "").toLowerCase().includes(EVENT_READINESS_KEYWORD));
 }
 
 /** The parts of a PacketContext shared by every assignee on a shift (truck, route summary, supervisor). */
@@ -101,9 +114,16 @@ export function buildSharedPacketContext(shift: StaffShift, users: Map<number, C
   let route: PacketContext["route"] = null;
   if (shift.routeId && shift.truckId) {
     const r = getRoutesForDate(shift.truckId, shift.date).find((x) => x.routeId === shift.routeId);
-    // premiumStops = stops whose quote carries a premium / exact-time delivery line item. >0 means the route
-    // is time-sensitive, which flips on the "mind the stop timings" reminder in the debrief (see commsTemplates).
-    if (r) route = { stops: r.stops.length, firstStop: r.stops[0]?.custName ?? null, premiumStops: r.stops.filter((s) => isPremiumDeliveryStop(s.items)).length };
+    // premiumStops = stops whose quote carries a premium / exact-time arrival window. >0 flips on the "mind the
+    // stop timings" reminder. eventReadinessCustomers = the customers on this route with Event Readiness
+    // Service, named in the debrief so the crew plans setup time. Both from line items (see commsTemplates).
+    if (r)
+      route = {
+        stops: r.stops.length,
+        firstStop: r.stops[0]?.custName ?? null,
+        premiumStops: r.stops.filter((s) => isPremiumWindowStop(s.items)).length,
+        eventReadinessCustomers: [...new Set(r.stops.filter((s) => isEventReadinessStop(s.items)).map((s) => s.custName).filter((n): n is string => !!n))],
+      };
   }
   const supUser = shift.supervisorUserId != null ? users.get(shift.supervisorUserId) : undefined;
   const supervisor = supUser ? { name: supUser.name, phone: supUser.phone ?? null } : null;

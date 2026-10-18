@@ -45,7 +45,7 @@ export interface ShiftPacket {
     supervisor: { name: string; phone?: string | null } | null;
     coworkers: PacketCoworker[];
   };
-  operations: { route: { stops: number; firstStop: string | null; premiumStops: number } | null; equipment: string[]; instructions: string | null };
+  operations: { route: { stops: number; firstStop: string | null; premiumStops: number; eventReadinessCustomers: string[] } | null; equipment: string[]; instructions: string | null };
   timekeeping: WorkerTimekeeping;
   dispatch: { phone: string };
 }
@@ -56,7 +56,7 @@ export interface PacketContext {
   truck: { id: string; name: string } | null;
   supervisor: { name: string; phone?: string | null } | null;
   coworkers: PacketCoworker[];
-  route: { stops: number; firstStop: string | null; premiumStops: number } | null;
+  route: { stops: number; firstStop: string | null; premiumStops: number; eventReadinessCustomers: string[] } | null;
   mapUrl: string | null;
   equipment: string[];
   clockInCode?: string | null;
