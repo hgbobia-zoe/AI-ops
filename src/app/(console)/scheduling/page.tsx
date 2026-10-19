@@ -62,6 +62,8 @@ import {
 } from "@/lib/connecteam";
 import { openShiftsWithSuggestions } from "@/lib/staffing/openShifts";
 import { StaffingRosterSections } from "@/components/scheduling/StaffingRosterSections";
+import { SchedulingBaselinePanel } from "@/components/scheduling/SchedulingBaselinePanel";
+import { computeSchedulingBaseline } from "@/lib/scheduling/opsMetrics";
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
 import { ConnectInstaworkButton } from "@/components/ConnectInstaworkButton";
 import { summarizeInstaworkByRole, instaworkShiftsForDate, instaworkGigsForRoute } from "@/lib/instawork/reconcile";
@@ -659,6 +661,10 @@ export default async function SchedulingPage({
         nextDay={nextDay}
         isToday={isToday}
       />
+
+      {/* ── Operations baseline — read-only activity roll-up over the trailing two weeks, so automation
+          workload change can be MEASURED over several cycles. Honest counts only; no fabricated savings. ── */}
+      <SchedulingBaselinePanel baseline={computeSchedulingBaseline(shiftYmd(date, -13), date)} />
     </main>
   );
 }
