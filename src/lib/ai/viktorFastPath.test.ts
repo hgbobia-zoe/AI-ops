@@ -12,6 +12,7 @@ import { chat, llmConfigured } from "@/lib/llm";
 import { slackBotConfigured, slackPostMessage } from "@/lib/notify/slack";
 import { responderHealthNow } from "@/lib/ai/responderHealth";
 import { createSession, addInstruction, appendEvent, listSessionEvents, getSession, NEUTRAL_EVENT_KINDS } from "@/lib/ai/sessions";
+import type { TranscriptTurn } from "@/lib/ai/threadContext";
 
 vi.mock("@/lib/llm", () => ({ chat: vi.fn(), llmConfigured: vi.fn() }));
 vi.mock("@/lib/notify/slack", () => ({ slackBotConfigured: vi.fn(), slackPostMessage: vi.fn() }));
@@ -140,6 +141,30 @@ describe("triageViktorMessage", () => {
   it("routes (fail safe) when the model call fails", async () => {
     mockChat.mockResolvedValue({ ok: false, error: "boom" });
     expect(await triageViktorMessage("anything")).toEqual({ mode: "route", answer: null });
+  });
+});
+
+describe("triageViktorMessage — conversation awareness", () => {
+  it("prepends the thread transcript as prior turns, with the current message last", async () => {
+    mockChat.mockResolvedValue({ ok: true, text: '{"mode":"route","answer":null}' });
+    const history: TranscriptTurn[] = [
+      { at: 1, speaker: "viktor", text: "RED gate: Saturday route is unstaffed", source: "slack" },
+      { at: 2, speaker: "user", text: "why is it red?", source: "slack" },
+    ];
+    await triageViktorMessage("silence that alert", history);
+    const msgs = mockChat.mock.calls[0][0] as { role: string; content: string }[];
+    expect(msgs[0].role).toBe("system");
+    // Viktor's own earlier alert is carried as an assistant turn — this is what makes "silence THIS alert" resolvable.
+    expect(msgs.some((m) => m.role === "assistant" && m.content.includes("RED gate"))).toBe(true);
+    expect(msgs[msgs.length - 1]).toEqual({ role: "user", content: "silence that alert" });
+  });
+
+  it("is backward compatible with no history (system + the single user turn)", async () => {
+    mockChat.mockResolvedValue({ ok: true, text: '{"mode":"route","answer":null}' });
+    await triageViktorMessage("hello");
+    const msgs = mockChat.mock.calls[0][0] as { role: string; content: string }[];
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1]).toEqual({ role: "user", content: "hello" });
   });
 });
 

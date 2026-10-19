@@ -41,6 +41,17 @@ quiet), then prints the **pending queue** (oldest first) and any **active improv
 For each pending entry (it carries `sessionId`, `instructionTs`, `instruction`, `agentId`, `blade`, `title`,
 `owner`/`askedBy`, and for Viktor a `slack` object):
 
+**Read the conversation first.** Each entry also carries a bounded **thread transcript** so you answer WITH
+context, never statelessly:
+- `transcriptText` — the recent thread, speaker-labeled (`User:` / `Viktor:`), chronological. It MERGES the
+  Slack thread (including alert posts Viktor made earlier in the thread) with the in-DB timeline. Use it to
+  resolve references like "silence THIS alert" or "the one you just mentioned" from the thread itself —
+  do NOT ask the person to paste what is already above.
+- `transcript` — the same turns structured (`{ speaker, text, source, at }`).
+- `slackRead` — `ok` means the Slack thread was read in full; `unavailable` / `no_target` means you only have
+  the in-DB fallback (the history scope is missing or the bot isn't in the channel). When it is not `ok`, be
+  honest if the thread context looks incomplete rather than guessing.
+
 ### 2a. Claim it first (idempotent; drops it from the queue so you can't double-handle)
 
 ```
@@ -71,14 +82,27 @@ If the claim reports it was already claimed, another responder/cycle has it — 
    ```
    Do **NOT** set `"end": true` — keep the thread session open for follow-ups.
 
-**operational →** NEVER execute from the message.
+**operational →** NEVER execute from the message. **Act through the governed path OR route to the right AI
+employee** — do not just explain the manual steps.
 1. Draft the concrete action and fill the six-field approval **card** from real facts.
-2. Raise the approval (creates a pending `ai_approvals` card and flips the session to awaiting_approval):
+2. **Route it to the owning AI employee.** Classify the ask to the employee whose domain it belongs to and set
+   `agentId` to that employee's id (from `src/lib/aiorg/registry.ts`) — NOT a blanket `"viktor"`. That makes
+   the approval card and its Slack announcement land in that employee's own channel. Honest mapping:
+   - schedule / shift / crew / staffing change → `scheduling`
+   - quote / lead / outreach / customer email or text → `outreach`
+   - pricing / discount / delivery fee → `quote-analyst` (money: forbidden)
+   - inventory / item / stock conflict → `inventory-exception`
+   - route / dispatch / ETA / stop → `dispatch-route`
+   - hiring / firing → `hiring` (forbidden); Instawork gig → `staffing` (forbidden)
+   - no clear owner → `viktor`
+   If you omit `agentId`, the app classifies it for you from the instruction (same rules); an unknown id is
+   rejected, so only pass a real registry id.
+3. Raise the approval (creates a pending `ai_approvals` card and flips the session to awaiting_approval):
    ```
    curl -sS -X POST "$APP_URL/api/ai/propose" -H "x-bridge-token: $AI_BRIDGE_TOKEN" \
      -H "content-type: application/json" -d '{
        "sessionId":"<sessionId>",
-       "agentId":"viktor",
+       "agentId":"<owning employee id, e.g. scheduling / outreach / dispatch-route>",
        "owner":"<owner/askedBy>",
        "title":"<short action headline>",
        "actionType":"send_email|send_sms|append_note|create_gs_task|modify_quote|change_pricing|schedule_change|hiring|firing|instawork_gig",
@@ -89,7 +113,8 @@ If the claim reports it was already claimed, another responder/cycle has it — 
    ```
    Pick the honest `actionType`. The forbidden categories (modify_quote / change_pricing / schedule_change /
    hiring / firing / instawork_gig) are accepted as a **proposal** but will never execute — say so in your
-   reply.
+   reply. For a "silence this alert" ask on a safety/readiness gate, do NOT fake a silence: raise the proper
+   governed approval for the real condition change (or route it to the scheduling employee) and say so.
 3. Post a short Slack reply back through the bridge so the person knows what to do (the app delivers it as
    Viktor):
    ```

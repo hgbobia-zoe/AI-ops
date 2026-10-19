@@ -17,6 +17,9 @@ import { bridgeTokenValid } from "@/lib/ai/provider";
 import type { NewApproval, ApprovalActionType, ApprovalCard } from "@/lib/aiorg/approvals";
 import { currentActor, viewerRole } from "@/lib/auth/getSession";
 import { canManageAi } from "@/lib/auth/roles";
+import { listSessionEvents } from "@/lib/ai/sessions";
+import { classifyIntentAgent } from "@/lib/ai/intentRouting";
+import { getEmployee } from "@/lib/aiorg/registry";
 
 export const dynamic = "force-dynamic";
 
@@ -83,8 +86,22 @@ export async function POST(req: Request): Promise<NextResponse> {
   // A token-authed headless responder has no cookie identity; attribute its proposal to "AI responder".
   const actor = tokenAuthed ? "AI responder" : (await currentActor()).label;
 
+  // Attribute the proposal to the OWNING AI employee, so its approval card + announcement route to that
+  // employee's channel (botForAgent). The caller's explicit agentId wins (the responder may have classified
+  // it already); when absent we classify deterministically from the session's latest instruction, falling
+  // back to "viktor". An unknown agentId is rejected rather than silently kept, so routing is never fiction.
+  const explicitAgent = (body.agentId ?? "").trim();
+  let agentId: string;
+  if (explicitAgent) {
+    if (!getEmployee(explicitAgent)) return NextResponse.json({ error: "unknown_agentId" }, { status: 400 });
+    agentId = explicitAgent;
+  } else {
+    const latestInstruction = listSessionEvents(sessionId, 50).find((e) => e.kind === "instruction")?.label ?? title;
+    agentId = classifyIntentAgent(latestInstruction).agentId;
+  }
+
   const input: NewApproval = {
-    agentId: (body.agentId ?? "viktor").trim() || "viktor",
+    agentId,
     owner: (body.owner ?? actor).trim() || actor,
     title,
     actionType,

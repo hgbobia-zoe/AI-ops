@@ -128,6 +128,69 @@ export async function slackPostMessage(channel: string, text: string, threadTs?:
   return sent.ok ? { ok: true } : { ok: false, error: `post: ${sent.error}` };
 }
 
+// ── Reads (conversations.history / conversations.replies) ────────────────────────
+// Viktor is conversation-aware: to understand "silence THIS alert" he must read the thread he's in —
+// including the alert posts he made from background jobs, which are NOT session events. These reads need the
+// history scopes (channels:history / groups:history / im:history / mpim:history). They DEGRADE HONESTLY:
+// without a bot token, without the scope (missing_scope), or when the bot isn't in the channel
+// (not_in_channel), they return { ok:false } and the caller falls back to the in-DB transcript. Never throw.
+
+/** A normalized Slack message from a history/replies read. `botId` set → an app/bot posted it (incl. Viktor's
+ *  own posts + his persona alert posts); `username` is the persona display name if one was used. */
+export interface SlackMessage {
+  ts: string; //        Slack message ts (epoch seconds as a string, e.g. "1699999999.000100")
+  user: string | null; // posting user id, or null for a bot/app message
+  botId: string | null; // bot_id when an app/bot posted (so we can label it as Viktor)
+  username: string | null; // persona display-name override (slackPostAs sets this), if any
+  text: string;
+}
+
+export interface SlackReadResult {
+  ok: boolean;
+  messages: SlackMessage[];
+  skipped?: boolean; // no bot token — read not attempted
+  error?: string; //   e.g. missing_scope / not_in_channel — caller falls back to the DB transcript
+}
+
+function toSlackMessages(data: Record<string, unknown> | undefined): SlackMessage[] {
+  const raw = (data?.messages as Record<string, unknown>[] | undefined) ?? [];
+  return raw
+    .map((m) => ({
+      ts: typeof m.ts === "string" ? m.ts : "",
+      user: typeof m.user === "string" ? m.user : null,
+      botId: typeof m.bot_id === "string" ? m.bot_id : null,
+      username: typeof m.username === "string" ? m.username : null,
+      text: typeof m.text === "string" ? m.text : "",
+    }))
+    .filter((m) => m.ts && (m.text || m.botId || m.user));
+}
+
+/** Read a thread's replies (the parent + its replies) for context. Returns the messages oldest-first as Slack
+ *  provides them. Honest degrade: skipped without a token; { ok:false } on missing scope / not-in-channel. */
+export async function slackConversationsReplies(channel: string, threadTs: string, limit = 50): Promise<SlackReadResult> {
+  if (!slackBotConfigured()) return { ok: false, skipped: true, messages: [] };
+  const ch = channel.trim();
+  const ts = threadTs.trim();
+  if (!ch || !ts) return { ok: false, error: "missing_channel_or_ts", messages: [] };
+  const id = (await resolveChannelId(ch)) ?? ch;
+  const r = await slackApi("conversations.replies", { channel: id, ts, limit: Math.min(200, Math.max(1, limit)) });
+  if (!r.ok) return { ok: false, error: r.error, messages: [] };
+  return { ok: true, messages: toSlackMessages(r.data) };
+}
+
+/** Read a channel's most recent messages (not thread-scoped). Same honest-degrade contract as replies. Used
+ *  only as a secondary context source; the thread read is the primary one for Viktor. */
+export async function slackConversationsHistory(channel: string, limit = 20): Promise<SlackReadResult> {
+  if (!slackBotConfigured()) return { ok: false, skipped: true, messages: [] };
+  const ch = channel.trim();
+  if (!ch) return { ok: false, error: "missing_channel", messages: [] };
+  const id = (await resolveChannelId(ch)) ?? ch;
+  const r = await slackApi("conversations.history", { channel: id, limit: Math.min(200, Math.max(1, limit)) });
+  if (!r.ok) return { ok: false, error: r.error, messages: [] };
+  // history returns newest-first; return oldest-first for a natural transcript.
+  return { ok: true, messages: toSlackMessages(r.data).reverse() };
+}
+
 /** A bot's Slack identity: the display name + icon it posts under. One Slack app (Viktor) posts AS each bot
  *  via chat:write.customize, so the team sees "Scheduling Bot", "Sales Bot", etc. without a separate app per
  *  bot. When that scope isn't granted Slack simply ignores name/icon and posts as the app — never an error. */

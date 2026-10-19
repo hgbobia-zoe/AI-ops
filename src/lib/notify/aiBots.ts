@@ -41,6 +41,15 @@ const AGENT_TO_BOT: Record<string, BotId> = {
   "inventory-exception": "inventory",
   "event-radar": "data",
   hiring: "hiring",
+  // Back-office scheduling/staffing employees → the scheduling bot's channel, so a routed schedule/shift
+  // proposal's card + announcement land where that team watches (not the generic ops channel).
+  scheduling: "scheduling",
+  staffing: "scheduling",
+  "back-office": "scheduling",
+  // Marketing content → the pricing/marketing-adjacent channels have no own bot; keep content on data (the
+  // marketing surface) rather than ops.
+  content: "data",
+  "campaign-analyst": "data",
 };
 export function botForAgent(agentId: string): BotId {
   return AGENT_TO_BOT[agentId] ?? "ops";

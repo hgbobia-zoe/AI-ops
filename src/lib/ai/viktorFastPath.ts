@@ -11,11 +11,12 @@
 // so the governing law holds: RULES CALCULATE, AI INTERPRETS. Fail-safe by construction: any error, any
 // doubt, any unparseable model output routes to Tier 2 rather than guessing an answer. Never throws.
 
-import { chat, llmConfigured } from "@/lib/llm";
+import { chat, llmConfigured, type ChatMessage } from "@/lib/llm";
 import { humanize } from "@/lib/salesos/outreach";
 import { slackBotConfigured, slackPostMessage } from "@/lib/notify/slack";
 import { appendEvent, getSession, listSessionEvents, setSessionResult, NEUTRAL_EVENT_KINDS } from "@/lib/ai/sessions";
 import { responderHealthNow } from "@/lib/ai/responderHealth";
+import { assembleThreadContext, type TranscriptTurn } from "@/lib/ai/threadContext";
 
 export type TriageMode = "answer" | "route";
 
@@ -116,15 +117,25 @@ export function looksLikeAction(text: string): boolean {
   return false;
 }
 
-/** Call the fast model to triage one message. Returns the parsed result, or a safe "route" on any failure
+/** Turn merged transcript turns into prior chat turns for the model, so triage/answer is CONTEXT-AWARE (it
+ *  can resolve "silence this alert" from the thread, including Viktor's own earlier posts). The current
+ *  message is passed separately as the final user turn — the context assembler already excludes it. PURE. */
+function historyToChatTurns(history: TranscriptTurn[] | undefined): ChatMessage[] {
+  if (!history?.length) return [];
+  return history.map((t) => ({ role: t.speaker === "viktor" ? "assistant" : "user", content: t.text }));
+}
+
+/** Call the fast model to triage one message. `history` (optional) is the recent thread transcript, prepended
+ *  as prior turns so triage is conversation-aware. Returns the parsed result, or a safe "route" on any failure
  *  (LLM unconfigured/errored/timed out). Never throws. */
-export async function triageViktorMessage(text: string): Promise<TriageResult> {
+export async function triageViktorMessage(text: string, history?: TranscriptTurn[]): Promise<TriageResult> {
   const clean = (text || "").trim();
   if (!clean) return { mode: "route", answer: null };
   if (!llmConfigured()) return { mode: "route", answer: null };
   const res = await chat(
     [
       { role: "system", content: buildTriageSystem() },
+      ...historyToChatTurns(history),
       { role: "user", content: clean },
     ],
     { json: true, temperature: 0, maxTokens: 600, timeoutMs: 15000 },
@@ -152,6 +163,8 @@ export interface FastPathParams {
   text: string;
   channel: string;
   threadTs: string | null;
+  /** The just-arrived Slack message ts (for context-exclusion diagnostics). Optional — history dedups by text. */
+  messageTs?: string | null;
 }
 
 export type FastPathOutcome = "answered" | "routed" | "skipped";
@@ -167,7 +180,23 @@ export async function handleViktorFastPath(params: FastPathParams): Promise<Fast
     const session = getSession(params.sessionId);
     if (!session) return "skipped";
 
-    const triage = await triageViktorMessage(params.text);
+    // Conversation awareness: assemble the recent thread transcript (Slack thread + the in-DB timeline),
+    // excluding the just-arrived message, so triage/answer understands the conversation so far — including
+    // any alert Viktor posted earlier in this thread. Degrades to the DB transcript (or empty) and never
+    // throws, so a history-read failure can never block or change the fast-path outcome.
+    let history: TranscriptTurn[] = [];
+    try {
+      const ctx = await assembleThreadContext({
+        sessionId: params.sessionId,
+        slack: params.channel ? { channel: params.channel, threadTs: params.threadTs } : null,
+        excludeText: params.text,
+      });
+      history = ctx.turns;
+    } catch {
+      history = [];
+    }
+
+    const triage = await triageViktorMessage(params.text, history);
 
     // Safety net: Tier 1 can only answer or route, never act. If the message is clearly a request to DO
     // something, route it even if the model wanted to answer, so Viktor never fabricates "I did it".

@@ -87,8 +87,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     const fastText = ev.text;
     const channel = ev.channel;
     const threadTs = ev.threadTs;
+    const messageTs = ev.ts;
     void (async () => {
-      const outcome = await handleViktorFastPath({ sessionId, text: fastText, channel, threadTs });
+      const outcome = await handleViktorFastPath({ sessionId, text: fastText, channel, threadTs, messageTs });
       // Only alarm when the message actually needs Tier 2 (routed, or fast path unavailable). A question
       // Tier 1 already answered must NOT trigger a false "responder is DOWN" alert. Deduped with a short
       // cool-off so a burst of Slack messages doesn't spam.
