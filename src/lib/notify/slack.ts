@@ -80,6 +80,27 @@ async function slackApi(method: string, body: Record<string, unknown>): Promise<
   }
 }
 
+// chat.postMessage / conversations.join want a channel ID, and a channel NAME only resolves when the bot can
+// see it. Cache name→ID per process so we don't list on every post. Needs channels:read.
+const channelIdCache = new Map<string, string>();
+async function resolveChannelId(nameOrId: string): Promise<string | null> {
+  const v = nameOrId.replace(/^#/, "").trim();
+  if (/^[CGD][A-Z0-9]{6,}$/.test(v)) return v; // already an ID
+  if (channelIdCache.has(v)) return channelIdCache.get(v)!;
+  let cursor: string | undefined;
+  for (let i = 0; i < 20; i++) {
+    const r = await slackApi("conversations.list", { exclude_archived: true, types: "public_channel,private_channel", limit: 1000, ...(cursor ? { cursor } : {}) });
+    if (!r.ok) return null; // e.g. missing_scope (channels:read) — caller falls back
+    for (const c of (r.data?.channels as { id: string; name: string }[] | undefined) ?? []) {
+      channelIdCache.set(c.name, c.id);
+      if (c.name === v) return c.id;
+    }
+    cursor = (r.data?.response_metadata as { next_cursor?: string } | undefined)?.next_cursor || undefined;
+    if (!cursor) break;
+  }
+  return channelIdCache.get(v) ?? null;
+}
+
 /** DM a person by their (work) email. Returns skipped when no bot token is set, or a clear error when the
  *  email maps to no Slack user — so the caller can fall back to a channel post. */
 export async function slackDmByEmail(email: string, text: string): Promise<SlackResult> {
@@ -125,13 +146,20 @@ export async function slackPostAs(
   opts?: { blocks?: unknown[]; threadTs?: string | null },
 ): Promise<SlackResult> {
   if (!slackBotConfigured()) return { ok: false, skipped: true };
-  const ch = channel.trim();
   const msg = text.trim();
-  if (!ch || !msg) return { ok: false, error: "missing_channel_or_text" };
+  if (!channel.trim() || !msg) return { ok: false, error: "missing_channel_or_text" };
+  // Resolve the channel NAME to an ID (falls back to the raw value if we can't list), then post.
+  const ch = (await resolveChannelId(channel)) ?? channel.trim();
   const body: Record<string, unknown> = { channel: ch, text: msg, username: persona.name, icon_emoji: persona.icon };
   if (opts?.blocks?.length) body.blocks = opts.blocks;
   if (opts?.threadTs) body.thread_ts = opts.threadTs;
-  const sent = await slackApi("chat.postMessage", body);
+  let sent = await slackApi("chat.postMessage", body);
+  // The bot isn't a member yet → self-join the (public) channel once and retry, so we don't need a manual
+  // /invite in every channel. Needs channels:join; if that scope is missing the join fails and we fall back.
+  if (!sent.ok && sent.error === "not_in_channel") {
+    const joined = await slackApi("conversations.join", { channel: ch });
+    if (joined.ok) sent = await slackApi("chat.postMessage", body);
+  }
   return sent.ok ? { ok: true } : { ok: false, error: `post: ${sent.error}` };
 }
 

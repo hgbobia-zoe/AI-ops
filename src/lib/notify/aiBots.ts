@@ -66,6 +66,9 @@ export interface BotCard {
   body?: string;
   /** A link button ("View in app"); dropped when url is empty. */
   link?: { text: string; url: string | null };
+  /** Interactive buttons (Approve / Dismiss …) — each carries an action_id + value the Slack interactivity
+   *  endpoint reads. Rendered alongside the link button. */
+  buttons?: { text: string; actionId: string; value: string; style?: "primary" | "danger" }[];
   /** A small footer line (persona + an override hint). mrkdwn. */
   context?: string;
 }
@@ -78,17 +81,21 @@ export function appUrl(path: string): string | null {
 }
 
 /** Build Block Kit blocks for a card. Keeps within Slack's limits (10 section fields, 150-char header). */
-function cardBlocks(card: BotCard): unknown[] {
+export function cardBlocks(card: BotCard): unknown[] {
   const blocks: unknown[] = [];
   const header = `${card.emoji ? `${card.emoji} ` : ""}${card.title}`.slice(0, 150);
   blocks.push({ type: "header", text: { type: "plain_text", text: header, emoji: true } });
+  blocks.push({ type: "divider" });
   if (card.fields?.length) {
     blocks.push({ type: "section", fields: card.fields.slice(0, 10).map((f) => ({ type: "mrkdwn", text: `*${f.label}:*\n${f.value}` })) });
   }
   if (card.body?.trim()) blocks.push({ type: "section", text: { type: "mrkdwn", text: card.body.trim() } });
-  if (card.link?.url) {
-    blocks.push({ type: "actions", elements: [{ type: "button", text: { type: "plain_text", text: card.link.text, emoji: true }, url: card.link.url }] });
+  const elements: unknown[] = [];
+  for (const b of card.buttons ?? []) {
+    elements.push({ type: "button", text: { type: "plain_text", text: b.text, emoji: true }, action_id: b.actionId, value: b.value, ...(b.style ? { style: b.style } : {}) });
   }
+  if (card.link?.url) elements.push({ type: "button", text: { type: "plain_text", text: card.link.text, emoji: true }, url: card.link.url });
+  if (elements.length) blocks.push({ type: "actions", elements });
   if (card.context?.trim()) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: card.context.trim() }] });
   return blocks;
 }
