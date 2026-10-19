@@ -12,6 +12,8 @@
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
 import { insertAudit } from "@/lib/db/repo";
+// Type-only (erased at runtime, so no import cycle with threadContext which reads this module).
+import type { TranscriptTurn, SlackReadState } from "@/lib/ai/threadContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type SessionStatus = "running" | "awaiting_approval" | "paused" | "done" | "failed" | "cancelled";
@@ -394,6 +396,13 @@ export interface PendingInstruction {
   askedBy: string | null; // the human who gave it
   /** For a Slack-sourced (Viktor) session: where the responder should post its reply. Null otherwise. */
   slack?: { channel: string; threadTs: string | null; user: string | null } | null;
+  /** The bounded, chronological thread transcript (Slack thread + in-DB timeline), so the Tier-2 responder
+   *  answers WITH context. Attached by the bridge/pending route (which does the IO) — the raw DB query below
+   *  leaves it undefined. `slackRead` says whether the Slack thread read succeeded, so the responder is
+   *  honest when it only has the DB fallback. */
+  transcript?: TranscriptTurn[];
+  transcriptText?: string;
+  slackRead?: SlackReadState;
 }
 
 interface PendingRow {
