@@ -18,6 +18,8 @@ import { namedPeriod } from "@/lib/payroll/period";
 import { payrollOverview } from "@/lib/payroll/overview";
 import { unifiedWorkers } from "@/lib/payroll/workers";
 import { payrollReview } from "@/lib/payroll/review";
+import { assessReadiness } from "@/lib/payroll/readiness";
+import { READINESS_STATUS_LABEL, type ReadinessStatus, type PayrollReadiness } from "@/lib/payroll/types";
 import { listExceptions, listSyncRuns, countTimeEntries, getApproval } from "@/lib/payroll/store";
 import { gustoConfigured } from "@/lib/payroll/gusto";
 import { instaworkTempPay } from "@/lib/payroll/instawork";
@@ -25,7 +27,7 @@ import {
   WORKER_TYPE_LABEL, MAPPING_STATUS_LABEL, APPROVAL_STATUS_LABEL,
   type UnifiedWorker, type ExceptionSeverity, type ReviewStatus, type ReviewWorker,
 } from "@/lib/payroll/types";
-import { getPayrollConfig } from "@/lib/payroll/config";
+import { getPayrollConfig, precheckScheduleLabel, payrollDeadlineLabel } from "@/lib/payroll/config";
 import { readGustoSnapshot } from "@/lib/payroll/gustoSnapshot";
 import { BladeAgents } from "@/components/aiorg/BladeAgents";
 import { getLatestImportBySource } from "@/lib/pull/state";
@@ -183,6 +185,9 @@ async function OverviewTab({ period, which }: { period: { start: string; end: st
         </div>
       </section>
 
+      {/* Readiness pre-check — "is this period ready to export to Gusto?" (prepares Lisa for Tuesday) */}
+      <ReadinessPanel period={period} />
+
       {/* Metrics — status first, then the blocker/exception/config taxonomy kept distinct (§3) */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <Metric label="Pay period" value={period.label} sub={`${period.start} → ${period.end}`} />
@@ -203,6 +208,56 @@ async function OverviewTab({ period, which }: { period: { start: string; end: st
         />
       </div>
     </div>
+  );
+}
+
+// ── Readiness pre-check panel ──────────────────────────────────────────────────────────────────────
+const READINESS_TONE: Record<ReadinessStatus, string> = {
+  READY: "text-positive border-positive/40 bg-positive/10",
+  ACTION_REQUIRED: "text-attention border-attention/40 bg-attention/10",
+  BLOCKED: "text-critical border-critical/40 bg-critical/10",
+  UNAVAILABLE: "text-meta border-border bg-[var(--row)]",
+};
+async function ReadinessPanel({ period }: { period: { start: string; end: string; label: string } }): Promise<React.JSX.Element> {
+  const r: PayrollReadiness = await assessReadiness(period);
+  const cfg = getPayrollConfig();
+  const top = r.exceptions.slice(0, 6);
+  return (
+    <section className="surface border p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-[10.5px] uppercase tracking-[0.1em] text-meta">
+          <ClipboardCheck className="size-3.5" /> Payroll readiness
+        </div>
+        <div className="text-[11px] text-meta">
+          Pre-check {cfg.precheckEnabled ? precheckScheduleLabel(cfg) : "off"} · payroll {payrollDeadlineLabel(cfg)}
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <span className={`inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-[13px] font-semibold ${READINESS_TONE[r.status]}`}>
+          {r.status === "READY" ? <CheckCircle2 className="size-4" /> : r.status === "BLOCKED" ? <Ban className="size-4" /> : r.status === "UNAVAILABLE" ? <CircleAlert className="size-4" /> : <AlertTriangle className="size-4" />}
+          {READINESS_STATUS_LABEL[r.status]}
+        </span>
+        <span className="text-[12px] text-meta">{r.summary}</span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-[11.5px] text-meta">
+        <span className="text-critical">{r.blocking} blocking</span>
+        <span className="text-attention">{r.anomalies} to review</span>
+        <span>{r.unverified} unverified</span>
+        <span>approval {r.approvalKnown ? "confirmed" : "unverified"}</span>
+        <span>{hrs(r.hours)}{r.approvedHours != null ? ` · ${r.approvedHours} approved` : ""}</span>
+      </div>
+      {top.length > 0 && (
+        <ul className="mt-3 space-y-1 border-t border-rule pt-3">
+          {top.map((e) => (
+            <li key={e.detectKey} className="flex items-start gap-2 text-[12px]">
+              <span className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[9.5px] font-semibold uppercase ${e.kind === "BLOCKING" ? "bg-critical/15 text-critical" : e.kind === "UNVERIFIED" ? "bg-attention/15 text-attention" : "bg-[var(--row)] text-meta"}`}>{e.kind.toLowerCase()}</span>
+              <span className="min-w-0"><span className="text-secondary-text">{e.description}</span> <span className="text-meta">— {e.ownerAction}</span></span>
+            </li>
+          ))}
+          {r.exceptions.length > top.length && <li className="text-[11px] text-meta">…and {r.exceptions.length - top.length} more in the Exceptions tab.</li>}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -502,7 +557,7 @@ function ExceptionsTab(): React.JSX.Element {
             <div className="text-[12px] text-secondary-text">{e.description}</div>
             <div className="mt-0.5 text-[10.5px] text-meta">{e.source ?? "—"} · {relTime(e.detectedAt)}</div>
           </div>
-          <ExceptionActions id={e.id} />
+          <ExceptionActions id={e.id} reconcilable={!!e.detectKey?.startsWith("RDY:")} />
         </div>
       ))}
     </div>

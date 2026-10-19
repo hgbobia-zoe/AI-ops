@@ -8,7 +8,7 @@
 // "READY / REQUIRES_REVIEW" and records gusto_ok = null (not configured / not pushed).
 
 import { createHash } from "node:crypto";
-import { getActualHours } from "@/lib/connecteam";
+import { getActualHours, getTimesheetDetail } from "@/lib/connecteam";
 import { getUsers } from "@/lib/connecteam";
 import { gustoConfigured } from "./gusto";
 import {
@@ -45,14 +45,25 @@ export async function runPayrollSync(input: SyncInput): Promise<SyncSummary> {
   const runId = startSyncRun({ periodStart: input.periodStart, periodEnd: input.periodEnd, trigger: input.trigger, initiatedBy: input.actor });
 
   // 1) Pull the operational time source. If it's unavailable, FAIL cleanly — never push partial payroll.
-  const [roster, actual] = await Promise.all([getUsers(), getActualHours(input.periodStart, input.periodEnd)]);
+  //    Also pull the timesheet APPROVAL detail: the sync must never mark unapproved (or approval-unverified)
+  //    hours as ready to export — that is the prerequisite to safely enabling the Connecteam→Gusto sync.
+  const [roster, actual, tsDetail] = await Promise.all([
+    getUsers(),
+    getActualHours(input.periodStart, input.periodEnd),
+    getTimesheetDetail(input.periodStart, input.periodEnd),
+  ]);
   if (!actual.ok) {
     finishSyncRun(runId, { status: "FAILED", connecteamOk: false, gustoOk: null, detail: "Connecteam time source unavailable — no hours pulled." });
     return summary(runId, "FAILED", { connecteamOk: false, message: "Connecteam unavailable — nothing was synced." });
   }
+  // Approval is UNVERIFIED when the timesheet endpoint exposed no approval signal at all — treated as
+  // not-clean (never assumed approved), so the run can't be READY until approval is confirmed.
+  const approvalKnown = tsDetail.ok && tsDetail.approvalFieldSeen;
 
   let workersProcessed = 0;
   let totalHours = 0;
+  let approvedHours = 0;
+  let unapprovedHours = 0;
   let newExceptions = 0;
   let reviewCount = 0;
 
@@ -64,6 +75,15 @@ export async function runPayrollSync(input: SyncInput): Promise<SyncSummary> {
     const worker = ensureWorkerFromConnecteam({ connecteamUserId: userId, name, email: member?.email ?? null });
     workersProcessed++;
     totalHours += hours;
+
+    // Fold the approval split into the run totals (observability). When approval is UNVERIFIED the split
+    // stays unknown — we never silently count unapproved time as approved.
+    const detail = tsDetail.byUser.get(userId);
+    if (approvalKnown && detail?.approvalKnown) {
+      approvedHours += detail.approvedHours ?? 0;
+      unapprovedHours += detail.unapprovedHours ?? 0;
+      if ((detail.unapprovedHours ?? 0) > 0) reviewCount++; // unapproved hours → not ready to export
+    }
 
     const rounded = Math.round(hours * 100) / 100;
     const checksum = createHash("sha1").update(`${userId}|${input.periodStart}|${input.periodEnd}|${rounded}`).digest("hex");
@@ -93,14 +113,27 @@ export async function runPayrollSync(input: SyncInput): Promise<SyncSummary> {
   }
 
   // 4) Decide run status. Gusto is not pushed in this slice → gustoOk stays null. A clean period is READY;
-  // anything needing a human (missing mapping, etc.) is REQUIRES_REVIEW.
-  const status: SyncStatus = reviewCount > 0 ? "REQUIRES_REVIEW" : "READY";
+  // anything needing a human (missing mapping, unapproved time, etc.) is REQUIRES_REVIEW. Approval that
+  // could NOT be confirmed (approvalKnown === false) also forces REQUIRES_REVIEW — the sync never reports a
+  // period READY while timesheet approval is unverified (the sync prerequisite, §4).
+  const approvalUnverified = workersProcessed > 0 && !approvalKnown;
+  const status: SyncStatus = reviewCount > 0 || approvalUnverified ? "REQUIRES_REVIEW" : "READY";
   const roundedTotal = Math.round(totalHours * 10) / 10;
+  // hoursReady = only APPROVED hours when approval is known; otherwise UNVERIFIED (null, never the total).
+  const hoursReady = approvalKnown ? Math.round(approvedHours * 10) / 10 : null;
   finishSyncRun(runId, {
-    status, workersProcessed, totalHours: roundedTotal, hoursReady: roundedTotal,
+    status, workersProcessed, totalHours: roundedTotal, hoursReady: hoursReady ?? undefined,
     exceptionsCount: newExceptions, reviewCount, gustoCreated: 0, gustoUpdated: 0, skipped: 0,
     connecteamOk: true, gustoOk: gustoConfigured() ? false : null,
-    detail: JSON.stringify({ gustoConfigured: gustoConfigured(), note: "Ingestion + matching only; Gusto push not yet enabled." }),
+    detail: JSON.stringify({
+      gustoConfigured: gustoConfigured(),
+      approvalKnown,
+      approvedHours: approvalKnown ? Math.round(approvedHours * 10) / 10 : null,
+      unapprovedHours: approvalKnown ? Math.round(unapprovedHours * 10) / 10 : null,
+      note: approvalKnown
+        ? "Ingestion + matching + approval split; Gusto push not yet enabled."
+        : "Ingestion + matching only; timesheet approval UNVERIFIED (Connecteam exposed no approval field) — not safe to mark ready. Gusto push not yet enabled.",
+    }),
   });
 
   try {
@@ -113,12 +146,17 @@ export async function runPayrollSync(input: SyncInput): Promise<SyncSummary> {
     /* audit is best-effort */
   }
 
+  const reviewReason = !approvalKnown
+    ? "timesheet approval unverified"
+    : unapprovedHours > 0
+      ? `${Math.round(unapprovedHours * 10) / 10}h unapproved + ${reviewCount} to review`
+      : `${reviewCount} need review`;
   return summary(runId, status, {
-    workersProcessed, totalHours: roundedTotal, hoursReady: roundedTotal, exceptions: newExceptions, reviewCount,
+    workersProcessed, totalHours: roundedTotal, hoursReady: hoursReady ?? null, exceptions: newExceptions, reviewCount,
     connecteamOk: true, gustoOk: gustoConfigured() ? false : null,
     message: status === "READY"
-      ? `Pulled ${roundedTotal}h for ${workersProcessed} workers. Ready for review.`
-      : `Pulled ${roundedTotal}h for ${workersProcessed} workers. ${reviewCount} need review before payroll.`,
+      ? `Pulled ${roundedTotal}h for ${workersProcessed} workers (all approved). Ready for review.`
+      : `Pulled ${roundedTotal}h for ${workersProcessed} workers. ${reviewReason} before payroll.`,
   });
 }
 

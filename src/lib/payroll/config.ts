@@ -12,6 +12,14 @@ export interface PayrollConfig {
   approvalPolicy: "always_require" | "auto_if_clean"; // never auto-approve unless explicitly set
   overtimeThreshold: number; // weekly hours above which overtime is flagged (EXCEPTION)
   rateWriteback: boolean; // when a Gusto pull syncs rates, also write them back into Connecteam (PUT)
+  // ── Payroll-readiness pre-check (prepares Lisa for the Tuesday payroll run) ──
+  precheckEnabled: boolean; // the scheduled readiness pre-check + Slack summary on/off
+  payrollDay: number; // the day payroll is RUN (0=Sun … 6=Sat; default Tuesday) — the deadline
+  payrollHour: number; // 0–23 ET the payroll run happens (the readiness deadline; default 9am)
+  precheckDay: number; // the day the readiness pre-check runs ahead of payroll (default Monday)
+  precheckHour: number; // 0–23 ET the pre-check runs (default 8am)
+  scheduleDiscrepancyPct: number; // |actual−planned|/planned ≥ this % flags a schedule discrepancy (default 25)
+  slackChannel: string | null; // dedicated payroll Slack channel NAME/ID; null = resolve from env/none (never hard-coded)
 }
 
 const KEY = "payroll.config";
@@ -23,6 +31,13 @@ export const DEFAULT_PAYROLL_CONFIG: PayrollConfig = {
   approvalPolicy: "always_require",
   overtimeThreshold: 40,
   rateWriteback: true,
+  precheckEnabled: false,
+  payrollDay: 2, // Tuesday
+  payrollHour: 9,
+  precheckDay: 1, // Monday — a day of lead time to resolve exceptions before Tuesday
+  precheckHour: 8,
+  scheduleDiscrepancyPct: 25,
+  slackChannel: null,
 };
 
 export const DOW_LABEL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -46,6 +61,13 @@ export function savePayrollConfig(patch: Partial<PayrollConfig>): PayrollConfig 
     approvalPolicy: patch.approvalPolicy === "auto_if_clean" || patch.approvalPolicy === "always_require" ? patch.approvalPolicy : cur.approvalPolicy,
     overtimeThreshold: clampInt(patch.overtimeThreshold, 1, 168, cur.overtimeThreshold),
     rateWriteback: typeof patch.rateWriteback === "boolean" ? patch.rateWriteback : cur.rateWriteback,
+    precheckEnabled: typeof patch.precheckEnabled === "boolean" ? patch.precheckEnabled : cur.precheckEnabled,
+    payrollDay: clampInt(patch.payrollDay, 0, 6, cur.payrollDay),
+    payrollHour: clampInt(patch.payrollHour, 0, 23, cur.payrollHour),
+    precheckDay: clampInt(patch.precheckDay, 0, 6, cur.precheckDay),
+    precheckHour: clampInt(patch.precheckHour, 0, 23, cur.precheckHour),
+    scheduleDiscrepancyPct: clampInt(patch.scheduleDiscrepancyPct, 1, 100, cur.scheduleDiscrepancyPct),
+    slackChannel: patch.slackChannel === undefined ? cur.slackChannel : (patch.slackChannel?.toString().trim() || null),
   };
   setJson(KEY, next);
   return next;
@@ -60,4 +82,14 @@ function hour12(h: number): string {
 /** "Mondays at 8:00 AM" — the recurring schedule, for display. */
 export function scheduleLabel(cfg: PayrollConfig = getPayrollConfig()): string {
   return `${DOW_LABEL[cfg.syncDay]}s at ${hour12(cfg.syncHour)} ET`;
+}
+
+/** "Mondays at 8:00 AM" — the readiness pre-check cadence, for display. */
+export function precheckScheduleLabel(cfg: PayrollConfig = getPayrollConfig()): string {
+  return `${DOW_LABEL[cfg.precheckDay]}s at ${hour12(cfg.precheckHour)} ET`;
+}
+
+/** "Tuesdays at 9:00 AM" — the payroll-run deadline, for display. */
+export function payrollDeadlineLabel(cfg: PayrollConfig = getPayrollConfig()): string {
+  return `${DOW_LABEL[cfg.payrollDay]}s at ${hour12(cfg.payrollHour)} ET`;
 }

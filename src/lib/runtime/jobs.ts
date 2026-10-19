@@ -17,7 +17,7 @@ import { discover } from "@/lib/seo/discovery";
 import { configured as ubersuggestConfigured } from "@/lib/seo/ubersuggest";
 import { connecteamConfigured, refreshConnecteamHealth, warmConnecteamCaches } from "@/lib/connecteam";
 import { getPayrollConfig } from "@/lib/payroll/config";
-import { runScheduledPayrollSyncIfDue } from "@/lib/payroll/scheduler";
+import { runScheduledPayrollSyncIfDue, runScheduledPrecheckIfDue } from "@/lib/payroll/scheduler";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
 import { runConnecteamImportTick, connecteamImportEnabled } from "@/lib/scheduling/connecteamReconcile";
 import { runRouteAutoSyncTick, connecteamAutosyncEnabled } from "@/lib/scheduling/routeAutoSync";
@@ -141,6 +141,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     note: "On the configured day/hour (default Mondays 8am ET): pull Connecteam hours, reconcile, create the Payroll Review and notify. Never auto-pushes to Gusto; only auto-approves when clean AND policy allows.",
     run: async () => {
       const r = await runScheduledPayrollSyncIfDue();
+      return { ok: true, detail: r.detail }; // "waiting"/"already ran" are healthy no-ops, not failures
+    },
+  },
+  {
+    key: "payroll-precheck",
+    label: "Payroll readiness pre-check",
+    bucket: "server",
+    configured: () => getPayrollConfig().precheckEnabled && connecteamConfigured(),
+    note: "Ahead of the Tuesday payroll deadline (default Mondays 8am ET) and again on payroll day: assesses the just-completed week's readiness — unapproved timesheets, missing punches, schedule discrepancies, missing/duplicate Gusto mappings, stale/unavailable sources — persists exceptions, and posts an idempotent readiness summary to the dedicated payroll Slack channel. READ-ONLY; never submits payroll. UNAVAILABLE/stale data can never read as READY.",
+    run: async () => {
+      const r = await runScheduledPrecheckIfDue();
       return { ok: true, detail: r.detail }; // "waiting"/"already ran" are healthy no-ops, not failures
     },
   },

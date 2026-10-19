@@ -83,6 +83,51 @@ export function PayrollSettingsForm({ initial }: { initial: PayrollConfig }): Re
           </select>
         </label>
       </div>
+
+      <h3 className="mb-3 mt-5 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">Readiness pre-check &amp; Slack</h3>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+        <label className="flex flex-col gap-1">
+          <span className={labelCls}>Readiness pre-check</span>
+          <select className={fieldCls} value={cfg.precheckEnabled ? "on" : "off"} onChange={(e) => set("precheckEnabled", e.target.value === "on")}>
+            <option value="off">Disabled</option>
+            <option value="on">Enabled — assess + Slack before payroll</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className={labelCls}>Schedule-discrepancy threshold (%)</span>
+          <input type="number" min={1} max={100} className={fieldCls} value={cfg.scheduleDiscrepancyPct} onChange={(e) => set("scheduleDiscrepancyPct", Number(e.target.value))} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className={labelCls}>Pre-check day</span>
+          <select className={fieldCls} value={cfg.precheckDay} onChange={(e) => set("precheckDay", Number(e.target.value))} disabled={!cfg.precheckEnabled}>
+            {DOW.map((d, i) => <option key={i} value={i}>{d}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className={labelCls}>Pre-check time (ET)</span>
+          <select className={fieldCls} value={cfg.precheckHour} onChange={(e) => set("precheckHour", Number(e.target.value))} disabled={!cfg.precheckEnabled}>
+            {HOURS.map((h) => <option key={h.v} value={h.v}>{h.label}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className={labelCls}>Payroll run day (deadline)</span>
+          <select className={fieldCls} value={cfg.payrollDay} onChange={(e) => set("payrollDay", Number(e.target.value))}>
+            {DOW.map((d, i) => <option key={i} value={i}>{d}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className={labelCls}>Payroll run time (ET)</span>
+          <select className={fieldCls} value={cfg.payrollHour} onChange={(e) => set("payrollHour", Number(e.target.value))}>
+            {HOURS.map((h) => <option key={h.v} value={h.v}>{h.label}</option>)}
+          </select>
+        </label>
+        <label className="col-span-2 flex flex-col gap-1">
+          <span className={labelCls}>Payroll Slack channel (name or ID)</span>
+          <input type="text" placeholder="e.g. payroll — or leave blank to use SLACK_CHANNEL_PAYROLL / ops webhook" className={fieldCls} value={cfg.slackChannel ?? ""} onChange={(e) => set("slackChannel", e.target.value || null)} />
+          <span className="text-[10.5px] text-meta">Env SLACK_CHANNEL_PAYROLL overrides this. No channel set → falls back to the ops webhook.</span>
+        </label>
+      </div>
+
       <div className="mt-4 flex items-center gap-3 border-t border-rule pt-4">
         <button onClick={save} disabled={busy} className="inline-flex h-9 items-center justify-center rounded-md bg-foreground px-4 text-[13px] font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-60">
           {busy ? "Saving…" : "Save settings"}

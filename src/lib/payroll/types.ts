@@ -174,6 +174,72 @@ export interface PayrollOverview {
   approvalStatus: PayrollApprovalStatus | null;
 }
 
+// ── Payroll READINESS pre-check (prepares Lisa for the Tuesday payroll run) ──────────────────────────
+// The deterministic answer to "is this pay period ready to export to Gusto?" One overall status + a flat
+// list of actionable exceptions. RULES CALCULATE: every field is derived from real Connecteam/Gusto facts
+// or null when a source is unavailable. UNAVAILABLE / stale / approval-unverified can NEVER be READY.
+export type ReadinessStatus = "READY" | "ACTION_REQUIRED" | "BLOCKED" | "UNAVAILABLE";
+export const READINESS_STATUS_LABEL: Record<ReadinessStatus, string> = {
+  READY: "Ready", ACTION_REQUIRED: "Action required", BLOCKED: "Blocked", UNAVAILABLE: "Source unavailable",
+};
+
+// A readiness issue's class. BLOCKING prevents export; EXCEPTION is an anomaly to review; UNVERIFIED means a
+// required source could not confirm (approval unknown, stale data) — treated as not-clean, never as clean.
+export type ReadinessIssueKind = "BLOCKING" | "EXCEPTION" | "UNVERIFIED";
+export type ReadinessIssueType =
+  | "UNAPPROVED_TIMESHEET"
+  | "APPROVAL_UNVERIFIED"
+  | "MISSING_PUNCH"
+  | "SCHEDULE_DISCREPANCY"
+  | "MISSING_GUSTO_MAPPING"
+  | "DUPLICATE_GUSTO_MAPPING"
+  | "NO_PAY_RATE"
+  | "OVERTIME"
+  | "SOURCE_UNAVAILABLE"
+  | "GUSTO_STALE";
+
+export interface ReadinessException {
+  detectKey: string; // stable idempotency key (persisted as hr_exceptions.detect_key)
+  workerKey: string | null; // ct:<id> | hw:<id> | null for a period-level issue
+  workerLabel: string | null;
+  connecteamUserId: number | null; // for authoritative re-check (reconciliation, §6)
+  type: ReadinessIssueType;
+  kind: ReadinessIssueKind;
+  severity: ExceptionSeverity;
+  description: string; // the evidence (what was found)
+  ownerAction: string; // who should do what to clear it
+  source: string; // connecteam | gusto | reconciliation
+}
+
+export interface ReadinessWorker {
+  key: string;
+  name: string;
+  connecteamUserId: number | null;
+  actualHours: number | null;
+  approvedHours: number | null;
+  unapprovedHours: number | null;
+  plannedHours: number | null;
+  issues: ReadinessException[];
+  status: ReadinessStatus;
+}
+
+export interface PayrollReadiness {
+  period: PayPeriod;
+  status: ReadinessStatus;
+  connecteamOk: boolean;
+  approvalKnown: boolean; // did Connecteam expose timesheet approval at all? (false ⇒ never READY)
+  gusto: { configured: boolean; fresh: boolean };
+  workers: ReadinessWorker[]; // workers with hours this period
+  exceptions: ReadinessException[]; // flat list (worker + period level)
+  counts: { workers: number; ready: number; actionRequired: number; blocked: number };
+  blocking: number;
+  anomalies: number;
+  unverified: number;
+  hours: number | null;
+  approvedHours: number | null;
+  summary: string; // one-line human readout
+}
+
 export type ExceptionSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 export type ExceptionStatus = "OPEN" | "IN_REVIEW" | "RESOLVED" | "IGNORED";
 
@@ -190,6 +256,7 @@ export interface PayrollException {
   resolution: string | null;
   resolvedBy: string | null;
   resolvedAt: string | null;
+  detectKey: string | null; // idempotency key — also used to re-check the authoritative source (§6)
   detectedAt: string;
 }
 
