@@ -7,7 +7,8 @@
 //   curl -X POST "https://zoe-dispatch.fly.dev/api/ai/announce-test?bot=scheduling" -H "authorization: Bearer <RUNTIME_TOKEN>"
 
 import { NextResponse } from "next/server";
-import { botAnnounce, appUrl, type BotId } from "@/lib/notify/aiBots";
+import { botAnnounce, appUrl, channelFor, BOTS, type BotId } from "@/lib/notify/aiBots";
+import { slackPostAs, slackBotConfigured } from "@/lib/notify/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -60,8 +61,23 @@ async function handle(req: Request): Promise<NextResponse> {
   }
   const botParam = (url.searchParams.get("bot") || "scheduling").toLowerCase();
   const bot = (BOT_IDS as string[]).includes(botParam) ? (botParam as BotId) : "scheduling";
-  const result = await botAnnounce(bot, sampleCard(bot));
-  return NextResponse.json({ ok: result.ok, bot, result, at: new Date().toISOString() });
+  const card = sampleCard(bot);
+
+  // DIAGNOSTIC: call the bot-token path DIRECTLY (not via botAnnounce, which hides the failure by falling
+  // back to the webhook). This surfaces the exact Slack error (not_in_channel / channel_not_found /
+  // missing_scope) so we can see why a card didn't render as the bot in its own channel.
+  const channel = channelFor(bot);
+  const diag = channel ? await slackPostAs(channel, BOTS[bot], `Test card for ${bot}`, { blocks: [] }) : { ok: false, error: "no_channel_configured" };
+
+  const result = await botAnnounce(bot, card);
+  return NextResponse.json({
+    bot,
+    channel,
+    botTokenConfigured: slackBotConfigured(),
+    directPost: diag, // the raw bot-token result (shows the real error, if any)
+    announceResult: result, // what botAnnounce returned (may be the webhook fallback)
+    at: new Date().toISOString(),
+  });
 }
 
 export const GET = handle;
