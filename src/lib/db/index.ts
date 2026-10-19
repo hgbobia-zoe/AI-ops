@@ -1764,6 +1764,43 @@ CREATE TABLE IF NOT EXISTS seo_diagnostics (
 CREATE INDEX IF NOT EXISTS idx_seo_diagnostics_ts ON seo_diagnostics(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_seo_diagnostics_ok ON seo_diagnostics(ok, ts DESC);
 
+-- SEO Growth Phase 4: the landing-page production layer. A DRAFT is a structured page proposal produced for
+-- an APPROVED opportunity, reusing an existing Zoe page as the structural template. SAME DESIGN LAW: FACTS
+-- ONLY. The scaffolder never fabricates pricing/inventory/guarantees/testimonials — wherever a business fact
+-- is needed it inserts an explicit "[NEEDS REVIEW: …]" marker (flagged by the deterministic quality checker).
+-- review_state is the draft's own lifecycle (DRAFT → IN_REVIEW → APPROVED | REJECTED); a human approves every
+-- draft and PUBLISHING is a separate authorized step that lives OUTSIDE this engine (never automatic). The
+-- (opportunity_id, slug) pair is UNIQUE so re-producing a draft for the same target is idempotent, never a
+-- duplicate. All content/flags are JSON blobs as TEXT; the live quality checker re-runs on every read.
+CREATE TABLE IF NOT EXISTS seo_page_drafts (
+  id                  TEXT PRIMARY KEY,       -- SEOPD-<uuid>
+  opportunity_id      TEXT NOT NULL,          -- the seo_opportunities row this draft serves
+  slug                TEXT NOT NULL,          -- target URL path, e.g. "/wedding-tent-rental-washington-dc"
+  action              TEXT NOT NULL,          -- CREATE | IMPROVE | CONSOLIDATE (a SKIP is never drafted)
+  template_path       TEXT,                   -- existing Zoe page used as the structural template
+  title               TEXT NOT NULL,          -- <title>
+  meta_description    TEXT,                    -- <meta name=description>
+  h1                  TEXT NOT NULL,
+  canonical_url       TEXT,                    -- canonical absolute URL
+  outline_json        TEXT NOT NULL,          -- JSON string[] of section headings
+  body_json           TEXT NOT NULL,          -- JSON [{heading, level, paragraphs[], sourced}]
+  schema_json         TEXT,                    -- JSON-LD structured data (object) — only verified fields
+  internal_links_json TEXT,                    -- JSON [{anchor, path}] to real Zoe pages
+  sources_json        TEXT,                    -- JSON research provenance (keyword/metrics/competitors/template)
+  flags_json          TEXT,                    -- JSON snapshot of quality findings at draft time
+  draft_source        TEXT NOT NULL,          -- deterministic | llm
+  review_state        TEXT NOT NULL,          -- DRAFT | IN_REVIEW | APPROVED | REJECTED
+  review_note         TEXT,
+  reviewed_by         TEXT,
+  reviewed_at         TEXT,
+  created_by          TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  UNIQUE(opportunity_id, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_seo_page_drafts_opp ON seo_page_drafts(opportunity_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_seo_page_drafts_state ON seo_page_drafts(review_state, updated_at DESC);
+
 -- ── HR / Payroll (Zoe Payroll Control Plane) ──────────────────────────────────────────────────────
 -- Zoe is the reconciliation + control layer BETWEEN Connecteam (operational time source of truth) and
 -- Gusto (payroll system of record). These tables own the unified worker identity, the normalized time,
