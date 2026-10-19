@@ -9,6 +9,7 @@
 import { salesLeads, getLead } from "@/lib/salesos/service";
 import { lostQuotesOverview } from "@/lib/salesos/lostService";
 import { draftLeadOutreach } from "@/lib/salesos/outreachService";
+import { stripSignOff } from "@/lib/salesos/outreach";
 import { STAGE_LABEL } from "@/lib/salesos/calc";
 import { getSettings } from "@/lib/settings";
 import { approvalExistsByKey, createApproval, type ApprovalActionType, type ApprovalCard } from "./approvals";
@@ -73,11 +74,14 @@ export async function proposeOutreachApprovals(): Promise<ProposeResult> {
       continue;
     }
     const draft = await draftLeadOutreach(lead.id);
-    const body = draft?.draft.sms?.trim();
+    let body = draft?.draft.sms?.trim();
     if (!body) {
       skipped++;
       continue;
     }
+    // EMAIL goes out through the Goodshuffle path, which appends the company signature, so drop any
+    // AI-drafted closing from the email body (greeting kept). SMS keeps its draft as-is.
+    if (actionType === "send_email") body = stripSignOff(body);
 
     const eventWhen = lead.eventDate ? `event on ${lead.eventDate}` : "event";
     const stageLabel = STAGE_LABEL[lead.stage];
@@ -154,11 +158,13 @@ export async function proposeLostQuoteApprovals(): Promise<ProposeResult> {
       continue;
     }
     const draft = await draftLeadOutreach(q.id);
-    const body = draft?.draft.sms?.trim();
+    let body = draft?.draft.sms?.trim();
     if (!body) {
       skipped++;
       continue;
     }
+    // EMAIL goes out through the Goodshuffle path (appends the signature); strip any AI closing. SMS stays.
+    if (actionType === "send_email") body = stripSignOff(body);
 
     const card: ApprovalCard = {
       what: `Send a win-back ${channelWord(actionType)} to ${q.clientName || "the client"}.`,

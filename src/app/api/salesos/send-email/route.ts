@@ -11,6 +11,7 @@ import { logSalesEvent } from "@/lib/salesos/audit";
 import { viewerInitials } from "@/lib/auth/getSession";
 import { syncTouchpointNote, shortHash } from "@/lib/comms/noteSync";
 import { todayInOpsTz } from "@/lib/dates";
+import { stripSignOff } from "@/lib/salesos/outreach";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
   const id = (body.id ?? "").trim();
-  const text = (body.content ?? "").trim();
+  // Goodshuffle appends the company signature on send, so strip any trailing AI sign-off / signature from
+  // the body first (the greeting is kept) to avoid a duplicated "Best, Zoe Events" before the real block.
+  const text = stripSignOff((body.content ?? "").trim());
   const subject = (body.subject ?? "").trim() || undefined;
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
   if (!text) return NextResponse.json({ error: "message body required" }, { status: 400 });

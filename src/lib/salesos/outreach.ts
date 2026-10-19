@@ -100,6 +100,54 @@ export function humanize(text: string): string {
     .trim();
 }
 
+// A closing line on its own ("Best,", "Thanks,", "Warm regards,", "Sincerely", ...). Anchored to the
+// WHOLE line so it never matches a real sentence that merely contains the word ("Thanks so much for ...").
+const SIGNOFF_CLOSING =
+  /^(?:best(?:\s+regards|\s+wishes)?|warm(?:est)?\s+regards|warm\s+wishes|warmly|kind(?:est)?\s+regards|kind\s+regards|regards|thanks(?:\s+(?:so|very)\s+much|\s+again)?|thank\s+you(?:\s+so\s+much)?|many\s+thanks|with\s+thanks|with\s+gratitude|sincerely|cheers|talk\s+soon|speak\s+soon|all\s+the\s+best|yours(?:\s+truly|\s+sincerely)?|respectfully)[,.!]?$/i;
+
+// A trailing line that is JUST the company name (with or without a leading dash), e.g. "Zoe Events" or
+// "- Zoe Events". Anchored, so an inline mention in the greeting ("this is Sarah from Zoe Events") is safe.
+const SIGNOFF_COMPANY = /^[-–—]?\s*zoe\s+events(?:\s*(?:&|and)\s*party\s+rentals)?\.?$/i;
+
+/** Remove a trailing sign-off / signature block from an AI-drafted EMAIL body. Goodshuffle appends the
+ *  real company signature on send (the sendMessage path), so an AI closing like "Best,\nZoe Events"
+ *  duplicates it. This strips a trailing closing line ("Best,"/"Thanks,"/"Sincerely,"/"Warm regards,"
+ *  and the like) together with any short name/company tail that follows it, plus a bare trailing
+ *  "Zoe Events" / "- Zoe Events" line even with no closing word. Line-anchored, so it never touches the
+ *  greeting or real body sentences (an inline "from Zoe Events" stays). EMAIL ONLY — SMS keeps its
+ *  draft as-is (no signature is appended to a text). Idempotent. */
+export function stripSignOff(text: string): string {
+  if (!text) return text;
+  let lines = text.replace(/\r\n/g, "\n").split("\n");
+  const trimEnd = (): void => {
+    while (lines.length && lines[lines.length - 1].trim() === "") lines.pop();
+  };
+  trimEnd();
+
+  // 1) Closing-word block: find a closing line in the trailing portion and cut from it to the end
+  //    (dropping the closing word and any name/company lines after it).
+  const start = Math.max(0, lines.length - 6);
+  let cut = -1;
+  for (let i = lines.length - 1; i >= start; i--) {
+    if (SIGNOFF_CLOSING.test(lines[i].trim())) {
+      cut = i;
+      break;
+    }
+  }
+  if (cut >= 0) {
+    lines = lines.slice(0, cut);
+    trimEnd();
+  }
+
+  // 2) Bare trailing company line, with or without a preceding closing word ("Zoe Events", "- Zoe Events").
+  while (lines.length && SIGNOFF_COMPANY.test(lines[lines.length - 1].trim())) {
+    lines.pop();
+    trimEnd();
+  }
+
+  return lines.join("\n").replace(/[ \t]+$/gm, "").trimEnd();
+}
+
 /** Deterministic outreach by stage, adjusted for the comms history. Always available; the honest floor. */
 export function templateOutreach(lead: OutreachLead, comms: CommsSummary): OutreachDraft {
   const fn = firstName(lead.firstName);

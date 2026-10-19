@@ -71,10 +71,22 @@ describe("executionPlan", () => {
 // ── Pure outbox payload builder ──────────────────────────────────────────────────
 describe("buildOutboxPayload", () => {
   it("converts an email body to Goodshuffle per-line HTML", () => {
-    const { transactionId, opPayload } = buildOutboxPayload("email_send", { transactionId: "123", body: "Hi there\nThanks", subject: "Re: hi" });
+    const { transactionId, opPayload } = buildOutboxPayload("email_send", { transactionId: "123", body: "Hi there\nLet me know", subject: "Re: hi" });
     expect(transactionId).toBe("123");
     expect(opPayload.subject).toBe("Re: hi");
-    expect(opPayload.content).toBe("<div>Hi there</div><div>Thanks</div>");
+    expect(opPayload.content).toBe("<div>Hi there</div><div>Let me know</div>");
+  });
+  it("strips an AI sign-off from the email body (Goodshuffle appends the real signature)", () => {
+    // Greeting is kept; the trailing "Best,\nZoe Events" is removed so it isn't duplicated on send.
+    const { opPayload } = buildOutboxPayload("email_send", {
+      transactionId: "123",
+      body: "Hi Ivy,\n\nFollowing up on your event. Happy to answer any questions.\n\nBest,\nZoe Events",
+    });
+    expect(opPayload.content).toBe("<div>Hi Ivy,</div><div><br></div><div>Following up on your event. Happy to answer any questions.</div>");
+  });
+  it("does NOT strip a note_append body (SMS/notes keep their text unchanged)", () => {
+    // note_append carries SMS-origin / log text; the sign-off strip is EMAIL-only.
+    expect(buildOutboxPayload("note_append", { transactionId: "9", body: "logged line\nThanks" }).opPayload).toEqual({ line: "logged line\nThanks" });
   });
   it("passes through existing HTML and builds note / task shapes", () => {
     expect(plainToHtml("<div>x</div>")).toBe("<div>x</div>");
