@@ -676,6 +676,164 @@ async function getActualHoursUncached(startDate: string, endDate: string): Promi
   return { ok: true, hours };
 }
 
+// ── Timesheet DETAIL: approval status + open punches (the payroll-sync prerequisite) ───────────────
+// getActualHours() sums dailyTotalHours but is BLIND to whether a timesheet is APPROVED — so the payroll
+// engine cannot tell apart "approved, safe to export to Gusto" from "still pending Lisa's approval". That
+// gap is the prerequisite to safely enabling the Connecteam→Gusto sync (you never export unapproved time).
+// This reader captures, per user, the approved vs unapproved split AND open (missing clock-out) punches,
+// SHAPE-TOLERANTLY: Connecteam has no public API docs and workspaces differ, so we probe the keys an
+// approval/open-shift signal most plausibly uses, at both the daily-record and per-shift level. When NO
+// recognizable approval field is present, approvalKnown stays FALSE and the approved/unapproved split is
+// null — approval is UNVERIFIED, NEVER assumed clean (honest degradation; the readiness engine then refuses
+// to call the period READY). The exact field name must be confirmed against a live key (see the detail doc).
+
+export interface TimesheetUserDetail {
+  userId: number;
+  totalHours: number;
+  /** Approved vs unapproved hours — null when the payload exposed no approval signal for this user. */
+  approvedHours: number | null;
+  unapprovedHours: number | null;
+  /** True only when a recognizable approval field was present (else approval is UNVERIFIED, not "approved"). */
+  approvalKnown: boolean;
+  /** A shift/day with a clock-in but no clock-out (or an explicitly-open flag). */
+  openPunch: boolean;
+}
+
+export interface TimesheetDetailResult {
+  ok: boolean; //                 false = Connecteam unreachable → everything is UNVERIFIED (never zero)
+  approvalFieldSeen: boolean; //  whether ANY user carried an approval signal (the endpoint supports it)
+  byUser: Map<number, TimesheetUserDetail>;
+}
+
+/** Coerce a truthy "approved" signal from a value that may be a boolean or a status string. Returns
+ *  "approved" | "unapproved" | null (null = the key was absent / unrecognized). */
+function approvalOf(rec: Record<string, unknown>): "approved" | "unapproved" | null {
+  for (const k of ["isApproved", "approved", "isTimesheetApproved"]) {
+    if (k in rec && typeof rec[k] === "boolean") return rec[k] ? "approved" : "unapproved";
+  }
+  for (const k of ["approvalStatus", "status", "timesheetStatus"]) {
+    const v = rec[k];
+    if (typeof v === "string" && v.trim()) {
+      const s = v.trim().toLowerCase();
+      if (["approved", "complete", "completed", "locked", "finalized"].includes(s)) return "approved";
+      if (["pending", "open", "unapproved", "draft", "submitted", "in_review", "awaiting_approval"].includes(s)) return "unapproved";
+    }
+  }
+  return null;
+}
+
+/** True when a record/shift looks like an OPEN punch (clocked in, never clocked out). Shape-tolerant. */
+function isOpenPunch(rec: Record<string, unknown>): boolean {
+  if (rec.isClockedIn === true || rec.hasOpenShift === true || rec.missingClockOut === true) return true;
+  const shifts = (rec.shifts ?? rec.shiftsData ?? rec.entries) as unknown;
+  if (Array.isArray(shifts)) {
+    for (const s of shifts) {
+      if (!s || typeof s !== "object") continue;
+      const o = s as Record<string, unknown>;
+      const start = o.start ?? o.startTime ?? o.clockIn ?? o.clockInTime;
+      const end = o.end ?? o.endTime ?? o.clockOut ?? o.clockOutTime;
+      if (unixOf(start) != null && end == null) return true;
+    }
+  }
+  return false;
+}
+
+/** Parse ONE raw Connecteam timesheet user into an approval/open-punch breakdown. Pure + exported for tests.
+ *  dailyTotalHours drives totals (matching getActualHours); approval is read per shift when shifts exist,
+ *  else per daily record. A user with hours but NO approval field → approvalKnown:false, split null. */
+export function parseTimesheetUser(rawUser: Record<string, unknown>): TimesheetUserDetail | null {
+  const userId = num(rawUser.userId ?? (rawUser as Record<string, unknown>).id);
+  if (!userId) return null;
+  const days = (rawUser.dailyRecords as Json[] | undefined) ?? [];
+  let total = 0;
+  let approved = 0;
+  let unapproved = 0;
+  let sawApprovalField = false;
+  let openPunch = false;
+
+  for (const d of days) {
+    const dayHours = num(d.dailyTotalHours ?? d.dailyTotalWorkHours) ?? 0;
+    total += dayHours;
+    if (isOpenPunch(d)) openPunch = true;
+
+    const shifts = (d.shifts ?? d.shiftsData ?? d.entries) as unknown;
+    if (Array.isArray(shifts) && shifts.length > 0) {
+      // Per-shift approval: split the day's hours by each shift's own flag.
+      for (const s of shifts) {
+        if (!s || typeof s !== "object") continue;
+        const o = s as Record<string, unknown>;
+        const sh = num(o.totalHours ?? o.hours ?? o.duration) ?? 0;
+        const a = approvalOf(o);
+        if (a != null) {
+          sawApprovalField = true;
+          if (a === "approved") approved += sh;
+          else unapproved += sh;
+        } else if (sawApprovalField) {
+          unapproved += sh; // field exists elsewhere but absent here → UNVERIFIED, never assumed approved
+        }
+      }
+    } else {
+      // Day-level approval.
+      const a = approvalOf(d);
+      if (a != null) {
+        sawApprovalField = true;
+        if (a === "approved") approved += dayHours;
+        else unapproved += dayHours;
+      } else if (sawApprovalField) {
+        unapproved += dayHours;
+      }
+    }
+  }
+
+  const round = (n: number): number => Math.round(n * 100) / 100;
+  return {
+    userId,
+    totalHours: round(total),
+    approvedHours: sawApprovalField ? round(approved) : null,
+    unapprovedHours: sawApprovalField ? round(unapproved) : null,
+    approvalKnown: sawApprovalField,
+    openPunch,
+  };
+}
+
+const _tsDetailCache = ttlCache<TimesheetDetailResult>(5 * 60_000, (r) => r.ok);
+
+/** Per-user timesheet detail (approval split + open punches) for [startDate,endDate]. Additive — does NOT
+ *  touch getActualHours. ok:false when Connecteam is unreachable (everything UNVERIFIED, never zeroed). */
+export async function getTimesheetDetail(startDate: string, endDate: string): Promise<TimesheetDetailResult> {
+  if (!connecteamConfigured()) return { ok: false, approvalFieldSeen: false, byUser: new Map() };
+  return _tsDetailCache(`tsdetail:${startDate}:${endDate}`, () => getTimesheetDetailUncached(startDate, endDate));
+}
+async function getTimesheetDetailUncached(startDate: string, endDate: string): Promise<TimesheetDetailResult> {
+  const byUser = new Map<number, TimesheetUserDetail>();
+  const clocks = await getTimeClocks();
+  if (clocks.length === 0) return { ok: false, approvalFieldSeen: false, byUser }; // unreachable / none configured
+  let approvalFieldSeen = false;
+  for (const c of clocks) {
+    const j = await ctGet(`/time-clock/v1/time-clocks/${c.id}/timesheet?startDate=${startDate}&endDate=${endDate}`);
+    for (const e of findArray(j, ["users", "employees"])) {
+      const d = parseTimesheetUser(e);
+      if (!d) continue;
+      if (d.approvalKnown) approvalFieldSeen = true;
+      // Merge across clocks (a user may appear on more than one).
+      const prev = byUser.get(d.userId);
+      if (!prev) {
+        byUser.set(d.userId, d);
+      } else {
+        byUser.set(d.userId, {
+          userId: d.userId,
+          totalHours: Math.round((prev.totalHours + d.totalHours) * 100) / 100,
+          approvedHours: prev.approvedHours == null && d.approvedHours == null ? null : (prev.approvedHours ?? 0) + (d.approvedHours ?? 0),
+          unapprovedHours: prev.unapprovedHours == null && d.unapprovedHours == null ? null : (prev.unapprovedHours ?? 0) + (d.unapprovedHours ?? 0),
+          approvalKnown: prev.approvalKnown || d.approvalKnown,
+          openPunch: prev.openPunch || d.openPunch,
+        });
+      }
+    }
+  }
+  return { ok: true, approvalFieldSeen, byUser };
+}
+
 /** Format a Unix-seconds instant as clock time in `tz` (e.g. "7:30 AM"). */
 export function shiftClock(unix: number, tz: string): string {
   return new Intl.DateTimeFormat("en-US", {

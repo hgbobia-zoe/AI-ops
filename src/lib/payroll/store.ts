@@ -158,14 +158,15 @@ export function latestSyncRun(): SyncRun | null {
 interface ExcRow {
   id: string; sync_run_id: string | null; worker_id: string | null; worker_label: string | null;
   severity: string; type: string; description: string; source: string | null; status: string;
-  resolution: string | null; resolved_by: string | null; resolved_at: string | null; detected_at: string;
+  resolution: string | null; resolved_by: string | null; resolved_at: string | null;
+  detect_key: string | null; detected_at: string;
 }
 function toException(r: ExcRow): PayrollException {
   return {
     id: r.id, syncRunId: r.sync_run_id, workerId: r.worker_id, workerLabel: r.worker_label,
     severity: r.severity as ExceptionSeverity, type: r.type, description: r.description, source: r.source,
     status: r.status as ExceptionStatus, resolution: r.resolution, resolvedBy: r.resolved_by,
-    resolvedAt: r.resolved_at, detectedAt: r.detected_at,
+    resolvedAt: r.resolved_at, detectKey: r.detect_key, detectedAt: r.detected_at,
   };
 }
 export interface NewException {
