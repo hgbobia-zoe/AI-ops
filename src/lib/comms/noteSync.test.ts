@@ -65,6 +65,18 @@ describe("composeTouchpointNote — house style M/D - <initials> <what happened>
     const line = composeTouchpointNote({ kind: "text", messageId: "m2", repInitials: null, clientName: null, snippet: "hi", ...base });
     expect(line).toBe('10/9 - Zoe team texted the client: "hi"');
   });
+
+  it("dispatch on-the-way names the link type and always attributes to the Zoe team", () => {
+    expect(composeTouchpointNote({ kind: "dispatch", stopId: "s1", action: "on_the_way", clientName: "Sarah Lee", linkType: "live map", ...base }))
+      .toBe("10/9 - Zoe team texted Sarah Lee the truck is on the way (live map)");
+    expect(composeTouchpointNote({ kind: "dispatch", stopId: "s1", action: "on_the_way", clientName: "Sarah Lee", linkType: null, ...base }))
+      .toBe("10/9 - Zoe team texted Sarah Lee the truck is on the way");
+  });
+
+  it("dispatch arrived", () => {
+    expect(composeTouchpointNote({ kind: "dispatch", stopId: "s1", action: "arrived", clientName: "Sarah Lee", ...base }))
+      .toBe("10/9 - Zoe team texted Sarah Lee the truck has arrived");
+  });
 });
 
 describe("touchpointDedupeKey", () => {
@@ -72,6 +84,8 @@ describe("touchpointDedupeKey", () => {
     expect(touchpointDedupeKey({ kind: "call", callId: "c9", repInitials: null, direction: null, outcome: "conversation", ...base } as Touchpoint)).toBe("call:c9");
     expect(touchpointDedupeKey({ kind: "text", messageId: "m9", repInitials: null, snippet: "x", ...base } as Touchpoint)).toBe("sms:m9");
     expect(touchpointDedupeKey({ kind: "email", emailKey: "k9", repInitials: null, ...base } as Touchpoint)).toBe("email:k9");
+    expect(touchpointDedupeKey({ kind: "dispatch", stopId: "s9", action: "arrived", ...base } as Touchpoint)).toBe("dispatch:s9:arrived");
+    expect(touchpointDedupeKey({ kind: "dispatch", stopId: "s9", action: "on_the_way", ...base } as Touchpoint)).toBe("dispatch:s9:on_the_way");
   });
 });
 
@@ -110,5 +124,30 @@ describe("syncTouchpointNote — gate + match + idempotency", () => {
     const payload = ops[0].payload as { line: string; dedupeKey: string };
     expect(payload.dedupeKey).toBe("sms:unique-1");
     expect(payload.line).toBe('10/9 - JM texted Sarah Lee: "hello"');
+  });
+
+  it("enqueues one dispatch note per stop+action, idempotent on a re-send", () => {
+    process.env.GS_NOTE_SYNC_ENABLED = "true";
+    const dtp = () => syncTouchpointNote({
+      kind: "dispatch", stopId: "stop-77", action: "on_the_way", transactionId: "TEST-DISP-1",
+      clientName: "Sarah Lee", linkType: "live map", dateYmd: "2026-10-09",
+    });
+    expect(dtp().enqueued).toBe(true);
+    expect(dtp()).toEqual({ enqueued: false, skipped: "duplicate" });
+
+    const ops = listPendingGsOps(100).filter((o) => o.op === "note_append" && o.transactionId === "TEST-DISP-1");
+    expect(ops.length).toBe(1);
+    const payload = ops[0].payload as { line: string; dedupeKey: string };
+    expect(payload.dedupeKey).toBe("dispatch:stop-77:on_the_way");
+    expect(payload.line).toBe("10/9 - Zoe team texted Sarah Lee the truck is on the way (live map)");
+  });
+
+  it("does NOTHING for a dispatch note when the gate is off", () => {
+    const res = syncTouchpointNote({
+      kind: "dispatch", stopId: "stop-off", action: "arrived", transactionId: "TEST-DISP-OFF",
+      clientName: "Sarah Lee", dateYmd: "2026-10-09",
+    });
+    expect(res).toEqual({ enqueued: false, skipped: "disabled" });
+    expect(listPendingGsOps(100).filter((o) => o.transactionId === "TEST-DISP-OFF").length).toBe(0);
   });
 });

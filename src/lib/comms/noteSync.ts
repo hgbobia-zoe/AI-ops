@@ -64,7 +64,22 @@ export interface EmailTouchpoint {
   dateYmd: string;
 }
 
-export type Touchpoint = CallTouchpoint | TextTouchpoint | EmailTouchpoint;
+export type DispatchAction = "on_the_way" | "arrived";
+
+/** An AUTOMATED dispatch SMS to the customer (driver action fan-out: "on the way" / "arrived"). Unlike
+ *  the sales touchpoints there is no human rep — it always attributes to the Zoe team — and it is keyed
+ *  on the stop + action, so the same status text to the same stop logs exactly one note. */
+export interface DispatchTouchpoint {
+  kind: "dispatch";
+  stopId: string; // idempotency component (one note per stop per action)
+  action: DispatchAction;
+  transactionId: string; // the stop's Goodshuffle waypoint transaction id (stop.txId)
+  clientName?: string | null;
+  linkType?: string | null; // which tracking link the on-the-way text carried (e.g. "live map"); on_the_way only
+  dateYmd: string;
+}
+
+export type Touchpoint = CallTouchpoint | TextTouchpoint | EmailTouchpoint | DispatchTouchpoint;
 
 /** A short stable hash — used to build a per-send idempotency key when there's no provider id yet. */
 export function shortHash(s: string): string {
@@ -101,6 +116,11 @@ function touchpointBody(t: Touchpoint): string {
     const snip = (t.snippet ?? "").trim();
     return snip ? `texted ${who}: "${clamp(snip, 80)}"` : `texted ${who}`;
   }
+  if (t.kind === "dispatch") {
+    if (t.action === "arrived") return `texted ${who} the truck has arrived`;
+    const lt = (t.linkType ?? "").trim();
+    return lt ? `texted ${who} the truck is on the way (${clamp(lt, 40)})` : `texted ${who} the truck is on the way`;
+  }
   // email
   const subj = (t.subject ?? "").trim();
   return subj ? `emailed ${who} (subject: ${clamp(subj, 80)})` : `emailed ${who}`;
@@ -109,7 +129,9 @@ function touchpointBody(t: Touchpoint): string {
 /** Build the internal-note line in the team's house style: `M/D - <initials> <what happened>`.
  *  e.g. `10/9 - JM called the client, left voicemail` / `10/9 - Zoe team texted the client: "…"`. Pure. */
 export function composeTouchpointNote(t: Touchpoint): string {
-  return `${shortDate(t.dateYmd)} - ${actorToken(t.repInitials)} ${touchpointBody(t)}`;
+  // Automated dispatch texts have no human rep — always the Zoe team (no fabricated person).
+  const actor = t.kind === "dispatch" ? "Zoe team" : actorToken(t.repInitials);
+  return `${shortDate(t.dateYmd)} - ${actor} ${touchpointBody(t)}`;
 }
 
 /** The idempotency key for a touchpoint — one note per real call/text/email, ever. Pure. */
@@ -121,6 +143,8 @@ export function touchpointDedupeKey(t: Touchpoint): string {
       return `sms:${t.messageId}`;
     case "email":
       return `email:${t.emailKey}`;
+    case "dispatch":
+      return `dispatch:${t.stopId}:${t.action}`;
   }
 }
 
