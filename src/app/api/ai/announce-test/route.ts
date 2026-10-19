@@ -1,22 +1,40 @@
 // Slack announce SELF-TEST — fires one real sample bot card through the live botAnnounce path (persona +
-// channel routing + Block Kit) so we can confirm the wiring end-to-end without waiting for a real event.
-// Token-gated (RUNTIME_TOKEN, same as the runtime tick): 503 until set, 401 on a bad token. Returns the
-// SlackResult so the caller can SEE what happened — ok (posted), skipped (no bot token), or an error like
-// "not_in_channel" / "missing_scope". Harmless: it only posts a clearly-labelled test card.
+// channel routing + Block Kit) so the wiring can be confirmed end-to-end without waiting for a real event.
+// Token-gated (RUNTIME_TOKEN, same as the runtime tick) OR an internal localhost call (only reachable from
+// inside the machine over SSH). Harmless: posts a clearly-labelled test card.
 //
-//   curl -X POST "https://zoe-dispatch.fly.dev/api/ai/announce-test?bot=scheduling" -H "authorization: Bearer <RUNTIME_TOKEN>"
+//   curl -X POST "https://zoe-dispatch.fly.dev/api/ai/announce-test?bot=sales" -H "authorization: Bearer <RUNTIME_TOKEN>"
+//
+// bot=sales also attaches real Approve/Dismiss buttons backed by a SAFE test approval (a FORBIDDEN-to-execute
+// action type), so clicking Approve in Slack exercises the interactivity endpoint but sends nothing.
 
 import { NextResponse } from "next/server";
-import { botAnnounce, appUrl, channelFor, BOTS, type BotId } from "@/lib/notify/aiBots";
-import { slackPostAs, slackBotConfigured, slackDebugChannel } from "@/lib/notify/slack";
+import { botAnnounce, appUrl, cardBlocks, BOTS, type BotCard, type BotId } from "@/lib/notify/aiBots";
+import { slackPostAs } from "@/lib/notify/slack";
+import { APPROVE_ACTION, REJECT_ACTION } from "@/lib/slack/interactivity";
+import { createApproval } from "@/lib/aiorg/approvals";
 
 export const dynamic = "force-dynamic";
 
 const BOT_IDS: BotId[] = ["scheduling", "pricing", "sales", "reviews", "inventory", "hiring", "data", "ops"];
 
-function sampleCard(bot: BotId) {
-  const at = new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+function etNow(): string {
+  return new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+}
+
+function sampleCard(bot: BotId): BotCard {
   if (bot === "sales") {
+    // A SAFE test approval: "schedule_change" is FORBIDDEN to execute, so approving it records intent and
+    // sends nothing (never contacts a customer). The buttons carry its id so the interactivity flow is real.
+    const appr = createApproval({
+      agentId: "outreach",
+      owner: "Jessie",
+      title: "TEST — follow-up to Test Client (sample)",
+      actionType: "schedule_change",
+      actionPayload: { note: "self-test" },
+      card: { what: "Test card.", why: "Self-test.", dataUsed: "none", expectedOutcome: "none", risk: "none", whatIfApproved: "Nothing is sent (forbidden action)." },
+      idempotencyKey: `announce-test:${Date.now()}`,
+    });
     return {
       emoji: "✍️",
       title: "Test — follow-up drafted",
@@ -26,9 +44,13 @@ function sampleCard(bot: BotId) {
         { label: "Channel", value: "text" },
         { label: "Event", value: "2026-11-02" },
       ],
-      body: "*This is a test card* to confirm the Sales Bot can post here. No real message was drafted or sent.",
-      link: { text: "Review & approve", url: appUrl("/ai-org/approvals") },
-      context: `Sales Bot · self-test ${at} ET`,
+      body: "*This is a test card.* Clicking Approve is safe — it records intent and sends nothing.",
+      buttons: [
+        { text: "Approve & send", actionId: APPROVE_ACTION, value: appr.id, style: "primary" },
+        { text: "Dismiss", actionId: REJECT_ACTION, value: appr.id, style: "danger" },
+      ],
+      link: { text: "Open to edit", url: appUrl("/ai-org/approvals") },
+      context: `Sales Bot · self-test ${etNow()} ET`,
     };
   }
   return {
@@ -36,7 +58,7 @@ function sampleCard(bot: BotId) {
     title: `Test notification — ${bot} bot`,
     fields: [
       { label: "Status", value: "Wiring check" },
-      { label: "Sent at", value: `${at} ET` },
+      { label: "Sent at", value: `${etNow()} ET` },
     ],
     body: `*This is a test card* to confirm the ${bot} bot can post to its channel. Nothing real happened.`,
     link: { text: "Open app", url: appUrl("/") },
@@ -52,8 +74,6 @@ async function handle(req: Request): Promise<NextResponse> {
   const url = new URL(req.url);
   const auth = req.headers.get("authorization");
   const qp = url.searchParams.get("token");
-  // Also allow an INTERNAL call (curl from inside the machine over localhost) — only someone with machine
-  // access can reach localhost:3000, so this is a safe, token-free way to self-test from an SSH session.
   const host = (req.headers.get("host") || "").toLowerCase();
   const internal = host.startsWith("localhost") || host.startsWith("127.0.0.1") || host.startsWith("[::1]");
   if (!internal && auth !== `Bearer ${token}` && qp !== token) {
@@ -62,24 +82,15 @@ async function handle(req: Request): Promise<NextResponse> {
   const botParam = (url.searchParams.get("bot") || "scheduling").toLowerCase();
   const bot = (BOT_IDS as string[]).includes(botParam) ? (botParam as BotId) : "scheduling";
   const card = sampleCard(bot);
-
-  // DIAGNOSTIC: call the bot-token path DIRECTLY (not via botAnnounce, which hides the failure by falling
-  // back to the webhook). This surfaces the exact Slack error (not_in_channel / channel_not_found /
-  // missing_scope) so we can see why a card didn't render as the bot in its own channel.
-  const channel = channelFor(bot);
-  const scopes = channel ? await slackDebugChannel(channel) : { error: "no_channel" };
-  const diag = channel ? await slackPostAs(channel, BOTS[bot], `Test card for ${bot}`, { blocks: [] }) : { ok: false, error: "no_channel_configured" };
-
+  // Optional ?ch= override: post this bot's card to a specific channel (e.g. to demo the sales card with
+  // buttons in a channel the bot has already been invited to). No fallback — shows the raw bot-token result.
+  const chOverride = url.searchParams.get("ch")?.trim();
+  if (chOverride) {
+    const r = await slackPostAs(chOverride, BOTS[bot], card.title, { blocks: cardBlocks(card) });
+    return NextResponse.json({ ok: r.ok, bot, channel: chOverride, result: r, at: new Date().toISOString() });
+  }
   const result = await botAnnounce(bot, card);
-  return NextResponse.json({
-    bot,
-    channel,
-    botTokenConfigured: slackBotConfigured(),
-    scopes, // auth.test + which Slack scopes are present (channels:read / channels:join)
-    directPost: diag, // the raw bot-token result (shows the real error, if any)
-    announceResult: result, // what botAnnounce returned (may be the webhook fallback)
-    at: new Date().toISOString(),
-  });
+  return NextResponse.json({ ok: result.ok, bot, result, at: new Date().toISOString() });
 }
 
 export const GET = handle;

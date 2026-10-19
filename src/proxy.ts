@@ -55,6 +55,7 @@ const PUBLIC: string[] = [
   "/api/ai/announce-test", // Slack announce self-test; RUNTIME_TOKEN-gated OR internal localhost only; posts a harmless test card (not a session)
   "/api/openphone/webhook", // OpenPhone → us; authenticates by HMAC signature, not a session
   "/api/slack/events", // Viktor (Slack bot) inbound; authenticates by Slack's HMAC signature, not a session
+  "/api/slack/interactivity", // Slack Block Kit button clicks (Approve/Dismiss); HMAC-signed + approver-gated, not a session
   "/api/communications/events", // Comms adapter ingress (Quo/Sona → us); COMMS_INGEST_TOKEN (fail-open), CORS-locked — NOT a session. Only this exact path is public; the rest of /api/communications stays session-gated.
   "/api/creative/callback", // n8n → us; authenticates by a per-generation callback token, not a session
   "/api/coach", // Custodian live-coach bridge; authenticates by COACH_API_TOKEN bearer, not a session

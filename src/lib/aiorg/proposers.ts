@@ -13,6 +13,7 @@ import { STAGE_LABEL } from "@/lib/salesos/calc";
 import { getSettings } from "@/lib/settings";
 import { approvalExistsByKey, createApproval, type ApprovalActionType, type ApprovalCard } from "./approvals";
 import { botAnnounce, appUrl } from "@/lib/notify/aiBots";
+import { APPROVE_ACTION, REJECT_ACTION } from "@/lib/slack/interactivity";
 
 /** Cap per proposer run — bounded, never a flood. */
 const MAX_PER_RUN = 6;
@@ -94,7 +95,7 @@ export async function proposeOutreachApprovals(): Promise<ProposeResult> {
 
     const key = `outreach:${lead.id}:${today}`;
     const existed = approvalExistsByKey(key);
-    createApproval({
+    const appr = createApproval({
       agentId: "outreach",
       owner: "Jessie",
       title: `Follow-up ${channelWord(actionType)} to ${lead.clientName || lead.id}`,
@@ -117,7 +118,11 @@ export async function proposeOutreachApprovals(): Promise<ProposeResult> {
           { label: "Event", value: lead.eventDate ?? "undated" },
         ],
         body: `*Why:* ${lead.action.reason}`,
-        link: { text: "Review & approve", url: appUrl("/ai-org/approvals") },
+        buttons: [
+          { text: "Approve & send", actionId: APPROVE_ACTION, value: appr.id, style: "primary" },
+          { text: "Dismiss", actionId: REJECT_ACTION, value: appr.id, style: "danger" },
+        ],
+        link: { text: "Open to edit", url: appUrl("/ai-org/approvals") },
         context: "Sales Bot · nothing is sent until you approve",
       }).catch(() => {});
     }
@@ -166,7 +171,7 @@ export async function proposeLostQuoteApprovals(): Promise<ProposeResult> {
 
     const key = `lostquote:${q.id}`;
     const existed = approvalExistsByKey(key);
-    createApproval({
+    const appr = createApproval({
       agentId: "lost-quote",
       owner: "Jessie",
       title: `Win-back ${channelWord(actionType)} to ${q.clientName || q.id}`,
@@ -189,7 +194,11 @@ export async function proposeLostQuoteApprovals(): Promise<ProposeResult> {
           { label: "Event", value: q.eventDate ?? "undated" },
         ],
         body: q.lossReason ? `*Loss reason:* ${q.lossReason}` : "Loss reason untagged.",
-        link: { text: "Review & approve", url: appUrl("/ai-org/approvals") },
+        buttons: [
+          { text: "Approve & send", actionId: APPROVE_ACTION, value: appr.id, style: "primary" },
+          { text: "Dismiss", actionId: REJECT_ACTION, value: appr.id, style: "danger" },
+        ],
+        link: { text: "Open to edit", url: appUrl("/ai-org/approvals") },
         context: "Sales Bot · nothing is sent until you approve",
       }).catch(() => {});
     }
