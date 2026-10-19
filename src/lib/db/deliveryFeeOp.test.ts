@@ -52,11 +52,13 @@ describe("getGsOpStatus", () => {
     expect(getGsOpStatus(id)?.status).toBe("done");
   });
 
-  it("reports a failure with its error", () => {
+  it("records the error on a failed ack (WS03 keeps it pending for bounded retry, not instantly failed)", () => {
     const id = queueFee("P1", 100);
     ackGsOp(id, false, "no_delivery_line");
     const st = getGsOpStatus(id);
-    expect(st?.status).toBe("failed");
+    // Under the WS03 outbox lifecycle a single ack-failure stays pending (backoff retry) with the error
+    // recorded; it only dead-letters (→ "dead") after the attempt budget is exhausted.
+    expect(st?.status).toBe("pending");
     expect(st?.lastError).toBe("no_delivery_line");
   });
 
