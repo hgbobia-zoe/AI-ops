@@ -34,6 +34,8 @@ import { dispatchPacketTouch } from "./packetSend";
 import { buildSharedPacketContext, assignmentPacketInputs, packetOriginFromEnv } from "./packetDispatch";
 import type { CommsTouch } from "./commsTemplates";
 import { getUsers, connecteamConfigured, type CrewMember } from "@/lib/connecteam";
+import { recordSchedulingAlarm } from "./autoAssignAlarm";
+import { slackNotify } from "@/lib/notify/slack";
 import type { StaffShift } from "./types";
 
 /** How far ahead we look for shifts to debrief. Matches the lifecycle tick's window so the two stay in
@@ -198,5 +200,20 @@ export async function runWorkerPacketsTick(now: Date = new Date()): Promise<Work
   if (failed) parts.push(`${failed} failed`);
   if (skipped) parts.push(`${skipped} skipped`);
   if (capped) parts.push(`capped at ${MAX_SENDS_PER_TICK}`);
+
+  // FAIL-LOUD: a provider FAILURE means a staffed route's pre-shift debrief silently did not go out (a
+  // "held" is a route gap — the pre-check already pages that; a "skipped" is an honest no-phone Instawork
+  // temp). Page the ops channel (2h-deduped + one "recovered" note), reusing the shared alarm decider. This
+  // only runs when every debrief master switch is on (we returned early otherwise), so a disabled/no-op day
+  // never alarms.
+  const { alert } = recordSchedulingAlarm("debriefSilent", failed > 0, nowMs);
+  if (alert === "down") {
+    void slackNotify(
+      `Auto debrief: ${failed} shift debrief${failed === 1 ? "" : "s"} for a staffed route failed to send this cycle, so ${failed === 1 ? "that worker" : "those workers"} did not get their pre-shift debrief. Check the SMS provider and /admin/health.`,
+    ).catch(() => {});
+  } else if (alert === "recovered") {
+    void slackNotify("Auto debrief: shift debrief sends are succeeding again. Debrief-failure alarm cleared.").catch(() => {});
+  }
+
   return { ok: failed === 0, detail: parts.join(", ") };
 }

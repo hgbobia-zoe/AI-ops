@@ -224,6 +224,22 @@ describe("applyRouteConnecteamCreate (silent + honest)", () => {
   });
 });
 
+describe("planRouteDriverRowReconcile (pure) — route row ↔ driver staff_shift", () => {
+  it("backfills the route driver from the shift assignee only when the route row is empty", async () => {
+    const { planRouteDriverRowReconcile } = await mods();
+    const sets = planRouteDriverRowReconcile([
+      { routeId: "rEmpty", hasDriverRow: false, driverShiftAssignees: [42] }, // backfill from the shift
+      { routeId: "rHasRow", hasDriverRow: true, driverShiftAssignees: [99] }, // explicit driver → never clobber
+      { routeId: "rNoShift", hasDriverRow: false, driverShiftAssignees: [] }, // nothing to mirror
+      { routeId: "rTwo", hasDriverRow: false, driverShiftAssignees: [7, 8] }, // first assignee wins
+    ]);
+    expect(sets).toEqual([
+      { routeId: "rEmpty", userId: 42 },
+      { routeId: "rTwo", userId: 7 },
+    ]);
+  });
+});
+
 describe("runRouteAutoSyncTick — honest when not configured / killed", () => {
   it("is a safe no-op when Connecteam is not configured", async () => {
     const { runRouteAutoSyncTick } = await mods();

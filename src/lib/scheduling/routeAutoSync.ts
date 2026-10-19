@@ -37,10 +37,12 @@ import {
   type Scheduler,
 } from "@/lib/connecteam";
 import { getActiveVehicles } from "@/lib/vehicles";
-import { getRoutesForDate } from "@/lib/db/repo";
+import { getRoutesForDate, setRouteDriver } from "@/lib/db/repo";
 import { insertAudit } from "@/lib/db/repo";
 import { todayInOpsTz, shiftYmd, DISPLAY_TZ } from "@/lib/dates";
 import { botAnnounce, appUrl } from "@/lib/notify/aiBots";
+import { slackNotify } from "@/lib/notify/slack";
+import { recordSchedulingAlarm } from "./autoAssignAlarm";
 import { createShift, getShiftById, getShiftsForDate, updateShift } from "./store";
 import { syncInternalAssignments } from "./assignments";
 import { routeAssignWindow, requiredCrewForRoute, assignedCrewForRoute, computeRouteGap } from "./preCheck";
@@ -329,6 +331,95 @@ export async function applyRouteConnecteamCreate(plan: RouteCreatePlan, deps: Ro
   return { created, flagged, deferred: plan.deferred.length, failed };
 }
 
+// ── Route-row driver reconcile (make route.driverId agree with the driver staff_shift) ──────────────────
+//
+// A driver assigned via a staff_shift (role=driver) — by the seniority auto-assign above, the one-click
+// scheduled-unrouted prompt, the manual board, or the Connecteam import — sets staff_shifts.assignees but
+// NOT the ROUTE row's driver_id/driver_name. The Dispatch route header + DRIVER column read route.driverName,
+// so a genuinely-staffed route showed "No driver" there while the DRIVER & STAFFING panel (which counts the
+// driver shift via assignedCrewForRoute) showed "Driver assigned: Yes / Fully staffed" — the two sides
+// disagreed. This reconcile closes that split: for any present route with a driver staff_shift assignee but
+// an EMPTY route driver row, set the route driver from the shift (first assignee), mirroring what a
+// dispatcher does by hand. Never clobbers an existing route driver (a human's explicit choice stays).
+
+export interface DriverRowReconcileRoute {
+  routeId: string;
+  /** route.driverId is already set (a dispatcher picked, or a prior reconcile ran) → leave it alone. */
+  hasDriverRow: boolean;
+  /** userIds on this route's non-cancelled driver staff_shift(s). */
+  driverShiftAssignees: number[];
+}
+
+export interface DriverRowSet {
+  routeId: string;
+  userId: number;
+}
+
+/** PURE. Decide which route rows to backfill: a route with no driver row but a driver shift assignee gets
+ *  its row set from the first assignee. A route that already has a driver row, or no driver shift assignee,
+ *  is left untouched. */
+export function planRouteDriverRowReconcile(routes: DriverRowReconcileRoute[]): DriverRowSet[] {
+  const out: DriverRowSet[] = [];
+  for (const r of routes) {
+    if (r.hasDriverRow) continue; // never overwrite an explicit route driver
+    const uid = r.driverShiftAssignees[0];
+    if (uid == null) continue; // no driver shift assignee → nothing to mirror
+    out.push({ routeId: r.routeId, userId: uid });
+  }
+  return out;
+}
+
+/** Apply the route-row driver reconcile for a day. DB write (setRouteDriver) + audit; keeps the in-memory
+ *  routesById in step so the driverless metric computed afterwards reflects the just-set rows. Returns the
+ *  number of route rows set. */
+function applyRouteDriverRowReconcile(
+  date: string,
+  routesById: Map<string, Route>,
+  nameOf: (userId: number) => string | null,
+  actor: string,
+): number {
+  const dayShifts = getShiftsForDate(date);
+  const driverAssigneesFor = (routeId: string): number[] =>
+    dayShifts.filter((s) => s.routeId === routeId && s.role === "driver" && s.status !== "cancelled").flatMap((s) => s.assignees);
+
+  const input: DriverRowReconcileRoute[] = [];
+  for (const route of routesById.values()) {
+    input.push({ routeId: route.routeId, hasDriverRow: Boolean(route.driverId), driverShiftAssignees: driverAssigneesFor(route.routeId) });
+  }
+
+  let set = 0;
+  for (const d of planRouteDriverRowReconcile(input)) {
+    const name = nameOf(d.userId);
+    const res = setRouteDriver(d.routeId, String(d.userId), name);
+    if (!res.ok) continue; // route row not present (e.g. a synthetic test route) → harmless no-op
+    set += 1;
+    const route = routesById.get(d.routeId);
+    if (route) {
+      route.driverId = String(d.userId);
+      route.driverName = name ?? undefined;
+    }
+    audit(actor, "ROUTE_SYNC_DRIVER_ROW_SET", d.routeId, { userId: d.userId, name, from: "driver_shift_assignee" });
+  }
+  return set;
+}
+
+/** Count present routes that REQUIRE a driver but have none assigned anywhere — no driver on the route row
+ *  AND no driver staff_shift assignee. This is the honest "a route that needs crew ended with no driver"
+ *  signal the driverless-route alarm pages on (computed AFTER the reconcile, so a route staffed only via a
+ *  shift is correctly counted as covered, not driverless). */
+function countDriverlessRequiredRoutes(date: string, routesById: Map<string, Route>): number {
+  const dayShifts = getShiftsForDate(date);
+  let n = 0;
+  for (const route of routesById.values()) {
+    if (requiredCrewForRoute(route).driver <= 0) continue; // route doesn't need a driver
+    const driverShiftAssignees = dayShifts
+      .filter((s) => s.routeId === route.routeId && s.role === "driver" && s.status !== "cancelled")
+      .reduce((acc, s) => acc + s.assignees.length, 0);
+    if (!route.driverId && driverShiftAssignees === 0) n += 1;
+  }
+  return n;
+}
+
 // ── Orchestrator (per day) + runtime tick ──────────────────────────────────────────────────────────────
 
 export interface RouteAutoSyncDayResult {
@@ -346,6 +437,11 @@ export interface RouteAutoSyncDayResult {
   createDeferred: number; // eligible to create but no window yet
   createFailed: number; // Connecteam rejected/unreachable this cycle
   alreadyInCt: number; // route shifts whose crew are already in Connecteam
+  /** Route rows whose driver was backfilled from a driver staff_shift (header/column ↔ panel reconcile). */
+  driverRowsSet: number;
+  /** Present routes that need a driver but have NONE assigned (route row empty AND no driver shift) after
+   *  the sync — the driverless-route alarm's signal for this day. */
+  driverlessRequiredRoutes: number;
 }
 
 const EMPTY_DAY = (date: string): RouteAutoSyncDayResult => ({
@@ -360,6 +456,8 @@ const EMPTY_DAY = (date: string): RouteAutoSyncDayResult => ({
   createDeferred: 0,
   createFailed: 0,
   alreadyInCt: 0,
+  driverRowsSet: 0,
+  driverlessRequiredRoutes: 0,
 });
 
 /** HH:MM in the ops timezone (ET) for narration; "TBD" when unknown. */
@@ -552,6 +650,13 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
     }).catch(() => {});
   }
 
+  // RECONCILE THE ROUTE-ROW DRIVER with the driver staff_shift. A driver assigned via a shift (the
+  // auto-assign above, the one-click prompt, the manual board, or the Connecteam import) sets the shift but
+  // not route.driver_id/driver_name, so the Dispatch header + DRIVER column (which read route.driverName)
+  // showed "No driver" on a route the staffing panel reported "Fully staffed". Backfill the route row so the
+  // two agree. Never overwrites an explicit route driver.
+  out.driverRowsSet = applyRouteDriverRowReconcile(date, routesById, nameOf, actor);
+
   // The scheduler is needed for both the route-change ratchet (silent Connecteam updates) and the auto-create
   // below — fetch it once. Null (unreachable) → the ratchet only touches unlinked shifts; linked ones retry.
   const scheduler = await getDefaultScheduler();
@@ -578,6 +683,10 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   out.mixedFlagged = applied.flagged;
   out.createFailed = applied.failed;
 
+  // Honest end-of-sync signal: present routes that need a driver but have none anywhere (route row empty AND
+  // no driver shift). The runtime tick aggregates this across days and pages if it's non-zero (fail-loud).
+  out.driverlessRequiredRoutes = countDriverlessRequiredRoutes(date, routesById);
+
   return out;
 }
 
@@ -593,6 +702,17 @@ export interface RouteAutoSyncTickResult {
   ctCreated: number;
   flagged: number;
   unreachableDays: number;
+  /** Route rows whose driver was backfilled from a driver staff_shift this sweep. */
+  driverRowsSet: number;
+  /** Present routes (across reachable days) that need a driver but have none assigned after the sweep. */
+  driverlessRequiredRoutes: number;
+}
+
+/** The ops-channel link for the scheduling board (request-less; uses PUBLIC_BASE_URL like preCheckNotify). */
+function schedulingLink(date: string): string {
+  const base = process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "") ?? "";
+  const path = `/scheduling?date=${date}`;
+  return base ? `${base}${path}` : path;
 }
 
 /**
@@ -612,6 +732,8 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
       ctCreated: 0,
       flagged: 0,
       unreachableDays: 0,
+      driverRowsSet: 0,
+      driverlessRequiredRoutes: 0,
     };
   }
   const today = todayInOpsTz();
@@ -623,6 +745,8 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
   let flagged = 0;
   let unreachable = 0;
   let reachableDays = 0;
+  let driverRowsSet = 0;
+  let driverlessRequiredRoutes = 0;
   for (const d of dates) {
     try {
       const r = await reconcileRouteAutoSyncForDate(d);
@@ -636,15 +760,37 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
       windowsExpanded += r.windowsExpanded;
       ctCreated += r.ctCreated;
       flagged += r.mixedFlagged;
+      driverRowsSet += r.driverRowsSet;
+      driverlessRequiredRoutes += r.driverlessRequiredRoutes;
     } catch {
       unreachable += 1; // a thrown day is an unknown, not a zero — skip it
     }
   }
   const ok = reachableDays > 0;
+
+  // FAIL-LOUD: if we actually reached Connecteam (we KNOW the roster) and present route(s) still need a
+  // driver with none assigned, page the ops channel (2h-deduped, one "recovered" note). Only when
+  // reachableDays>0 — an all-unreachable sweep is an UNKNOWN, never a false "0 assigned"/false recovery.
+  if (reachableDays > 0) {
+    const { alert } = recordSchedulingAlarm("driverlessRoutes", driverlessRequiredRoutes > 0);
+    if (alert === "down") {
+      void slackNotify(
+        [
+          `Route auto-assign: ${driverlessRequiredRoutes} present route${driverlessRequiredRoutes === 1 ? "" : "s"} still ${driverlessRequiredRoutes === 1 ? "needs" : "need"} a driver and ${driverlessRequiredRoutes === 1 ? "has" : "have"} none assigned (no driver on the route and no driver shift).`,
+          `Auto-assign could not fill ${driverlessRequiredRoutes === 1 ? "it" : "them"} from the Connecteam schedule. Assign a driver in Scheduling: ${schedulingLink(today)}`,
+        ].join("\n"),
+      ).catch(() => {});
+    } else if (alert === "recovered") {
+      void slackNotify("Route auto-assign: every present route that needs a driver now has one assigned. Driver-gap alarm cleared.").catch(() => {});
+    }
+  }
+
   const seniorityNote = seniorityAssigned ? ` (${seniorityAssigned} by seniority)` : "";
   const expandedNote = windowsExpanded ? `, ${windowsExpanded} shift${windowsExpanded === 1 ? "" : "s"} adjusted to the route` : "";
+  const driverRowNote = driverRowsSet ? `, ${driverRowsSet} route driver${driverRowsSet === 1 ? "" : "s"} reconciled` : "";
+  const driverlessNote = driverlessRequiredRoutes ? `, ${driverlessRequiredRoutes} route${driverlessRequiredRoutes === 1 ? "" : "s"} still need a driver` : "";
   const detail = reachableDays === 0
     ? `Connecteam unreachable (${unreachable}/${dates.length} days) — skipped, nothing written`
-    : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned${seniorityNote}${expandedNote}, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent), ${flagged} flagged${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
-  return { ok, detail, days: reachableDays, autoAssigned, seniorityAssigned, windowsExpanded, ctCreated, flagged, unreachableDays: unreachable };
+    : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned${seniorityNote}${expandedNote}${driverRowNote}, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent), ${flagged} flagged${driverlessNote}${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
+  return { ok, detail, days: reachableDays, autoAssigned, seniorityAssigned, windowsExpanded, ctCreated, flagged, unreachableDays: unreachable, driverRowsSet, driverlessRequiredRoutes };
 }
