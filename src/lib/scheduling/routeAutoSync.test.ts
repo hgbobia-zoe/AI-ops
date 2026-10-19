@@ -82,6 +82,9 @@ describe("applyRouteAutoAssign (DB path, idempotent)", () => {
 
     const r1 = applyRouteAutoAssign(plan, { date: DATE, routesById, nameOf: () => null });
     expect(r1.assigned).toBe(1);
+    // Returns the assignment detail for the Slack narration (who/role/route), carrying the decision reasons.
+    expect(r1.assignments).toHaveLength(1);
+    expect(r1.assignments[0]).toMatchObject({ userId: 900, name: "Nine", routeId: "rAA", fillRole: "field" });
     const after = getShiftsForDate(DATE).filter((s) => s.routeId === "rAA");
     expect(after).toHaveLength(1);
     expect(after[0].role).toBe("field");

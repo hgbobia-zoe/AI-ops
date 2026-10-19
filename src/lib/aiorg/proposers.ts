@@ -12,6 +12,7 @@ import { draftLeadOutreach } from "@/lib/salesos/outreachService";
 import { STAGE_LABEL } from "@/lib/salesos/calc";
 import { getSettings } from "@/lib/settings";
 import { approvalExistsByKey, createApproval, type ApprovalActionType, type ApprovalCard } from "./approvals";
+import { botAnnounce, appUrl } from "@/lib/notify/aiBots";
 
 /** Cap per proposer run — bounded, never a flood. */
 const MAX_PER_RUN = 6;
@@ -104,7 +105,22 @@ export async function proposeOutreachApprovals(): Promise<ProposeResult> {
       idempotencyKey: key,
     });
     if (existed) skipped++;
-    else created++;
+    else {
+      created++;
+      void botAnnounce("sales", {
+        emoji: "✍️",
+        title: "Follow-up drafted — ready for approval",
+        fields: [
+          { label: "Client", value: lead.clientName || "the client" },
+          { label: "Value", value: money(lead.value) },
+          { label: "Channel", value: channelWord(actionType) },
+          { label: "Event", value: lead.eventDate ?? "undated" },
+        ],
+        body: `*Why:* ${lead.action.reason}`,
+        link: { text: "Review & approve", url: appUrl("/ai-org/approvals") },
+        context: "Sales Bot · nothing is sent until you approve",
+      }).catch(() => {});
+    }
   }
   return { agent: "outreach", candidates: candidates.length, created, skipped };
 }
@@ -161,7 +177,22 @@ export async function proposeLostQuoteApprovals(): Promise<ProposeResult> {
       idempotencyKey: key,
     });
     if (existed) skipped++;
-    else created++;
+    else {
+      created++;
+      void botAnnounce("sales", {
+        emoji: "✍️",
+        title: "Win-back drafted — ready for approval",
+        fields: [
+          { label: "Client", value: q.clientName || "the client" },
+          { label: "Lost value", value: money(q.value) },
+          { label: "Channel", value: channelWord(actionType) },
+          { label: "Event", value: q.eventDate ?? "undated" },
+        ],
+        body: q.lossReason ? `*Loss reason:* ${q.lossReason}` : "Loss reason untagged.",
+        link: { text: "Review & approve", url: appUrl("/ai-org/approvals") },
+        context: "Sales Bot · nothing is sent until you approve",
+      }).catch(() => {});
+    }
   }
   return { agent: "lost-quote", candidates: candidates.length, created, skipped };
 }
