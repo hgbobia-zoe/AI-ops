@@ -20,6 +20,13 @@
 //     from the 10-min read cadence; and (2) the Zoe app pokes us with {type:"zoe-create-now"} right after a
 //     submit (externally_connectable) so the common office-machine case fires within ~1s. Both reuse the
 //     SAME drainCreates + create.js claim flow (no parallel drain); the one-at-a-time + watchdog guards hold.
+//   • The GENERAL outbox (photos / notes / delivery-fee / email / tasks / team adds) is drained INSIDE the
+//     read-pull by pull-injected.js's drainOutbox(), so it normally shares the 10-min read cadence. It is
+//     ALSO drained ON DEMAND by the SAME path (no parallel drain function here): (1) a dedicated short
+//     OUTBOX_DRAIN_ALARM (every OUTBOX_DRAIN_MIN) nudges a pull ONLY when the outbox has a pending op this
+//     drainer can action — a cheap outbox GET that no-ops when idle; and (2) the Zoe app pokes us with
+//     {type:"zoe-drain-now"} right after it queues such a write (e.g. the Delivery Pricing push) so the
+//     office-machine case lands within seconds. Both just trigger the existing content-script pull/drain.
 //
 // SW lifecycle: no long-lived in-memory state is relied upon across sleeps — everything needed
 // (config, lastRun, pendingCreate) lives in chrome.storage.local; alarms, not timers, drive work.
@@ -28,6 +35,8 @@ const DEFAULTS = { apiBase: "https://zoe-dispatch.fly.dev", intervalMin: 10, ena
 const PULL_ALARM = "zoe-pull";
 const CREATE_DRAIN_ALARM = "zoe-create-drain"; // drains ONLY creates, on a short fixed period (on-demand-ish)
 const CREATE_DRAIN_MIN = 1; // keep pending-create latency ≤ ~1 min regardless of the read-pull interval
+const OUTBOX_DRAIN_ALARM = "zoe-outbox-drain"; // nudges the general-outbox drain when (and only when) ops are pending
+const OUTBOX_DRAIN_MIN = 1; // keep pending general-outbox latency ≤ ~1 min regardless of the read-pull interval
 const CREATE_WATCHDOG = "zoe-create-watchdog";
 const GS_MATCH = "https://pro.goodshuffle.com/*";
 const GS_DASHBOARD = "https://pro.goodshuffle.com/app/dashboard";
@@ -89,6 +98,20 @@ async function ensureAlarm() {
     await chrome.alarms.create(PULL_ALARM, { periodInMinutes: period, delayInMinutes: 0.1 });
   }
   await ensureCreateDrainAlarm();
+  await ensureOutboxDrainAlarm();
+}
+
+// Dedicated short alarm that nudges the GENERAL-outbox drain (pull-injected.js's drainOutbox, via a normal
+// pull), so a queued delivery-fee / note / photo / email / task write is picked up within ~OUTBOX_DRAIN_MIN
+// minutes instead of waiting for the next (default 10-min) read-pull. drainOutboxNow is cheap when idle (one
+// outbox GET → nothing actionable pending → returns without nudging) and honors `enabled` itself, so this
+// alarm is a no-op when disabled or when the outbox is empty. Kept separate from PULL_ALARM so it never drags
+// the read-pull onto a faster cadence.
+async function ensureOutboxDrainAlarm() {
+  const existing = await chrome.alarms.get(OUTBOX_DRAIN_ALARM).catch(() => null);
+  if (!existing || existing.periodInMinutes !== OUTBOX_DRAIN_MIN) {
+    await chrome.alarms.create(OUTBOX_DRAIN_ALARM, { periodInMinutes: OUTBOX_DRAIN_MIN, delayInMinutes: OUTBOX_DRAIN_MIN });
+  }
 }
 
 // Dedicated short alarm that drains ONLY pending creates, so a queued guided-intake create is picked up
@@ -320,6 +343,36 @@ async function reapPending(pending, why) {
   }
 }
 
+// ── General-outbox drain nudge (ON DEMAND / short alarm) ────────────────────────────
+// The general outbox (photos/notes/delivery-fee/email/tasks/team adds) is drained by pull-injected.js's
+// drainOutbox(), which only runs as part of a pull. Rather than duplicate that logic here, we TRIGGER the
+// existing content-script pull/drain — but only when there's actually an actionable op pending, so an idle
+// office machine doesn't run a pull every minute. create_project is excluded (it has its own drainCreates
+// path and the content script can't action it). Returns {ok, enabled, pending, nudged} so the external
+// handler can tell the app "office browser got it" from "disabled / nothing to do". Never opens a login tab.
+async function drainOutboxNow(reason) {
+  const { apiBase, enabled } = await cfg();
+  if (!enabled) return { ok: true, enabled: false, pending: 0, nudged: false };
+
+  let pending = 0;
+  try {
+    const r = await fetch(apiBase + "/api/gs/outbox", { headers: { accept: "application/json" } });
+    const j = await r.json();
+    const ops = (j && j.ops) || [];
+    // Everything except create_project is drained by the content-script drainer; count only those.
+    pending = ops.filter((o) => o && o.op && o.op !== "create_project").length;
+  } catch (e) {
+    return { ok: false, enabled: true, pending: 0, nudged: false }; // outbox unreachable — try again next cycle
+  }
+  if (!pending) return { ok: true, enabled: true, pending: 0, nudged: false };
+
+  // Nudge the existing read-pull/drain in the signed-in GS tab. ensureGsTab opens one if needed; the content
+  // script's drainOutbox acks each op, so once applied the next tick finds nothing pending and no-ops.
+  await ensureGsTab().catch(() => {});
+  await triggerPull();
+  return { ok: true, enabled: true, pending, nudged: true };
+}
+
 // ── Login probe (for the handshake) ───────────────────────────────────────────────
 // Decide whether GS looks signed out. We prefer the content script's own probe (lastRun.status), which
 // is authoritative (it hit searchProjects). If we have no recent signal, we treat it as unknown and do
@@ -428,6 +481,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     runPullCycle("alarm").catch(() => {});
   } else if (alarm.name === CREATE_DRAIN_ALARM) {
     drainCreates("create-alarm").catch(() => {});
+  } else if (alarm.name === OUTBOX_DRAIN_ALARM) {
+    drainOutboxNow("outbox-alarm").catch(() => {});
   } else if (alarm.name === CREATE_WATCHDOG) {
     getPending().then((p) => {
       if (p && Date.now() - p.startedAt > CREATE_TIMEOUT_MS - 1000) reapPending(p, "watchdog");
@@ -544,6 +599,18 @@ chrome.runtime.onMessageExternal.addListener((msg, _sender, sendResponse) => {
       const { createDrainEnabled } = await cfg();
       drainCreates("ondemand").catch(() => {});
       sendResponse({ ok: true, createDrainEnabled });
+    })();
+    return true;
+  }
+
+  // On-demand general-outbox drain: the Zoe app just queued a write (e.g. a delivery-fee push) and wants it
+  // applied NOW, not on the next read-pull. Reuse the SAME content-script drain (no parallel drain here) —
+  // drainOutboxNow checks the outbox and nudges a pull only when something actionable is pending. Reply with
+  // the outcome so the app can show honest state ("office browser got it" vs "extension absent / disabled").
+  if (msg.type === "zoe-drain-now") {
+    (async () => {
+      const r = await drainOutboxNow("ondemand").catch(() => ({ ok: false, enabled: true, pending: 0, nudged: false }));
+      sendResponse(r);
     })();
     return true;
   }

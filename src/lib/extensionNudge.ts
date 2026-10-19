@@ -16,12 +16,17 @@ interface ChromeRuntimeLike {
   };
 }
 
-/** Ask the extension to drain any pending create_project ops NOW (used right after a guided-intake submit).
- *  Best-effort: resolves true only if the extension answered. Resolves false when it's absent / not Chrome. */
-export function nudgeCreateNow(): Promise<boolean> {
+// Shared poster. Sends a single {type} message to the extension and resolves true ONLY if the extension
+// answered with { ok: true }. Resolves false when there's no window / no chrome.runtime (not Chrome, or the
+// extension isn't installed in this browser), when the extension doesn't ack, or after a 1.5s timeout (the
+// callback never fires when the extension is absent — we must not hang the caller). Never throws.
+function poke(type: string): Promise<boolean> {
   return new Promise((resolve) => {
     try {
-      const chromeApi = (window as unknown as { chrome?: ChromeRuntimeLike }).chrome;
+      const chromeApi =
+        typeof window !== "undefined"
+          ? (window as unknown as { chrome?: ChromeRuntimeLike }).chrome
+          : undefined;
       if (!chromeApi?.runtime || typeof chromeApi.runtime.sendMessage !== "function") {
         resolve(false);
         return;
@@ -32,7 +37,7 @@ export function nudgeCreateNow(): Promise<boolean> {
         settled = true;
         resolve(v);
       };
-      chromeApi.runtime.sendMessage(EXTENSION_ID, { type: "zoe-create-now" }, (resp) => {
+      chromeApi.runtime.sendMessage(EXTENSION_ID, { type }, (resp) => {
         // Swallow "Could not establish connection" (extension absent) — no console noise, no UI.
         void chromeApi.runtime?.lastError;
         finish(Boolean(resp && (resp as { ok?: boolean }).ok));
@@ -43,4 +48,19 @@ export function nudgeCreateNow(): Promise<boolean> {
       resolve(false);
     }
   });
+}
+
+/** Ask the extension to drain any pending create_project ops NOW (used right after a guided-intake submit).
+ *  Best-effort: resolves true only if the extension answered. Resolves false when it's absent / not Chrome. */
+export function nudgeCreateNow(): Promise<boolean> {
+  return poke("zoe-create-now");
+}
+
+/** Ask the extension to drain the GENERAL gs_outbox NOW (photos / notes / delivery-fee / email / tasks),
+ *  instead of waiting for its ~10-min read-pull. Used right after an app action queues such a write — e.g.
+ *  the Delivery Pricing "Push delivery fee to Goodshuffle" button. Best-effort: resolves true only if the
+ *  extension answered (so the caller can tell "office browser got it" from "extension absent"). Resolves
+ *  false when it's absent / not Chrome. */
+export function nudgeDrainNow(): Promise<boolean> {
+  return poke("zoe-drain-now");
 }

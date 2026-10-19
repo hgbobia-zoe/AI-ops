@@ -13,10 +13,12 @@
 // sees only the final price; the route internals are labelled rep-only. No cost/margin is ever shown.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Calculator, Check, FolderOpen, Loader2, MapPin, Route as RouteIcon, Search, Send, Truck, Wrench } from "lucide-react";
+import { Calculator, Check, FolderOpen, Loader2, MapPin, RefreshCw, Route as RouteIcon, Search, Send, Truck, Wrench } from "lucide-react";
 import { deliveryQuote, type LegMode, type LegBreakdown, type MileageTier, type DeliveryQuote } from "@/lib/pricing/delivery";
 import { readinessTier } from "@/lib/pricing/eventReadiness";
 import { EXTENSION_ID } from "@/lib/extensionId";
+import { nudgeDrainNow } from "@/lib/extensionNudge";
+import { deliveryPushDisplay, type PushOpStatus, type PushDisplayTone } from "@/lib/pricing/pushStatus";
 
 const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -54,6 +56,19 @@ interface LiveSubtotalResp {
 
 // How the subtotal field's value was sourced, for an HONEST label under the field.
 type SubtotalInfo = { state: "loading" | "live" | "stored"; text: string } | null;
+
+// State of a "Push delivery fee" action. "error" never even queued; "tracking" is queued and we poll the
+// op's real gs_outbox status so the UI resolves honestly (never a dead "queued").
+type PushState =
+  | { phase: "error"; text: string }
+  | { phase: "tracking"; opId: string; status: PushOpStatus; waitedSec: number; extReachable: boolean | null; error?: string };
+
+const TONE_CLS: Record<PushDisplayTone, string> = {
+  info: "text-muted-foreground",
+  ok: "text-emerald-400",
+  error: "text-red-400",
+  attention: "text-amber-300",
+};
 
 /** Ask the installed Auto-Pull extension to read the project's current pre-discount subtotal from a
  *  logged-in Goodshuffle session. Resolves (never rejects) with ok:false when the extension isn't
@@ -123,7 +138,9 @@ export function DeliveryCalculator(): React.JSX.Element {
   const [distNote, setDistNote] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string>("");
   const [pushing, setPushing] = useState(false);
-  const [pushMsg, setPushMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Honest, resolving push state. "error" = couldn't even queue; "tracking" = queued, we now poll the op's
+  // REAL status (Pushing… → Pushed ✓ / failed) instead of a flat "queued" that never updates.
+  const [push, setPush] = useState<PushState | null>(null);
   const [rq, setRq] = useState<RouteQuoteResp | null>(null);
   // Searchable project picker.
   const [query, setQuery] = useState("");
@@ -170,7 +187,7 @@ export function DeliveryCalculator(): React.JSX.Element {
 
   const pickProject = useCallback((p: ProjectOpt) => {
     setProjectId(p.id);
-    setPushMsg(null);
+    setPush(null);
     if (p.location) setAddress(p.location);
     setSubtotal(p.subtotal != null ? String(p.subtotal) : "");
     if (p.eventDate) setEventDate(p.eventDate);
@@ -281,21 +298,69 @@ export function DeliveryCalculator(): React.JSX.Element {
   async function pushToGoodshuffle() {
     if (!projectId) return;
     setPushing(true);
-    setPushMsg(null);
+    setPush(null);
     try {
       const r = await fetch("/api/pricing/push", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId, amount: perLeg }),
       });
-      const j = (await r.json()) as { ok?: boolean; error?: string };
-      setPushMsg(j.ok ? { ok: true, text: "Queued — it applies on the next Auto-Pull." } : { ok: false, text: j.error ?? "Could not queue." });
+      const j = (await r.json()) as { ok?: boolean; error?: string; opId?: string };
+      if (!j.ok || !j.opId) {
+        setPush({ phase: "error", text: j.error ?? "Could not queue." });
+        return;
+      }
+      // Queued. Start tracking the op's REAL status, then poke the office-machine extension to drain it NOW
+      // (best-effort; no-ops off the office machine, where the honest "waiting" state + the 10-min pull cover it).
+      setPush({ phase: "tracking", opId: j.opId, status: "pending", waitedSec: 0, extReachable: null });
+      const reachable = await nudgeDrainNow();
+      setPush((p) => (p && p.phase === "tracking" && p.opId === j.opId ? { ...p, extReachable: reachable } : p));
     } catch {
-      setPushMsg({ ok: false, text: "Could not queue — network error." });
+      setPush({ phase: "error", text: "Could not queue — network error." });
     } finally {
       setPushing(false);
     }
   }
+
+  // Re-poke the office browser to drain NOW (the "Push now" button on the honest waiting state). Doesn't
+  // re-queue — the op is already pending — it just asks the extension to apply it immediately.
+  const reNudgePush = useCallback(async () => {
+    const reachable = await nudgeDrainNow();
+    setPush((p) => (p && p.phase === "tracking" ? { ...p, extReachable: reachable } : p));
+  }, []);
+
+  // Poll the queued op's real status until it lands (done/failed), ticking waitedSec so the display can flip
+  // from "Pushing…" to an honest "waiting for the office browser" state. The on-demand drain usually lands it
+  // within seconds; this resolves it the instant it does.
+  const pushOpId = push?.phase === "tracking" ? push.opId : null;
+  const pushDone = push?.phase === "tracking" && (push.status === "done" || push.status === "failed");
+  useEffect(() => {
+    if (!pushOpId || pushDone) return;
+    let live = true;
+    const tick = async (): Promise<void> => {
+      try {
+        const r = await fetch(`/api/pricing/push?opId=${encodeURIComponent(pushOpId)}`);
+        const j = (await r.json()) as { status?: PushOpStatus; error?: string };
+        if (!live) return;
+        setPush((p) =>
+          p && p.phase === "tracking" && p.opId === pushOpId
+            ? { ...p, status: (j.status as PushOpStatus) ?? "unknown", error: j.error }
+            : p,
+        );
+      } catch {
+        /* transient — try again next tick */
+      }
+    };
+    const iv = setInterval(() => {
+      setPush((p) => (p && p.phase === "tracking" && p.opId === pushOpId ? { ...p, waitedSec: p.waitedSec + 2.5 } : p));
+      void tick();
+    }, 2500);
+    void tick();
+    return () => {
+      live = false;
+      clearInterval(iv);
+    };
+  }, [pushOpId, pushDone]);
 
   const rTier = useMemo(() => readinessTier(subtotalNum), [subtotalNum]);
   const grandTotal = Math.round((q.total + (readiness ? rTier.fee : 0)) * 100) / 100;
@@ -575,22 +640,42 @@ export function DeliveryCalculator(): React.JSX.Element {
               </>
             )}
 
-            {projectId && (
-              <div className="space-y-2 border-t border-white/10 pt-4">
-                <button
-                  onClick={pushToGoodshuffle}
-                  disabled={pushing}
-                  className="btn-hero inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium disabled:opacity-50"
-                >
-                  {pushing ? <Loader2 className="size-4 animate-spin" /> : pushMsg?.ok ? <Check className="size-4" /> : <Send className="size-4" />}
-                  Push delivery fee to Goodshuffle
-                </button>
-                <p className="text-xs text-muted-foreground">
-                  Overrides the Standard Delivery price on the selected project with {money(perLeg)} per leg (the {pricingMode ? MODE_BADGE[pricingMode].label.toLowerCase() : "current"}-mode fee). Applies on the next Auto-Pull.
-                </p>
-                {pushMsg && <p className={`text-xs ${pushMsg.ok ? "text-emerald-400" : "text-red-400"}`}>{pushMsg.text}</p>}
-              </div>
-            )}
+            {projectId && (() => {
+              const display = push?.phase === "tracking" ? deliveryPushDisplay(push) : null;
+              const landed = display?.kind === "done";
+              return (
+                <div className="space-y-2 border-t border-white/10 pt-4">
+                  <button
+                    onClick={pushToGoodshuffle}
+                    disabled={pushing}
+                    className="btn-hero inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium disabled:opacity-50"
+                  >
+                    {pushing ? <Loader2 className="size-4 animate-spin" /> : landed ? <Check className="size-4" /> : <Send className="size-4" />}
+                    Push delivery fee to Goodshuffle
+                  </button>
+                  <p className="text-xs text-muted-foreground">
+                    Overrides the Standard Delivery price on the selected project with {money(perLeg)} per leg (the {pricingMode ? MODE_BADGE[pricingMode].label.toLowerCase() : "current"}-mode fee). Applied through the logged-in office browser, usually within seconds.
+                  </p>
+                  {push?.phase === "error" && <p className="text-xs text-red-400">{push.text}</p>}
+                  {display && (
+                    <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-xs ${TONE_CLS[display.tone]}`}>
+                      {display.kind === "pushing" && <Loader2 className="size-3 animate-spin" />}
+                      {display.kind === "done" && <Check className="size-3" />}
+                      <span>{display.text}</span>
+                      {display.showPushNow && (
+                        <button
+                          type="button"
+                          onClick={() => void reNudgePush()}
+                          className="inline-flex items-center gap-1 rounded-md border border-white/15 px-2 py-0.5 font-medium text-foreground hover:bg-accent"
+                        >
+                          <RefreshCw className="size-3" /> Push now
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">Enter the address (and event date) or the miles, plus the subtotal, to see the price.</p>
