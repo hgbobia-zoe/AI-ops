@@ -122,7 +122,7 @@ describe("driver seniority routing → real assignment (DB)", () => {
   });
 });
 
-describe("applyRouteWindowRatchet (route grew → shift grows; shorter → holds)", () => {
+describe("applyRouteWindowRatchet (shift follows the route; hours never auto-shrink)", () => {
   // A route whose stops span 9:00–17:00, so its own window is well past a short shift's 12:00 end.
   const wideRoute = (routeId: string): Route =>
     ({
@@ -157,6 +157,33 @@ describe("applyRouteWindowRatchet (route grew → shift grows; shorter → holds
     const after = m.getShiftById(wide.id)!;
     expect(after.endTime).toBe(`${DATE}T23:00:00.000Z`); // unchanged
     expect(after.startTime).toBe(`${DATE}T06:00:00.000Z`);
+  });
+
+  it("MOVES a shift later (keeps its hours) when Goodshuffle slid the route later", async () => {
+    const m = await mods();
+    const { applyRouteWindowRatchet } = await import("./routeAutoSync");
+    // A route whose stops now sit in the late afternoon — well after a morning shift's 13:00 end.
+    const laterRoute = (routeId: string): Route =>
+      ({
+        routeId,
+        date: DATE,
+        truckId: "E450",
+        status: "planned",
+        stops: [
+          { sequence: 1, custName: "A", kind: "delivery", plannedWindow: `${DATE}T15:00:00.000Z` },
+          { sequence: 2, custName: "B", kind: "delivery", plannedWindow: `${DATE}T18:00:00.000Z` },
+        ],
+      }) as unknown as Route;
+    const s = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T09:00:00.000Z`, endTime: `${DATE}T13:00:00.000Z`, windowKnown: true, routeId: "rLater", truckId: "E450", assignees: [12], source: "manual" });
+    const beforeDur = Date.parse(s.endTime!) - Date.parse(s.startTime!);
+
+    const n = await applyRouteWindowRatchet({ date: DATE, routesById: new Map([["rLater", laterRoute("rLater")]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" });
+    expect(n).toBe(1);
+    const after = m.getShiftById(s.id)!;
+    // The block slid later to follow the route…
+    expect(Date.parse(after.startTime!)).toBeGreaterThan(Date.parse(`${DATE}T09:00:00.000Z`));
+    // …and the worker's hours were preserved, never auto-cut.
+    expect(Date.parse(after.endTime!) - Date.parse(after.startTime!)).toBeGreaterThanOrEqual(beforeDur);
   });
 });
 

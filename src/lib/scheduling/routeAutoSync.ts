@@ -48,7 +48,7 @@ import { scheduledUnroutedForDate } from "./scheduledUnrouted";
 import { planRouteAutoAssign, type RouteAutoAssignPlan } from "./routeAutoAssign";
 import { resolveDriverSeniority, type SeniorityRouteMeta } from "./driverSeniority";
 import { routeSpecialty } from "./routeSpecialty";
-import { ratchetWindow, routeOwnWindow } from "./routeRatchet";
+import { trackWindow, routeOwnWindow } from "./routeRatchet";
 import { getSettings } from "@/lib/settings";
 import type { ShiftRole, StaffShift } from "./types";
 import type { Route } from "@/lib/types";
@@ -372,13 +372,15 @@ function hhmm(iso: string | null): string {
 }
 
 /**
- * ROUTE-CHANGE RATCHET (expand-only). For each route-tied app shift, if the route's own window now exceeds
- * the shift's window, GROW the shift to cover it; a shorter route is held as-is (never shrink a worker's
- * hours). For a Connecteam-linked shift the grown window is pushed to Connecteam FIRST (silent); only on a
- * successful push is the app side expanded, so the Connecteam-wins importer can never flap it back
- * (connecteamContentHash=null makes the next import RE-BASELINE to the grown window — no conflict, no flag).
- * Every expansion is announced in Slack (viktorAnnounce) so a human can see it and override. Returns the
- * count of shifts expanded. Honest-when-unreachable: a failed Connecteam push skips that shift (retry next tick).
+ * ROUTE-CHANGE TRACKING. For each route-tied app shift, FOLLOW the route's own window — move the shift
+ * earlier/later with it and grow it to cover a longer route — so the schedule, Connecteam, and /dispatch all
+ * agree with what Goodshuffle re-optimized. Guardrail: the window MOVES but we never auto-shrink a worker's
+ * hours (a shorter route keeps the worker's existing duration; cutting hours stays a human decision). A shift
+ * that already brackets the route is left as-is. For a Connecteam-linked shift the moved window is pushed to
+ * Connecteam FIRST (silent); only on a successful push is the app side updated, so the Connecteam-wins
+ * importer can never flap it back (connecteamContentHash=null makes the next import RE-BASELINE — no conflict,
+ * no flag). Every move is announced in Slack so a human can see it and override. Returns the count of shifts
+ * moved. Honest-when-unreachable: a failed Connecteam push skips that shift (retry next tick).
  */
 export async function applyRouteWindowRatchet(deps: {
   date: string;
@@ -397,7 +399,7 @@ export async function applyRouteWindowRatchet(deps: {
       (s) => s.routeId === route.routeId && (s.role === "driver" || s.role === "field") && s.status !== "cancelled",
     );
     for (const shift of routeShifts) {
-      const out = ratchetWindow({ start: shift.startTime, end: shift.endTime, windowKnown: shift.windowKnown }, rw);
+      const out = trackWindow({ start: shift.startTime, end: shift.endTime, windowKnown: shift.windowKnown }, rw);
       if (!out.changed || !out.start || !out.end) continue;
 
       // Linked to Connecteam → push the grown window silently FIRST; only expand the app side if it sticks.
@@ -438,9 +440,11 @@ export async function applyRouteWindowRatchet(deps: {
       });
       const who = shift.assignees.map((u) => deps.nameOf(u) || `#${u}`).join(", ") || "the crew";
       const truck = shift.truckId ? deps.truckNameOf(shift.truckId) : "the route";
+      // "moved" when the block slid earlier/later; "extended" when it only grew at the end.
+      const moved = Boolean(out.reason && (out.reason.includes("moved") || out.reason.includes("earlier")));
       void botAnnounce("scheduling", {
         emoji: "🗓️",
-        title: "Shift extended",
+        title: moved ? "Shift moved" : "Shift extended",
         fields: [
           { label: "Who", value: who },
           { label: "Truck", value: truck },
@@ -551,8 +555,9 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   // below — fetch it once. Null (unreachable) → the ratchet only touches unlinked shifts; linked ones retry.
   const scheduler = await getDefaultScheduler();
 
-  // 1b. ROUTE-CHANGE RATCHET: a route that grew expands its workers' shifts (and their Connecteam hours),
-  //     never shrinks. Announced in Slack so a human can override.
+  // 1b. ROUTE-CHANGE TRACKING: a route that Goodshuffle moved (earlier/later) or lengthened moves/grows its
+  //     workers' shifts (and their Connecteam hours) to follow it; hours are never auto-shrunk. Announced in
+  //     Slack so a human can override. (Field name windowsExpanded kept for the API contract.)
   out.windowsExpanded = await applyRouteWindowRatchet({ date, routesById, scheduler, truckNameOf, nameOf, actor });
 
   // 2. App route -> Connecteam auto-create (silent). Needs the real Connecteam presence set; if we can't
@@ -636,7 +641,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
   }
   const ok = reachableDays > 0;
   const seniorityNote = seniorityAssigned ? ` (${seniorityAssigned} by seniority)` : "";
-  const expandedNote = windowsExpanded ? `, ${windowsExpanded} shift${windowsExpanded === 1 ? "" : "s"} expanded` : "";
+  const expandedNote = windowsExpanded ? `, ${windowsExpanded} shift${windowsExpanded === 1 ? "" : "s"} adjusted to the route` : "";
   const detail = reachableDays === 0
     ? `Connecteam unreachable (${unreachable}/${dates.length} days) — skipped, nothing written`
     : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned${seniorityNote}${expandedNote}, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent), ${flagged} flagged${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
