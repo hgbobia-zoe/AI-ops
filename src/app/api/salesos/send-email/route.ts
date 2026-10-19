@@ -6,7 +6,7 @@
 // = "true", matching SMS. Nothing is auto-sent: a human drafts, reviews, and confirms each one.
 
 import { NextResponse } from "next/server";
-import { getBookingById, enqueueGsOp } from "@/lib/db/repo";
+import { getBookingById, enqueueGsOp, recentEmailSendOpExists } from "@/lib/db/repo";
 import { logSalesEvent } from "@/lib/salesos/audit";
 import { viewerInitials } from "@/lib/auth/getSession";
 import { syncTouchpointNote, shortHash } from "@/lib/comms/noteSync";
@@ -48,8 +48,16 @@ export async function POST(req: Request): Promise<NextResponse> {
   const lead = getBookingById(id);
   if (!lead) return NextResponse.json({ error: "lead not found" }, { status: 404 });
 
+  // Idempotency: a double-click (or a retried request) must not enqueue — and therefore send — the same
+  // reply twice. Key on the lead + a hash of subject+body; if an identical op is already pending or was
+  // queued within the last cycle, treat this as the same submit and no-op.
+  const dedupeKey = `${id}:${shortHash(`${subject ?? ""}\n${text}`)}`;
+  if (recentEmailSendOpExists(dedupeKey)) {
+    return NextResponse.json({ ok: true, queued: true, duplicate: true, message: "Already queued — not sending twice." });
+  }
+
   // Queue the reply for the logged-in office session to replay into the GS thread.
-  enqueueGsOp({ op: "email_send", transactionId: id, label: "email reply", payload: { content: toHtml(text), subject } });
+  enqueueGsOp({ op: "email_send", transactionId: id, label: "email reply", payload: { content: toHtml(text), subject, dedupeKey } });
   await logSalesEvent("EMAIL_SENT", id, { chars: text.length, queued: true });
 
   // Auto-log the outreach into the project's INTERNAL notes (gated behind GS_NOTE_SYNC_ENABLED, deduped

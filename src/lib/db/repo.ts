@@ -2139,6 +2139,23 @@ export function gsNoteOpExists(dedupeKey: string): boolean {
   return Boolean(row);
 }
 
+/** Has an identical email_send op already been queued very recently? Double-submit guard for the sales
+ *  send-email path: a rapid double-click would otherwise enqueue (and the office session would then
+ *  send) the SAME reply twice. Matches on the `dedupeKey` stored in the email_send payload — true when a
+ *  matching op is still pending, OR was created within `windowMs` in ANY status (so a drain landing
+ *  between two clicks is still caught). After the window an intentional identical resend goes through.
+ *  Older email_send ops without a dedupeKey (e.g. the AI-approval path) simply never match. */
+export function recentEmailSendOpExists(dedupeKey: string, windowMs = 15 * 60 * 1000): boolean {
+  if (!dedupeKey) return false;
+  const cutoff = new Date(Date.now() - windowMs).toISOString();
+  const row = getDb()
+    .prepare(
+      "SELECT 1 FROM gs_outbox WHERE op = 'email_send' AND json_extract(payload, '$.dedupeKey') = ? AND (status = 'pending' OR created_at > ?) LIMIT 1",
+    )
+    .get(dedupeKey, cutoff);
+  return Boolean(row);
+}
+
 /** All write-backs (any status), newest first — for the dispatch sync panel. */
 export function listGsOps(limit = 50): GsOutboxItem[] {
   return (
@@ -2345,14 +2362,32 @@ export function writeRoute(route: Route): void {
       status: rt.status,
       gsRouteId: rt.gsRouteId,
     });
-    db.prepare("DELETE FROM stops WHERE route_id = ?").run(rt.routeId);
+    // Per-stop UPSERT (not DELETE-all + INSERT): a re-pull must NEVER wipe proof-of-delivery. POD
+    // (photos_ref / signature_ref) is written separately via setStopProof AFTER a stop completes, so a
+    // blanket re-INSERT that omits those columns silently erased it on the next pull. We now (a) delete
+    // only the stops that are GONE from this write, and (b) INSERT ... ON CONFLICT(stop_id) DO UPDATE,
+    // preserving POD with COALESCE(excluded, existing) — incoming POD wins when present (reconcileStops
+    // carries it on an acted-on stop), else the stored POD is kept. Every OTHER column is overwritten by
+    // the incoming value exactly as the old INSERT did, so the final row set is otherwise identical.
     const ins = db.prepare(
       `INSERT INTO stops (stop_id, route_id, customer_id, sequence, state, cust_name,
         cust_first_name, cust_last_name, kind, cust_phone, address, day_of_name, day_of_phone,
-        planned_window, eta, items, tx_id, contact_id, arrived_at, completed_at, tracking_token)
+        planned_window, eta, items, tx_id, contact_id, arrived_at, completed_at, tracking_token,
+        photos_ref, signature_ref)
        VALUES (@stopId, @routeId, @customerId, @sequence, @state, @custName,
         @custFirstName, @custLastName, @kind, @custPhone, @address, @dayOfName, @dayOfPhone,
-        @plannedWindow, @eta, @items, @txId, @contactId, @arrivedAt, @completedAt, @trackingToken)`,
+        @plannedWindow, @eta, @items, @txId, @contactId, @arrivedAt, @completedAt, @trackingToken,
+        @photosRef, @signatureRef)
+       ON CONFLICT(stop_id) DO UPDATE SET
+        route_id=excluded.route_id, customer_id=excluded.customer_id, sequence=excluded.sequence,
+        state=excluded.state, cust_name=excluded.cust_name, cust_first_name=excluded.cust_first_name,
+        cust_last_name=excluded.cust_last_name, kind=excluded.kind, cust_phone=excluded.cust_phone,
+        address=excluded.address, day_of_name=excluded.day_of_name, day_of_phone=excluded.day_of_phone,
+        planned_window=excluded.planned_window, eta=excluded.eta, items=excluded.items,
+        tx_id=excluded.tx_id, contact_id=excluded.contact_id, arrived_at=excluded.arrived_at,
+        completed_at=excluded.completed_at, tracking_token=excluded.tracking_token,
+        photos_ref=COALESCE(excluded.photos_ref, stops.photos_ref),
+        signature_ref=COALESCE(excluded.signature_ref, stops.signature_ref)`,
     );
     // Self-heal a corrupt route whose stored stops share a stop_id: two stops with the same id would
     // violate the UNIQUE(stop_id) constraint and abort the whole import (seen live — route 62232's
@@ -2389,8 +2424,17 @@ export function writeRoute(route: Route): void {
         arrivedAt: s.arrivedAt ?? null,
         completedAt: s.completedAt ?? null,
         trackingToken: s.trackingLinkId ?? null,
+        photosRef: s.photoIds?.length ? JSON.stringify(s.photoIds) : null,
+        signatureRef: s.signatureId ?? null,
       });
     }
+    // Remove only the stops that are no longer part of this route (the old DELETE-all did this implicitly).
+    // A stop still present is UPSERTed above, so its POD survives.
+    const finalIds = [...seenStopIds];
+    const placeholders = finalIds.map(() => "?").join(",");
+    db.prepare(
+      `DELETE FROM stops WHERE route_id = ?${finalIds.length ? ` AND stop_id NOT IN (${placeholders})` : ""}`,
+    ).run(rt.routeId, ...finalIds);
   });
   tx(route);
 }

@@ -161,8 +161,16 @@ function zoePull(apiBase) {
       const noteOps = all.filter((o) => o.op === "note_append" && o.transactionId && o.payload && o.payload.line);
       const teamOps = all.filter((o) => o.op === "add_team_member" && o.transactionId && o.payload && o.payload.userID);
       const feeOps = all.filter((o) => o.op === "set_delivery_fee" && o.transactionId && o.payload && o.payload.amount != null);
+      const emailOps = all.filter((o) => o.op === "email_send" && o.transactionId && o.payload && o.payload.content);
+      const taskOps = all.filter((o) => o.op === "create_gs_task" && o.transactionId && o.payload && o.payload.title);
       const provOps = all.filter((o) => (o.op === "provision_user" || o.op === "revoke_user") && o.payload && o.payload.system);
-      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, provisioned = 0, chain = Promise.resolve();
+      // Ops this content-script drainer can't action (e.g. create_project, which needs a popup created
+      // from a real user gesture — a timer-driven content script has none, so the office bookmarklet or a
+      // Playwright runner drains those). Surfaced in the result so they're VISIBLE, never silently
+      // ignored forever. Keep this set in sync with the handlers below + gsPull.ts.
+      const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1 };
+      const unhandledOps = all.filter((o) => !HANDLED[o.op]);
+      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, emails = 0, tasks = 0, provisioned = 0, chain = Promise.resolve();
       // provision_user / revoke_user: People Lifecycle access provisioning via REPLAY. Mirrors
       // src/lib/gsPull.ts — gated on the captured endpoint (src/lib/people/provisioningEndpoints.ts). This
       // content script runs ONLY on pro.goodshuffle.com, so it can replay the GOODSHUFFLE invite/disable once
@@ -214,8 +222,37 @@ function zoePull(apiBase) {
           return gchain.then(() => { if (!legs.length) throw "no_delivery_line"; let s = Promise.resolve(true); legs.forEach((L) => { s = s.then((ok) => ok ? saveLeg(L.gid, L.n) : false); }); return s; });
         }).then((ok) => { if (ok) fees++; else failed++; return ackOp(o.id, ok, "set_delivery_fee_failed"); }).catch((e) => { failed++; return ackOp(o.id, false, "set_delivery_fee_" + (typeof e === "string" ? e : "error")); });
       }); });
-      return chain.then(() => ({ pushed, failed, notes, team, fees, provisioned }));
-    }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0, fees: 0, provisioned: 0 }));
+      // email_send: reply into the project's CLIENT email thread (continues it; Goodshuffle appends the
+      // signature). Read the thread, take the latest message's id + recipients + subject, POST sendMessage.
+      // PARITY with the bookmarklet (gsPull.ts) — without this handler an APPROVED email reply was stamped
+      // "executed" upstream but sat in the outbox forever (never actually sent) whenever this extension was
+      // the active drainer. Pure fetch, no popup, so it runs fine on the drain timer.
+      emailOps.forEach((o) => { chain = chain.then(() => {
+        return fetch("/app/conversation/getMessagesForTransaction?transactionID=" + encodeURIComponent(o.transactionId), { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" }).then((r) => { if (!r.ok) throw 0; return r.json(); }).then((cv) => {
+          const msgs = (cv && cv.client && cv.client.messages) || [];
+          if (!msgs.length) throw "no_thread";
+          const last = msgs[msgs.length - 1];
+          const recips = (last.clientRecipients || []).map((rp) => ({ contactID: rp.contactID, email: rp.email, name: rp.name, phone: rp.phone, isCurrentUser: !!rp.isCurrentUser, isEmailValid: true, deliveryConfirmedDate: null, messageOpenedDate: null, hardBouncedDate: null, droppedMessageDate: null }));
+          if (!recips.length) throw "no_recipient";
+          let subj = (o.payload.subject || last.subject || "");
+          if (!/^re:/i.test(subj)) subj = "Re: " + subj;
+          let txID = Number(o.transactionId); if (!txID) txID = o.transactionId;
+          const payload = { messageID: last.id, transactionID: txID, content: o.payload.content, recipients: recips, subject: subj, messageType: "CLIENT", attachments: [] };
+          return fetch("/app/conversation/sendMessage", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include", body: JSON.stringify(payload) }).then((r) => r.ok);
+        }).then((ok) => { if (ok) emails++; else failed++; return ackOp(o.id, ok, "email_send_failed"); }).catch((e) => { failed++; return ackOp(o.id, false, "email_send_" + (typeof e === "string" ? e : "error")); });
+      }); });
+      // create_gs_task: queue a to-do on the GSPRO project. Form-urlencoded POST /app/task/createTask
+      // (captured + verified live in gsPull.ts). On success ack; on FAILURE leave the op PENDING (no ack)
+      // so it retries next cycle, mirroring the bookmarklet.
+      const GS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const gsDueStr = () => { const d = new Date(); return GS_MON[d.getMonth()] + " " + d.getDate() + " " + d.getFullYear(); };
+      taskOps.forEach((o) => { chain = chain.then(() => {
+        let text = String(o.payload.title || ""); if (o.payload.note) text += " — " + String(o.payload.note);
+        const body = new URLSearchParams({ taskID: "", taskText: text, taskAssignedTransactionID: String(o.transactionId), taskAssignedUserID: "", taskDueDateStr: gsDueStr(), fromProjectView: "true" });
+        return fetch("/app/task/createTask", { method: "POST", headers: { "x-requested-with": "XMLHttpRequest", "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, credentials: "include", body }).then((r) => r.ok).then((ok) => { if (ok) { tasks++; return ackOp(o.id, true); } /* leave PENDING on failure so it retries */ }).catch(() => { /* leave PENDING; never disrupt the rest of the drain */ });
+      }); });
+      return chain.then(() => ({ pushed, failed, notes, team, fees, emails, tasks, provisioned, unhandled: unhandledOps.length }));
+    }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0, fees: 0, emails: 0, tasks: 0, provisioned: 0, unhandled: 0 }));
   }
 
   return loggedInProbe().then((ok) => {
@@ -223,8 +260,8 @@ function zoePull(apiBase) {
     return Promise.all([pullRoutes(), pullProjects(), drainOutbox()]).then((res) => {
       const r = res[0] || { stops: 0, failed: 0, unmatched: [] };
       const bk = res[1] || { saved: 0, partial: false, notes: 0 };
-      const ph = res[2] || { pushed: 0, failed: 0 };
-      return { ok: !r.failed && !bk.partial, loggedIn: true, stops: r.stops || 0, bookings: bk.saved || 0, notes: bk.notes || 0, photos: ph.pushed || 0, unmatched: r.unmatched || [], partial: !!bk.partial, error: r.failed ? "routes failed to save" : bk.partial ? "bookings incomplete" : null };
+      const ph = res[2] || { pushed: 0, failed: 0, emails: 0, tasks: 0, unhandled: 0 };
+      return { ok: !r.failed && !bk.partial, loggedIn: true, stops: r.stops || 0, bookings: bk.saved || 0, notes: bk.notes || 0, photos: ph.pushed || 0, emails: ph.emails || 0, tasks: ph.tasks || 0, unhandled: ph.unhandled || 0, unmatched: r.unmatched || [], partial: !!bk.partial, error: r.failed ? "routes failed to save" : bk.partial ? "bookings incomplete" : null };
     }).catch((e) => ({ ok: false, loggedIn: true, stops: 0, bookings: 0, notes: 0, photos: 0, error: String(e).slice(0, 120) }));
   });
 }
