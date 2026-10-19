@@ -7,8 +7,9 @@
 // clicks "draft"), so the per-use cost is small — no need to gate it off by default.
 
 import { getLead } from "./service";
+import { buildLeadTimeline } from "./timeline";
 import { STAGE_LABEL, type SalesStage } from "./calc";
-import { summarizeComms, templateOutreach, humanize, type CommsSummary, type OutreachDraft, type OutreachLead } from "./outreach";
+import { summarizeComms, templateOutreach, humanize, renderConversationContext, type CommsSummary, type ConversationContext, type OutreachDraft, type OutreachLead } from "./outreach";
 import { chat, llmConfigured, llmModel } from "@/lib/llm";
 import { formatYmdLong } from "@/lib/dates";
 
@@ -33,10 +34,20 @@ function outreachLlmEnabled(): boolean {
 
 const SYSTEM =
   "You are a sales coach for Zoe Events & Party Rentals (an event-rental company in the DC/Maryland/" +
-  "Virginia area). Given ONE open quote — its stage, event, and the rep's own logged history of calls/" +
-  "texts/emails — write the single best next outreach. Read the history carefully: do NOT suggest another " +
-  "identical follow-up when the client has been contacted many times with no response, and respect any " +
-  "context note (e.g. on leave, deferred to another contact). " +
+  "Virginia area). Given ONE open quote — its stage, event, the rep's own logged history of calls/" +
+  "texts/emails, the two-way CONVERSATION (the customer's own texts/calls/emails, both directions), and " +
+  "the single most recent thing the CUSTOMER said — write the single best next outreach. Read the history " +
+  "carefully: do NOT suggest another identical follow-up when the client has been contacted many times " +
+  "with no response, and respect any context note (e.g. on leave, deferred to another contact). " +
+  "GROUND THE MESSAGE IN WHAT THE CUSTOMER ACTUALLY SAID. If the customer said they need to decide with a " +
+  "spouse, partner, or family, are travelling, asked for time, or raised a specific question or concern, " +
+  "ACKNOWLEDGE that directly and build the message on it: a gentle, no-pressure check-in that offers to " +
+  "help, matched to their stated situation, never a generic chase. " +
+  "DO NOT INVENT A SITUATION THE CUSTOMER NEVER STATED. In particular, do NOT frame this as comparing " +
+  "vendors, weighing options, or an 'apples to apples' comparison unless the customer actually said they " +
+  "are comparing or shopping around. Never state any fact that is not in the context you were given. " +
+  "If there is no conversation, notes, or call summary at all, write a brief, neutral, low-pressure " +
+  "follow-up and do not assume any reason for the silence. " +
   "Write like a real person texting a customer: warm, natural, and concise. Contractions are good. Do NOT " +
   "sound like a brochure or a mass marketing blast, and do NOT use buzzwords like 'unforgettable'. " +
   "Open the text by greeting the customer by first name and introducing the rep by name: " +
@@ -63,7 +74,7 @@ function extractJson(text: string): unknown {
   return JSON.parse(s);
 }
 
-async function llmDraft(lead: OutreachLead, clientName: string, eventDate: string | null, history: string | null, clientContext: string | null): Promise<{ draft: OutreachDraft; model?: string } | null> {
+async function llmDraft(lead: OutreachLead, clientName: string, eventDate: string | null, history: string | null, clientContext: string | null, convo: ConversationContext): Promise<{ draft: OutreachDraft; model?: string } | null> {
   const user = JSON.stringify({
     stage: lead.stage,
     stageMeaning: STAGE_LABEL[lead.stage],
@@ -74,6 +85,10 @@ async function llmDraft(lead: OutreachLead, clientName: string, eventDate: strin
     eventDateLong: lead.eventDateLong ?? null, // say "your event on {this}"
     daysToEvent: lead.daysToEvent,
     clientContextNote: clientContext ?? "",
+    // The genuine two-way conversation (texts/calls/emails, both directions) + the latest customer
+    // statement — so the draft is tailored to what they actually said, not a generic follow-up.
+    conversation: convo.thread || "(no two-way conversation captured)",
+    latestCustomerMessage: convo.latestInbound ?? "",
     commsHistory: (history ?? "").slice(0, 6000) || "(no prior contact logged)",
   });
   const r = await chat(
@@ -110,6 +125,9 @@ export async function draftLeadOutreach(id: string, repFirstName?: string | null
   if (!l) return null;
 
   const comms = summarizeComms(l.internalNotes, l.clientNotes);
+  // The FULL two-way picture: merged texts/calls/emails (incl. the latest inbound) + call summaries, from
+  // the same deterministic timeline the drawer shows. Assembled here, never inferred — the LLM only drafts.
+  const convo = renderConversationContext(buildLeadTimeline(l.id));
   const oLead: OutreachLead = {
     firstName: l.clientName,
     eventName: l.eventName,
@@ -122,7 +140,7 @@ export async function draftLeadOutreach(id: string, repFirstName?: string | null
   let draft = templateOutreach(oLead, comms);
   let model: string | undefined;
   if (outreachLlmEnabled() && llmConfigured()) {
-    const ai = await llmDraft(oLead, l.clientName, l.eventDate, l.internalNotes, l.clientNotes);
+    const ai = await llmDraft(oLead, l.clientName, l.eventDate, l.internalNotes, l.clientNotes, convo);
     if (ai) {
       draft = ai.draft;
       model = ai.model;

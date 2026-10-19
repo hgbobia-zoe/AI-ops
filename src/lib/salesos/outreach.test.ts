@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summarizeComms, templateOutreach, humanize, stripSignOff, type OutreachLead } from "./outreach";
+import { summarizeComms, templateOutreach, humanize, stripSignOff, renderConversationContext, type ConversationEntry, type OutreachLead } from "./outreach";
 
 const GRADY_NOTES = `8/28 - JM SENT THE QUOTE
 
@@ -36,6 +36,70 @@ const lead = (stage: OutreachLead["stage"]): OutreachLead => ({
   eventDateLong: "Saturday, Sep 20",
   daysToEvent: 6,
   stage,
+});
+
+describe("outreach — renderConversationContext (the full two-way picture for the drafter)", () => {
+  // The real "Nelson" shape: customer said she needs to decide WITH HER HUSBAND, plus the Oct 17 call.
+  // Newest-first, as buildLeadTimeline returns.
+  const NELSON: ConversationEntry[] = [
+    { at: "2026-10-17T15:00:00Z", channel: "call", direction: "out", title: "Call to client", detail: "Jessie Medalla from Zoe spoke with Melissa. Melissa will talk to her husband tomorrow to come up with a plan." },
+    { at: "2026-10-16T18:30:00Z", channel: "sms", direction: "in", title: "Text from client", detail: "I need to go through the details with my husband, he's travelling, I'll get back to you in a day or so." },
+    { at: "2026-10-14T12:00:00Z", channel: "email", direction: "out", title: "Email sent: Your quote", detail: "Here is your quote for the event." },
+    { at: "2026-10-14T11:00:00Z", channel: "quote", direction: "out", title: "Quote emailed" }, // excluded (not something the customer said)
+    { at: null, channel: "note", direction: null, title: "Logged note", detail: "10/16 husband travelling, will decide together" }, // excluded (notes pass separately)
+  ];
+
+  it("includes both directions, the call summary, and surfaces the customer's latest inbound statement", () => {
+    const c = renderConversationContext(NELSON);
+    expect(c.hasInbound).toBe(true);
+    // The customer's own words are captured verbatim as the latest inbound.
+    expect(c.latestInbound).toMatch(/husband/i);
+    expect(c.latestInbound).toMatch(/travelling/i);
+    // The thread carries the inbound text, the outbound call summary, and the outbound email.
+    expect(c.thread).toMatch(/Customer text: I need to go through the details with my husband/);
+    expect(c.thread).toMatch(/Zoe call: .*talk to her husband/);
+    expect(c.thread).toMatch(/Zoe email:/);
+    // Internal notes and quote milestones are NOT part of the two-way conversation block.
+    expect(c.thread).not.toMatch(/Logged note/);
+    expect(c.thread).not.toMatch(/Quote emailed/);
+  });
+
+  it("a genuinely comparing customer's words are carried through (comparison is real, not invented)", () => {
+    const c = renderConversationContext([
+      { at: "2026-10-10T10:00:00Z", channel: "sms", direction: "in", title: "Text from client", detail: "Still comparing a few rental companies, can you beat this other quote?" },
+    ]);
+    expect(c.latestInbound).toMatch(/comparing a few rental companies/i);
+    expect(c.thread).toMatch(/Customer text: Still comparing/);
+  });
+
+  it("is empty and honest when nothing was captured (drafter then writes a neutral follow-up)", () => {
+    const c = renderConversationContext([]);
+    expect(c.thread).toBe("");
+    expect(c.latestInbound).toBeNull();
+    expect(c.hasInbound).toBe(false);
+  });
+
+  it("never asserts a sender it doesn't know, and falls back to the factual title with no body", () => {
+    const c = renderConversationContext([
+      { at: "2026-10-12T10:00:00Z", channel: "call", direction: "in", title: "Voicemail from client", detail: null },
+      { at: "2026-10-11T10:00:00Z", channel: "email", direction: null, title: "Email: re quote", detail: "hello" },
+    ]);
+    expect(c.thread).toMatch(/Customer call: Voicemail from client/); // title fallback, no fabricated body
+    expect(c.thread).toMatch(/Unknown sender email: hello/); // direction unknown is not asserted as in/out
+    expect(c.latestInbound).toBeNull(); // the inbound voicemail had no captured body
+  });
+
+  it("caps the number of entries", () => {
+    const many: ConversationEntry[] = Array.from({ length: 40 }, (_, i) => ({
+      at: `2026-10-${String((i % 28) + 1).padStart(2, "0")}T10:00:00Z`,
+      channel: "sms" as const,
+      direction: "out" as const,
+      title: "Text to client",
+      detail: `message ${i}`,
+    }));
+    const c = renderConversationContext(many, { maxEntries: 5 });
+    expect(c.thread.split("\n").length).toBe(5);
+  });
 });
 
 describe("outreach — humanize (house voice: no dashes, no emoji)", () => {
