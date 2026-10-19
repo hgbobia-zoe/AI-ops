@@ -12,7 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
-import { enqueueGsOp, insertAudit } from "@/lib/db/repo";
+import { enqueueGsOp, insertAudit, getGsOpById, type GsOutboxItem } from "@/lib/db/repo";
 import { botAnnounce, botForAgent } from "@/lib/notify/aiBots";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -36,8 +36,10 @@ export type ApprovalStatus =
   | "rejected"
   | "edited" //         payload edited by a human; still actionable
   | "info_requested" // sent back to the employee with a note; still actionable
-  | "executed" //       the outbox op was enqueued (queued to send; NOT confirmed delivered)
-  | "failed";
+  | "queued" //         the outbox op was ENQUEUED (queued to send; NOT confirmed delivered) — the honest post-approve state
+  | "confirmed" //      the drainer reported the destination ACCEPTED the write (NOT a recipient read receipt)
+  | "executed" //       LEGACY: pre-WS03 rows stamped executed on enqueue; treated as in-flight and still reconciles forward
+  | "failed"; //        the enqueue errored, or the op dead-lettered (bounded retries exhausted — needs a human)
 
 export type ApprovalDecision = "approve" | "reject" | "edit" | "request_info";
 
@@ -84,8 +86,8 @@ export interface AiApproval {
 
 // ── Pure helpers (no DB — unit-tested) ─────────────────────────────────────────
 
-/** A status a human can still act on. Terminal states (rejected / executed / failed, and a held
- *  'approved') are NOT decidable — re-deciding is an idempotent no-op. */
+/** A status a human can still act on. Post-decision states (rejected / queued / confirmed / executed /
+ *  failed, and a held 'approved') are NOT decidable — re-deciding is an idempotent no-op. */
 const DECIDABLE: ApprovalStatus[] = ["pending", "info_requested", "edited"];
 
 export function canDecide(status: ApprovalStatus): boolean {
@@ -299,11 +301,11 @@ export function listPendingApprovals(limit = 100): AiApproval[] {
   ).map(toApproval);
 }
 
-/** Decided history (approved / rejected / executed / failed), newest first. */
+/** Decided history (approved / rejected / queued / confirmed / executed / failed), newest first. */
 export function listDecidedApprovals(limit = 100): AiApproval[] {
   return (
     getDb()
-      .prepare(`SELECT * FROM ai_approvals WHERE status IN ('approved','rejected','executed','failed') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT ?`)
+      .prepare(`SELECT * FROM ai_approvals WHERE status IN ('approved','rejected','queued','confirmed','executed','failed') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT ?`)
       .all(limit) as Row[]
   ).map(toApproval);
 }
@@ -427,11 +429,13 @@ export function decideApproval(
     recordAudit(current, "APPROVAL_FAILED", actor, { reason: "enqueue_failed" });
     return { approval: getApproval(id)!, outcome: "failed", message: "Could not enqueue the action." };
   }
-  const note = "Queued to the Goodshuffle outbox. It sends on the next office Auto-Pull cycle (queued, not yet confirmed delivered).";
-  db.prepare("UPDATE ai_approvals SET status='executed', action_payload=@payload, outbox_op_id=@op, decision_note=@note, decided_by=@by, decided_at=@at WHERE id=@id").run({
+  const note = "Queued to the Goodshuffle outbox. It sends on the next office Auto-Pull cycle (queued, not yet confirmed delivered). It auto-confirms when the drainer reports the write landed, or fails if it dead-letters.";
+  // Honest state: QUEUED (enqueued, not delivered) — NOT 'executed'. The drainer ack later reconciles this
+  // row forward to CONFIRMED (destination accepted) or FAILED (dead-lettered) via reconcileApprovalForOp.
+  db.prepare("UPDATE ai_approvals SET status='queued', action_payload=@payload, outbox_op_id=@op, decision_note=@note, decided_by=@by, decided_at=@at WHERE id=@id").run({
     id, payload: JSON.stringify(payload), op: opId, note, by: actor, at: now,
   });
-  recordAudit(current, "APPROVAL_EXECUTED", actor, { executed: true, op: plan.op, outboxOpId: opId });
+  recordAudit(current, "APPROVAL_QUEUED", actor, { queued: true, op: plan.op, outboxOpId: opId });
   // Confirm the send in the owning bot's channel (owner rule: no silent AI actions). Honest: it's QUEUED and
   // goes out on the next office sync, not confirmed delivered yet.
   void botAnnounce(botForAgent(current.agentId), {
@@ -445,4 +449,64 @@ export function decideApproval(
     context: "Sent after your approval",
   }).catch(() => {});
   return { approval: getApproval(id)!, outcome: "executed_queued", message: note };
+}
+
+// ── Correlated lifecycle read (WS03 contract — consumed by WS05 exception engine) ─────────────────────
+
+/** The honest lifecycle "phase" of an approval-backed action, derived deterministically from the approval
+ *  status + its linked outbox op. This is the single vocabulary a consumer (e.g. the exception engine)
+ *  should reason over, instead of re-deriving from raw statuses. */
+export type ActionPhase =
+  | "proposed" //     pending — awaiting a human decision
+  | "needs_input" //  info_requested / edited — back with the proposer/human
+  | "rejected" //     a human said no
+  | "held" //         approved but not executable here (gate off / forbidden / SMS) — intent only
+  | "queued" //       enqueued to the outbox, awaiting a drainer (incl. transient-retry)
+  | "confirmed" //    the destination accepted the write (NOT a recipient read receipt)
+  | "failed" //       the enqueue errored or the op dead-lettered (needs a human)
+  | "unknown";
+
+/** PURE. Map an approval status (+ whether its op dead-lettered) to the honest phase. */
+export function actionPhase(status: ApprovalStatus, opStatus?: GsOutboxItem["status"]): ActionPhase {
+  switch (status) {
+    case "pending":
+      return "proposed";
+    case "info_requested":
+    case "edited":
+      return "needs_input";
+    case "rejected":
+      return "rejected";
+    case "approved":
+      return "held";
+    case "queued":
+    case "executed": //   legacy in-flight — if its op already dead-lettered, surface failure honestly
+      return opStatus === "dead" ? "failed" : "queued";
+    case "confirmed":
+      return "confirmed";
+    case "failed":
+      return "failed";
+    default:
+      return "unknown";
+  }
+}
+
+export interface ApprovalLifecycle {
+  approval: AiApproval;
+  phase: ActionPhase;
+  /** The linked outbox op (if any) — carries attempts, status, lastError, dead-letter + retry gate. */
+  op: GsOutboxItem | null;
+  /** Session ids that proposed this approval (correlation across session → approval → op → outcome). */
+  sessionIds: string[];
+}
+
+/** Correlate an approval to its outbox op + proposing session(s) + honest phase — the stable read a
+ *  verification/exception consumer uses to answer "did it land?" without touching the raw tables. */
+export function getApprovalLifecycle(approvalId: string): ApprovalLifecycle | null {
+  const approval = getApproval(approvalId);
+  if (!approval) return null;
+  const op = approval.outboxOpId ? getGsOpById(approval.outboxOpId) : null;
+  const sessionIds = (
+    getDb().prepare("SELECT session_id FROM ai_session_approvals WHERE approval_id = ?").all(approvalId) as { session_id: string }[]
+  ).map((r) => r.session_id);
+  return { approval, phase: actionPhase(approval.status, op?.status), op, sessionIds };
 }
