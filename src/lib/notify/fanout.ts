@@ -4,14 +4,15 @@
 // action intake so the tablet never waits. Every send is key-gated and never throws.
 
 import type { ActionType, CloseoutResult, Stop, Vehicle } from "@/lib/types";
-import { sendSms } from "./sms";
+import { sendSms, type SmsResult } from "./sms";
 import { slackNotify } from "./slack";
 import { alertOps } from "./alert";
 import { createTracking, expireTracking, insertMessage, insertException, insertAudit, getMintedEtaLinkForStop } from "@/lib/db/repo";
 import { getSettings, renderTemplate, templateForKind, type AppSettings } from "@/lib/settings";
-import { formatClockTime } from "@/lib/dates";
+import { formatClockTime, todayInOpsTz } from "@/lib/dates";
 import { mintEtaLinkForStop } from "@/lib/eta/mint";
-import { chooseDepartureLink } from "@/lib/eta/etaLinkMint";
+import { chooseDepartureLink, IGNITION_ETALINK_ORIGIN } from "@/lib/eta/etaLinkMint";
+import { syncTouchpointNote, type DispatchAction } from "@/lib/comms/noteSync";
 
 export interface FanoutCtx {
   action: ActionType;
@@ -147,7 +148,7 @@ function coordinatorArrivedText(s: AppSettings, stop: Stop, truck: string): stri
   );
 }
 
-async function sendTo(stopId: string, phone: string, body: string): Promise<void> {
+async function sendTo(stopId: string, phone: string, body: string): Promise<SmsResult> {
   const r = await sendSms(phone, body);
   insertMessage({
     stopId,
@@ -165,11 +166,45 @@ async function sendTo(stopId: string, phone: string, body: string): Promise<void
     // The customer/coordinator never got their text — surface it to dispatch.
     void alertOps("SMS (Quo/OpenPhone)", `to ${phone}: ${r.error ?? "unknown error"}`);
   }
+  return r;
 }
 
-/** Text the customer. */
-async function sms(stop: Stop, body: string): Promise<void> {
-  await sendTo(stop.stopId, stop.custPhone, body);
+/** Text the customer. Returns the send result so the caller can log the touchpoint only on a real send. */
+async function sms(stop: Stop, body: string): Promise<SmsResult> {
+  return sendTo(stop.stopId, stop.custPhone, body);
+}
+
+/** "live map" when the customer's link is the real Ignition tracking page, else our own "tracking link". */
+function dispatchLinkType(link: string): string {
+  return link.startsWith(IGNITION_ETALINK_ORIGIN) ? "live map" : "tracking link";
+}
+
+/** The customer's full name for the note (real first/last from Goodshuffle), else the display label. */
+function noteClientName(stop: Stop): string | null {
+  const full = [stop.custFirstName, stop.custLastName].map((s) => (s ?? "").trim()).filter(Boolean).join(" ");
+  return full || (stop.custName ?? "").trim() || null;
+}
+
+/** Log an AUTOMATED customer dispatch SMS to the matching Goodshuffle project's internal notes. Only
+ *  when we actually sent it AND we know the project (stop.txId). Gated + idempotent inside syncTouchpointNote
+ *  (GS_NOTE_SYNC_ENABLED, keyed on stop+action), enqueued to gs_outbox and drained by the office pull like
+ *  every other write — never a direct GS call, never a customer-visible note. Best-effort; never throws. */
+function noteDispatchSms(stop: Stop, action: DispatchAction, result: SmsResult, link?: string): void {
+  if (!result.ok) return; // skipped (provider off) or failed — don't log a send that didn't happen
+  if (!stop.txId) return; // no Goodshuffle project to attach to (manual/old pull) — skip honestly
+  try {
+    syncTouchpointNote({
+      kind: "dispatch",
+      stopId: stop.stopId,
+      action,
+      transactionId: stop.txId,
+      clientName: noteClientName(stop),
+      linkType: action === "on_the_way" && link ? dispatchLinkType(link) : null,
+      dateYmd: todayInOpsTz(),
+    });
+  } catch {
+    /* note is best-effort — never let it affect the fan-out */
+  }
 }
 
 /** Text the day-of coordinator too, if this stop has one. */
@@ -194,14 +229,16 @@ export async function runFanout(ctx: FanoutCtx): Promise<void> {
         if (!cur) break;
         // Real Ignition live-map link (office-machine mint) if available, else our /track link (see trackingLink).
         const link = await trackingLink(ctx, cur, s);
-        await sms(cur, onWayText(s, cur, truck, link));
+        const sent = await sms(cur, onWayText(s, cur, truck, link));
+        noteDispatchSms(cur, "on_the_way", sent, link);
         await smsCoordinator(cur, coordinatorOnWayText(s, cur, truck, link));
         await slack(`🚚 ${truck} departed → ${cur.custName}${cur.dayOfName ? ` (day-of: ${cur.dayOfName})` : ""}`);
         break;
       }
       case "ARRIVED": {
         if (!cur) break;
-        await sms(cur, arrivedText(s, cur, truck));
+        const sent = await sms(cur, arrivedText(s, cur, truck));
+        noteDispatchSms(cur, "arrived", sent);
         await smsCoordinator(cur, coordinatorArrivedText(s, cur, truck));
         await slack(`📍 ${truck} arrived at ${cur.custName}`);
         break;
@@ -213,7 +250,8 @@ export async function runFanout(ctx: FanoutCtx): Promise<void> {
         }
         if (ctx.nextStop) {
           const link = await trackingLink(ctx, ctx.nextStop, s);
-          await sms(ctx.nextStop, onWayText(s, ctx.nextStop, truck, link));
+          const sent = await sms(ctx.nextStop, onWayText(s, ctx.nextStop, truck, link));
+          noteDispatchSms(ctx.nextStop, "on_the_way", sent, link);
           await smsCoordinator(ctx.nextStop, coordinatorOnWayText(s, ctx.nextStop, truck, link));
           await slack(`🚚 ${truck} heading to ${ctx.nextStop.custName}${ctx.nextStop.dayOfName ? ` (day-of: ${ctx.nextStop.dayOfName})` : ""}`);
         }
