@@ -8,6 +8,7 @@ import {
   buildEtaLinkMintRequest,
   selectTrackingLink,
   chooseDepartureLink,
+  etaLinkFallbackAlert,
   isEtaLinkCurrent,
   type EtaLinkMintInput,
 } from "./etaLinkMint";
@@ -131,6 +132,29 @@ describe("isEtaLinkCurrent — expiry guard (never a dead link)", () => {
   it("a null/blank end is treated as current (legacy rows carry no window)", () => {
     expect(isEtaLinkCurrent(null, now)).toBe(true);
     expect(isEtaLinkCurrent(undefined, now)).toBe(true);
+  });
+});
+
+describe("etaLinkFallbackAlert — a /track fallback is never silent", () => {
+  it("pages when Ignition IS configured here but we still fell back", () => {
+    for (const reason of ["geocode-fail", "wait-timeout", "error"] as const) {
+      expect(etaLinkFallbackAlert(reason, true).alert).toBe(true);
+    }
+  });
+
+  it("does NOT page when Ignition was never set up here (unconfigured) or is disabled", () => {
+    expect(etaLinkFallbackAlert("unconfigured", false).alert).toBe(false);
+    expect(etaLinkFallbackAlert("disabled", false).alert).toBe(false);
+  });
+
+  it("notes a stale poller heartbeat in the summary (session may be down, not just throttled)", () => {
+    expect(etaLinkFallbackAlert("wait-timeout", false).summary).toBe("wait-timeout, poller heartbeat stale");
+    expect(etaLinkFallbackAlert("wait-timeout", true).summary).toBe("wait-timeout");
+  });
+
+  it("the reason is always carried in the summary (so the log/alert records WHY)", () => {
+    expect(etaLinkFallbackAlert("error", true).summary).toBe("error");
+    expect(etaLinkFallbackAlert("unconfigured", false).summary).toBe("unconfigured");
   });
 });
 

@@ -15,8 +15,9 @@ vi.mock("./sms", async (orig) => ({
 vi.mock("./slack", () => ({ slackNotify: vi.fn(async () => ({ ok: true })) }));
 vi.mock("./alert", () => ({ alertOps: vi.fn(async () => {}) }));
 vi.mock("@/lib/eta/mint", () => ({
-  // An Ignition etaLink → the on-the-way note should record "(live map)".
-  mintEtaLinkForStop: vi.fn(async () => "https://ignition.zonarsystems.com/etaLink/abc123"),
+  // An Ignition etaLink → the on-the-way note should record "(live map)". Returns the WS84 result shape
+  // ({ url, reason, pollerReady }) that mintEtaLinkForStop now yields.
+  mintEtaLinkForStop: vi.fn(async () => ({ url: "https://ignition.zonarsystems.com/etaLink/abc123", reason: "minted" as const, pollerReady: true })),
 }));
 
 import { runFanout } from "./fanout";
