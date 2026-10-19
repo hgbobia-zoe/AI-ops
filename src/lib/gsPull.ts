@@ -70,11 +70,19 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
               emails.push({ bookingId:String(id), providerMsgId:mid, direction:(recips.length?"outbound":null), participant:participant, subject:(m.subject||null), snippet:snip, occurredAt:(m.date||null), openedAt:opened });
             }); }
           // Quote sent/opened from the client email thread (getMessagesForTransaction). sent = earliest
-          // outbound quote email; opened = latest client open. Prefer emails whose subject mentions "quote";
-          // fall back to any outbound email with client recipients.
+          // CONFIRMED-sent quote email; opened = latest client open on a confirmed-sent email. Prefer emails
+          // whose subject mentions "quote"; fall back to any confirmed-sent email with client recipients.
+          // A message only counts as a genuine client send when the provider confirmed delivery to a client
+          // recipient (deliveryConfirmedDate). A prepared-but-unsent quote on a NEW PROJECT has client
+          // recipients populated but no delivery confirmation — treating it as "sent" fabricated a send time
+          // and mis-fired the quote-opened Slack alert (proven prod false-positive 2026-10-19). Caveat: this
+          // intentionally trades toward silence — if Goodshuffle ever under-populates deliveryConfirmedDate
+          // for a genuinely sent email, we leave quote_sent_at null rather than guess (the alert's own gate
+          // still relies on GS's authoritative quote_sent_date/last_sent_date).
+          function sentRecips(m){ return ((m&&m.clientRecipients)||[]).filter(function(rp){ return rp && rp.deliveryConfirmedDate; }); }
           function quoteTimes(mv){ var msgs=(mv&&mv.client&&mv.client.messages)||[]; var qs=null, qo=null;
-            function consider(m){ if(m.medium!=="EMAIL") return; var recips=m.clientRecipients||[]; if(!recips.length) return; if(m.date && (!qs || m.date<qs)) qs=m.date; recips.forEach(function(rp){ if(rp.messageOpenedDate && (!qo || rp.messageOpenedDate>qo)) qo=rp.messageOpenedDate; }); }
-            var quoteMsgs=msgs.filter(function(m){ return m.medium==="EMAIL" && (m.clientRecipients||[]).length && /quote/i.test(m.subject||""); });
+            function consider(m){ if(m.medium!=="EMAIL") return; var recips=sentRecips(m); if(!recips.length) return; if(m.date && (!qs || m.date<qs)) qs=m.date; recips.forEach(function(rp){ if(rp.messageOpenedDate && (!qo || rp.messageOpenedDate>qo)) qo=rp.messageOpenedDate; }); }
+            var quoteMsgs=msgs.filter(function(m){ return m.medium==="EMAIL" && sentRecips(m).length && /quote/i.test(m.subject||""); });
             (quoteMsgs.length?quoteMsgs:msgs).forEach(consider);
             return { sent:qs, opened:qo }; }
           function one(i){ if(i>=openIds.length) return Promise.resolve(); var id=openIds[i];
