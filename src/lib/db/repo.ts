@@ -2210,6 +2210,22 @@ export function recentEmailSendOpExists(dedupeKey: string, windowMs = 15 * 60 * 
   return Boolean(row);
 }
 
+/** Is there already a PENDING create_project op for this intake? Idempotency guard for the guided-intake
+ *  create flow: a repeat submit (retry button, a re-nudge, a double-click) must not enqueue a SECOND
+ *  create op while the first is still waiting for the office browser — that would create two Goodshuffle
+ *  projects for one intake. Matches on the `intakeId` stored in the create_project payload. Only PENDING
+ *  counts: once an op is done/failed the intake either has its project id (create route short-circuits) or
+ *  is genuinely being retried. */
+export function pendingCreateOpExists(intakeId: string): boolean {
+  if (!intakeId) return false;
+  const row = getDb()
+    .prepare(
+      "SELECT 1 FROM gs_outbox WHERE op = 'create_project' AND status = 'pending' AND json_extract(payload, '$.intakeId') = ? LIMIT 1",
+    )
+    .get(intakeId);
+  return Boolean(row);
+}
+
 /** All write-backs (any status), newest first — for the dispatch sync panel. */
 export function listGsOps(limit = 50): GsOutboxItem[] {
   return (

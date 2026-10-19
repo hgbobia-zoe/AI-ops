@@ -14,12 +14,20 @@
 //     createNewProject; the declared create.js content script claims the op for that exact tab, runs the
 //     populate sequence, and asks us to close the tab. One create tab at a time. A stuck tab is reaped
 //     by a watchdog and the op is left pending — the read-pull is never disturbed.
+//   • create_project is ALSO drained ON DEMAND so a guided-intake submit doesn't wait up to `intervalMin`
+//     for the next read-pull: (1) a dedicated short CREATE_DRAIN_ALARM (every CREATE_DRAIN_MIN) drains ONLY
+//     creates — a cheap outbox GET that opens a tab only when one is pending — decoupling create latency
+//     from the 10-min read cadence; and (2) the Zoe app pokes us with {type:"zoe-create-now"} right after a
+//     submit (externally_connectable) so the common office-machine case fires within ~1s. Both reuse the
+//     SAME drainCreates + create.js claim flow (no parallel drain); the one-at-a-time + watchdog guards hold.
 //
 // SW lifecycle: no long-lived in-memory state is relied upon across sleeps — everything needed
 // (config, lastRun, pendingCreate) lives in chrome.storage.local; alarms, not timers, drive work.
 
 const DEFAULTS = { apiBase: "https://zoe-dispatch.fly.dev", intervalMin: 10, enabled: true, createDrainEnabled: true };
 const PULL_ALARM = "zoe-pull";
+const CREATE_DRAIN_ALARM = "zoe-create-drain"; // drains ONLY creates, on a short fixed period (on-demand-ish)
+const CREATE_DRAIN_MIN = 1; // keep pending-create latency ≤ ~1 min regardless of the read-pull interval
 const CREATE_WATCHDOG = "zoe-create-watchdog";
 const GS_MATCH = "https://pro.goodshuffle.com/*";
 const GS_DASHBOARD = "https://pro.goodshuffle.com/app/dashboard";
@@ -79,6 +87,19 @@ async function ensureAlarm() {
   const existing = await chrome.alarms.get(PULL_ALARM).catch(() => null);
   if (!existing || existing.periodInMinutes !== period) {
     await chrome.alarms.create(PULL_ALARM, { periodInMinutes: period, delayInMinutes: 0.1 });
+  }
+  await ensureCreateDrainAlarm();
+}
+
+// Dedicated short alarm that drains ONLY pending creates, so a queued guided-intake create is picked up
+// within ~CREATE_DRAIN_MIN minutes instead of waiting for the next (default 10-min) read-pull. drainCreates
+// is cheap when idle (one outbox GET → nothing pending → returns) and honors createDrainEnabled itself, so
+// this alarm is a no-op when the feature is toggled off. Kept separate from PULL_ALARM so it never drags the
+// read-pull onto a faster cadence.
+async function ensureCreateDrainAlarm() {
+  const existing = await chrome.alarms.get(CREATE_DRAIN_ALARM).catch(() => null);
+  if (!existing || existing.periodInMinutes !== CREATE_DRAIN_MIN) {
+    await chrome.alarms.create(CREATE_DRAIN_ALARM, { periodInMinutes: CREATE_DRAIN_MIN, delayInMinutes: CREATE_DRAIN_MIN });
   }
 }
 
@@ -405,6 +426,8 @@ chrome.runtime.onStartup.addListener(boot);
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === PULL_ALARM) {
     runPullCycle("alarm").catch(() => {});
+  } else if (alarm.name === CREATE_DRAIN_ALARM) {
+    drainCreates("create-alarm").catch(() => {});
   } else if (alarm.name === CREATE_WATCHDOG) {
     getPending().then((p) => {
       if (p && Date.now() - p.startedAt > CREATE_TIMEOUT_MS - 1000) reapPending(p, "watchdog");
@@ -510,6 +533,19 @@ chrome.runtime.onMessageExternal.addListener((msg, _sender, sendResponse) => {
       sendResponse(r);
     })();
     return true; // keep the channel open for the async fetch
+  }
+
+  // On-demand create drain: the Zoe app just queued a guided-intake create and wants it made NOW, not on
+  // the next alarm. Reuse the SAME drainCreates flow; reply so the app can tell "office browser got it" from
+  // "extension absent / drain disabled". Never opens a login tab — a signed-out GS leaves the op pending and
+  // the read-pull's handshake handles sign-in nudging.
+  if (msg.type === "zoe-create-now") {
+    (async () => {
+      const { createDrainEnabled } = await cfg();
+      drainCreates("ondemand").catch(() => {});
+      sendResponse({ ok: true, createDrainEnabled });
+    })();
+    return true;
   }
 
   if (msg.type === "zoe-sync-now") {

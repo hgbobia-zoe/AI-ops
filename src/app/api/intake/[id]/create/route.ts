@@ -11,7 +11,7 @@ import { formatIntakeNotes, suggestEventName, gsEventDetails, gsIntakeLocation }
 import { autoAddSimpleItems, autoAddLogisticsLegs, windowUpgradeGroup, mdyFromYmd } from "@/lib/intake/gsItems";
 import { geocodeAddress } from "@/lib/intake/geocode";
 import { logIntakeEvent } from "@/lib/intake/audit";
-import { enqueueGsOp } from "@/lib/db/repo";
+import { enqueueGsOp, pendingCreateOpExists } from "@/lib/db/repo";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +26,13 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   if (intake.gsProjectId) {
     // Already created — return the existing shell rather than making a duplicate.
     return NextResponse.json({ ok: true, status: "created", gsProjectId: intake.gsProjectId, gsProjectUrl: intake.gsProjectUrl });
+  }
+
+  // Idempotency: a create op is already queued for this intake (repeat submit / retry / re-nudge while the
+  // office browser hasn't drained it yet). Don't enqueue a second one — that would create two projects.
+  // Report "queued" so the success screen keeps polling the existing op's result.
+  if (pendingCreateOpExists(intake.id)) {
+    return NextResponse.json({ ok: true, status: "queued" });
   }
 
   // Geocode the captured delivery address so the office session can set the delivery location and auto-add
