@@ -1985,6 +1985,39 @@ CREATE TABLE IF NOT EXISTS lifecycle_task (
   completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_lifecycle_task_emp ON lifecycle_task(employee_id, kind);
+
+-- WS05 Exception Resolution Engine — Victor's coordination record over the EXISTING exception surfaces
+-- (risk_items, shift_exceptions, the gs_outbox dead-letter backlog). One row per detected exception, keyed
+-- by source:sourceId so a repeated scan updates in place (never a duplicate, never a second proposal).
+-- It holds OUR coordination lifecycle only — it never mutates the source row. approval_id links to the
+-- ai_approvals governance card; verification_evidence records that the resolution actually LANDED (WS03).
+CREATE TABLE IF NOT EXISTS exception_resolutions (
+  key                   TEXT PRIMARY KEY,           -- source:sourceId — stable dedup identity
+  source                TEXT NOT NULL,              -- risk | dead_letter | ...
+  source_id             TEXT NOT NULL,              -- risk signature / outbox op id
+  type                  TEXT NOT NULL,              -- finer machine type (riskType / "dead_letter_op")
+  severity              TEXT NOT NULL,              -- low | medium | high | critical (normalized)
+  status                TEXT NOT NULL,              -- active|delegated|awaiting_approval|acting|resolved|failed|escalated|unverifiable|disposed
+  title                 TEXT NOT NULL,
+  detail                TEXT,
+  assigned_role         TEXT,                       -- scheduling|dispatch|warehouse|sales|finance|ops (delegate/escalate)
+  next_action           TEXT,                       -- human-readable "what should happen next"
+  deadline              TEXT,                       -- ISO hard deadline from the source (if any)
+  approval_id           TEXT,                       -- → ai_approvals.id (the proposed resolution), nullable
+  resolve_attempts      INTEGER NOT NULL DEFAULT 0, -- how many times a proposed resolution FAILED
+  last_attempt_at       TEXT,
+  escalation_tier       TEXT NOT NULL DEFAULT 'none',-- none | team | owner
+  escalated_at          TEXT,
+  verification_evidence TEXT,                       -- JSON {phase,outboxOpId,confirmedAt,attempts} once verified landed
+  disposition           TEXT,                       -- human-recorded final disposition text
+  disposed_by           TEXT,
+  first_detected_at     TEXT NOT NULL,
+  last_seen_at          TEXT NOT NULL,
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT NOT NULL,
+  resolved_at           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_exception_resolutions_status ON exception_resolutions(status, severity);
 `;
 
 type DB = InstanceType<typeof Database>;
