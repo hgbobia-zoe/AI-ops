@@ -8,7 +8,7 @@
 
 import { NextResponse } from "next/server";
 import { botAnnounce, appUrl, channelFor, BOTS, type BotId } from "@/lib/notify/aiBots";
-import { slackPostAs, slackBotConfigured } from "@/lib/notify/slack";
+import { slackPostAs, slackBotConfigured, slackDebugChannel } from "@/lib/notify/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -67,6 +67,7 @@ async function handle(req: Request): Promise<NextResponse> {
   // back to the webhook). This surfaces the exact Slack error (not_in_channel / channel_not_found /
   // missing_scope) so we can see why a card didn't render as the bot in its own channel.
   const channel = channelFor(bot);
+  const scopes = channel ? await slackDebugChannel(channel) : { error: "no_channel" };
   const diag = channel ? await slackPostAs(channel, BOTS[bot], `Test card for ${bot}`, { blocks: [] }) : { ok: false, error: "no_channel_configured" };
 
   const result = await botAnnounce(bot, card);
@@ -74,6 +75,7 @@ async function handle(req: Request): Promise<NextResponse> {
     bot,
     channel,
     botTokenConfigured: slackBotConfigured(),
+    scopes, // auth.test + which Slack scopes are present (channels:read / channels:join)
     directPost: diag, // the raw bot-token result (shows the real error, if any)
     announceResult: result, // what botAnnounce returned (may be the webhook fallback)
     at: new Date().toISOString(),

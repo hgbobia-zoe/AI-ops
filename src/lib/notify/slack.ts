@@ -136,6 +136,22 @@ export interface BotPersona {
   icon: string; // a Slack :emoji: shortcode
 }
 
+/** DIAGNOSTIC: report exactly which Slack call fails for a channel (which scope is missing). Not for normal
+ *  use — the announce self-test calls it. Returns the raw ok/error of auth.test, conversations.list (resolve)
+ *  and conversations.join, plus the resolved channel id. */
+export async function slackDebugChannel(name: string): Promise<Record<string, unknown>> {
+  const who = await slackApi("auth.test", {});
+  const id = await resolveChannelId(name);
+  const list = await slackApi("conversations.list", { exclude_archived: true, types: "public_channel", limit: 5 });
+  const join = id ? await slackApi("conversations.join", { channel: id }) : { ok: false, error: "no_resolved_id" };
+  return {
+    botUser: who.ok ? { user: who.data?.user, team: who.data?.team } : { error: who.error },
+    resolvedId: id,
+    listScope: list.ok ? "ok" : list.error, // missing_scope => need channels:read
+    joinScope: join.ok ? "ok" : (join as { error?: string }).error, // missing_scope => need channels:join
+  };
+}
+
 /** Post to a channel AS a named bot persona (custom display name + icon). Skipped when no bot token is set.
  *  `opts.blocks` renders a designed Block Kit card; `text` is still passed as the notification/fallback text
  *  (and what shows if blocks can't render), so always provide a readable `text`. */
