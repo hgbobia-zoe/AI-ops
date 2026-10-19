@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   advanceNextStop,
+  enqueueEtaLinkMint,
   getRoute,
   insertEventIfNew,
   saveBookings,
   searchBookings,
   writeRoute,
 } from "./repo";
+import { getDb } from "@/lib/db";
 import type { Route } from "@/lib/types";
 
 // DATABASE_PATH is ":memory:" (see vitest.config.ts), so this hits a throwaway DB.
@@ -67,6 +69,59 @@ describe("writeRoute / getRoute", () => {
     // A different truck's route must not throw on its own S1/S2 ids.
     expect(() => writeRoute(sampleRoute("E450"))).not.toThrow();
     expect(getRoute("E450")?.stops).toHaveLength(2);
+  });
+});
+
+describe("enqueueEtaLinkMint — reuse vs re-enqueue at the click", () => {
+  const base = (stopId: string) => ({
+    stopId,
+    truckId: "E450",
+    truckLabel: "Ford E450",
+    address: "111 Rockville Pike",
+    lat: 39.08,
+    lng: -77.14,
+    etaHours: null,
+    startISO: new Date().toISOString(),
+    endISO: new Date(Date.now() + 8 * 3600 * 1000).toISOString(), // window still open
+  });
+
+  it("reuses a FRESH pending row (idempotent — a re-tap never double-mints)", () => {
+    const a = enqueueEtaLinkMint(base("EL-STOP-fresh"));
+    const b = enqueueEtaLinkMint({ ...base("EL-STOP-fresh"), maxPendingAgeMs: 10 * 60 * 1000 });
+    expect(a.status).toBe("pending");
+    expect(b.id).toBe(a.id); // same row reused
+  });
+
+  it("RE-ENQUEUES an over-age pending row (stale, likely never drained) when maxPendingAgeMs is set", () => {
+    const a = enqueueEtaLinkMint(base("EL-STOP-stale"));
+    // Age the pending row 1h into the past (as if the pre-mint tick enqueued it while the poller was down).
+    getDb()
+      .prepare("UPDATE eta_links SET created_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 3600 * 1000).toISOString(), a.id);
+
+    const b = enqueueEtaLinkMint({ ...base("EL-STOP-stale"), maxPendingAgeMs: 10 * 60 * 1000 });
+    expect(b.id).not.toBe(a.id); // a fresh pending row, not the stale one
+    expect(b.status).toBe("pending");
+  });
+
+  it("without maxPendingAgeMs an old pending row is still reused (pre-mint tick behavior unchanged)", () => {
+    const a = enqueueEtaLinkMint(base("EL-STOP-nolimit"));
+    getDb()
+      .prepare("UPDATE eta_links SET created_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 3600 * 1000).toISOString(), a.id);
+    const b = enqueueEtaLinkMint(base("EL-STOP-nolimit")); // no maxPendingAgeMs
+    expect(b.id).toBe(a.id);
+  });
+
+  it("an over-age MINTED row is always reused (a live link is not stale)", () => {
+    const a = enqueueEtaLinkMint(base("EL-STOP-minted"));
+    getDb()
+      .prepare("UPDATE eta_links SET status = 'minted', url = ?, created_at = ? WHERE id = ?")
+      .run("https://ignition.zonarsystems.com/etaLink/live", new Date(Date.now() - 3600 * 1000).toISOString(), a.id);
+    const b = enqueueEtaLinkMint({ ...base("EL-STOP-minted"), maxPendingAgeMs: 10 * 60 * 1000 });
+    expect(b.id).toBe(a.id);
+    expect(b.status).toBe("minted");
+    expect(b.url).toBe("https://ignition.zonarsystems.com/etaLink/live");
   });
 });
 

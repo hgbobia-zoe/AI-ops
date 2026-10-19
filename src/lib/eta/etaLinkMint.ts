@@ -128,6 +128,41 @@ export function selectTrackingLink(opts: {
   return { url: opts.fallbackUrl, source: "track" };
 }
 
+/**
+ * Why a departure mint produced the link it did (or why it fell back). Recorded on every customer
+ * "on the way" send so a /track fallback is never silent. Values:
+ *   • "minted"       — a real Ignition link was returned (pre-minted OR just-in-time).
+ *   • "disabled"     — minting is turned off here (ETA_LINK_MINT=0).
+ *   • "no-address"   — the stop has no address to geocode.
+ *   • "unconfigured" — Ignition live-tracking was NEVER set up on this office machine → no wait.
+ *   • "geocode-fail" — the address wouldn't geocode → no mint request could be built.
+ *   • "wait-timeout" — we waited the bounded window for the live session and no link landed.
+ *   • "error"        — the live session reported a mint error.
+ */
+export type EtaLinkMintReason =
+  | "minted"
+  | "disabled"
+  | "no-address"
+  | "unconfigured"
+  | "geocode-fail"
+  | "wait-timeout"
+  | "error";
+
+/**
+ * Decide whether a /track fallback should be SURFACED (paged) and summarize why. Honest gate: we only
+ * page when Ignition IS configured here but we still fell back — the silent-surprise case the fix targets.
+ * An office that never set Ignition up (or turned it off) expectedly uses /track, so we never nag it.
+ * Pure (no IO) so it's unit-testable; the caller does the actual console log + alert.
+ */
+export function etaLinkFallbackAlert(
+  reason: EtaLinkMintReason,
+  pollerReady: boolean,
+): { alert: boolean; summary: string } {
+  const configured = reason !== "unconfigured" && reason !== "disabled";
+  const staleNote = configured && !pollerReady ? ", poller heartbeat stale" : "";
+  return { alert: configured, summary: `${reason}${staleNote}` };
+}
+
 /** The shift window (hours) used for a mint's dateRange.end (now → now + window). */
 export function shiftWindowHours(): number {
   const n = Number(process.env.ETA_LINK_SHIFT_WINDOW_H || 8);

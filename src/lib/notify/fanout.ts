@@ -11,7 +11,7 @@ import { createTracking, expireTracking, insertMessage, insertException, insertA
 import { getSettings, renderTemplate, templateForKind, type AppSettings } from "@/lib/settings";
 import { formatClockTime, todayInOpsTz } from "@/lib/dates";
 import { mintEtaLinkForStop } from "@/lib/eta/mint";
-import { chooseDepartureLink, IGNITION_ETALINK_ORIGIN } from "@/lib/eta/etaLinkMint";
+import { chooseDepartureLink, IGNITION_ETALINK_ORIGIN, etaLinkFallbackAlert, type EtaLinkMintReason } from "@/lib/eta/etaLinkMint";
 import { syncTouchpointNote, type DispatchAction } from "@/lib/comms/noteSync";
 
 export interface FanoutCtx {
@@ -46,9 +46,11 @@ const CLOSEOUT_LABELS: [keyof CloseoutResult, string][] = [
 //      (so even a fallback send becomes the live map). We never hand Zonar the customer's number — the
 //      mint forces Zonar's notify SMS to the Zoe main line (+13012915296, ETA_NOTIFY_PHONE_E164).
 //
-// Timing: we always create the /track fallback first, then mintEtaLinkForStop does a bounded wait ONLY
-// when a signed-in Ignition tab is actively minting; otherwise the text goes out immediately with /track
-// and upgrades later. See the design note atop src/lib/eta/mint.ts.
+// Timing: we always create the /track fallback first, then mintEtaLinkForStop does a bounded wait
+// whenever Ignition is CONFIGURED on the office machine (it has ever polled here) — not only when the
+// 20-min ready heartbeat is fresh — so a live-but-throttled session still mints at the click; an
+// unconfigured office sends /track immediately and upgrades later. See the design note atop
+// src/lib/eta/mint.ts. A /track fallback here is recorded (log + ops alert when configured) below.
 //
 // TODO(remove next release): the tablet-minted Zonar `payload.etaLink` and the static per-truck
 // `ignitionEtaLinks` are the RETIRED device-login path, now SUPERSEDED by the office-machine mint above.
@@ -68,10 +70,33 @@ async function trackingLink(
   try {
     // FAST PATH: a link pre-minted earlier in the day (runtime pre-mint tick) is already waiting — use the
     // real Ignition live map IMMEDIATELY, no wait, no dependency on the office session being live right now.
-    // The `??` short-circuits the departure mint entirely when a pre-minted link exists.
     const preMinted = getMintedEtaLinkForStop(stop.stopId)?.url ?? null;
-    const ignition = preMinted ?? (await mintEtaLinkForStop(stop, ctx.truckId, truckLabel(ctx.truckId)));
-    return chooseDepartureLink({ preMintedUrl: preMinted, ignitionUrl: ignition, fallbackUrl: fallback }).url;
+    // No pre-mint → mint just-in-time (waits the bounded window whenever Ignition is configured here).
+    let ignitionUrl: string | null = preMinted;
+    let reason: EtaLinkMintReason = "minted";
+    let pollerReady = false;
+    if (!preMinted) {
+      const res = await mintEtaLinkForStop(stop, ctx.truckId, truckLabel(ctx.truckId));
+      ignitionUrl = res.url;
+      reason = res.reason;
+      pollerReady = res.pollerReady;
+    }
+    const chosen = chooseDepartureLink({ preMintedUrl: preMinted, ignitionUrl, fallbackUrl: fallback });
+    // Observability: a customer "on the way" send that falls back to /track is never silent. Log the
+    // chosen source + reason, and — only when Ignition IS configured here (the surprising case) — surface
+    // it via the existing throttled ops alert so a live-but-lapsed office session gets noticed.
+    if (chosen.source === "track") {
+      const { alert, summary } = etaLinkFallbackAlert(reason, pollerReady);
+      console.log(`[fanout] etaLink fell back to /track for stop ${stop.stopId} (source=track, ${summary})`);
+      if (alert) {
+        void alertOps(
+          "Ignition etaLink",
+          `Customer "on the way" link fell back to /track for ${stop.custName || stop.stopId} (${summary}). ` +
+            `Office Ignition session may be backgrounded or signed out — reopen ignition.zonarsystems.com on the office machine.`,
+        );
+      }
+    }
+    return chosen.url;
   } catch {
     return fallback; // never let a mint hiccup drop the customer's link
   }

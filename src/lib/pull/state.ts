@@ -100,6 +100,15 @@ export function etaLinkPollerReady(withinMin = 20, now: number = Date.now()): bo
   return Number.isFinite(ageMin) && ageMin <= withinMin;
 }
 
+/** True when the Ignition mint path has EVER been set up on this office machine (the poller has checked
+ *  in at least once), regardless of how recent that was. The DEPARTURE bounded-wait keys off THIS — not
+ *  the 20-min `etaLinkPollerReady` heartbeat — so a session that is actually signed in but whose tab is
+ *  backgrounded/throttled (no ready-poll in 20m) still gets a REAL chance to mint at the "on the way"
+ *  click. An office that never configured Ignition returns false here and never pays the wait. */
+export function etaLinkConfigured(): boolean {
+  return !!getPullState().ignitionMintSeenAt;
+}
+
 /** Server-inferred Ignition session health from the mint poller's heartbeat. `ok` = a signed-in tab
  *  polled within `freshMin` (default 20m, matching etaLinkPollerReady); `configured` = the poller has
  *  EVER checked in here (the feature is in use). Honest: no heartbeat → not ok; never faked. */

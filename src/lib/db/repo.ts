@@ -2299,8 +2299,16 @@ export interface EtaLinkMintState {
  * Enqueue (or reuse) an Ignition etaLink mint for a stop. Idempotent within a 12h window: a live
  * pending or already-minted row for the same stop is returned instead of creating a duplicate (so a
  * re-tap / HEADING_NEXT retry never double-mints). Returns the current state.
+ *
+ * `maxPendingAgeMs` (optional): when set, a still-`pending` row OLDER than this is treated as STALE and
+ * NOT reused — a fresh pending row is enqueued instead. The departure path passes it so a pending mint
+ * that was enqueued hours ago (e.g. by the pre-mint tick while the office poller was down, and so never
+ * drained) doesn't get reused-and-waited-on at the click; the live session gets a current attempt. An
+ * already-MINTED row is a live link and is always reused regardless of age (its window guards expiry).
  */
-export function enqueueEtaLinkMint(input: EtaLinkMintInput & { routeId?: string }): EtaLinkMintState {
+export function enqueueEtaLinkMint(
+  input: EtaLinkMintInput & { routeId?: string; maxPendingAgeMs?: number },
+): EtaLinkMintState {
   const db = getDb();
   const nowISO = new Date().toISOString();
   const cutoff = new Date(Date.now() - 12 * 3600 * 1000).toISOString();
@@ -2312,7 +2320,13 @@ export function enqueueEtaLinkMint(input: EtaLinkMintInput & { routeId?: string 
       "SELECT * FROM eta_links WHERE stop_id = ? AND status IN ('pending','minted') AND created_at > ? AND (end_iso IS NULL OR end_iso > ?) ORDER BY created_at DESC LIMIT 1",
     )
     .get(input.stopId, cutoff, nowISO) as EtaLinkRow | undefined;
-  if (existing) {
+  const stalePending =
+    !!existing &&
+    existing.status === "pending" &&
+    input.maxPendingAgeMs != null &&
+    Number.isFinite(input.maxPendingAgeMs) &&
+    Date.now() - Date.parse(existing.created_at) > input.maxPendingAgeMs;
+  if (existing && !stalePending) {
     return {
       id: existing.id,
       stopId: input.stopId,
