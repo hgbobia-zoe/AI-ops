@@ -149,7 +149,7 @@ describe("buildShiftPacket", () => {
 
 describe("ROLE_WORD (locked duty words)", () => {
   it("maps each role to its locked word", () => {
-    expect(ROLE_WORD).toEqual({ driver: "driver", field: "delivery helper", prep: "warehouse prep" });
+    expect(ROLE_WORD).toEqual({ driver: "driver", field: "delivery helper", prep: "warehouse prep", office: "office" });
   });
 });
 

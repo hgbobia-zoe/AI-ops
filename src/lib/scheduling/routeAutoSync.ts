@@ -56,9 +56,10 @@ import type { Route } from "@/lib/types";
 /** How many days forward (including today) the sweep reconciles. Bounds the write surface (mirrors #48). */
 const SYNC_HORIZON_DAYS = 14;
 
-const ROLE_LABEL: Record<ShiftRole, string> = { driver: "Driver", field: "Field", prep: "Prep" };
-/** Natural duty words for the Slack narration ("delivery helper", not "field"). */
-const ROLE_WORD: Record<ShiftRole, string> = { driver: "driver", field: "delivery helper", prep: "warehouse prep" };
+const ROLE_LABEL: Record<ShiftRole, string> = { driver: "Driver", field: "Field", prep: "Prep", office: "Office" };
+/** Natural duty words for the Slack narration ("delivery helper", not "field"). office never reaches a route
+ *  sync (route seats are driver/field only) — the entry exists only to keep the map exhaustive. */
+const ROLE_WORD: Record<ShiftRole, string> = { driver: "driver", field: "delivery helper", prep: "warehouse prep", office: "office" };
 
 /** Enabled = Connecteam configured AND not killed by the env escape hatch (mirrors connecteamImportEnabled). */
 export function connecteamAutosyncEnabled(): boolean {

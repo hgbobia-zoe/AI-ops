@@ -27,6 +27,9 @@ const ROLES: { value: ShiftRole; label: string }[] = [
   { value: "driver", label: "Driver" },
   { value: "field", label: "Field" },
   { value: "prep", label: "Prep" },
+  // "office" is the non-crew office/admin bucket (set by the Connecteam import, not route/warehouse crew).
+  // Listed so an imported office shift round-trips in this editor rather than showing a blank role.
+  { value: "office", label: "Office / admin (not crew)" },
 ];
 const STATUSES: { value: ShiftStatus; label: string }[] = [
   { value: "draft", label: "Draft" },

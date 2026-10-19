@@ -250,7 +250,9 @@ export default async function SchedulingPage({
   // Prep is day-level warehouse staffing (no route) — its NEED + scheduled crew show in the "Warehouse /
   // Prep" section, so keep prep OUT of the generic "other" section (which is for manual / orphaned shifts).
   const prepNeed = shifts.filter((s) => s.role === "prep").reduce((n, s) => n + s.headcount, 0);
-  const otherShifts = shifts.filter((s) => (!s.routeId || !routeIds.has(s.routeId)) && s.role !== "prep");
+  // Office/admin (non-crew) shifts render in their OWN section, never as a field helper in "other".
+  const officeShifts = shifts.filter((s) => s.role === "office");
+  const otherShifts = shifts.filter((s) => (!s.routeId || !routeIds.has(s.routeId)) && s.role !== "prep" && s.role !== "office");
 
   // Per-route FIELD gap — lets the "move to a route" picker surface where a helper is actually wanted.
   const routeFieldNeed: Record<string, number> = {};
@@ -259,7 +261,8 @@ export default async function SchedulingPage({
     routeFieldNeed[s.routeId] = (routeFieldNeed[s.routeId] ?? 0) + (cov.byShift[s.id]?.gap ?? shiftGap(s));
   }
 
-  const peopleNeeded = shifts.reduce((n, s) => n + s.headcount, 0);
+  // Office/admin shifts are not crew demand — they contribute 0 to the day's required headcount.
+  const peopleNeeded = shifts.filter((s) => s.role !== "office").reduce((n, s) => n + s.headcount, 0);
 
   // ── Day economics (read-only) — the deterministic temp-exposure metric. Internal seats are the covered
   // internal people per shift (explicit assignees + Connecteam-credited crew), costed at their pay rate;
@@ -267,6 +270,7 @@ export default async function SchedulingPage({
   // window; an unknown rate/window stays null and is excluded from totals (never fabricated to 0).
   const laborSeats: LaborSeat[] = [];
   for (const s of shifts) {
+    if (s.role === "office") continue; // office/admin is not route/warehouse labor — excluded from temp economics
     const hours = shiftWindowHours(s);
     const covShift = cov.byShift[s.id];
     const internalIds = [...s.assignees, ...(covShift?.scheduledUserIds ?? [])];
@@ -300,7 +304,9 @@ export default async function SchedulingPage({
   // STAFFING + LOGISTICS are computable now; the worker-facing loop (COMMUNICATION / TIMEKEEPING /
   // CONFIRMATION) is not wired yet (later phases), so those components are honestly UNVERIFIED rather
   // than fabricated red. Report time/location default to the shift start/location until explicitly set.
-  const readinessRows: ReadinessRow[] = shifts.map((s) => {
+  // Office/admin shifts are non-crew: they have no route, coverage, packet or confirmation, so they are
+  // excluded from the readiness/exception queue (including them would fabricate noise blockers).
+  const readinessRows: ReadinessRow[] = shifts.filter((s) => s.role !== "office").map((s) => {
     const gap = cov.byShift[s.id]?.gap ?? shiftGap(s);
     const live = (assignmentsByShift.get(s.id) ?? []).filter((a) => isLiveAssignment(a.state));
     const assignmentCount = live.length;
@@ -602,6 +608,7 @@ export default async function SchedulingPage({
         routeCards={routeCards}
         shifts={shifts}
         otherShifts={otherShifts}
+        officeShifts={officeShifts}
         roster={roster}
         eligibilityData={eligibilityData}
         coverage={cov.byShift}

@@ -25,11 +25,12 @@ import { createHash } from "node:crypto";
 import { roleFromTitle, type CrewRole, type CrewShift } from "@/lib/connecteam";
 import type { ShiftRole, StaffShift } from "./types";
 
-/** Map Connecteam's Title-derived ops role onto the app's ShiftRole. office/admin ("other") -> field. */
+/** Map Connecteam's Title-derived ops role onto the app's ShiftRole. office/admin ("other") -> "office"
+ *  (a NON-CREW bucket — never driver/field/prep, never counted as route coverage). */
 export function shiftRoleFromCrewRole(role: CrewRole): ShiftRole {
   if (role === "driver") return "driver";
   if (role === "prep") return "prep";
-  return "field";
+  return "office";
 }
 
 /** How much later an app edit must be than the last sync to count as a genuine LOCAL edit (absorbs the
@@ -77,8 +78,9 @@ export function contentHashOf(parts: {
 }
 
 /** The ops role for an ingested shift: prefer the Connecteam shift TITLE's role; if that is the catch-all
- *  "other", fall back to the dominant role among its assignees (driver beats prep beats other); else field.
- *  Day-level only — this never implies a route. */
+ *  "other", fall back to the DOMINANT crew role among its assignees (driver beats prep) so an office person
+ *  on an otherwise driver/prep shift still follows that crew role; else "office" (a non-crew office/admin
+ *  shift — never field). Day-level only — this never implies a route. */
 function roleForShift(shift: CrewShift): ShiftRole {
   const titleRole = roleFromTitle(shift.title);
   if (titleRole !== "other") return shiftRoleFromCrewRole(titleRole);
@@ -86,7 +88,7 @@ function roleForShift(shift: CrewShift): ShiftRole {
   for (const a of shift.assignees) counts[a.role] += 1;
   if (counts.driver > 0 && counts.driver >= counts.prep) return "driver";
   if (counts.prep > 0) return "prep";
-  return "field";
+  return "office";
 }
 
 function isoFromUnix(unix: number): string {

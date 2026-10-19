@@ -48,7 +48,7 @@ const LABEL = "text-[11px] uppercase tracking-[0.08em] text-meta";
 
 const ROLES: ShiftRole[] = ["driver", "field", "prep"];
 // Instawork position proposed per role (Field → General Labor, Driver → Driver). Prep tops up with labor.
-const IW_POSITION: Record<ShiftRole, string> = { driver: "Driver", field: "General Labor", prep: "General Labor" };
+const IW_POSITION: Record<ShiftRole, string> = { driver: "Driver", field: "General Labor", prep: "General Labor", office: "General Labor" };
 
 type Source = "connecteam" | "instawork";
 

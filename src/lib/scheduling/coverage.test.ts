@@ -77,4 +77,15 @@ describe("computeCoverage (explicit assignments only — no Connecteam-schedule 
     expect(cov.byShift.f1.gap).toBe(1);
     expect(cov.byShift.f1.scheduledCredit).toBe(0);
   });
+
+  it("an OFFICE/admin shift is non-crew: excluded from coverage entirely (no byShift entry, no gap/total)", () => {
+    const cov = computeCoverage([
+      shift({ id: "d1", role: "driver", assignees: [1] }),
+      shift({ id: "o1", role: "office", headcount: 1, assignees: [99] }), // Lisa (Operations Coordinator)
+    ]);
+    // Office shift contributes NOTHING to coverage — it is not a crew seat.
+    expect(cov.byShift.o1).toBeUndefined();
+    expect(cov.internalTotal).toBe(1); // only the driver assignee
+    expect(cov.gapTotal).toBe(0);
+  });
 });

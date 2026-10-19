@@ -77,10 +77,10 @@ function hashFor(s: CrewShift): string {
 }
 
 describe("shiftRoleFromCrewRole", () => {
-  it("maps driver/prep straight and other -> field", () => {
+  it("maps driver/prep straight and office/admin (other) -> office (non-crew)", () => {
     expect(shiftRoleFromCrewRole("driver")).toBe("driver");
     expect(shiftRoleFromCrewRole("prep")).toBe("prep");
-    expect(shiftRoleFromCrewRole("other")).toBe("field");
+    expect(shiftRoleFromCrewRole("other")).toBe("office");
   });
 });
 
@@ -111,8 +111,11 @@ describe("normalizeForImport", () => {
     expect(normalizeForImport([crewShift({ title: "Warehouse Associate" })], DATE)[0].role).toBe("prep");
     // Blank title, driver assignee -> driver from the dominant assignee role.
     expect(normalizeForImport([crewShift({ title: "", assignees: [member(1, "driver")] })], DATE)[0].role).toBe("driver");
-    // Blank title, office-only -> field.
-    expect(normalizeForImport([crewShift({ title: "", assignees: [member(1, "other")] })], DATE)[0].role).toBe("field");
+    // Blank title, office-only -> office (non-crew), NOT field.
+    expect(normalizeForImport([crewShift({ title: "", assignees: [member(1, "other")] })], DATE)[0].role).toBe("office");
+    // Office person on an otherwise driver/prep shift still follows the dominant CREW role.
+    expect(normalizeForImport([crewShift({ title: "", assignees: [member(1, "other"), member(2, "driver")] })], DATE)[0].role).toBe("driver");
+    expect(normalizeForImport([crewShift({ title: "", assignees: [member(1, "other"), member(2, "prep")] })], DATE)[0].role).toBe("prep");
   });
 
   it("captures a last-modified only when present (never fabricated)", () => {
@@ -141,6 +144,15 @@ describe("planReconcile — honesty + create", () => {
     const plan = planReconcile({ date: DATE, connecteam: { ok: true, shifts: [crewShift({ id: "new1" })] }, appShifts: [] });
     expect(plan.creates).toHaveLength(1);
     expect(plan.creates[0].ct.connecteamShiftId).toBe("new1");
+  });
+
+  it("two-way sync still MIRRORS an office/admin Connecteam shift — created, with role office (not dropped)", () => {
+    // Lisa's Operations Coordinator shift: office title + office-only assignee → role office.
+    const officeCt = crewShift({ id: "office1", title: "Operations Coordinator", assignees: [member(99, "other")] });
+    const plan = planReconcile({ date: DATE, connecteam: { ok: true, shifts: [officeCt] }, appShifts: [] });
+    expect(plan.creates).toHaveLength(1);
+    expect(plan.creates[0].ct.connecteamShiftId).toBe("office1");
+    expect(plan.creates[0].ct.role).toBe("office"); // mirrored as office, never silently dropped
   });
 });
 

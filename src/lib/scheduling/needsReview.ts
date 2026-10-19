@@ -27,7 +27,7 @@ import { getShiftById, updateShift } from "./store";
 import { normalizeForImport, type ImportableShift } from "./connecteamImport";
 import type { ShiftRole, StaffShift } from "./types";
 
-const ROLE_LABEL: Record<ShiftRole, string> = { driver: "Driver", field: "Field", prep: "Prep" };
+const ROLE_LABEL: Record<ShiftRole, string> = { driver: "Driver", field: "Field", prep: "Prep", office: "Office" };
 
 // ── 1. Conflict view (pure) ────────────────────────────────────────────────────────────────────────
 

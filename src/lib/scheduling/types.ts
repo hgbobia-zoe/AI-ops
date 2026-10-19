@@ -8,8 +8,13 @@
 // (routes + crew rules); a time we don't actually know is left null with windowKnown=false — never
 // fabricated to look staffed.
 
-/** Roles the schedule reasons about. Maps onto Connecteam's Title-derived driver|prep|other. */
-export type ShiftRole = "driver" | "field" | "prep";
+/** Roles the schedule reasons about. driver|field|prep are ROUTE/WAREHOUSE CREW; "office" is the non-crew
+ *  bucket for office/admin people (Connecteam's catch-all "other" title: Operations Coordinator, Executive
+ *  Assistant, Digital Sales Marketer, any manager). An "office" shift is NEVER route crew: it is excluded
+ *  from coverage/required/assigned/gap, never recommended or route-assignable, and shown only in its own
+ *  non-crew board section so the person is still visibly scheduled that day. Maps onto Connecteam's
+ *  Title-derived driver|prep|other (other → office). */
+export type ShiftRole = "driver" | "field" | "prep" | "office";
 
 /** Lifecycle of a shift the human is building toward sending out. */
 export type ShiftStatus =

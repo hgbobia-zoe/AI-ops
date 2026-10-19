@@ -41,8 +41,10 @@ interface WorkerAcc {
 }
 
 /** driver > field > prep: only `prep` is special in the cascade (whole slice → non-customer), so a worker
- *  with any route-bearing role is treated as route labor; a purely-prep worker stays prep. */
-function rollupRole(roles: Set<ShiftRole>): ShiftRole {
+ *  with any route-bearing role is treated as route labor; a purely-prep worker stays prep. "office" is
+ *  non-crew and never carries a costable route assignment, so it folds into the conservative prep fallback
+ *  (and the return is narrowed to the crew roles the cost model actually uses). */
+function rollupRole(roles: Set<ShiftRole>): "driver" | "field" | "prep" {
   if (roles.has("driver")) return "driver";
   if (roles.has("field")) return "field";
   return "prep";

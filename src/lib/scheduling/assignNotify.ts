@@ -56,6 +56,8 @@ export function roleLabelForWorker(role: ShiftRole): string {
       return "field crew";
     case "prep":
       return "warehouse prep";
+    case "office":
+      return "office"; // non-crew; office shifts are never route-assigned, so this is not sent in practice
     default:
       return "a shift";
   }

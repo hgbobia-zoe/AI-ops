@@ -107,6 +107,15 @@ describe("assignedCrewForRoute (explicit app assignments only)", () => {
     ];
     expect(assignedCrewForRoute(r, shifts)).toEqual({ driver: 1, field: 2 });
   });
+  it("an OFFICE shift tied to a route is NON-CREW: it never counts toward driver/field coverage", () => {
+    const r = route({ stops: [stop({ sequence: 1, items: [{ name: "20x20 Tent" }] })] }); // needs driver + 1 field
+    // Lisa (Operations Coordinator) is on an office shift attached to this route — must NOT staff it.
+    const shifts = [shift({ id: "o", role: "office", assignees: [99] })];
+    expect(assignedCrewForRoute(r, shifts)).toEqual({ driver: 0, field: 0 });
+    const g = computeRouteGap({ requiredByRole: requiredCrewForRoute(r), assignedByRole: assignedCrewForRoute(r, shifts) });
+    expect(g.status).toBe("gap");
+    expect(g.nobody).toBe(true); // the office person provides no coverage at all
+  });
   it("a Connecteam-only (old-way) route has ZERO app assignment → nobody", () => {
     // No driverId, no app shifts with assignees — the whole point of the pre-check.
     const r = route({ stops: [stop({ sequence: 1 })] });

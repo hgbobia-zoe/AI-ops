@@ -72,6 +72,7 @@ export function scanShiftExceptions(input: ScanInput): ShiftException[] {
 
   for (const s of shifts) {
     if (s.status === "cancelled") continue;
+    if (s.role === "office") continue; // office/admin is non-crew — it has no route/coverage/packet, so no exception applies
     const startMs = startMsOf(s);
     const endMs = endMsOf(s);
     const gap = coverage.byShift[s.id]?.gap ?? Math.max(0, s.headcount - s.assignees.length);

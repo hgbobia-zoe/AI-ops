@@ -37,6 +37,9 @@ describe("candidateRoles", () => {
     expect(candidateRoles("prep")).toEqual(["prep"]);
     expect(candidateRoles("field")).toEqual(["prep"]); // no internal field title
   });
+  it("an OFFICE shift qualifies NOBODY (non-crew, not route-assignable)", () => {
+    expect(candidateRoles("office")).toEqual([]);
+  });
 });
 
 describe("recommendCrew", () => {
@@ -90,6 +93,11 @@ describe("recommendCrew", () => {
   it("a field shift recommends free warehouse/prep (no internal field title)", () => {
     const recs = recommendCrew(shift("field", "2026-10-01T12:00:00-04:00", "2026-10-01T20:00:00-04:00"), [], roster);
     expect(recs.map((r) => r.userId)).toEqual([3]); // Adrane (prep); drivers + office excluded
+  });
+
+  it("an OFFICE shift recommends NO ONE (not even office staff) — it is never route-assignable", () => {
+    const recs = recommendCrew(shift("office", "2026-10-01T12:00:00-04:00", "2026-10-01T20:00:00-04:00"), [], roster);
+    expect(recs).toEqual([]);
   });
 
   it("does not recommend someone already assigned to the shift", () => {
