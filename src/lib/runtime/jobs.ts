@@ -32,6 +32,7 @@ import { runSalesAiJob, salesAiEnabled } from "@/lib/salesos/salesAiJob";
 import { getRiskQueue } from "@/lib/risk/store";
 import { responderHealthNow, recordJobAlert, formatAge } from "@/lib/ai/responderHealth";
 import { runOutboxHealthTick } from "@/lib/aiorg/outboxHealth";
+import { runExceptionResolutionTick } from "@/lib/exceptions/engine";
 import { countPendingInstructions } from "@/lib/ai/sessions";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { logImport, getLatestImportBySource, recordInstaworkProbe, type ImportRow } from "@/lib/pull/state";
@@ -297,6 +298,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     note: "Watches the Goodshuffle write-back outbox (where every approved email/note/task queues until the office Auto-Pull drains it). Alerts the ops channel, deduped with a 2h cool-off + recovered note, when the oldest pending op goes stale (drainer likely down), the queue backs up, an op dead-letters (bounded retries exhausted), or an op of a type no drainer handles is stuck. Deterministic; reconciliation of a delivered op back to its approval happens in the ack path, not here.",
     run: async () => {
       const r = await runOutboxHealthTick();
+      return { ok: r.ok, detail: r.detail };
+    },
+  },
+  {
+    key: "exception-resolution",
+    label: "Exception resolution (cross-agent coordination)",
+    bucket: "server",
+    configured: () => true, // app-owned; a silent no-op when there are no open exceptions
+    note: "Victor's coordination layer over the EXISTING exception surfaces (Event Risk Engine risk_items + the write-back dead-letter backlog). Each tick it dedupes every detected exception into one record, routes a DETERMINISTIC resolution — propose a human-gated Goodshuffle task via the shared approval→outbox path, delegate to the owning team role, or escalate — then VERIFIES any in-flight resolution via WS03's getApprovalLifecycle: a confirmed landing marks it resolved (with evidence), a dead-letter marks it failed, and failed/overdue/repeatedly-failing/high-impact items escalate (team channel first, owner only on defined criteria), all 2h-deduped. It NEVER executes money/schedule/hiring actions (those delegate), never silently marks-done (resolved needs a verified landing or a human disposition), and treats a disappeared signal as unverifiable, not resolved.",
+    run: async () => {
+      const r = await runExceptionResolutionTick();
       return { ok: r.ok, detail: r.detail };
     },
   },
