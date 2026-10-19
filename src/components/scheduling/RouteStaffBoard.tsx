@@ -14,7 +14,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, Truck as TruckIcon, UserPlus, Users, ArrowRight, Wand2, MapPin, SlidersHorizontal, ChevronRight } from "lucide-react";
+import { Loader2, Truck as TruckIcon, UserPlus, Users, ArrowRight, Wand2, MapPin, SlidersHorizontal, ChevronRight, Briefcase } from "lucide-react";
 import { SidePanelOverlay } from "@/components/SidePanelOverlay";
 import { ShiftEditor } from "@/components/scheduling/ShiftEditor";
 import { AddWorkerPanel } from "@/components/scheduling/AddWorkerPanel";
@@ -44,8 +44,9 @@ export interface RouteStopBrief {
   address: string | null;
 }
 
-export const ROLE_LABEL: Record<ShiftRole, string> = { driver: "Driver", field: "Field", prep: "Prep" };
-const ROLE_SHORT: Record<ShiftRole, string> = { driver: "Drv", field: "Fld", prep: "Prp" };
+export const ROLE_LABEL: Record<ShiftRole, string> = { driver: "Driver", field: "Field", prep: "Prep", office: "Office" };
+const ROLE_SHORT: Record<ShiftRole, string> = { driver: "Drv", field: "Fld", prep: "Prp", office: "Off" };
+// ROUTE/WAREHOUSE crew roles only — "office" is non-crew and never appears in the route grid or chips.
 const ROLE_ORDER: ShiftRole[] = ["driver", "field", "prep"];
 
 /** An Instawork gig matched to a route (availability, not allocation). */
@@ -136,6 +137,7 @@ export function RouteStaffBoard({
   routeCards,
   shifts,
   otherShifts,
+  officeShifts,
   roster,
   eligibilityData,
   coverage,
@@ -154,6 +156,8 @@ export function RouteStaffBoard({
   routeCards: RouteCardData[];
   shifts: StaffShift[];
   otherShifts: StaffShift[];
+  /** Office/admin shifts (role "office") — NON-CREW, shown in their own section, never route crew. */
+  officeShifts: StaffShift[];
   roster: CrewMember[];
   eligibilityData: WorkerDayEligibilityData;
   coverage: Record<string, ShiftCoverage>;
@@ -190,7 +194,7 @@ export function RouteStaffBoard({
         </p>
       )}
 
-      {routeCards.length === 0 && otherShifts.length === 0 && prepCrewToday.length === 0 && prepNeed === 0 ? (
+      {routeCards.length === 0 && otherShifts.length === 0 && officeShifts.length === 0 && prepCrewToday.length === 0 && prepNeed === 0 ? (
         <p className="text-[13px] text-meta">No shifts built for this day yet.</p>
       ) : (
         <div className="space-y-6">
@@ -251,6 +255,23 @@ export function RouteStaffBoard({
               <div className="surface border border-border">
                 {otherShifts.map((s) => (
                   <OtherShiftRow key={s.id} shift={s} coverage={coverage[s.id]} nameOf={nameOf} onEdit={() => setEditing(s)} />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Office / admin shifts — people scheduled in Connecteam who are NOT route crew (Operations
+              Coordinator, Executive Assistant, Digital Sales Marketer, managers). Shown for awareness so
+              they are visibly scheduled that day, but never counted as coverage and never route-assignable. */}
+          {officeShifts.length > 0 && (
+            <section>
+              <h2 className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">
+                <Briefcase className="size-3.5" /> Office / admin
+                <span className="font-normal normal-case text-meta">(not route crew)</span>
+              </h2>
+              <div className="surface border border-border">
+                {officeShifts.map((s) => (
+                  <OfficeShiftRow key={s.id} shift={s} nameOf={nameOf} onEdit={() => setEditing(s)} />
                 ))}
               </div>
             </section>
@@ -843,6 +864,41 @@ function OtherShiftRow({
         </span>
         {gap > 0 && <span className="rounded border border-attention/40 px-1.5 py-px text-[11px] text-attention">Instawork: {gap}</span>}
       </div>
+    </button>
+  );
+}
+
+// ── Office / admin shift row (NON-CREW) ──────────────────────────────────────────
+// An office/admin person scheduled in Connecteam. Deliberately shows NO coverage / gap / Instawork framing
+// (they are not a route or warehouse seat): just who is scheduled and when, so the day's schedule is honest
+// without ever implying they staff a route. Clickable to edit the underlying shift like the others.
+function OfficeShiftRow({
+  shift,
+  nameOf,
+  onEdit,
+}: {
+  shift: StaffShift;
+  nameOf: (userId: number) => CrewMember | undefined;
+  onEdit: () => void;
+}): React.JSX.Element {
+  const win = windowLabel(shift.startTime, shift.endTime, shift.windowKnown);
+  const names = shift.assignees.map((u) => nameOf(u)?.name ?? `#${u}`);
+  return (
+    <button
+      onClick={onEdit}
+      className="flex w-full flex-wrap items-center justify-between gap-3 border-t border-[var(--row-rule)] px-3 py-2.5 text-left transition-colors first:border-t-0 hover:bg-[var(--row-hover)]"
+    >
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[14px] font-medium text-foreground">{shift.eventLabel || (names.length > 0 ? names.join(", ") : "Office / admin")}</span>
+          <span className="text-[11px] uppercase tracking-[0.06em] text-meta">Office</span>
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-[12px] text-meta">
+          {win ? <span className="tabular-nums">{win}</span> : <span className="text-meta">Time not set</span>}
+          {shift.eventLabel && names.length > 0 && <span>{names.join(", ")}</span>}
+        </div>
+      </div>
+      <span className="shrink-0 text-[11px] text-meta">Not route crew</span>
     </button>
   );
 }

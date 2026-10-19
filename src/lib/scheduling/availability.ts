@@ -21,6 +21,7 @@ import type { ShiftRole, StaffShift } from "./types";
 export function candidateRoles(role: ShiftRole): CrewRole[] {
   if (role === "driver") return ["driver"];
   if (role === "prep") return ["prep"];
+  if (role === "office") return []; // office/admin shift — NOT route crew; nobody qualifies to fill it
   return ["prep"]; // field: no internal field title → free warehouse/prep as optional helpers (else Instawork)
 }
 

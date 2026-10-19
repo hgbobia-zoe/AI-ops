@@ -23,6 +23,7 @@ export const ROLE_WORD: Record<ShiftPacket["identity"]["role"], string> = {
   driver: "driver",
   field: "delivery helper",
   prep: "warehouse prep",
+  office: "office", // non-crew; office shifts never get a worker packet (route crew only) — kept for exhaustiveness
 };
 
 /** Default templates. Overridable later via settings (same pattern as customer SMS), kept here as the

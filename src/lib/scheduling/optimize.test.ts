@@ -86,6 +86,13 @@ describe("scoreAssignment", () => {
     expect(scoreAssignment(driver, { role: "driver", hours: 8 }, ctx, DEFAULT_STAFFING_CONFIG)).toBeGreaterThan(0);
     expect(scoreAssignment(driver, { role: "field", hours: 8 }, ctx, DEFAULT_STAFFING_CONFIG)).toBe(-Infinity); // field needs prep
   });
+  it("an OFFICE seat qualifies no one (candidateRoles empty) → -Infinity even for office-titled staff", () => {
+    const office = crew(9, "Lisa", "other");
+    const driver = crew(1, "D", "driver");
+    const ctx = { bookedHours: 0, maxSeatHours: 8, isContinuity: false };
+    expect(scoreAssignment(office, { role: "office", hours: 8 }, ctx, DEFAULT_STAFFING_CONFIG)).toBe(-Infinity);
+    expect(scoreAssignment(driver, { role: "office", hours: 8 }, ctx, DEFAULT_STAFFING_CONFIG)).toBe(-Infinity);
+  });
   it("prefers a longer route and a less-loaded worker", () => {
     const d = crew(1, "D", "driver");
     const long = scoreAssignment(d, { role: "driver", hours: 8 }, { bookedHours: 0, maxSeatHours: 8, isContinuity: false }, DEFAULT_STAFFING_CONFIG);
@@ -106,6 +113,17 @@ describe("optimizeStaffing", () => {
     expect(plan.planTempCount).toBe(0);
     expect(plan.betterThanCurrent).toBe(true);
     expect(plan.tempHoursSaved).toBe(8);
+  });
+
+  it("never creates a seat for an OFFICE shift (non-crew, excluded from the optimization surface)", () => {
+    const d = shift({ id: "L", role: "driver", startTime: L_START, endTime: L_END });
+    const office = shift({ id: "O", role: "office", startTime: L_START, endTime: L_END, assignees: [99] });
+    const plan = optimizeStaffing(
+      input({ shifts: [d, office], coverage: cov({ L: { gap: 1 } }), roster: [crew(1, "Driver A", "driver"), crew(99, "Lisa", "other")] }),
+    );
+    // Only the driver seat is planned; the office shift contributes no seat (and Lisa is never placed).
+    expect(plan.assignments.every((a) => a.routeId !== "O")).toBe(true);
+    expect(plan.assignments.filter((a) => a.kind === "internal").every((a) => a.userId !== 99)).toBe(true);
   });
 
   it("surfaces the seat's wall-clock window and a clear placement reason on each assignment", () => {

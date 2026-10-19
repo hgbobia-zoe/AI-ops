@@ -44,6 +44,8 @@ export function computeCoverage(shifts: StaffShift[]): DayCoverage {
   let internalTotal = 0;
   let gapTotal = 0;
 
+  // Only the CREW roles count toward coverage. "office" (office/admin, non-crew) is deliberately excluded:
+  // an office shift contributes 0 to covered/gap and never appears in byShift (it is not route/field crew).
   const roles: ShiftRole[] = ["driver", "field", "prep"];
   for (const role of roles) {
     const roleShifts = shifts.filter((s) => s.role === role);

@@ -14,7 +14,7 @@ import type { ShiftRole } from "@/lib/scheduling/types";
 
 export const dynamic = "force-dynamic";
 
-const ROLE_LABEL: Record<ShiftRole, string> = { driver: "Driver", field: "Field", prep: "Prep" };
+const ROLE_LABEL: Record<ShiftRole, string> = { driver: "Driver", field: "Field", prep: "Prep", office: "Office" };
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   const actor = (await currentActor()).label;

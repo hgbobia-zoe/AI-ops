@@ -97,7 +97,9 @@ export function summarizeInstaworkByRole(shifts: InstaworkShift[], date: string)
     driver: { total: 0, booked: 0, pending: 0 },
     field: { total: 0, booked: 0, pending: 0 },
     prep: { total: 0, booked: 0, pending: 0 },
+    office: { total: 0, booked: 0, pending: 0 }, // office is non-crew: never Instawork-covered (stays 0)
   };
+  // office is deliberately omitted from the summed roles — office/admin is never temp-filled on Instawork.
   const roles: ShiftRole[] = ["driver", "field", "prep"];
   for (const s of instaworkShiftsForDate(shifts, date)) {
     for (const role of roles) {
