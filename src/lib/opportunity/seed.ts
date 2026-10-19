@@ -10,6 +10,7 @@ import { syncEventOpportunities } from "./eventBridge";
 import { enrichEntityMatches } from "./relationship";
 import { samGovSource, samGovConfigured } from "./sources/samgov";
 import { BROWSER_WORKFLOWS } from "./sources/browser";
+import { icsFeedsFromEnv } from "@/lib/radar/sources/ics";
 
 // ── Source registry ───────────────────────────────────────────────────────────────────────────────
 interface SourceRow {
@@ -26,6 +27,16 @@ function registerSources(now: Date): void {
   ];
   for (const w of BROWSER_WORKFLOWS) {
     rows.push({ id: w.sourceId, name: w.name, kind: "GOV_PORTAL", url: w.portalUrl, region: w.jurisdiction, enabled: 1, acquisition_method: "BROWSER", auth_status: "NONE", frequency: "weekly", adapter: `browser:${w.sourceId}`, is_seed: 0 });
+  }
+  // ICS / iCal event feeds — the first live EVENT source (everything above is procurement). One row per
+  // configured feed; when none are set, a single dormant row documents the blocker right in the registry.
+  const feeds = icsFeedsFromEnv();
+  if (feeds.length > 0) {
+    for (const f of feeds) {
+      rows.push({ id: f.id, name: f.name, kind: "ICS_FEED", url: f.url, region: f.region ?? "DMV", enabled: 1, acquisition_method: "API", auth_status: "REQUIRED_OK", frequency: "daily", adapter: "ics", is_seed: 0 });
+    }
+  } else {
+    rows.push({ id: "ics-events", name: "Public event calendars (ICS/iCal)", kind: "ICS_FEED", url: null, region: "DMV", enabled: 0, acquisition_method: "API", auth_status: "REQUIRED_MISSING", frequency: "daily", adapter: "ics", is_seed: 0 });
   }
   const stmt = db.prepare(
     `INSERT INTO radar_sources (id, name, kind, url, region, enabled, adapter, acquisition_method, auth_status, frequency, last_status, is_seed, created_at)
