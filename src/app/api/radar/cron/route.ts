@@ -10,6 +10,9 @@
 import { NextResponse } from "next/server";
 import { runOpportunitySource } from "@/lib/opportunity/ingest";
 import { samGovSource, samGovConfigured } from "@/lib/opportunity/sources/samgov";
+import { syncEventOpportunities } from "@/lib/opportunity/eventBridge";
+import { runSource } from "@/lib/radar/ingest";
+import { configuredIcsSources, icsFeedsConfigured } from "@/lib/radar/sources/ics";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +34,22 @@ async function run(req: Request): Promise<NextResponse> {
     }
   } else {
     ran.push({ source: "samgov-federal", ok: false, dormant: true, message: "SAM_API_KEY not set" });
+  }
+
+  // ICS / iCal EVENT feeds (server-side, no key). Each runs the event pipeline; bridge once after.
+  if (icsFeedsConfigured()) {
+    const now = new Date();
+    for (const s of configuredIcsSources()) {
+      try {
+        const res = await runSource(s, now);
+        ran.push({ source: s.id, ok: res.errors.length === 0, ...res });
+      } catch (e) {
+        ran.push({ source: s.id, ok: false, error: String(e).slice(0, 200) });
+      }
+    }
+    try { syncEventOpportunities(now); } catch { /* non-fatal */ }
+  } else {
+    ran.push({ source: "ics-events", ok: false, dormant: true, message: "RADAR_ICS_FEEDS not set" });
   }
 
   return NextResponse.json({ ok: true, ranAt: new Date().toISOString(), sources: ran });
