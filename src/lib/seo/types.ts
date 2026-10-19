@@ -230,3 +230,107 @@ export interface ZoePage {
   /** Page role, for match weighting. */
   kind: "home" | "service" | "category" | "blog" | "info" | "other";
 }
+
+// ── Phase 4: landing-page production (draft → quality → review → approval) ───────────────────────────
+//
+// A page DRAFT is the structured landing-page proposal the engine produces for an APPROVED opportunity,
+// reusing an existing Zoe page as the structural template. HONESTY LAW: the scaffolder NEVER invents
+// pricing, inventory, service areas, guarantees or testimonials — anywhere a business-specific fact is
+// needed it inserts an explicit "[NEEDS REVIEW: …]" marker that the quality checker flags for a human.
+// Publishing is a SEPARATE authorized step (not in this engine); the furthest the engine goes on its own
+// is APPROVED (a human-approved draft), never a live page.
+
+/** Review lifecycle of a single page draft (distinct from the opportunity's Kanban stage). */
+export type SeoDraftReviewState = "DRAFT" | "IN_REVIEW" | "APPROVED" | "REJECTED";
+
+export const SEO_DRAFT_REVIEW_STATES: SeoDraftReviewState[] = ["DRAFT", "IN_REVIEW", "APPROVED", "REJECTED"];
+
+/** Where a draft's copy came from — deterministic scaffold (facts + review markers) or an LLM enrichment pass. */
+export type SeoDraftSource = "deterministic" | "llm";
+
+/** One section of body copy. `sourced` = rests only on approved/known facts (no review markers). */
+export interface PageDraftBodyBlock {
+  heading: string;
+  level: 2 | 3;
+  paragraphs: string[];
+  /** True when every paragraph rests on approved facts; false when it carries a [NEEDS REVIEW] marker. */
+  sourced: boolean;
+}
+
+export interface PageDraftInternalLink {
+  anchor: string;
+  path: string;
+}
+
+/** The research provenance behind a draft — kept explicit so sourced facts are never confused with copy. */
+export interface PageDraftSources {
+  keyword: string;
+  intent: SeoIntent;
+  location: string | null;
+  category: string | null;
+  relatedKeywords: string[];
+  competitorRefs: string[];
+  /** Third-party ESTIMATE (Ubersuggest), null when none pulled. */
+  metrics: SeoMetrics | null;
+  metricsSource: SeoMetricsSource;
+  researchAt: string | null;
+  templatePath: string | null;
+  /** Honest note about how complete the research behind this draft is. */
+  researchNote: string;
+}
+
+export interface PageDraft {
+  id: string;
+  opportunityId: string;
+  /** Target URL path (also the idempotency key with opportunityId). */
+  slug: string;
+  /** CREATE | IMPROVE | CONSOLIDATE — a SKIP opportunity is never drafted. */
+  action: SeoAction;
+  templatePath: string | null;
+  title: string;
+  metaDescription: string;
+  h1: string;
+  canonicalUrl: string;
+  /** Section headings (H2s) in order. */
+  outline: string[];
+  body: PageDraftBodyBlock[];
+  /** JSON-LD structured data, or null. Only known fields — never a fabricated price/rating. */
+  schema: Record<string, unknown> | null;
+  internalLinks: PageDraftInternalLink[];
+  sources: PageDraftSources;
+  /** Quality findings snapshot at draft time (the live checker re-runs on every read). */
+  flags: SeoQualityFinding[];
+  draftSource: SeoDraftSource;
+  reviewState: SeoDraftReviewState;
+  reviewNote: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── deterministic quality checks ────────────────────────────────────────────────────────────────────
+
+export type SeoQualitySeverity = "error" | "warn" | "info";
+
+export interface SeoQualityFinding {
+  /** Stable check id, e.g. "title.length". */
+  id: string;
+  /** Human bucket: Title | Meta | Headings | URL | Schema | Internal links | Factual claims | Duplication | Accessibility. */
+  category: string;
+  severity: SeoQualitySeverity;
+  message: string;
+  /** Where it applies (field/section), when useful. */
+  field?: string;
+}
+
+export interface SeoQualityReport {
+  findings: SeoQualityFinding[];
+  errors: number;
+  warnings: number;
+  /** True when there are zero error-severity findings. A reviewer gate — NOT an auto-publish signal. */
+  passedStructural: boolean;
+  /** Count of claims / missing business details flagged for human verification. */
+  unsupportedClaims: number;
+}
