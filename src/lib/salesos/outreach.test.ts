@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { summarizeComms, templateOutreach, humanize, type OutreachLead } from "./outreach";
+import { summarizeComms, templateOutreach, humanize, stripSignOff, type OutreachLead } from "./outreach";
 
 const GRADY_NOTES = `8/28 - JM SENT THE QUOTE
 
@@ -110,5 +110,60 @@ describe("outreach — humanize", () => {
     expect(humanize("Give it 2–3 days")).toBe("Give it 2 to 3 days");
     expect(humanize("plain text stays put")).toBe("plain text stays put");
     expect(humanize("a — b – c")).toBe("a, b, c");
+  });
+});
+
+describe("outreach — stripSignOff (email bodies, Goodshuffle appends the real signature)", () => {
+  const GREETING = "Hi Ivy,";
+  const BODY = "Following up on your event on Saturday, Sep 20. Happy to answer any questions whenever you're ready.";
+
+  it("removes the real-world 'Best,\\nZoe Events' closing while keeping the greeting and body", () => {
+    const out = stripSignOff(`${GREETING}\n\n${BODY}\n\nBest,\nZoe Events`);
+    expect(out).toBe(`${GREETING}\n\n${BODY}`);
+    expect(out.startsWith("Hi Ivy,")).toBe(true);
+    expect(out).not.toMatch(/Best,/);
+    expect(out).not.toMatch(/\bZoe Events\b/);
+  });
+
+  it("removes assorted closing words with a name/company tail", () => {
+    for (const close of ["Best,", "Thanks,", "Thank you,", "Sincerely,", "Warm regards,", "Best regards,", "Kind regards,", "Regards,", "Cheers,", "Talk soon,"]) {
+      const out = stripSignOff(`${GREETING}\n${BODY}\n${close}\nSarah\nZoe Events`);
+      expect(out).toBe(`${GREETING}\n${BODY}`);
+    }
+  });
+
+  it("removes a closing word even with only a name line after it (no company)", () => {
+    expect(stripSignOff(`${GREETING}\n${BODY}\nThanks,\nSarah`)).toBe(`${GREETING}\n${BODY}`);
+  });
+
+  it("removes a bare trailing company line with no closing word, with or without a leading dash", () => {
+    expect(stripSignOff(`${GREETING}\n${BODY}\nZoe Events`)).toBe(`${GREETING}\n${BODY}`);
+    expect(stripSignOff(`${GREETING}\n${BODY}\n- Zoe Events`)).toBe(`${GREETING}\n${BODY}`);
+    expect(stripSignOff(`${GREETING}\n${BODY}\nZoe Events & Party Rentals`)).toBe(`${GREETING}\n${BODY}`);
+  });
+
+  it("keeps the greeting and never eats an inline company mention in the body", () => {
+    // The opening identifies the rep/company inline; that must survive (only trailing sign-offs go).
+    const body = "Hi Devin, this is Sarah from Zoe Events. Your quote for your event on Sep 20 is ready to go.";
+    expect(stripSignOff(body)).toBe(body);
+  });
+
+  it("leaves a body with no sign-off completely intact", () => {
+    expect(stripSignOff(`${GREETING}\n${BODY}`)).toBe(`${GREETING}\n${BODY}`);
+  });
+
+  it("does not strip a real sentence that merely starts with a closing word", () => {
+    const body = `${GREETING}\nThanks so much for considering Zoe Events for your celebration.`;
+    expect(stripSignOff(body)).toBe(body);
+  });
+
+  it("is idempotent", () => {
+    const once = stripSignOff(`${GREETING}\n${BODY}\n\nBest,\nZoe Events`);
+    expect(stripSignOff(once)).toBe(once);
+  });
+
+  it("handles empty / whitespace input safely", () => {
+    expect(stripSignOff("")).toBe("");
+    expect(stripSignOff("   ")).toBe("");
   });
 });

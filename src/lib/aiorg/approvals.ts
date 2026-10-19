@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
 import { enqueueGsOp, insertAudit, getGsOpById, type GsOutboxItem } from "@/lib/db/repo";
 import { botAnnounce, botForAgent } from "@/lib/notify/aiBots";
+import { stripSignOff } from "@/lib/salesos/outreach";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 /** Every action an approval can carry. Only the first four are EXECUTABLE in v2 (via the proven
@@ -168,7 +169,9 @@ export function buildOutboxPayload(
   const transactionId = typeof txRaw === "string" ? txRaw : typeof txRaw === "number" ? String(txRaw) : undefined;
   const body = typeof payload.body === "string" ? payload.body : "";
   if (op === "email_send") {
-    const content = typeof payload.content === "string" && payload.content ? payload.content : plainToHtml(body);
+    // Goodshuffle appends the real company signature on send, so strip any AI-drafted closing/sign-off
+    // from the plain-text body first (the greeting is kept) to avoid a duplicated "Best, Zoe Events".
+    const content = typeof payload.content === "string" && payload.content ? payload.content : plainToHtml(stripSignOff(body));
     const subject = typeof payload.subject === "string" ? payload.subject : undefined;
     return { transactionId, opPayload: { content, subject } };
   }

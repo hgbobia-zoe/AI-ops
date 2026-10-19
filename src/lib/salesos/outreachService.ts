@@ -46,8 +46,12 @@ const SYSTEM =
   "project name (it's often just a last name and reads oddly to the client). If no date is given, say " +
   "'your event'. " +
   "CRITICAL STYLE RULE: never use an em dash or en dash (— or –) anywhere — use commas, periods, or a new " +
-  "sentence instead. No emojis. Sign texts as Zoe Events. The rep will review and send it themselves, so " +
-  "never imply it was already sent. " +
+  "sentence instead. No emojis. " +
+  "Do NOT add a closing sign-off or signature line. No 'Best,', no 'Thanks,', no 'Sincerely,', no 'Warm " +
+  "regards,', and no trailing 'Zoe Events' name line. The opening greeting already identifies the rep and " +
+  "the company, and when this is sent as an email Goodshuffle automatically appends the Zoe Events " +
+  "signature, so any closing you add would be a duplicate. End at your last real sentence. " +
+  "The rep will review and send it themselves, so never imply it was already sent. " +
   'Output RAW JSON ONLY, no markdown/fences: {"sms": string, "callStrategy": string, "cadence": string, "caution": string}. ' +
   "sms <= 320 characters. caution = one short heads-up drawn from the history, or empty string if none.";
 
