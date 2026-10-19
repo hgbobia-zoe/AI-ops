@@ -45,7 +45,7 @@ export function AutoAssignButton({ date }: { date: string }): React.JSX.Element 
       const promptOnly = res.promptOnly ?? 0;
       const windowsExpanded = res.windowsExpanded ?? 0;
       toast.success(
-        `Auto-assigned ${autoAssigned} (${seniorityAssigned} by seniority), ${promptOnly} still need a pick${windowsExpanded ? `, ${windowsExpanded} shift(s) extended` : ""}`,
+        `Auto-assigned ${autoAssigned} (${seniorityAssigned} by seniority), ${promptOnly} still need a pick${windowsExpanded ? `, ${windowsExpanded} shift(s) adjusted to the route` : ""}`,
         { id: "auto-assign" },
       );
       router.refresh();
