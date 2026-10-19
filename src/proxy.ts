@@ -52,6 +52,7 @@ const PUBLIC: string[] = [
   "/api/etalink", // Ignition etaLink mint pending/result; GS_INGEST_TOKEN (fail-open), CORS-locked to ignition.zonarsystems.com — the office-machine Ignition tab reads/posts here, NOT a session (distinct from the /api/eta GPS prefix)
   "/api/pull/heartbeat", // Auto-Pull extension status ping; own token (fail-open), CORS-open
   "/api/runtime/tick", // Cloud runtime heartbeat; RUNTIME_TOKEN-gated (503 until set), hit by GitHub Actions (not a session)
+  "/api/ai/announce-test", // Slack announce self-test; RUNTIME_TOKEN-gated OR internal localhost only; posts a harmless test card (not a session)
   "/api/openphone/webhook", // OpenPhone → us; authenticates by HMAC signature, not a session
   "/api/slack/events", // Viktor (Slack bot) inbound; authenticates by Slack's HMAC signature, not a session
   "/api/communications/events", // Comms adapter ingress (Quo/Sona → us); COMMS_INGEST_TOKEN (fail-open), CORS-locked — NOT a session. Only this exact path is public; the rest of /api/communications stays session-gated.
