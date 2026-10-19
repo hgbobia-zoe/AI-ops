@@ -4,11 +4,13 @@
 // another column to set its status (persisted via /api/salesos/lead-status; optimistic, reverts on
 // failure). Archiving a card drops it off the board. Native HTML5 drag-and-drop — no library.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive, GripVertical } from "lucide-react";
-import type { BoardStatus, LeadCard } from "@/lib/salesos/boardTypes";
+import { STATUS_LABEL, type BoardStatus, type LeadCard } from "@/lib/salesos/boardTypes";
+import { matchesQuery } from "@/lib/salesos/search";
 import { LeadSidePanel } from "@/components/LeadSidePanel";
+import { SearchCount, useSalesSearch } from "@/components/SalesSearch";
 
 const money = (n: number | null): string => (n == null ? "" : "$" + Math.round(n).toLocaleString("en-US"));
 
@@ -32,10 +34,26 @@ export function SalesBoard({
   viewer: { name: string; quoUserId: string | null; initials: string };
 }): React.JSX.Element {
   const router = useRouter();
+  const { query } = useSalesSearch();
   const [cards, setCards] = useState(initialCards);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<BoardStatus | null>(null);
   const [drawerId, setDrawerId] = useState<string | null>(null);
+
+  // Search filters what's SHOWN (a derived view); drag/drop/archive still operate on the full `cards`
+  // state, so moving a matching card works and its column counts stay honest to what's on screen.
+  const visible = useMemo(() => {
+    const out = {} as Record<BoardStatus, LeadCard[]>;
+    for (const col of columns) {
+      out[col.key] = cards[col.key].filter((c) =>
+        matchesQuery({ id: c.id, clientName: c.clientName, eventName: c.eventName, value: c.value, stage: STATUS_LABEL[c.status], venue: c.venue, location: c.location }, query),
+      );
+    }
+    return out;
+  }, [cards, columns, query]);
+  const total = useMemo(() => columns.reduce((n, col) => n + cards[col.key].length, 0), [cards, columns]);
+  const shown = useMemo(() => columns.reduce((n, col) => n + visible[col.key].length, 0), [columns, visible]);
+  const searching = query.trim().length > 0;
 
   async function persist(id: string, status: BoardStatus | "archived"): Promise<void> {
     try {
@@ -74,10 +92,19 @@ export function SalesBoard({
   }
 
   return (
-    <div className="h-[calc(100dvh-6rem)]">
-      <div className="flex h-full items-start gap-3 overflow-auto p-4 md:p-5">
+    <div className="flex h-[calc(100dvh-6rem)] flex-col">
+      {searching && (
+        <div className="flex items-center gap-2 px-4 pt-3 md:px-5">
+          <SearchCount shown={shown} total={total} />
+          <span className="text-[12px] text-meta">matching projects</span>
+        </div>
+      )}
+      {searching && shown === 0 ? (
+        <p className="flex-1 px-6 py-16 text-center text-[13.5px] text-muted-foreground">No projects match &ldquo;{query.trim()}&rdquo;.</p>
+      ) : (
+      <div className="flex min-h-0 flex-1 items-start gap-3 overflow-auto p-4 md:p-5">
       {columns.map((col) => {
-        const list = cards[col.key];
+        const list = visible[col.key];
         const isOver = overCol === col.key;
         return (
           <div
@@ -92,7 +119,7 @@ export function SalesBoard({
               <span className="ml-auto text-[12px] tabular-nums text-meta">{list.length}</span>
             </div>
             <div className="space-y-1.5 p-1.5">
-              {list.length === 0 && <p className="px-1 py-6 text-center text-[12px] text-meta">{isOver ? "Drop here" : "Empty"}</p>}
+              {list.length === 0 && <p className="px-1 py-6 text-center text-[12px] text-meta">{isOver ? "Drop here" : searching ? "No match" : "Empty"}</p>}
               {list.map((c) => {
                 const w = whenLabel(c.daysToEvent);
                 return (
@@ -127,6 +154,7 @@ export function SalesBoard({
         );
       })}
       </div>
+      )}
       {drawerId && <LeadSidePanel id={drawerId} viewer={viewer} onClose={() => setDrawerId(null)} />}
     </div>
   );
