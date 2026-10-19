@@ -6,7 +6,7 @@
 // Body: { truckId: string }
 
 import { NextResponse } from "next/server";
-import { closeOneRoute } from "@/lib/dispatch/closeRoute";
+import { closeOneRoute, rescheduleAlertLine } from "@/lib/dispatch/closeRoute";
 import { slackNotify } from "@/lib/notify/slack";
 import { currentActor } from "@/lib/auth/getSession";
 
@@ -28,16 +28,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "route not found" }, { status: 404 });
   }
 
-  // If the route was closed with stops still unfinished, they need rescheduling — tell
-  // dispatch on Slack (only on the first close, not a repeat of an already-closed route).
-  if (!result.already && result.incomplete && result.incomplete.length > 0) {
-    const by = (await currentActor()).label; // who closed it, for the notification
-    const list = result.incomplete
-      .map((s) => `#${s.sequence} ${s.custName || "—"} (${s.state})`)
-      .join(", ");
-    void slackNotify(
-      `⚠️ *${result.truckId ?? "Route"} route closed by ${by} with ${result.incomplete.length} unfinished stop${result.incomplete.length === 1 ? "" : "s"}* — needs rescheduling: ${list}`,
-    );
-  }
+  // If the route was closed with stops still unfinished, they need rescheduling — tell dispatch on Slack
+  // (only on the first close, not a repeat). Same alert the driver/bulk close paths send (shared builder).
+  const line = rescheduleAlertLine(result, (await currentActor()).label);
+  if (line) void slackNotify(line);
   return NextResponse.json(result);
 }

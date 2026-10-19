@@ -58,3 +58,17 @@ export function closeOneRoute(routeId: string): CloseOneResult {
 
   return { ...result, date: route?.date };
 }
+
+/**
+ * The "needs rescheduling" Slack line for a route closed with unfinished stops, or null when there's
+ * nothing to flag (closed clean, or a repeat close of an already-done route). Shared so EVERY close path
+ * — the office single close, the bulk past-routes close, AND the driver's ARRIVED_WAREHOUSE closeout —
+ * emits the SAME alert. PURE (builds the text only; the caller posts it), so closeRoute.ts stays free of
+ * Slack. `by` names who closed it (an office actor, or "the driver" for the warehouse-arrival path).
+ */
+export function rescheduleAlertLine(result: CloseOneResult, by: string): string | null {
+  if (result.already || !result.incomplete || result.incomplete.length === 0) return null;
+  const n = result.incomplete.length;
+  const list = result.incomplete.map((s) => `#${s.sequence} ${s.custName || "—"} (${s.state})`).join(", ");
+  return `⚠️ *${result.truckId ?? "Route"} route closed by ${by} with ${n} unfinished stop${n === 1 ? "" : "s"}* — needs rescheduling: ${list}`;
+}

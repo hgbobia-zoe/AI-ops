@@ -17,7 +17,8 @@ import {
   updateStopState,
 } from "@/lib/db/repo";
 import { runFanout } from "@/lib/notify/fanout";
-import { closeOneRoute } from "@/lib/dispatch/closeRoute";
+import { closeOneRoute, rescheduleAlertLine } from "@/lib/dispatch/closeRoute";
+import { slackNotify } from "@/lib/notify/slack";
 import type { ActionRequest, ActionResponse, Stop } from "@/lib/types";
 
 export async function POST(req: Request): Promise<NextResponse<ActionResponse>> {
@@ -98,7 +99,12 @@ export async function POST(req: Request): Promise<NextResponse<ActionResponse>> 
   // surfaces on the driver link. Idempotent: replays are dropped above (isNew) and closeOneRoute no-ops a
   // route that's already done.
   if (action === "ARRIVED_WAREHOUSE" && body.routeId) {
-    closeOneRoute(body.routeId);
+    const closeResult = closeOneRoute(body.routeId);
+    // If the driver closed the route with stops still unfinished, they need rescheduling — fire the SAME
+    // Slack alert the office/bulk close paths send (previously this path closed silently, so a driver
+    // ending the day with open stops left no "needs rescheduling" trail). First close only, guarded.
+    const line = rescheduleAlertLine(closeResult, "the driver");
+    if (line) void slackNotify(line);
   }
 
   // Fan-out runs async; the response returns immediately.
