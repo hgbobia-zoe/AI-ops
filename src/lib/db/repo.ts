@@ -830,7 +830,17 @@ export function saveLeadNotes(items: LeadNotesRecord[]): number {
 
 /** A quote a client has opened that we may want to Slack about. Filters to opens that landed at least an
  *  hour after the quote was sent (so we don't ping while they're glancing at the just-sent confirmation),
- *  and that we haven't already alerted for (opened_at newer than the last alerted open). */
+ *  and that we haven't already alerted for (opened_at newer than the last alerted open).
+ *
+ *  HONESTY GATE (fixes a proven prod false-positive, 2026-10-19): we only treat a quote as "sent" when
+ *  Goodshuffle's own authoritative send marker exists — `quote_sent_date` (the project's quote-sent date)
+ *  or `last_sent_date` (dateLastSent). The precise message-thread timestamp (`quote_sent_at`) is NOT
+ *  sufficient on its own: the pull derived it from any email in the thread that carried client recipients,
+ *  so a prepared-but-unsent quote on a NEW PROJECT (Send-To-Client never clicked, "Quote Expiration TBD")
+ *  produced a fabricated send time and then mis-fired "opened their quote (Nh after we sent it)". No
+ *  authoritative send marker → no verified send → we stay silent (a false-negative is preferable to a
+ *  fabricated alert). The send anchor for the gap/text is the precise `quote_sent_at` when present, else
+ *  the authoritative date. */
 export interface QuoteOpenCandidate {
   bookingId: string;
   clientName: string | null;
@@ -844,22 +854,34 @@ export function pendingQuoteOpenAlerts(): QuoteOpenCandidate[] {
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT booking_id, client_name, event_name, event_date, location, quote_sent_at, quote_opened_at
+      `SELECT booking_id, client_name, event_name, event_date, location,
+              quote_sent_at, quote_sent_date, last_sent_date, quote_opened_at
          FROM bookings
-        WHERE quote_opened_at IS NOT NULL AND quote_sent_at IS NOT NULL
+        WHERE quote_opened_at IS NOT NULL
+          -- Verified send: Goodshuffle's authoritative sent marker must exist. quote_sent_at alone can be
+          -- fabricated from an unsent prepared quote, so it is not accepted as proof of a send.
+          AND (quote_sent_date IS NOT NULL OR last_sent_date IS NOT NULL)
           AND (quote_open_alerted_at IS NULL OR quote_opened_at > quote_open_alerted_at)
-          AND (julianday(quote_opened_at) - julianday(quote_sent_at)) * 86400 >= 3600`,
+          -- Open must land strictly after the send (by at least the 1h cushion). Anchor on the precise
+          -- quote_sent_at when we have it, else the authoritative send date.
+          AND (julianday(quote_opened_at) - julianday(COALESCE(quote_sent_at, quote_sent_date, last_sent_date))) * 86400 >= 3600`,
     )
     .all() as Record<string, unknown>[];
-  return rows.map((r) => ({
-    bookingId: String(r.booking_id),
-    clientName: (r.client_name as string) ?? null,
-    eventName: (r.event_name as string) ?? null,
-    eventDate: (r.event_date as string) ?? null,
-    location: (r.location as string) ?? null,
-    quoteSentAt: r.quote_sent_at as string,
-    quoteOpenedAt: r.quote_opened_at as string,
-  }));
+  return rows.map((r) => {
+    const sentAt = (r.quote_sent_at as string) ?? null;
+    const sentDate = (r.quote_sent_date as string) ?? (r.last_sent_date as string) ?? null;
+    // Precise send time when captured; otherwise the authoritative date at midnight UTC (day-granular gap).
+    const anchor = sentAt ?? (sentDate ? `${sentDate}T00:00:00Z` : "");
+    return {
+      bookingId: String(r.booking_id),
+      clientName: (r.client_name as string) ?? null,
+      eventName: (r.event_name as string) ?? null,
+      eventDate: (r.event_date as string) ?? null,
+      location: (r.location as string) ?? null,
+      quoteSentAt: anchor,
+      quoteOpenedAt: r.quote_opened_at as string,
+    };
+  });
 }
 
 /** Record that we've handled a quote-open at `openedAt` (whether we alerted or intentionally suppressed a
