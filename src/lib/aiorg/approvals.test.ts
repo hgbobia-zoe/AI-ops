@@ -114,7 +114,7 @@ describe("decideApproval execution routing", () => {
     const r = decideApproval(a.id, "approve", "Tester");
     expect(r.outcome).toBe("executed_queued");
     const out = getApproval(a.id)!;
-    expect(out.status).toBe("executed");
+    expect(out.status).toBe("queued"); // honest: ENQUEUED, not delivered (WS03) — was "executed"
     expect(out.outboxOpId).toBeTruthy();
     const ops = listPendingGsOps(50).filter((o) => o.op === "email_send");
     expect(ops.length).toBe(1);

@@ -79,8 +79,11 @@ export interface DecidedCardView {
 
 export function decidedCardView(status: ApprovalStatus): DecidedCardView {
   switch (status) {
-    case "executed": //   approved AND queued to the outbox (queued to send — NOT confirmed delivered)
+    case "queued": //     approved AND enqueued to the outbox — the honest post-approve state (WS03 lifecycle)
+    case "executed": //   LEGACY (pre-WS03) rows stamped executed on enqueue — same meaning: queued to send
       return { emoji: "✅", title: "Approved — queued to send", byLabel: "Approved by" };
+    case "confirmed": //  the drainer reported Goodshuffle ACCEPTED the write (NOT a recipient read receipt)
+      return { emoji: "✅", title: "Sent — accepted by Goodshuffle", byLabel: "Approved by" };
     case "approved": //   approved but execution held (gate off / forbidden / no async path) — intent recorded
       return { emoji: "⏸️", title: "Approved — send held", byLabel: "Approved by" };
     case "rejected":

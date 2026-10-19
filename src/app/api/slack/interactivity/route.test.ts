@@ -116,7 +116,7 @@ describe("POST /api/slack/interactivity", () => {
     const a = mkEmail();
     const res = await POST(makeReq(payloadBody(APPROVE_ACTION, a.id)));
     expect(res.status).toBe(200);
-    expect(getApproval(a.id)!.status).toBe("executed");
+    expect(getApproval(a.id)!.status).toBe("queued");
     expect(listPendingGsOps(50).filter((o) => o.op === "email_send").length).toBe(1);
     const card = sent[0].body;
     expect(card.replace_original).toBe(true);
@@ -150,10 +150,10 @@ describe("POST /api/slack/interactivity", () => {
     const a = mkEmail();
     await POST(makeReq(payloadBody(APPROVE_ACTION, a.id)));
     await POST(makeReq(payloadBody(APPROVE_ACTION, a.id)));
-    // Still exactly one enqueued op; status is still executed.
+    // Still exactly one enqueued op; status is the honest post-approve "queued" (WS03).
     expect(listPendingGsOps(50).filter((o) => o.op === "email_send").length).toBe(1);
-    expect(getApproval(a.id)!.status).toBe("executed");
-    // The second render shows the real (executed) state, not a fresh "approved".
+    expect(getApproval(a.id)!.status).toBe("queued");
+    // The second render shows the real (queued) state, not a fresh "approved".
     expect(String(sent[1].body.text)).toContain("queued");
   });
 
@@ -162,7 +162,7 @@ describe("POST /api/slack/interactivity", () => {
     const a = mkEmail();
     await POST(makeReq(payloadBody(APPROVE_ACTION, a.id)));
     await POST(makeReq(payloadBody(REJECT_ACTION, a.id)));
-    expect(getApproval(a.id)!.status).toBe("executed");
+    expect(getApproval(a.id)!.status).toBe("queued");
     // The reject render must NOT claim the item was dismissed.
     expect(String(sent[1].body.text)).not.toContain("Dismissed");
     expect(String(sent[1].body.text)).toContain("queued");

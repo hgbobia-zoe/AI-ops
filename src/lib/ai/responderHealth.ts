@@ -124,7 +124,9 @@ export function recordReactiveAlert(now: number = Date.now(), cooloffMs: number 
 }
 
 // ── Proactive (runtime-job) alert dedupe (2h cool-off + recovered note) ──────────
-interface JobAlertRecord {
+// Exported so sibling staleness alarms (e.g. the outbox-health alarm, WS03) can reuse the SAME pure
+// decider (decideJobAlert) with their own kv row, instead of duplicating the cool-off/recovered logic.
+export interface JobAlertRecord {
   firstDownAt?: string;
   lastAlertedAt?: string;
 }

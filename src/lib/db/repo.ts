@@ -16,6 +16,7 @@ import {
   type EtaLinkMintInput,
   type EtaLinkMintRequest,
 } from "@/lib/eta/etaLinkMint";
+import { decideAckTransition, reconcileApprovalForOp, type OutboxAckStatus } from "@/lib/aiorg/outboxLifecycle";
 
 interface StopRow {
   stop_id: string;
@@ -2016,11 +2017,18 @@ export interface GsOutboxItem {
   gsRouteId?: string;
   transactionId?: string;
   label?: string;
-  status: "pending" | "done" | "failed";
+  // "pending" = awaiting a drainer (incl. a transient failure being retried behind nextAttemptAt);
+  // "done" = destination accepted; "dead" = bounded retries exhausted (dead-letter, needs a human);
+  // "failed" survives only on legacy rows written before the WS03 retry lifecycle.
+  status: "pending" | "done" | "failed" | "dead";
   attempts: number;
   lastError?: string;
   /** Structured op data (e.g. { photoIds } for a photo_upload). */
   payload?: unknown;
+  /** Retry lifecycle (WS03). maxAttempts null => code default; nextAttemptAt a backoff gate; deadLetteredAt set when exhausted. */
+  maxAttempts?: number;
+  nextAttemptAt?: string;
+  deadLetteredAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -2037,6 +2045,9 @@ interface GsOutboxRow {
   status: string;
   attempts: number;
   last_error: string | null;
+  max_attempts: number | null;
+  next_attempt_at: string | null;
+  dead_lettered_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -2054,6 +2065,9 @@ function toGsItem(r: GsOutboxRow): GsOutboxItem {
     status: r.status as GsOutboxItem["status"],
     attempts: r.attempts,
     lastError: r.last_error ?? undefined,
+    maxAttempts: r.max_attempts ?? undefined,
+    nextAttemptAt: r.next_attempt_at ?? undefined,
+    deadLetteredAt: r.dead_lettered_at ?? undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -2141,13 +2155,31 @@ export function enqueueWarehouseTeamAdds(limit = 50): number {
   return n;
 }
 
-/** Pending write-backs, oldest first — what a logged-in session should replay. */
+/** Pending write-backs a logged-in session should replay now, oldest first. A transient failure that is
+ *  waiting out its retry backoff (next_attempt_at in the future) is EXCLUDED until it's due, so a drainer
+ *  doesn't hammer a failing write every cycle. A dead-lettered op (status 'dead') is never returned. */
 export function listPendingGsOps(limit = 50): GsOutboxItem[] {
+  const now = new Date().toISOString();
   return (
     getDb()
-      .prepare("SELECT * FROM gs_outbox WHERE status = 'pending' ORDER BY created_at LIMIT ?")
+      .prepare("SELECT * FROM gs_outbox WHERE status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at LIMIT ?")
+      .all(now, limit) as GsOutboxRow[]
+  ).map(toGsItem);
+}
+
+/** Dead-lettered write-backs (bounded retries exhausted) — the actionable backlog for a human. Newest first. */
+export function listDeadLetterGsOps(limit = 50): GsOutboxItem[] {
+  return (
+    getDb()
+      .prepare("SELECT * FROM gs_outbox WHERE status = 'dead' ORDER BY updated_at DESC LIMIT ?")
       .all(limit) as GsOutboxRow[]
   ).map(toGsItem);
+}
+
+/** One outbox op by id — for correlating an approval to its op outcome (WS03 / consumed by WS05). */
+export function getGsOpById(id: string): GsOutboxItem | null {
+  const r = getDb().prepare("SELECT * FROM gs_outbox WHERE id = ?").get(id) as GsOutboxRow | undefined;
+  return r ? toGsItem(r) : null;
 }
 
 /** Has a touchpoint note already been queued for this dedupe key (any status)? Prevents double-logging
@@ -2187,14 +2219,44 @@ export function listGsOps(limit = 50): GsOutboxItem[] {
   ).map(toGsItem);
 }
 
-/** Mark a queued write-back done or failed once a session has (or hasn't) applied it. */
-export function ackGsOp(id: string, ok: boolean, error?: string): void {
-  getDb()
-    .prepare(
-      `UPDATE gs_outbox SET status = ?, attempts = attempts + 1,
-        last_error = ?, updated_at = ? WHERE id = ?`,
-    )
-    .run(ok ? "done" : "failed", ok ? null : (error ?? "unknown"), new Date().toISOString(), id);
+/**
+ * Mark a queued write-back done or failed once a session has (or hasn't) applied it, and reconcile the
+ * linked approval. This is the SINGLE shared choke point both drainers reach (extension + bookmarklet
+ * POST /api/gs/outbox), so the WS03 verification lifecycle lives here and every op type gets it:
+ *   • ok        → op 'done';  a linked approval → CONFIRMED (destination accepted).
+ *   • !ok       → bounded retry: the op stays 'pending' behind a backoff (next_attempt_at) and retries,
+ *                 until the attempt budget is exhausted, when it is DEAD-LETTERED (status 'dead') and the
+ *                 linked approval → FAILED. Never silently terminal, never retried past the budget.
+ * Returns the resulting op status + whether an approval was reconciled (for the caller/telemetry).
+ */
+export function ackGsOp(
+  id: string,
+  ok: boolean,
+  error?: string,
+): { status: OutboxAckStatus | "noop"; approvalReconciledTo?: string } {
+  const db = getDb();
+  const row = db.prepare("SELECT attempts, max_attempts FROM gs_outbox WHERE id = ?").get(id) as
+    | { attempts: number; max_attempts: number | null }
+    | undefined;
+  if (!row) return { status: "noop" }; // unknown id — nothing to ack (idempotent)
+
+  const t = decideAckTransition({ attempts: row.attempts, maxAttempts: row.max_attempts }, ok, error, Date.now());
+  db.prepare(
+    `UPDATE gs_outbox SET status = @status, attempts = @attempts, last_error = @lastError,
+       next_attempt_at = @nextAttemptAt, dead_lettered_at = COALESCE(@deadLetteredAt, dead_lettered_at),
+       updated_at = @now WHERE id = @id`,
+  ).run({
+    id,
+    status: t.status,
+    attempts: t.attempts,
+    lastError: t.lastError,
+    nextAttemptAt: t.nextAttemptAt,
+    deadLetteredAt: t.deadLetteredAt,
+    now: new Date().toISOString(),
+  });
+
+  const rec = reconcileApprovalForOp(id, t);
+  return { status: t.status, approvalReconciledTo: rec.reconciled ? rec.to : undefined };
 }
 
 // ── Ignition etaLink mint (office-machine path) ─────────────────────────────────────────────────────
