@@ -70,6 +70,8 @@ function toCard(b: BookingView, today: string, status: LeadBoardStatus): LeadCar
     statusLabel: b.statusLabel,
     daysToEvent: b.eventDate ? daysBetween(today, b.eventDate) : null,
     status,
+    venue: b.venue,
+    location: b.location,
   };
 }
 

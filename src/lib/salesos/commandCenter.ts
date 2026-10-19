@@ -21,6 +21,8 @@ export interface QueueItem {
   nba: NbaResult;
   repliedMinutesAgo: number | null;
   lastReplyPreview: string | null;
+  venue: string | null; // address signals (searchable in the Sales OS views)
+  location: string | null;
 }
 
 export interface CommandCenterView {
@@ -68,6 +70,8 @@ export function salesCommandCenter(): CommandCenterView {
       nba,
       repliedMinutesAgo,
       lastReplyPreview: inbound?.body?.slice(0, 120) ?? null,
+      venue: b.venue,
+      location: b.location,
     };
   });
 

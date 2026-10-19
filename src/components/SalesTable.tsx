@@ -7,7 +7,9 @@
 import { useState, useMemo } from "react";
 import { ArrowUp, ArrowDown } from "lucide-react";
 import { BOARD_COLUMNS, STATUS_LABEL, type LeadCard } from "@/lib/salesos/boardTypes";
+import { matchesQuery } from "@/lib/salesos/search";
 import { LeadSidePanel } from "@/components/LeadSidePanel";
+import { SearchCount, useSalesSearch } from "@/components/SalesSearch";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
 const shortDate = (ymd: string | null): string => {
@@ -35,15 +37,22 @@ type SortKey = "project" | "client" | "status" | "value" | "netPaid" | "remainin
 const num = (n: number | null): number => (n == null ? -1 : n);
 
 export function SalesTable({ cards, showMoney, viewer }: { cards: LeadCard[]; showMoney: boolean; viewer: { name: string; quoUserId: string | null; initials: string } }): React.JSX.Element {
+  const { query } = useSalesSearch();
   const [filter, setFilter] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("eventDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [selected, setSelected] = useState<string | null>(null);
 
-  const counts = useMemo(() => Object.fromEntries(BOARD_COLUMNS.map((c) => [c.key, cards.filter((l) => l.status === c.key).length])), [cards]);
+  // The search narrows the whole set first; the status chips (and their counts) then act on what matches.
+  const searched = useMemo(
+    () => cards.filter((l) => matchesQuery({ id: l.id, clientName: l.clientName, eventName: l.eventName, value: l.value, stage: STATUS_LABEL[l.status], venue: l.venue, location: l.location }, query)),
+    [cards, query],
+  );
+  const counts = useMemo(() => Object.fromEntries(BOARD_COLUMNS.map((c) => [c.key, searched.filter((l) => l.status === c.key).length])), [searched]);
+  const searching = query.trim().length > 0;
 
   const rows = useMemo(() => {
-    const filtered = filter ? cards.filter((l) => l.status === filter) : cards;
+    const filtered = filter ? searched.filter((l) => l.status === filter) : searched;
     const dir = sortDir === "asc" ? 1 : -1;
     const val = (l: LeadCard): number | string => {
       switch (sortKey) {
@@ -64,7 +73,7 @@ export function SalesTable({ cards, showMoney, viewer }: { cards: LeadCard[]; sh
       if (av > bv) return 1 * dir;
       return 0;
     });
-  }, [cards, filter, sortKey, sortDir]);
+  }, [searched, filter, sortKey, sortDir]);
 
   const sort = (k: SortKey): void => {
     if (k === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -83,8 +92,13 @@ export function SalesTable({ cards, showMoney, viewer }: { cards: LeadCard[]; sh
   return (
     <main className="p-5 md:p-6">
       <header className="mb-4">
-        <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
-        <p className="text-sm text-muted-foreground">{cards.length} open {cards.length === 1 ? "lead" : "leads"} · click a status to filter, a column to sort.</p>
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
+          <SearchCount shown={searched.length} total={cards.length} />
+        </div>
+        <p className="text-sm text-muted-foreground">
+          {searching ? `${searched.length} of ${cards.length} leads match` : `${cards.length} open ${cards.length === 1 ? "lead" : "leads"}`} · click a status to filter, a column to sort.
+        </p>
       </header>
 
       {/* Clickable status filters */}
@@ -93,7 +107,7 @@ export function SalesTable({ cards, showMoney, viewer }: { cards: LeadCard[]; sh
           onClick={() => setFilter(null)}
           className={`rounded-full border px-2.5 py-1 text-xs font-medium ${filter === null ? "border-white/40 bg-white/10 text-foreground" : "border-white/15 text-muted-foreground hover:text-foreground"}`}
         >
-          All <span className="tabular-nums">{cards.length}</span>
+          All <span className="tabular-nums">{searched.length}</span>
         </button>
         {BOARD_COLUMNS.map((c) => {
           const on = filter === c.key;
@@ -126,7 +140,7 @@ export function SalesTable({ cards, showMoney, viewer }: { cards: LeadCard[]; sh
           </thead>
           <tbody className="divide-y divide-white/5">
             {rows.length === 0 ? (
-              <tr><td colSpan={showMoney ? 9 : 6} className="p-8 text-center text-muted-foreground">No leads{filter ? " in this status" : ""}.</td></tr>
+              <tr><td colSpan={showMoney ? 9 : 6} className="p-8 text-center text-muted-foreground">{searching ? `No projects match “${query.trim()}”${filter ? " in this status" : ""}.` : `No leads${filter ? " in this status" : ""}.`}</td></tr>
             ) : (
               rows.map((l) => (
                 <tr

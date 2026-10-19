@@ -35,4 +35,6 @@ export interface LeadCard {
   statusLabel: string;
   daysToEvent: number | null;
   status: LeadStatus;
+  venue: string | null; // address signals (searchable in the Sales OS views)
+  location: string | null;
 }

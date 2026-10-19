@@ -5,14 +5,21 @@
 // click selects into the panel (local state — no navigation); "Open full lead" opens the full board in
 // the modal. The analytical sub-views (Bid/Lost/Trends) and the Table/Board views render full-width.
 // All data is the existing QueueItem[]; nothing is fetched here.
+//
+// A single project search bar lives in the shared header (next to the view toggle). Its query is held
+// in SalesSearchProvider and mirrored to ?q=, so it survives the Board/Worklist/Table toggle and is
+// shareable. Every view filters its own set with the same matchesQuery, so a query means the same thing
+// everywhere; here the worklist filters its queue and keeps the group/figure counts honest.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { List, Table2, Columns3 } from "lucide-react";
 import type { QueueItem } from "@/lib/salesos/commandCenter";
 import { NBA_LABEL } from "@/lib/salesos/nba";
+import { matchesQuery } from "@/lib/salesos/search";
 import { LeadSidePanel } from "@/components/LeadSidePanel";
+import { SalesSearchProvider, SalesSearchBar, SearchCount, useSalesSearch, withQuery } from "@/components/SalesSearch";
 import { FigureStrip, ActionVerb, tierBar, tierActionTone, tierValueText, tableCls, theadCls, thCls, type Tier, type Figure } from "@/components/console-primitives";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
@@ -39,6 +46,17 @@ function repliedLabel(mins: number | null): string | null {
 }
 const isInferred = (src: string): boolean => src === "inbound_reply" || src === "derived" || src === "inferred";
 
+// A QueueItem projected onto the shared searchable shape (the worklist shows the customer-state label).
+const toSearchable = (it: QueueItem) => ({
+  id: it.id,
+  clientName: it.clientName,
+  eventName: it.eventName,
+  value: it.value,
+  stage: it.stateLabel,
+  venue: it.venue,
+  location: it.location,
+});
+
 type ViewKey = "worklist" | "table" | "board";
 
 export function SalesShell({
@@ -58,43 +76,78 @@ export function SalesShell({
   children: React.ReactNode;
 }): React.JSX.Element {
   const pathname = usePathname();
-  const [selected, setSelected] = useState<string | null>(null);
-
   const seg = pathname.split("/")[2] ?? "";
-  // Analytical / full-width sub-views render themselves; the master-detail worklist steps aside.
+  // Analytical / full-width sub-views render themselves; the shared header + master-detail step aside.
   if (seg === "bid" || seg === "lost" || seg === "trends" || seg === "status") return <>{children}</>;
 
-  // Board is the default view (/salesos redirects to /salesos/board). The worklist lives at
-  // /salesos/worklist and is rendered by this shell; every other path (board, table, a lead-id deep
-  // link) renders its own page as children under the shared view switcher.
+  // Board is the default view (/salesos redirects to /salesos/board). The worklist is rendered by this
+  // shell; every other path (board, table, a lead-id deep link) renders its own page as children under
+  // the shared view switcher + search bar.
   const view: ViewKey = seg === "worklist" ? "worklist" : seg === "table" ? "table" : "board";
-  if (seg !== "worklist") {
-    return (
+
+  return (
+    <SalesSearchProvider>
       <div className="flex min-w-0 flex-1 flex-col">
-        <ViewSwitcher active={view} />
-        <div className="min-w-0 flex-1">{children}</div>
+        <SalesHeader active={view} />
+        {view === "worklist" ? (
+          <WorklistBody queue={queue} showMoney={showMoney} justReplied={justReplied} totalPotential={totalPotential} viewer={viewer} />
+        ) : (
+          <div className="min-w-0 flex-1">{children}</div>
+        )}
       </div>
-    );
-  }
+    </SalesSearchProvider>
+  );
+}
 
-  const now = queue.filter((q) => tierOf(q) === "now");
-  const today = queue.filter((q) => tierOf(q) === "today");
-  const monitor = queue.filter((q) => tierOf(q) === "passive");
+function SalesHeader({ active }: { active: ViewKey }): React.JSX.Element {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 px-6 pt-4">
+      <ViewSwitcher active={active} />
+      <SalesSearchBar />
+    </div>
+  );
+}
 
+function WorklistBody({
+  queue,
+  showMoney,
+  justReplied,
+  totalPotential,
+  viewer,
+}: {
+  queue: QueueItem[];
+  showMoney: boolean;
+  justReplied: number;
+  totalPotential: number | null;
+  viewer: { name: string; quoUserId: string | null; initials: string };
+}): React.JSX.Element {
+  const { query } = useSalesSearch();
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const filtered = useMemo(() => queue.filter((q) => matchesQuery(toSearchable(q), query)), [queue, query]);
+
+  const now = filtered.filter((q) => tierOf(q) === "now");
+  const today = filtered.filter((q) => tierOf(q) === "today");
+  const monitor = filtered.filter((q) => tierOf(q) === "passive");
+
+  // Figures reflect the filtered set so the header never contradicts the rows below it.
+  const filteredPotential = showMoney ? filtered.reduce<number | null>((sum, q) => (q.value != null ? (sum ?? 0) + q.value : sum), null) : null;
   const figures: Figure[] = [
     { label: "Act now", value: now.length, tone: now.length ? "critical" : "default" },
     { label: "Today", value: today.length, tone: today.length ? "attention" : "default" },
     { label: "Replied 24h", value: justReplied },
     ...(showMoney
-      ? ([{ label: "Open", value: queue.length, sep: true }, { label: "Pipeline", value: money(totalPotential) }] as Figure[])
-      : ([{ label: "Open", value: queue.length, sep: true }] as Figure[])),
+      ? ([{ label: "Open", value: filtered.length, sep: true }, { label: "Pipeline", value: money(query.trim() ? filteredPotential : totalPotential) }] as Figure[])
+      : ([{ label: "Open", value: filtered.length, sep: true }] as Figure[])),
   ];
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col">
-      <ViewSwitcher active="worklist" />
+    <>
       <div className="flex flex-wrap items-end justify-between gap-4 px-6 pt-4 pb-3">
-        <h1 className="text-[22px] font-medium tracking-tight">Sales OS</h1>
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-[22px] font-medium tracking-tight">Sales OS</h1>
+          <SearchCount shown={filtered.length} total={queue.length} />
+        </div>
         <FigureStrip figures={figures} />
       </div>
 
@@ -102,6 +155,8 @@ export function SalesShell({
       <div className="min-w-0 flex-1 overflow-auto border-t border-border">
         {queue.length === 0 ? (
           <p className="px-6 py-16 text-center text-[13.5px] text-muted-foreground">No active opportunities.</p>
+        ) : filtered.length === 0 ? (
+          <p className="px-6 py-16 text-center text-[13.5px] text-muted-foreground">No projects match &ldquo;{query.trim()}&rdquo;.</p>
         ) : (
           <table className={tableCls}>
             <colgroup>
@@ -130,7 +185,7 @@ export function SalesShell({
       </div>
 
       {selected && <LeadSidePanel id={selected} viewer={viewer} onClose={() => setSelected(null)} />}
-    </div>
+    </>
   );
 }
 
@@ -203,18 +258,19 @@ function Group({
 }
 
 function ViewSwitcher({ active }: { active: ViewKey }): React.JSX.Element {
+  const { query } = useSalesSearch();
   const items: { key: ViewKey; label: string; href: string; icon: typeof List }[] = [
     { key: "board", label: "Board", href: "/salesos/board", icon: Columns3 },
     { key: "worklist", label: "Worklist", href: "/salesos/worklist", icon: List },
     { key: "table", label: "Table", href: "/salesos/table", icon: Table2 },
   ];
   return (
-    <div className="flex items-center gap-5 px-6 pt-4">
+    <div className="flex items-center gap-5">
       {items.map((it) => {
         const on = active === it.key;
         const Icon = it.icon;
         return (
-          <Link key={it.key} href={it.href} aria-current={on ? "page" : undefined} className={`flex items-center gap-1.5 text-[13.5px] transition-colors ${on ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+          <Link key={it.key} href={withQuery(it.href, query)} aria-current={on ? "page" : undefined} className={`flex items-center gap-1.5 text-[13.5px] transition-colors ${on ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
             <Icon className="size-4" /> {it.label}
           </Link>
         );
