@@ -2194,6 +2194,34 @@ export function pendingCreateOpExists(intakeId: string): boolean {
   return Boolean(row);
 }
 
+/** Is there already a PENDING set_delivery_fee op for this project at this exact amount? Idempotency guard
+ *  for the Delivery Pricing push: a double-click / re-push / on-demand re-nudge of the SAME fee must not
+ *  enqueue a second identical op while the first is still waiting for the office browser. Matches on the
+ *  project (transaction_id) + the `amount` in the payload (dollars). Only PENDING counts — once an op is
+ *  done/failed a genuine re-push (same or new amount) goes through. A push at a DIFFERENT amount is a real
+ *  change of intent and is NOT deduped (the later op's override wins). Returns the existing op's id so the
+ *  caller can report/poll it. */
+export function pendingDeliveryFeeOp(transactionId: string, amount: number): { id: string } | null {
+  if (!transactionId || !Number.isFinite(amount)) return null;
+  const row = getDb()
+    .prepare(
+      "SELECT id FROM gs_outbox WHERE op = 'set_delivery_fee' AND status = 'pending' AND transaction_id = ? AND json_extract(payload, '$.amount') = ? LIMIT 1",
+    )
+    .get(String(transactionId), amount) as { id: string } | undefined;
+  return row ? { id: row.id } : null;
+}
+
+/** Current status of one gs_outbox op (for the app to poll a write it just queued). Returns null when the
+ *  id is unknown. `status` is 'pending' | 'done' | 'failed'. */
+export function getGsOpStatus(id: string): { status: string; lastError?: string } | null {
+  if (!id) return null;
+  const row = getDb()
+    .prepare("SELECT status, last_error FROM gs_outbox WHERE id = ?")
+    .get(id) as { status: string; last_error: string | null } | undefined;
+  if (!row) return null;
+  return { status: row.status, lastError: row.last_error ?? undefined };
+}
+
 /** All write-backs (any status), newest first — for the dispatch sync panel. */
 export function listGsOps(limit = 50): GsOutboxItem[] {
   return (
