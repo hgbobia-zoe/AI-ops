@@ -57,6 +57,9 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (typeof body.ok !== "boolean") {
     return NextResponse.json({ error: "explicit boolean ok required" }, { status: 400, headers: CORS });
   }
-  ackGsOp(body.id, body.ok, body.error);
-  return NextResponse.json({ ok: true }, { headers: CORS });
+  // The ack applies the verification lifecycle: success confirms the linked approval; a failure retries
+  // with backoff and dead-letters once the budget is exhausted (then the approval fails). Surface the
+  // resulting op status so the drainer/telemetry can see what happened (additive, non-breaking).
+  const res = ackGsOp(body.id, body.ok, body.error);
+  return NextResponse.json({ ok: true, opStatus: res.status, approvalReconciledTo: res.approvalReconciledTo }, { headers: CORS });
 }

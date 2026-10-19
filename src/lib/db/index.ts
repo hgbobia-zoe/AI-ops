@@ -2099,6 +2099,14 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "staff_shifts", column: "connecteam_last_modified", type: "TEXT" },// ISO last-modified captured FROM Connecteam, when the API exposes one (else null — see the feasibility note)
   { table: "staff_shifts", column: "sync_status", type: "TEXT" },             // null | synced | needs_review (divergence / vanished Connecteam copy)
   { table: "staff_shifts", column: "sync_note", type: "TEXT" },               // human explanation when sync_status = needs_review
+  // Did-It-Land verification lifecycle (WS03): bounded retry + dead-letter bookkeeping on the write-back
+  // outbox. All additive + nullable so existing rows keep working (null max_attempts => code default; a
+  // row with no next_attempt_at is immediately drainable; dead_lettered_at null until retries exhaust).
+  // A transient ack failure now keeps the op 'pending' with a future next_attempt_at (backoff); once
+  // attempts hit the budget the op flips to status 'dead' (dead-letter) and dead_lettered_at is stamped.
+  { table: "gs_outbox", column: "max_attempts", type: "INTEGER" },   // per-op retry budget (null => DEFAULT_MAX_ATTEMPTS)
+  { table: "gs_outbox", column: "next_attempt_at", type: "TEXT" },   // ISO; a retryable failure is held until this time (backoff). null = eligible now
+  { table: "gs_outbox", column: "dead_lettered_at", type: "TEXT" },  // ISO; set when bounded retries are exhausted (status => 'dead')
 ];
 
 function migrate(db: DB): void {
@@ -2133,6 +2141,7 @@ function ensureIndexes(db: DB): void {
     CREATE INDEX IF NOT EXISTS idx_routes_date ON routes(date);
     CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at DESC);
     CREATE INDEX IF NOT EXISTS idx_seo_opportunities_stage ON seo_opportunities(stage, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_approvals_outbox ON ai_approvals(outbox_op_id);
   `);
 }
 
