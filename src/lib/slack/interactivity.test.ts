@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { parseInteractivity, decisionForAction, isSlackApprover, APPROVE_ACTION, REJECT_ACTION } from "./interactivity";
+import {
+  parseInteractivity,
+  decisionForAction,
+  isSlackApprover,
+  decidedCardView,
+  APPROVE_ACTION,
+  REJECT_ACTION,
+  REQUEST_CHANGES_ACTION,
+} from "./interactivity";
 
 function encode(payload: unknown): string {
   return new URLSearchParams({ payload: JSON.stringify(payload) }).toString();
@@ -37,10 +45,31 @@ describe("parseInteractivity", () => {
 });
 
 describe("decisionForAction", () => {
-  it("maps the approve/reject action ids and nothing else", () => {
+  it("maps the approve/reject/request-changes action ids and nothing else", () => {
     expect(decisionForAction(APPROVE_ACTION)).toBe("approve");
     expect(decisionForAction(REJECT_ACTION)).toBe("reject");
+    expect(decisionForAction(REQUEST_CHANGES_ACTION)).toBe("request_info");
     expect(decisionForAction("some_other_button")).toBeNull();
+  });
+});
+
+describe("decidedCardView (renders the REAL stored state, never the click's intent)", () => {
+  it("shows queued for an executed approval, held for an approved-but-not-sent one", () => {
+    expect(decidedCardView("executed")).toMatchObject({ emoji: "✅", byLabel: "Approved by" });
+    expect(decidedCardView("executed").title.toLowerCase()).toContain("queued");
+    expect(decidedCardView("approved")).toMatchObject({ byLabel: "Approved by" });
+    expect(decidedCardView("approved").title.toLowerCase()).toContain("held");
+  });
+  it("never claims success for a failed execution", () => {
+    const v = decidedCardView("failed");
+    expect(v.emoji).toBe("⚠️");
+    expect(v.title.toLowerCase()).not.toContain("approved");
+    expect(v.title.toLowerCase()).toContain("not sent");
+  });
+  it("labels dismissed and change-requested states distinctly", () => {
+    expect(decidedCardView("rejected")).toMatchObject({ title: "Dismissed", byLabel: "Dismissed by" });
+    expect(decidedCardView("info_requested").byLabel).toBe("Requested by");
+    expect(decidedCardView("info_requested").title.toLowerCase()).toContain("app");
   });
 });
 

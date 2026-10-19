@@ -11,7 +11,7 @@
 import { NextResponse } from "next/server";
 import { botAnnounce, appUrl, cardBlocks, BOTS, type BotCard, type BotId } from "@/lib/notify/aiBots";
 import { slackPostAs } from "@/lib/notify/slack";
-import { APPROVE_ACTION, REJECT_ACTION } from "@/lib/slack/interactivity";
+import { APPROVE_ACTION, REJECT_ACTION, REQUEST_CHANGES_ACTION } from "@/lib/slack/interactivity";
 import { createApproval } from "@/lib/aiorg/approvals";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +47,7 @@ function sampleCard(bot: BotId): BotCard {
       body: "*This is a test card.* Clicking Approve is safe — it records intent and sends nothing.",
       buttons: [
         { text: "Approve & send", actionId: APPROVE_ACTION, value: appr.id, style: "primary" },
+        { text: "Request changes", actionId: REQUEST_CHANGES_ACTION, value: appr.id },
         { text: "Dismiss", actionId: REJECT_ACTION, value: appr.id, style: "danger" },
       ],
       link: { text: "Open to edit", url: appUrl("/ai-org/approvals") },
