@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive, GripVertical } from "lucide-react";
 import { STATUS_LABEL, type BoardStatus, type LeadCard } from "@/lib/salesos/boardTypes";
-import { matchesQuery } from "@/lib/salesos/search";
+import { matchesQuery, matchesState } from "@/lib/salesos/search";
 import { LeadSidePanel } from "@/components/LeadSidePanel";
 import { SearchCount, useSalesSearch } from "@/components/SalesSearch";
 
@@ -34,7 +34,7 @@ export function SalesBoard({
   viewer: { name: string; quoUserId: string | null; initials: string };
 }): React.JSX.Element {
   const router = useRouter();
-  const { query } = useSalesSearch();
+  const { query, stateFilter } = useSalesSearch();
   const [cards, setCards] = useState(initialCards);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<BoardStatus | null>(null);
@@ -51,9 +51,12 @@ export function SalesBoard({
     }
     return out;
   }, [cards, columns, query]);
+  // A state filter focuses the board on that one column (Goodshuffle-style); the column key IS the board
+  // status, so this is exact. Search still narrows within the shown column(s).
+  const shownColumns = useMemo(() => columns.filter((col) => matchesState(col.key, stateFilter)), [columns, stateFilter]);
   const total = useMemo(() => columns.reduce((n, col) => n + cards[col.key].length, 0), [cards, columns]);
-  const shown = useMemo(() => columns.reduce((n, col) => n + visible[col.key].length, 0), [columns, visible]);
-  const searching = query.trim().length > 0;
+  const shown = useMemo(() => shownColumns.reduce((n, col) => n + visible[col.key].length, 0), [shownColumns, visible]);
+  const searching = query.trim().length > 0 || stateFilter !== null;
 
   async function persist(id: string, status: BoardStatus | "archived"): Promise<void> {
     try {
@@ -100,10 +103,12 @@ export function SalesBoard({
         </div>
       )}
       {searching && shown === 0 ? (
-        <p className="flex-1 px-6 py-16 text-center text-[13.5px] text-muted-foreground">No projects match &ldquo;{query.trim()}&rdquo;.</p>
+        <p className="flex-1 px-6 py-16 text-center text-[13.5px] text-muted-foreground">
+          {query.trim() ? <>No projects match &ldquo;{query.trim()}&rdquo;{stateFilter ? " in this state" : ""}.</> : "No projects in this state."}
+        </p>
       ) : (
       <div className="flex min-h-0 flex-1 items-start gap-3 overflow-auto p-4 md:p-5">
-      {columns.map((col) => {
+      {shownColumns.map((col) => {
         const list = visible[col.key];
         const isOver = overCol === col.key;
         return (

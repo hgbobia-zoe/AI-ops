@@ -2,16 +2,14 @@
 // off an effective status: a manual override (set by dragging on the board) if present, else a derived
 // default from Goodshuffle signals. RULES derive the default; the human can override by moving a card.
 
-import { getPipelineLeads, getLeadStatusMap, getAllCustomerStates, getLatestInboundForLead, getLastCommsAt, type BookingView, type LeadBoardStatus } from "@/lib/db/repo";
+import { getPipelineLeads, getLeadStatusMap, getAllCustomerStates, getLatestInboundForLead, getLastCommsAt, type BookingView, type LeadBoardStatus, type CustomerStateRow } from "@/lib/db/repo";
 import { resolveDeterministic, fromStored } from "./stateService";
 import { nextBestAction } from "./nba";
 import { todayInOpsTz } from "@/lib/dates";
-import { BOARD_COLUMNS, type BoardStatus, type LeadCard } from "./boardTypes";
+import { BOARD_COLUMNS, autoStatus, daysSinceContactDays, type BoardStatus, type LeadCard } from "./boardTypes";
 
-export { BOARD_COLUMNS, STATUS_LABEL } from "./boardTypes";
+export { BOARD_COLUMNS, STATUS_LABEL, autoStatus } from "./boardTypes";
 export type { BoardStatus, LeadStatus, LeadCard } from "./boardTypes";
-
-const FOLLOWUP_SILENCE_DAYS = 4; // quote sent + this many days with no contact → Need Follow-up
 
 function daysBetween(fromYmd: string, toYmd: string): number {
   const a = Date.parse(`${fromYmd}T00:00:00Z`);
@@ -25,33 +23,18 @@ const minutesSince = (iso: string | null): number | null => {
   return Number.isFinite(t) ? Math.max(0, Math.round((Date.now() - t) / 60_000)) : null;
 };
 
-interface AutoSignals {
-  state: string; // customer state machine value
-  nbaAction: string; // next-best-action
-  repliedMinutesAgo: number | null;
-  daysSinceContact: number | null;
-}
-
-/** Automatic board status from the same signals the worklist uses. A manual drag overrides this.
- *  - signed → Signed; lost/cancelled → archived (off board)
- *  - customer just replied, an urgent next-action, or an objection/ready state → Action Needed
- *  - quote not sent → New
- *  - sent but dormant / silent past the follow-up window → Need Follow-up
- *  - otherwise (sent, waiting) → Quote Sent */
-function autoStatus(b: BookingView, sig: AutoSignals): LeadBoardStatus {
-  if (b.signed) return "signed";
-  if (/lost|cancel|dead/i.test(b.statusLabel)) return "archived";
-
-  const sent = !!b.quoteSentDate || /sent|proposal|quote|contract|review/i.test(b.statusLabel);
-  const justReplied = sig.repliedMinutesAgo != null && sig.repliedMinutesAgo <= 1440;
-  const urgentNba = sig.nbaAction === "CALL_NOW" || sig.nbaAction === "HANDLE_OBJECTION" || sig.nbaAction === "CLOSE" || sig.nbaAction === "ESCALATE";
-  const actionState = sig.state === "PRICE_OBJECTION" || sig.state === "COMPETITOR_COMPARISON" || sig.state === "READY_TO_BOOK";
-  if (justReplied || urgentNba || actionState) return "action_needed";
-
-  if (!sent) return "new";
-  if (sig.state === "DORMANT") return "follow_up";
-  if (sig.daysSinceContact != null && sig.daysSinceContact >= FOLLOWUP_SILENCE_DAYS) return "follow_up";
-  return "quote_sent";
+/** The effective board status for a lead: a manual override if present, else the derived auto status
+ *  from the same signals the worklist uses. ONE source of truth, so the board, table and the worklist's
+ *  state filter all agree on what state a lead is in. */
+export function deriveBoardStatus(b: BookingView, today: string, opts?: { override?: LeadBoardStatus; stored?: CustomerStateRow }): LeadBoardStatus {
+  if (opts?.override) return opts.override;
+  const state = opts?.stored ? fromStored(opts.stored) : resolveDeterministic(b);
+  const inbound = getLatestInboundForLead(b.bookingId);
+  const repliedMinutesAgo = minutesSince(inbound?.occurredAt ?? inbound?.ts ?? null);
+  const dte = b.eventDate ? daysBetween(today, b.eventDate) : null;
+  const nba = nextBestAction({ state: state.state, value: b.grandTotal, daysToEvent: dte, repliedMinutesAgo });
+  const daysSinceContact = daysSinceContactDays(getLastCommsAt(b.bookingId), b.quoteSentDate, today);
+  return autoStatus(b, { state: state.state, nbaAction: nba.action, repliedMinutesAgo, daysSinceContact });
 }
 
 function toCard(b: BookingView, today: string, status: LeadBoardStatus): LeadCard {
@@ -81,19 +64,7 @@ export function salesLeadCards(): LeadCard[] {
   const overrides = getLeadStatusMap();
   const states = getAllCustomerStates();
   return getPipelineLeads(today).map((b) => {
-    const override = overrides.get(b.bookingId);
-    let status = override;
-    if (!status) {
-      const stored = states.get(b.bookingId);
-      const state = stored ? fromStored(stored) : resolveDeterministic(b);
-      const inbound = getLatestInboundForLead(b.bookingId);
-      const repliedMinutesAgo = minutesSince(inbound?.occurredAt ?? inbound?.ts ?? null);
-      const dte = b.eventDate ? daysBetween(today, b.eventDate) : null;
-      const nba = nextBestAction({ state: state.state, value: b.grandTotal, daysToEvent: dte, repliedMinutesAgo });
-      const lastAt = getLastCommsAt(b.bookingId);
-      const daysSinceContact = lastAt ? daysBetween(lastAt.slice(0, 10), today) : b.quoteSentDate ? daysBetween(b.quoteSentDate.slice(0, 10), today) : null;
-      status = autoStatus(b, { state: state.state, nbaAction: nba.action, repliedMinutesAgo, daysSinceContact });
-    }
+    const status = deriveBoardStatus(b, today, { override: overrides.get(b.bookingId), stored: states.get(b.bookingId) });
     return toCard(b, today, status);
   });
 }

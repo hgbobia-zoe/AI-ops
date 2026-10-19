@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchesQuery, filterProjects, normalizeQuery, type SearchableProject } from "./search";
+import { matchesQuery, matchesState, filterProjects, normalizeQuery, type SearchableProject } from "./search";
 
 const carter: SearchableProject = {
   id: "101",
@@ -95,6 +95,43 @@ describe("salesos search — filterProjects", () => {
 
   it("is case-insensitive end to end", () => {
     expect(filterProjects(all, "NGUYEN")).toEqual([nguyen]);
+  });
+});
+
+describe("salesos search — matchesState (the state-filter predicate)", () => {
+  it("matches everything when no state filter is set (default = all)", () => {
+    expect(matchesState("new", null)).toBe(true);
+    expect(matchesState("quote_sent", null)).toBe(true);
+    expect(matchesState("action_needed", undefined)).toBe(true);
+    expect(matchesState("signed", "")).toBe(true);
+    expect(matchesState(null, null)).toBe(true); // a row with no status still shows under "All"
+  });
+
+  it("matches only the selected board status (exact)", () => {
+    expect(matchesState("new", "new")).toBe(true);
+    expect(matchesState("quote_sent", "quote_sent")).toBe(true);
+    expect(matchesState("action_needed", "action_needed")).toBe(true);
+    expect(matchesState("signed", "signed")).toBe(true);
+  });
+
+  it("excludes rows whose status differs from the filter", () => {
+    expect(matchesState("new", "quote_sent")).toBe(false);
+    expect(matchesState("quote_sent", "signed")).toBe(false);
+    expect(matchesState("follow_up", "action_needed")).toBe(false);
+  });
+
+  it("a row with no status is excluded once a specific state is selected", () => {
+    expect(matchesState(null, "new")).toBe(false);
+    expect(matchesState(undefined, "signed")).toBe(false);
+  });
+
+  it("composes with matchesQuery (both must pass to keep a row)", () => {
+    // carter is Quote Sent — passes a 'quote_sent' filter + a 'dulles' query, fails a 'signed' filter.
+    const keep = (statusFilter: string | null, q: string): boolean => matchesQuery(carter, q) && matchesState("quote_sent", statusFilter);
+    expect(keep("quote_sent", "dulles")).toBe(true);
+    expect(keep(null, "dulles")).toBe(true);
+    expect(keep("signed", "dulles")).toBe(false); // state filter rejects
+    expect(keep("quote_sent", "nguyen")).toBe(false); // query rejects
   });
 });
 

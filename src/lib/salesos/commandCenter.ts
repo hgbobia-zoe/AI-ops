@@ -3,11 +3,12 @@
 // the next best action, then ranks them so the highest-value, most time-sensitive work is on top:
 // a big deal that JUST replied outranks a small one sitting untouched — but the ranking is transparent.
 
-import { getOpenLeads, getAllCustomerStates, getLatestInboundForLead, type BookingView } from "@/lib/db/repo";
+import { getOpenLeads, getAllCustomerStates, getLatestInboundForLead, getLastCommsAt, getLeadStatusMap, type BookingView } from "@/lib/db/repo";
 import { todayInOpsTz } from "@/lib/dates";
 import { resolveDeterministic, fromStored } from "./stateService";
 import { nextBestAction, type NbaResult } from "./nba";
 import { STATE_LABEL, type ResolvedState } from "./state";
+import { autoStatus, daysSinceContactDays, type LeadStatus } from "./boardTypes";
 
 export interface QueueItem {
   id: string;
@@ -18,6 +19,10 @@ export interface QueueItem {
   daysToEvent: number | null;
   state: ResolvedState;
   stateLabel: string;
+  /** Effective board status (override else derived) — the signal the shared state filter keys off, so
+   *  the worklist filters by the SAME classification as the board/table. Open-leads only here, so
+   *  "signed" appears only when a lead was manually moved there. */
+  boardStatus: LeadStatus;
   nba: NbaResult;
   repliedMinutesAgo: number | null;
   lastReplyPreview: string | null;
@@ -49,6 +54,7 @@ function minutesSince(iso: string | null): number | null {
 export function salesCommandCenter(): CommandCenterView {
   const today = todayInOpsTz();
   const states = getAllCustomerStates();
+  const overrides = getLeadStatusMap();
   const open = getOpenLeads(today);
 
   const items: QueueItem[] = open.map((b: BookingView) => {
@@ -58,6 +64,11 @@ export function salesCommandCenter(): CommandCenterView {
     const repliedMinutesAgo = minutesSince(inbound?.occurredAt ?? inbound?.ts ?? null);
     const daysToEvent = b.eventDate ? daysBetween(today, b.eventDate) : null;
     const nba = nextBestAction({ state: state.state, value: b.grandTotal, daysToEvent, repliedMinutesAgo });
+    // Effective board status: a manual board override wins, else derive from the same signals the board
+    // uses (one classifier in boardTypes), so the shared state filter means the same thing everywhere.
+    const override = overrides.get(b.bookingId);
+    const daysSinceContact = daysSinceContactDays(getLastCommsAt(b.bookingId), b.quoteSentDate, today);
+    const boardStatus: LeadStatus = override ?? autoStatus(b, { state: state.state, nbaAction: nba.action, repliedMinutesAgo, daysSinceContact });
     return {
       id: b.bookingId,
       clientName: b.clientName,
@@ -67,6 +78,7 @@ export function salesCommandCenter(): CommandCenterView {
       daysToEvent,
       state,
       stateLabel: STATE_LABEL[state.state],
+      boardStatus,
       nba,
       repliedMinutesAgo,
       lastReplyPreview: inbound?.body?.slice(0, 120) ?? null,

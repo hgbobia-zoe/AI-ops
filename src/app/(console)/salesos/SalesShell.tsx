@@ -17,9 +17,9 @@ import { usePathname } from "next/navigation";
 import { List, Table2, Columns3 } from "lucide-react";
 import type { QueueItem } from "@/lib/salesos/commandCenter";
 import { NBA_LABEL } from "@/lib/salesos/nba";
-import { matchesQuery } from "@/lib/salesos/search";
+import { matchesQuery, matchesState } from "@/lib/salesos/search";
 import { LeadSidePanel } from "@/components/LeadSidePanel";
-import { SalesSearchProvider, SalesSearchBar, SearchCount, useSalesSearch, withQuery } from "@/components/SalesSearch";
+import { SalesSearchProvider, SalesSearchBar, StateFilterBar, SearchCount, useSalesSearch, withQuery } from "@/components/SalesSearch";
 import { FigureStrip, ActionVerb, tierBar, tierActionTone, tierValueText, tableCls, theadCls, thCls, type Tier, type Figure } from "@/components/console-primitives";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
@@ -103,7 +103,12 @@ function SalesHeader({ active }: { active: ViewKey }): React.JSX.Element {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 px-6 pt-4">
       <ViewSwitcher active={active} />
-      <SalesSearchBar />
+      <div className="flex flex-wrap items-center gap-2">
+        {/* The Table view carries its own richer status chips (all five states + counts), so the shared
+            header filter would be redundant there; everywhere else it's the single state control. */}
+        {active !== "table" && <StateFilterBar />}
+        <SalesSearchBar />
+      </div>
     </div>
   );
 }
@@ -121,10 +126,14 @@ function WorklistBody({
   totalPotential: number | null;
   viewer: { name: string; quoUserId: string | null; initials: string };
 }): React.JSX.Element {
-  const { query } = useSalesSearch();
+  const { query, stateFilter } = useSalesSearch();
   const [selected, setSelected] = useState<string | null>(null);
 
-  const filtered = useMemo(() => queue.filter((q) => matchesQuery(toSearchable(q), query)), [queue, query]);
+  // Search and state filter compose: a row must match the query AND (if set) the selected lead state.
+  const filtered = useMemo(
+    () => queue.filter((q) => matchesQuery(toSearchable(q), query) && matchesState(q.boardStatus, stateFilter)),
+    [queue, query, stateFilter],
+  );
 
   const now = filtered.filter((q) => tierOf(q) === "now");
   const today = filtered.filter((q) => tierOf(q) === "today");
@@ -156,7 +165,9 @@ function WorklistBody({
         {queue.length === 0 ? (
           <p className="px-6 py-16 text-center text-[13.5px] text-muted-foreground">No active opportunities.</p>
         ) : filtered.length === 0 ? (
-          <p className="px-6 py-16 text-center text-[13.5px] text-muted-foreground">No projects match &ldquo;{query.trim()}&rdquo;.</p>
+          <p className="px-6 py-16 text-center text-[13.5px] text-muted-foreground">
+            {query.trim() ? <>No projects match &ldquo;{query.trim()}&rdquo;{stateFilter ? " in this state" : ""}.</> : "No projects in this state."}
+          </p>
         ) : (
           <table className={tableCls}>
             <colgroup>
@@ -258,7 +269,7 @@ function Group({
 }
 
 function ViewSwitcher({ active }: { active: ViewKey }): React.JSX.Element {
-  const { query } = useSalesSearch();
+  const { query, stateFilter } = useSalesSearch();
   const items: { key: ViewKey; label: string; href: string; icon: typeof List }[] = [
     { key: "board", label: "Board", href: "/salesos/board", icon: Columns3 },
     { key: "worklist", label: "Worklist", href: "/salesos/worklist", icon: List },
@@ -270,7 +281,7 @@ function ViewSwitcher({ active }: { active: ViewKey }): React.JSX.Element {
         const on = active === it.key;
         const Icon = it.icon;
         return (
-          <Link key={it.key} href={withQuery(it.href, query)} aria-current={on ? "page" : undefined} className={`flex items-center gap-1.5 text-[13.5px] transition-colors ${on ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+          <Link key={it.key} href={withQuery(it.href, query, stateFilter)} aria-current={on ? "page" : undefined} className={`flex items-center gap-1.5 text-[13.5px] transition-colors ${on ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
             <Icon className="size-4" /> {it.label}
           </Link>
         );
