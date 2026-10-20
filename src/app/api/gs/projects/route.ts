@@ -8,7 +8,9 @@
 
 import { NextResponse } from "next/server";
 import { saveBookings, enqueueWarehouseTeamAdds, archiveBookingsNotIn, type BookingRecord } from "@/lib/db/repo";
-import { recordPull, logImport } from "@/lib/pull/state";
+import { recordPull, logImport, recordBookingsImportFailure } from "@/lib/pull/state";
+import { consumeBookingsForcePrune } from "@/lib/ingest/forcePruneBookings";
+import { slackNotify } from "@/lib/notify/slack";
 
 export const dynamic = "force-dynamic";
 
@@ -102,9 +104,46 @@ export async function POST(req: Request): Promise<NextResponse> {
   // pull (not partial) carrying a real full set, archive any booking GS no longer returns. The >=100 floor
   // plus the per-call cap (archiveBookingsNotIn skips if it would archive more than a handful) guard against
   // a silently-truncated pull wrongly mass-archiving live projects.
-  const prune = !partial && records.length >= 100 ? archiveBookingsNotIn(records.map((r) => r.bookingId), 15) : { archived: 0, skipped: false };
-  if (prune.skipped) logImport("bookings", false, { rowsIn: projects.length, rowsWritten: records.length, detail: "prune skipped — too many orphans, likely a truncated pull" });
+  //
+  // One-shot FORCE override: when a human has armed Force-archive in /admin (e.g. they just deleted a large
+  // batch of placeholder projects on purpose, so the orphans legitimately exceed the cap), the SAME safety
+  // floor still holds — we only force on a COMPLETE pull with a real full set (>=100) — but we lift the
+  // per-call cap for exactly this one pull, then disarm. The flag is only read (and cleared) when the pull
+  // is actually eligible, so a partial/tiny pull can never silently consume the arming.
+  const eligible = !partial && records.length >= 100;
+  const forced = eligible && consumeBookingsForcePrune(); // one-shot: reads AND clears, only when it can act
+  let prune: { archived: number; skipped: boolean; candidates: number } = { archived: 0, skipped: false, candidates: 0 };
+  if (eligible) {
+    // Forced: lift the cap for this one complete pull. Unarmed: the conservative cap of 15.
+    prune = archiveBookingsNotIn(records.map((r) => r.bookingId), forced ? records.length : 15);
+  }
+  if (forced) {
+    // Human-confirmed bulk deletion swept. Log it as a SUCCESS with an explicit audited detail.
+    logImport("bookings", true, {
+      rowsIn: projects.length,
+      rowsWritten: records.length,
+      detail: `force-prune: archived ${prune.archived} orphans (human-confirmed bulk deletion)`,
+    });
+  } else if (prune.skipped) {
+    logImport("bookings", false, { rowsIn: projects.length, rowsWritten: records.length, detail: "prune skipped — too many orphans, likely a truncated pull" });
+  }
   const pruned = prune.archived;
+
+  // Sustained-failure alert (the loud signal the import ledger alone didn't fire). Only evaluate on an
+  // eligible (complete, full) pull: a skip pages a human to decide (truncated pull, or arm Force-archive),
+  // a clean/forced prune clears it. Wrapped so a Slack hiccup NEVER breaks the ingest write.
+  if (eligible) {
+    const probe = prune.skipped
+      ? recordBookingsImportFailure(false, `${prune.candidates} active projects missing from the pull`)
+      : recordBookingsImportFailure(true, forced ? `${prune.archived} orphans archived (forced)` : `${prune.archived} orphans archived`);
+    if (probe.alert) {
+      try {
+        void slackNotify(probe.alert);
+      } catch {
+        /* a Slack failure must never fail the ingest */
+      }
+    }
+  }
 
   // Auto-add the Warehouse Desktop account to every SIGNED project's GSPRO team (add-once, batched)
   // so the warehouse tablet/workstation sees signed work. The office extension drains these ops.

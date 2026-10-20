@@ -1249,19 +1249,23 @@ export function getPipelineBreakdown(today: string): PipelineBreakdown {
  *  row GS stopped returning — so a deleted quote lingers as a phantom open quote. Flipping archived 0→1
  *  drops it from the pipeline/upcoming; it's reversible (a later pull that includes it restores GS's value).
  *  Caller MUST guard this to complete pulls only (not partial, and a real full set) — see the ingest route. */
-export function archiveBookingsNotIn(keepIds: string[], maxArchive: number): { archived: number; skipped: boolean } {
-  if (keepIds.length === 0) return { archived: 0, skipped: false };
+// `candidates` = how many active (non-archived) bookings are missing from the pulled set. It is always
+// reported (even when the archive proceeds) so the ingest route can state "NN projects missing" in its
+// sustained-failure alert without a second query. Backward-compatible: existing callers ignore it.
+export function archiveBookingsNotIn(keepIds: string[], maxArchive: number): { archived: number; skipped: boolean; candidates: number } {
+  if (keepIds.length === 0) return { archived: 0, skipped: false, candidates: 0 };
   const db = getDb();
   const ph = keepIds.map(() => "?").join(",");
   // SAFETY: a silently-truncated pull (HTTP 200 with a short results page) isn't flagged partial, so it
   // could otherwise archive hundreds of still-live projects. Real daily deletions are a handful — if the
   // candidate set is larger than maxArchive, this is almost certainly a bad pull: skip, don't mass-archive.
+  // (A human can raise maxArchive for one COMPLETE pull via the /admin force-prune one-shot.)
   const candidates = (db.prepare(`SELECT COUNT(*) AS c FROM bookings WHERE COALESCE(archived,0) = 0 AND booking_id NOT IN (${ph})`).get(...keepIds) as { c: number }).c;
-  if (candidates > maxArchive) return { archived: 0, skipped: true };
+  if (candidates > maxArchive) return { archived: 0, skipped: true, candidates };
   const r = db
     .prepare(`UPDATE bookings SET archived = 1, updated_at = ? WHERE COALESCE(archived,0) = 0 AND booking_id NOT IN (${ph})`)
     .run(new Date().toISOString(), ...keepIds);
-  return { archived: r.changes, skipped: false };
+  return { archived: r.changes, skipped: false, candidates };
 }
 
 export interface QuoteStageSnapshot {
