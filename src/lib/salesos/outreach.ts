@@ -62,6 +62,61 @@ export function datedNoteLines(internalNotes?: string | null): DatedNoteLine[] {
   return out;
 }
 
+// ── Conversation context for the LLM drafter ──────────────────────────────────────────────────────
+// The deterministic core assembles the FULL two-way picture so the model drafts against what the
+// customer ACTUALLY said, not a generic chase. A minimal, structural view of a merged timeline entry
+// (buildLeadTimeline's TimelineEntry is a superset) so this stays a pure function with no DB / no cycle.
+export interface ConversationEntry {
+  at: string | null; // ISO instant, or null for an undated note
+  channel: "sms" | "call" | "email" | "note" | "quote" | "system";
+  direction: "in" | "out" | null; // customer's perspective: in = they said it, out = we reached them
+  title: string;
+  detail?: string | null;
+}
+
+export interface ConversationContext {
+  thread: string; // newest-first rendered two-way conversation + call summaries; "" when none captured
+  latestInbound: string | null; // the most recent thing the CUSTOMER actually said, when captured
+  hasInbound: boolean; // the customer has said something we captured (text / call / email, inbound)
+}
+
+/** Render the genuine two-way conversation (texts, calls, emails, both directions) and the single most
+ *  recent thing the CUSTOMER said into a bounded, deterministic transcript for the drafter. FACTS ONLY:
+ *  we never assert a sender we don't know (direction null), and we never invent content — an entry with
+ *  no captured body falls back to its factual title (e.g. "Voicemail from client"). Internal notes and
+ *  quote milestones are excluded here (notes are passed to the model separately; a quote-sent milestone
+ *  is not something the customer said). Input is expected newest-first (as buildLeadTimeline returns). */
+export function renderConversationContext(
+  entries: ConversationEntry[],
+  opts?: { maxEntries?: number; maxChars?: number },
+): ConversationContext {
+  const maxEntries = opts?.maxEntries ?? 14;
+  const maxChars = opts?.maxChars ?? 3500;
+  const convo = entries.filter((e) => e.channel === "sms" || e.channel === "call" || e.channel === "email");
+
+  const lines: string[] = [];
+  let used = 0;
+  for (const e of convo) {
+    if (lines.length >= maxEntries) break;
+    const date = (e.at ?? "").slice(0, 10);
+    const who = e.direction === "in" ? "Customer" : e.direction === "out" ? "Zoe" : "Unknown sender";
+    const kind = e.channel === "sms" ? "text" : e.channel; // text | call | email
+    const body = (e.detail ?? "").trim();
+    const say = body || e.title; // honest fallback — never fabricate a message body
+    const line = `${date ? `[${date}] ` : ""}${who} ${kind}: ${say}`;
+    if (lines.length > 0 && used + line.length + 1 > maxChars) break;
+    used += line.length + 1;
+    lines.push(line);
+  }
+
+  const latest = convo.find((e) => e.direction === "in" && (e.detail ?? "").trim());
+  return {
+    thread: lines.join("\n"),
+    latestInbound: latest ? (latest.detail ?? "").trim() : null,
+    hasInbound: convo.some((e) => e.direction === "in"),
+  };
+}
+
 export interface OutreachLead {
   firstName: string;
   eventName: string;
