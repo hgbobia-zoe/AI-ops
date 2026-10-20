@@ -50,6 +50,12 @@ export interface PullState {
   // Slack-alerted a lapsed office Ignition session (2h cool-off), cleared on recovery.
   ignitionStaleSince?: string;
   ignitionAlertedAt?: string;
+  // Bookings-import data-quality alert bookkeeping (mirrors the Instawork probe dedup). `bookingsImportOk`
+  // is the last known result (undefined until the first observation → cold-start never pages);
+  // `bookingsFailingSince`/`bookingsAlertedAt` drive the 2h-deduped sustained-failure + recovery alerts.
+  bookingsImportOk?: boolean;
+  bookingsFailingSince?: string;
+  bookingsAlertedAt?: string;
 }
 
 export function getPullState(): PullState {
@@ -240,6 +246,38 @@ export function recordInstaworkProbe(ok: boolean, detail: string | null, now: Da
   }
 
   s.instaworkOk = ok;
+  save(s);
+  return { alert };
+}
+
+/** Record the result of a bookings import's orphan-prune step and decide whether to Slack. MIRRORS
+ *  recordInstaworkProbe EXACTLY: once a bookings pull has been observed at least once, a failing prune
+ *  (the orphan cleanup keeps skipping because too many active projects are missing — likely a truncated
+ *  pull, or a real bulk deletion that needs the /admin Force-archive one-shot) Slack-alerts so a human
+ *  decides, deduped by a 2h cool-off that also caps a SUSTAINED failure at one page per 2h; and one alert
+ *  on recovery (only if we had alerted). Honest: a cold-start first-ever observation never pages, and a
+ *  failing prune is never reported as OK. `detail` carries the missing-orphan count for the alert copy.
+ *  Returns `alert` = the message to send, or null. */
+export function recordBookingsImportFailure(ok: boolean, detail: string | null, now: Date = new Date()): { alert: string | null } {
+  const s = getPullState();
+  const seenBefore = s.bookingsImportOk !== undefined; // don't page on a cold-start first glance (no known baseline)
+  let alert: string | null = null;
+
+  if (!ok) {
+    if (!s.bookingsFailingSince) s.bookingsFailingSince = now.toISOString();
+    const alertedAgo = s.bookingsAlertedAt ? now.getTime() - Date.parse(s.bookingsAlertedAt) : Infinity;
+    if (seenBefore && alertedAgo > ALERT_COOLOFF_MS) {
+      // House comms style: no em-dashes, no emoji, natural and short.
+      alert = `Zoe bookings pull keeps skipping orphan cleanup${detail ? ` (${detail})` : ""}. If you deliberately deleted a batch in Goodshuffle, arm Force-archive in /admin. Otherwise the pull may be truncated, so check the office browser. Failing since ${s.bookingsFailingSince}.`;
+      s.bookingsAlertedAt = now.toISOString();
+    }
+  } else {
+    if (s.bookingsAlertedAt) alert = `Zoe bookings pull recovered (${detail || "ok"}). Orphan cleanup is running again.`;
+    s.bookingsFailingSince = undefined;
+    s.bookingsAlertedAt = undefined;
+  }
+
+  s.bookingsImportOk = ok;
   save(s);
   return { alert };
 }

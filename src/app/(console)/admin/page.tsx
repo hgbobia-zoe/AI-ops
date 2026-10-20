@@ -6,7 +6,7 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2 } from "lucide-react";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
 import { SeoCredentialSettings } from "@/components/SeoCredentialSettings";
@@ -14,6 +14,7 @@ import { InstaworkCredentialSettings } from "@/components/InstaworkCredentialSet
 import { OpsCycleSettings } from "@/components/OpsCycleSettings";
 import { PricingSettings } from "@/components/PricingSettings";
 import { RuntimeStatus } from "@/components/RuntimeStatus";
+import { ForcePruneBookings } from "@/components/ForcePruneBookings";
 
 const ADMIN_PIN = process.env.NEXT_PUBLIC_ADMIN_PIN || "0000";
 
@@ -272,6 +273,10 @@ export default function AdminPage() {
 
           <Section icon={<PlugZap className="size-4" />} title="Cloud runtime">
             <RuntimeStatus />
+          </Section>
+
+          <Section icon={<Trash2 className="size-4" />} title="Goodshuffle cleanup">
+            <ForcePruneBookings pin={pin} />
           </Section>
 
           {/* Tablet sign-ins (Goodshuffle / Ignition) */}
