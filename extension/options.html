@@ -25,9 +25,9 @@
     <input id="apiBase" type="text" placeholder="https://zoe-dispatch.fly.dev" />
     <div class="hint">Where the data is sent. Leave the default unless you're on a different deployment.</div>
 
-    <label for="intervalMin">Pull every (minutes)</label>
+    <label for="intervalMin">Cross-tab dedup window (minutes)</label>
     <input id="intervalMin" type="number" min="1" max="120" />
-    <div class="hint">How often to refresh. 10 is plenty for a delivery day.</div>
+    <div class="hint">The pull now runs on a built-in two-tier schedule — a fast lane every few minutes (routes, active bookings, notes, queued pushes) and a full history sweep hourly — so there is nothing to set here. This value only sizes the window that stops two open Goodshuffle tabs from pulling at the same moment.</div>
 
     <div class="row"><input id="enabled" type="checkbox" /> <label for="enabled" style="margin:0;">Auto-pull enabled</label></div>
 

@@ -53,8 +53,12 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
   const base = `${proto}://${host}`;
   const script = buildOfficePullScript(base, process.env.GS_INGEST_TOKEN);
   const extVersion = extensionVersion();
-  const AUTO_MIN = 10;
-  const autoScript = buildOfficePullScript(base, process.env.GS_INGEST_TOKEN, AUTO_MIN * 60 * 1000);
+  // Two-tier auto-pull: a FAST lane (routes + active projects + notes + outbox) and a SLOW lane (full
+  // archive history + orphan-prune for Finance/intelligence). Keep these in step with the extension's
+  // ACTIVE_PULL_MIN / FULL_PULL_MIN in extension/background.js.
+  const FAST_MIN = 3;
+  const FULL_MIN = 60;
+  const autoScript = buildOfficePullScript(base, process.env.GS_INGEST_TOKEN, FAST_MIN * 60 * 1000, false, FULL_MIN * 60 * 1000);
 
   const state = getPullState();
   const ageH = hoursAgo(state.lastPullAt);
@@ -104,9 +108,10 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
         <p className="text-sm text-muted-foreground">
           Install once on the <b>office machine</b>, then just stay <b>signed into Goodshuffle</b> in that browser —
           <b> there&apos;s no tab to keep open</b>. The extension schedules itself and opens/keeps its own background
-          Goodshuffle tab, pulling every 10 minutes across browser restarts. And when you log into Zoe Ops, it kicks an
-          immediate sync (prompting a Goodshuffle sign-in only if needed). Everyone else just uses the app; only this one
-          machine needs it.
+          Goodshuffle tab. It runs on <b>two tiers</b>: a <b>fast lane every {FAST_MIN} minutes</b> (today&apos;s routes,
+          active bookings, notes and queued pushes) and a <b>full history sweep every {FULL_MIN} minutes</b> (the whole
+          archive for finance and reporting). And when you log into Zoe Ops, it kicks an immediate sync (prompting a
+          Goodshuffle sign-in only if needed). Everyone else just uses the app; only this one machine needs it.
         </p>
         <p className="border-l-2 border-indigo-400/40 pl-3 text-[13px] text-muted-foreground">
           <b>Install only on the office machine(s)</b> that stay signed in, not on everyone&apos;s computer. Sign into
@@ -156,7 +161,7 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
             <div>
               <div className="font-medium text-foreground">Sessions</div>
               <ul className="ml-4 list-disc space-y-1">
-                <li>The pull hits Goodshuffle every 10 minutes, which keeps the session alive on its own. It should only drop on an absolute timeout or if cookies are cleared.</li>
+                <li>The fast lane hits Goodshuffle every {FAST_MIN} minutes, which keeps the session alive on its own. It should only drop on an absolute timeout or if cookies are cleared.</li>
                 <li>When it does drop, the extension opens a login tab and this page (plus the top status dot and a Slack alert) shows it, so someone just re-signs-in when prompted.</li>
               </ul>
             </div>
@@ -232,11 +237,12 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
         <p className="text-sm text-muted-foreground">
           Drag this <b>second</b> button to your bookmarks bar. On a computer that keeps <b>pro.goodshuffle.com</b> open
           and signed in all day (the office machine), click it <b>once each morning</b>. It pulls immediately and then
-          <b> every {AUTO_MIN} minutes on its own</b> — routes, revenue and bookings stay fresh with no more clicking. A
-          small badge top-right shows it&apos;s running and the last sync time. (It runs as long as that Goodshuffle tab
-          stays open; if the browser restarts, click it again.)
+          runs on its own on <b>two tiers</b>: a <b>fast lane every {FAST_MIN} minutes</b> (routes, active bookings,
+          notes, queued pushes) and a <b>full history sweep every {FULL_MIN} minutes</b> for finance and reporting — all
+          with no more clicking. A small badge top-right shows it&apos;s running and the last sync time. (It runs as long
+          as that Goodshuffle tab stays open; if the browser restarts, click it again.)
         </p>
-        <PullBookmarklet script={autoScript} label={`Auto-Pull Zoe (every ${AUTO_MIN}m)`} />
+        <PullBookmarklet script={autoScript} label={`Auto-Pull Zoe (every ${FAST_MIN}m)`} />
       </section>
 
       {/* Account note */}

@@ -50,14 +50,21 @@
         if (lastRun && lastRun.status === "ok" && Date.now() - lastRun.at < intervalMin * 60000 * 0.5) return;
       }
 
+      // Which tier the background worker asked for (set alongside pullNow). Default "active" (the fast
+      // lane) when unset — e.g. a tab that auto-ran on load before any alarm set a tier.
+      const { pullTier } = await chrome.storage.local.get("pullTier");
+      const tier = pullTier === "full" ? "full" : "active";
+
       let res;
-      try { res = await zoePull(apiBase); } catch (e) { res = { ok: false, loggedIn: true, error: "pull error: " + String(e).slice(0, 120) }; }
-      if (!res) res = { ok: false, loggedIn: true, error: "no result" };
+      try { res = await zoePull(apiBase, tier); } catch (e) { res = { ok: false, loggedIn: true, tier, error: "pull error: " + String(e).slice(0, 120) }; }
+      if (!res) res = { ok: false, loggedIn: true, tier, error: "no result" };
 
       const status = res.loggedIn === false ? "not_logged_in" : res.ok ? "ok" : "error";
-      const detail = status === "ok" ? `${res.stops || 0} stops · ${res.bookings || 0} bookings` : res.error || "pull error";
+      const detail = status === "ok"
+        ? (tier === "full" ? `full history · ${res.bookings || 0} bookings` : `${res.stops || 0} stops · ${res.bookings || 0} bookings`)
+        : res.error || "pull error";
       await heartbeat(apiBase, status, detail);
-      await chrome.storage.local.set({ lastRun: { at: Date.now(), status, result: res, reason } });
+      await chrome.storage.local.set({ lastRun: { at: Date.now(), status, tier, result: res, reason } });
       badge(status, detail);
     } finally {
       running = false;

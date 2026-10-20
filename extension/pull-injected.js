@@ -8,8 +8,12 @@
 // Defines a global `zoePull(apiBase)` in the content-script world; content.js calls it on a timer.
 // Stays fully self-contained (every helper nested) so it also works if ever injected directly.
 
-/** @param {string} apiBase Zoe origin, e.g. https://zoe-dispatch.fly.dev */
-function zoePull(apiBase) {
+/** @param {string} apiBase Zoe origin, e.g. https://zoe-dispatch.fly.dev
+ *  @param {"active"|"full"} [tier] which lane to run. "active" (default) = routes + active projects +
+ *   notes + outbox drain (FAST lane, every few minutes, NEVER prunes). "full" = the archive-inclusive
+ *   projects history walk (SLOW lane, hourly — the ONLY lane that prunes orphans). */
+function zoePull(apiBase, tier) {
+  const TIER = tier === "full" ? "full" : "active";
   const API = String(apiBase || "").replace(/\/+$/, "");
   const H = { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" };
   const POSTH = { "content-type": "application/json" };
@@ -27,15 +31,21 @@ function zoePull(apiBase) {
   function d2(s) { try { if (!s) return null; const dt = new Date(s); if (isNaN(dt)) return null; return new Date(dt.getTime() - dt.getTimezoneOffset() * 60000).toISOString().slice(0, 10); } catch (e) { return null; } }
 
   // ---- Bookings feed (projects) → Sales / Finance / Customer ----
-  function pullProjects() {
+  // TWO-TIER: mode="active" pulls ONLY the ~88 active, non-archived projects (searchProjects WITHOUT
+  // allProjects, a single page) — the FAST lane that rides with routes/notes/outbox and POSTs
+  // scope:"active" (NEVER prunes). mode="full" walks the archive-inclusive history (allProjects=true,
+  // paginated) — the SLOW lane that feeds Finance and POSTs scope:"full" (the ONLY scope that prunes).
+  function pullProjects(mode) {
+    const FULL = mode !== "active"; // default to full for any unexpected value (back-compat / safety)
     const all = {}; let pErr = false;
+    function url(pg) { return "/app/project/searchProjects?page=" + pg + "&pageSize=500" + (FULL ? "&allProjects=true" : "") + "&sortColumn=logistics_start_date&sortDirection=desc&useV2DateHandling=true"; }
     function fetchPage(pg) {
-      return fetch("/app/project/searchProjects?page=" + pg + "&pageSize=500&allProjects=true&sortColumn=logistics_start_date&sortDirection=desc&useV2DateHandling=true", H)
+      return fetch(url(pg), H)
         .then((r) => { if (!r.ok) throw 0; return r.json(); })
         .then((b) => { const ps = b && b.projectSearch; if (!ps) return { count: 0 }; const res = ps.results || []; res.forEach((p) => { if (p && p.id != null && !all[p.id]) all[p.id] = p; }); return { count: res.length }; })
         .catch(() => { pErr = true; return { count: 0 }; });
     }
-    function loop(pg) { return fetchPage(pg).then((r) => { if (!pErr && r.count > 0 && pg < 60) return loop(pg + 1); return null; }); }
+    function loop(pg) { return fetchPage(pg).then((r) => { if (FULL && !pErr && r.count > 0 && pg < 60) return loop(pg + 1); return null; }); }
     return loop(0).then(() => {
       const recs = Object.keys(all).map((id) => { const p = all[id];
         return { bookingId: String(p.id), eventName: p.eventName || "", eventDate: d2(p.logistics_start_date), statusLabel: p.statusLabel || "", signed: !!p.signed, archived: !!p.archived, grandTotalCents: p.grand_total, contractTotalCents: p.contract_subtotal, amountPaidCents: p.amount_paid, amountDueCents: p.amount_due, clientName: p.client_name || "", clientEmail: p.client_email || "", clientPhone: p.client_phone || "", quoteSentDate: d2(p.quote_sent_date), dateCreated: d2(p.date_created), venue: p.venueLabel || "", location: p.cityStateZipCounty || "" };
@@ -80,7 +90,12 @@ function zoePull(apiBase) {
         }
         return one(0).then(() => { if (!notes.length) return { updated: 0 }; return fetch(API + "/api/gs/notes", { method: "POST", headers: POSTH, body: JSON.stringify({ notes }) }).then((r) => r.json()).catch(() => ({ updated: 0 })); });
       }
-      return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, partial: pErr }) }).then((r) => r.json()).then((j) => pullNotes().then((nj) => ({ saved: (j && j.saved) || recs.length, partial: pErr || !!(j && j.partial), notes: (nj && nj.updated) || 0 }))).catch(() => ({ saved: 0, partial: true }));
+      // FULL lane: archive-inclusive POST (scope:"full" — the ONLY scope that prunes) carrying `partial`,
+      // no notes (those ride the fast ACTIVE lane). ACTIVE lane: scope:"active" (never prunes) + notes.
+      if (FULL) {
+        return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, partial: pErr, scope: "full" }) }).then((r) => r.json()).then((j) => ({ saved: (j && j.saved) || recs.length, partial: pErr || !!(j && j.partial), notes: 0 })).catch(() => ({ saved: 0, partial: true }));
+      }
+      return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, scope: "active" }) }).then((r) => r.json()).then((j) => pullNotes().then((nj) => ({ saved: (j && j.saved) || recs.length, partial: false, notes: (nj && nj.updated) || 0 }))).catch(() => ({ saved: 0, partial: false }));
     });
   }
 
@@ -256,12 +271,21 @@ function zoePull(apiBase) {
   }
 
   return loggedInProbe().then((ok) => {
-    if (!ok) return { ok: false, loggedIn: false, stops: 0, bookings: 0, notes: 0, photos: 0, error: "not signed in" };
-    return Promise.all([pullRoutes(), pullProjects(), drainOutbox()]).then((res) => {
+    if (!ok) return { ok: false, loggedIn: false, tier: TIER, stops: 0, bookings: 0, notes: 0, photos: 0, error: "not signed in" };
+    // SLOW lane: just the archive-inclusive projects history + prune. Routes/notes/outbox stay on the
+    // fast lane, so they are intentionally NOT run here (no double work at the hourly tick).
+    if (TIER === "full") {
+      return pullProjects("full").then((bk) => {
+        bk = bk || { saved: 0, partial: false };
+        return { ok: !bk.partial, loggedIn: true, tier: "full", stops: 0, bookings: bk.saved || 0, notes: 0, photos: 0, emails: 0, tasks: 0, unhandled: 0, unmatched: [], partial: !!bk.partial, error: bk.partial ? "history incomplete" : null };
+      }).catch((e) => ({ ok: false, loggedIn: true, tier: "full", stops: 0, bookings: 0, notes: 0, photos: 0, error: String(e).slice(0, 120) }));
+    }
+    // FAST lane: routes + active projects (scope:"active", never prunes) + notes + outbox drain.
+    return Promise.all([pullRoutes(), pullProjects("active"), drainOutbox()]).then((res) => {
       const r = res[0] || { stops: 0, failed: 0, unmatched: [] };
       const bk = res[1] || { saved: 0, partial: false, notes: 0 };
       const ph = res[2] || { pushed: 0, failed: 0, emails: 0, tasks: 0, unhandled: 0 };
-      return { ok: !r.failed && !bk.partial, loggedIn: true, stops: r.stops || 0, bookings: bk.saved || 0, notes: bk.notes || 0, photos: ph.pushed || 0, emails: ph.emails || 0, tasks: ph.tasks || 0, unhandled: ph.unhandled || 0, unmatched: r.unmatched || [], partial: !!bk.partial, error: r.failed ? "routes failed to save" : bk.partial ? "bookings incomplete" : null };
-    }).catch((e) => ({ ok: false, loggedIn: true, stops: 0, bookings: 0, notes: 0, photos: 0, error: String(e).slice(0, 120) }));
+      return { ok: !r.failed && !bk.partial, loggedIn: true, tier: "active", stops: r.stops || 0, bookings: bk.saved || 0, notes: bk.notes || 0, photos: ph.pushed || 0, emails: ph.emails || 0, tasks: ph.tasks || 0, unhandled: ph.unhandled || 0, unmatched: r.unmatched || [], partial: !!bk.partial, error: r.failed ? "routes failed to save" : bk.partial ? "bookings incomplete" : null };
+    }).catch((e) => ({ ok: false, loggedIn: true, tier: "active", stops: 0, bookings: 0, notes: 0, photos: 0, error: String(e).slice(0, 120) }));
   });
 }
