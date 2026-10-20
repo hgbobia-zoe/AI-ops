@@ -37,8 +37,9 @@ type SortKey = "project" | "client" | "status" | "value" | "netPaid" | "remainin
 const num = (n: number | null): number => (n == null ? -1 : n);
 
 export function SalesTable({ cards, showMoney, viewer }: { cards: LeadCard[]; showMoney: boolean; viewer: { name: string; quoUserId: string | null; initials: string } }): React.JSX.Element {
-  const { query } = useSalesSearch();
-  const [filter, setFilter] = useState<string | null>(null);
+  // The status chips drive the SAME shared state filter the header pills use on the other views, so a
+  // selected state carries across the Board/Worklist/Table toggle (and the URL) as one source of truth.
+  const { query, stateFilter, setStateFilter } = useSalesSearch();
   const [sortKey, setSortKey] = useState<SortKey>("eventDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [selected, setSelected] = useState<string | null>(null);
@@ -52,7 +53,7 @@ export function SalesTable({ cards, showMoney, viewer }: { cards: LeadCard[]; sh
   const searching = query.trim().length > 0;
 
   const rows = useMemo(() => {
-    const filtered = filter ? searched.filter((l) => l.status === filter) : searched;
+    const filtered = stateFilter ? searched.filter((l) => l.status === stateFilter) : searched;
     const dir = sortDir === "asc" ? 1 : -1;
     const val = (l: LeadCard): number | string => {
       switch (sortKey) {
@@ -73,7 +74,7 @@ export function SalesTable({ cards, showMoney, viewer }: { cards: LeadCard[]; sh
       if (av > bv) return 1 * dir;
       return 0;
     });
-  }, [searched, filter, sortKey, sortDir]);
+  }, [searched, stateFilter, sortKey, sortDir]);
 
   const sort = (k: SortKey): void => {
     if (k === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -104,17 +105,17 @@ export function SalesTable({ cards, showMoney, viewer }: { cards: LeadCard[]; sh
       {/* Clickable status filters */}
       <div className="mb-4 flex flex-wrap gap-2">
         <button
-          onClick={() => setFilter(null)}
-          className={`rounded-full border px-2.5 py-1 text-xs font-medium ${filter === null ? "border-white/40 bg-white/10 text-foreground" : "border-white/15 text-muted-foreground hover:text-foreground"}`}
+          onClick={() => setStateFilter(null)}
+          className={`rounded-full border px-2.5 py-1 text-xs font-medium ${stateFilter === null ? "border-white/40 bg-white/10 text-foreground" : "border-white/15 text-muted-foreground hover:text-foreground"}`}
         >
           All <span className="tabular-nums">{searched.length}</span>
         </button>
         {BOARD_COLUMNS.map((c) => {
-          const on = filter === c.key;
+          const on = stateFilter === c.key;
           return (
             <button
               key={c.key}
-              onClick={() => setFilter(on ? null : c.key)}
+              onClick={() => setStateFilter(on ? null : c.key)}
               className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${STATUS_CHIP[c.key]} ${on ? "ring-1 ring-white/40" : "opacity-80 hover:opacity-100"}`}
             >
               {c.label} <span className="tabular-nums">{counts[c.key]}</span>
@@ -140,7 +141,7 @@ export function SalesTable({ cards, showMoney, viewer }: { cards: LeadCard[]; sh
           </thead>
           <tbody className="divide-y divide-white/5">
             {rows.length === 0 ? (
-              <tr><td colSpan={showMoney ? 9 : 6} className="p-8 text-center text-muted-foreground">{searching ? `No projects match “${query.trim()}”${filter ? " in this status" : ""}.` : `No leads${filter ? " in this status" : ""}.`}</td></tr>
+              <tr><td colSpan={showMoney ? 9 : 6} className="p-8 text-center text-muted-foreground">{searching ? `No projects match “${query.trim()}”${stateFilter ? " in this status" : ""}.` : `No leads${stateFilter ? " in this status" : ""}.`}</td></tr>
             ) : (
               rows.map((l) => (
                 <tr

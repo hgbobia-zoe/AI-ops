@@ -51,3 +51,12 @@ export function filterProjects<T extends SearchableProject>(projects: T[], q: st
   if (!normalizeQuery(q)) return projects;
   return projects.filter((p) => matchesQuery(p, q));
 }
+
+/** Match a row's lead state against the active single-select state filter. `null`/`""` (the default)
+ *  matches everything. The status compared is the row's EXISTING board-status classification — the
+ *  state filter never invents a state, it just selects one the code already computes. Composes with the
+ *  search: a view applies `matchesQuery(p, q) && matchesState(status, stateFilter)` to narrow by both. */
+export function matchesState(status: string | null | undefined, stateFilter: string | null | undefined): boolean {
+  if (!stateFilter) return true;
+  return status === stateFilter;
+}
