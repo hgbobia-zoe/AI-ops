@@ -36,4 +36,15 @@ export async function register(): Promise<void> {
   // Check every 15 minutes, plus once ~1 min after boot.
   g.__zoePullStaleTimer = setInterval(() => void run(), 15 * 60 * 1000);
   setTimeout(() => void run(), 60 * 1000);
+
+  // Arm the in-process runtime clock: run the server-job bucket (runServerJobs — the SAME function
+  // /api/runtime/tick calls) on a dependable in-app 15-min timer, since GitHub's scheduled cron throttles
+  // to ~hours. Idempotent + self-gated (RUNTIME_IN_PROCESS_CLOCK); the GH cron + tick endpoint stay as a
+  // harmless backstop (jobs are idempotent). Dynamically imported so it never loads in the edge/build bundle.
+  try {
+    const { startRuntimeClock } = await import("@/lib/runtime/inProcessClock");
+    startRuntimeClock();
+  } catch {
+    /* never let boot wiring crash the process */
+  }
 }
