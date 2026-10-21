@@ -10,6 +10,74 @@
 
 import { PROVISION_ENDPOINTS } from "@/lib/people/provisioningEndpoints";
 
+// ── Note/comms capture id-selection (PURE, shared contract) ──────────────────────────────────────────────
+// The set of Goodshuffle project ids whose notes/comms (internalNotes + client notes + email thread) the
+// ACTIVE lane captures. It is the UNION of:
+//   • OPEN leads — unsigned, not lost/cancelled/dead, future or undated (the sales pipeline, existing set).
+//   • SIGNED near-term DELIVERIES — signed projects whose logistics_start_date is within today..+horizon,
+//     so the pre-shift driver debrief can read the office's "customer had delays last time, be punctual"
+//     notes and the customer's own messages BEFORE delivery day. Signed projects were previously excluded
+//     from note capture (the openIds filter dropped `p.signed`), which is exactly the gap Part A closes.
+// Deduped (open set first, preserving the existing sales priority), capped so the per-day cost stays small
+// (a handful of near-term deliveries ride on top of the ~88 active open leads). This lives here as the
+// canonical, unit-tested logic; the bookmarklet string and the extension's pull-injected.js mirror it
+// inline (they are serialized/standalone and cannot import), and a drift there is caught in review + tests.
+export const NOTE_CAPTURE_CAP = 100;
+export const DELIVERY_HORIZON_DAYS = 3;
+
+/** A project as searchProjects returns it, as far as id-selection cares. */
+export interface PullProjectLite {
+  signed?: boolean;
+  statusLabel?: string;
+  logistics_start_date?: string | null;
+}
+
+/** YYYY-MM-DD for a Goodshuffle date string (local-day normalized), matching the bookmarklet's inline d2. */
+function pullYmd(s: string | null | undefined): string | null {
+  try {
+    if (!s) return null;
+    const dt = new Date(s);
+    if (isNaN(dt.getTime())) return null;
+    return new Date(dt.getTime() - dt.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  } catch {
+    return null;
+  }
+}
+
+/** PURE: the deduped, capped id set the ACTIVE lane captures notes/comms for. `todayY`/`horizonY` are
+ *  YYYY-MM-DD bounds (horizonY = todayY + DELIVERY_HORIZON_DAYS). Open leads first, then near-term signed
+ *  deliveries, deduped, capped at NOTE_CAPTURE_CAP. */
+export function selectNoteCaptureIds(
+  projects: Record<string, PullProjectLite>,
+  todayY: string,
+  horizonY: string,
+  cap: number = NOTE_CAPTURE_CAP,
+): string[] {
+  const open: string[] = [];
+  const signed: string[] = [];
+  for (const id of Object.keys(projects)) {
+    const p = projects[id];
+    const d = pullYmd(p.logistics_start_date);
+    if (p.signed) {
+      // Near-term delivery: a signed project with a logistics date within today..+horizon.
+      if (d && d >= todayY && d <= horizonY) signed.push(id);
+      continue;
+    }
+    const s = (p.statusLabel || "").toLowerCase();
+    if (s.indexOf("lost") >= 0 || s.indexOf("cancel") >= 0 || s.indexOf("dead") >= 0) continue;
+    if (!d || d >= todayY) open.push(id);
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of open.concat(signed)) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out.slice(0, cap);
+}
+
 /** Build the office pull IIFE. `apiBase` is the absolute Zoe Ops origin (e.g. https://zoe-dispatch.fly.dev).
  *  `publishToken` (when the KIOSK_PUBLISH_TOKEN secret is set) is sent as x-publish-token so the
  *  now-gated ingest endpoints accept the write — only logged-in users can see /admin/pull, so the
@@ -60,10 +128,19 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
           // NB: Goodshuffle's searchProjects field is contract_subtotal (there is no contract_total).
           return { bookingId:String(p.id), eventName:p.eventName||"", eventDate:d2(p.logistics_start_date), statusLabel:p.statusLabel||"", signed:!!p.signed, archived:!!p.archived, grandTotalCents:p.grand_total, contractTotalCents:p.contract_subtotal, amountPaidCents:p.amount_paid, amountDueCents:p.amount_due, clientName:p.client_name||"", clientEmail:p.client_email||"", clientPhone:p.client_phone||"", quoteSentDate:d2(p.quote_sent_date), dateCreated:d2(p.date_created), venue:p.venueLabel||"", location:p.cityStateZipCounty||"" }; });
         if(!recs.length) return { saved:0, partial:pErr };
-        // OPEN leads (unsigned, not lost, future/undated) get their comms history captured too — the
-        // team's call/text/email log lives in each project's internalNotes (via initContractView).
+        // Capture comms history for OPEN leads AND SIGNED near-term deliveries. The team's call/text/email
+        // log lives in each project's internalNotes (via initContractView). OPEN leads = unsigned, not lost,
+        // future/undated (sales). SIGNED near-term = signed deliveries within today..+3 days, so the driver
+        // debrief can read "customer had delays last time, be punctual" notes BEFORE delivery day. Union,
+        // deduped (open first), capped at 100. MIRRORS selectNoteCaptureIds() in gsPull.ts (unit-tested).
         var todayY=new Date().toISOString().slice(0,10);
-        var openIds=Object.keys(all).filter(function(id){ var p=all[id]; if(p.signed) return false; var s=(p.statusLabel||"").toLowerCase(); if(s.indexOf("lost")>=0||s.indexOf("cancel")>=0||s.indexOf("dead")>=0) return false; var d=d2(p.logistics_start_date); return !d || d>=todayY; }).slice(0,80);
+        var horizonY=new Date(Date.now()+${DELIVERY_HORIZON_DAYS}*86400000).toISOString().slice(0,10);
+        var openIds=[], signedIds=[];
+        Object.keys(all).forEach(function(id){ var p=all[id]; var d=d2(p.logistics_start_date);
+          if(p.signed){ if(d&&d>=todayY&&d<=horizonY) signedIds.push(id); return; }
+          var s=(p.statusLabel||"").toLowerCase(); if(s.indexOf("lost")>=0||s.indexOf("cancel")>=0||s.indexOf("dead")>=0) return;
+          if(!d||d>=todayY) openIds.push(id); });
+        var seenCap={}, captureIds=[]; openIds.concat(signedIds).forEach(function(id){ if(!seenCap[id]){seenCap[id]=1;captureIds.push(id);} }); captureIds=captureIds.slice(0,${NOTE_CAPTURE_CAP});
         function pullNotes(){
           var notes=[]; var emails=[];
           // Collect line-item titles from a project's loaded line-item groups (event-type signal).
@@ -96,7 +173,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             var quoteMsgs=msgs.filter(function(m){ return m.medium==="EMAIL" && sentRecips(m).length && /quote/i.test(m.subject||""); });
             (quoteMsgs.length?quoteMsgs:msgs).forEach(consider);
             return { sent:qs, opened:qo }; }
-          function one(i){ if(i>=openIds.length) return Promise.resolve(); var id=openIds[i];
+          function one(i){ if(i>=captureIds.length) return Promise.resolve(); var id=captureIds[i];
             var pCV=fetch("/app/vendorTransaction/initContractView?transactionID="+id,H).then(function(r){ return r.ok?r.json():null; }).catch(function(){return null;});
             var pMsg=fetch("/app/conversation/getMessagesForTransaction?transactionID="+id,H).then(function(r){ return r.ok?r.json():null; }).catch(function(){return null;});
             return Promise.all([pCV,pMsg]).then(function(res){ var j=res[0], qt=quoteTimes(res[1]);

@@ -27,11 +27,13 @@
 import { getDb } from "@/lib/db";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { getShiftsForDate } from "./store";
-import { autoPacketEnabled, shiftCommsEnabled, smsSendEnabled } from "./commsFlag";
+import { autoPacketEnabled, shiftCommsEnabled, smsSendEnabled, customerAttentionEnabled } from "./commsFlag";
 import { getAssignmentsForShift, hasShiftEvent, logShiftEvent } from "./assignments";
 import { isLiveAssignment } from "./lifecycle";
 import { dispatchPacketTouch } from "./packetSend";
 import { buildSharedPacketContext, assignmentPacketInputs, packetOriginFromEnv } from "./packetDispatch";
+import { customerAttentionNote } from "./customerAttention";
+import { getRoutesForDate } from "@/lib/db/repo";
 import type { CommsTouch } from "./commsTemplates";
 import { getUsers, connecteamConfigured, type CrewMember } from "@/lib/connecteam";
 import { recordSchedulingAlarm } from "./autoAssignAlarm";
@@ -164,7 +166,23 @@ export async function runWorkerPacketsTick(now: Date = new Date()): Promise<Work
       );
       if (due.length === 0) continue;
 
+      // Is any (assignment, touch) pair still unsent? The LLM heads-up below is skipped entirely when every
+      // debrief on this shift already went out, so repeat ticks inside the 2h window add no LLM cost.
+      const anyPending = live.some((a) => due.some((touch) => !hasShiftEvent(autoPacketChangeKey(a.id, touch))));
+      if (!anyPending) continue;
+
       const shared = buildSharedPacketContext(shift, users);
+
+      // AI CUSTOMER-ATTENTION heads-up — computed ONCE per route here (not per worker, not inside the pure
+      // renderer), ONLY when we are about to debrief a route (a touch is still pending) and the flag is on.
+      // It reads the route's stops' notes/comms and returns a short line, or undefined (no signal / LLM
+      // unavailable / any error). Undefined drops the {customerAttention} line; it NEVER blocks the send.
+      let customerAttention: string | null = null;
+      if (customerAttentionEnabled() && shift.routeId && shift.truckId) {
+        const route = getRoutesForDate(shift.truckId, shift.date).find((r) => r.routeId === shift.routeId);
+        if (route) customerAttention = (await customerAttentionNote(route)) ?? null;
+      }
+
       for (const a of live) {
         const { ctx, workerPhone, link } = assignmentPacketInputs(shift, a, live, shared, users, origin, actor);
         for (const touch of due) {
@@ -172,7 +190,7 @@ export async function runWorkerPacketsTick(now: Date = new Date()): Promise<Work
           const changeKey = autoPacketChangeKey(a.id, touch);
           if (hasShiftEvent(changeKey)) continue;
 
-          const dispatch = await dispatchPacketTouch({ shift, assignment: a, ctx, touch, workerPhone, link, actor });
+          const dispatch = await dispatchPacketTouch({ shift, assignment: a, ctx, touch, workerPhone, link, customerAttention, actor });
           if (dispatch.state === "sent") {
             // Record the per-touch idempotency + audit row ONLY after the provider reported ok, so a failed
             // or skipped/held touch stays eligible to retry on a later tick (never a silent drop).
