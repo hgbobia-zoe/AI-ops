@@ -40,22 +40,23 @@ export function SalesBoard({
   const [overCol, setOverCol] = useState<BoardStatus | null>(null);
   const [drawerId, setDrawerId] = useState<string | null>(null);
 
-  // Search filters what's SHOWN (a derived view); drag/drop/archive still operate on the full `cards`
-  // state, so moving a matching card works and its column counts stay honest to what's on screen.
+  // Search + state filter narrow what's SHOWN (a derived view); drag/drop/archive still operate on the
+  // full `cards` state, so moving a card works and column counts stay honest to what's on screen. The
+  // board NEVER collapses — all columns always render (Jira-style). A state filter is applied PER CARD
+  // against the card's own board status, so only the matching column keeps cards and the rest empty out.
   const visible = useMemo(() => {
     const out = {} as Record<BoardStatus, LeadCard[]>;
     for (const col of columns) {
-      out[col.key] = cards[col.key].filter((c) =>
-        matchesQuery({ id: c.id, clientName: c.clientName, eventName: c.eventName, value: c.value, stage: STATUS_LABEL[c.status], venue: c.venue, location: c.location }, query),
+      out[col.key] = cards[col.key].filter(
+        (c) =>
+          matchesState(c.status, stateFilter) &&
+          matchesQuery({ id: c.id, clientName: c.clientName, eventName: c.eventName, value: c.value, stage: STATUS_LABEL[c.status], venue: c.venue, location: c.location }, query),
       );
     }
     return out;
-  }, [cards, columns, query]);
-  // A state filter focuses the board on that one column (Goodshuffle-style); the column key IS the board
-  // status, so this is exact. Search still narrows within the shown column(s).
-  const shownColumns = useMemo(() => columns.filter((col) => matchesState(col.key, stateFilter)), [columns, stateFilter]);
+  }, [cards, columns, query, stateFilter]);
   const total = useMemo(() => columns.reduce((n, col) => n + cards[col.key].length, 0), [cards, columns]);
-  const shown = useMemo(() => shownColumns.reduce((n, col) => n + visible[col.key].length, 0), [shownColumns, visible]);
+  const shown = useMemo(() => columns.reduce((n, col) => n + visible[col.key].length, 0), [columns, visible]);
   const searching = query.trim().length > 0 || stateFilter !== null;
 
   async function persist(id: string, status: BoardStatus | "archived"): Promise<void> {
@@ -108,7 +109,7 @@ export function SalesBoard({
         </p>
       ) : (
       <div className="flex min-h-0 flex-1 items-start gap-3 overflow-auto p-4 md:p-5">
-      {shownColumns.map((col) => {
+      {columns.map((col) => {
         const list = visible[col.key];
         const isOver = overCol === col.key;
         return (
