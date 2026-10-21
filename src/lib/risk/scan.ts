@@ -144,7 +144,9 @@ async function resolvePrepOpportunities(today: string, tomorrow: string, nowReal
   // Today's crew still on-shift NOW, minus anyone in an unavailability block over now. Connecteam-verified.
   const nowUnix = Math.floor(nowReal.getTime() / 1000);
   const crewToday = await getCrewForDateSafe(today);
-  const onShift = [...shiftsForRole(crewToday.shifts, "prep"), ...shiftsForRole(crewToday.shifts, "driver")];
+  const prepShifts = shiftsForRole(crewToday.shifts, "prep");
+  const onShift = [...prepShifts, ...shiftsForRole(crewToday.shifts, "driver")];
+  const prepUserIds = new Set(prepShifts.map((s) => s.userId));
   const candidateIds = [...new Set(onShift.map((s) => s.userId))];
   const blockedNow = new Set<number>();
   if (crewToday.ok && candidateIds.length > 0) {
@@ -155,12 +157,17 @@ async function resolvePrepOpportunities(today: string, tomorrow: string, nowReal
   }
   const availableUsers = new Set<number>();
   const shiftEndUnix: number[] = [];
+  // PREP (warehouse) crew specifically on-shift now — the staffing/coverage signal for the load. Adrane
+  // Walgori + Alain Miko scheduled today 9a–1p loading the truck land here, so Smith's prep reads as
+  // STAFFED and the clock-only escalation is suppressed (gates reflect reality).
+  const prepOnShift = new Set<number>();
   for (const s of onShift) {
     if (blockedNow.has(s.userId) || s.endUnix <= nowUnix) continue;
     if (!availableUsers.has(s.userId)) {
       availableUsers.add(s.userId);
       shiftEndUnix.push(s.endUnix);
     }
+    if (prepUserIds.has(s.userId)) prepOnShift.add(s.userId);
   }
 
   const cfg = getSettings().prepOpportunity;
@@ -172,7 +179,7 @@ async function resolvePrepOpportunities(today: string, tomorrow: string, nowReal
     displayTz: DISPLAY_TZ,
     trucks: truckStates,
     routes,
-    crew: { verified: crewToday.ok, availableCount: availableUsers.size, shiftEndUnix },
+    crew: { verified: crewToday.ok, availableCount: availableUsers.size, shiftEndUnix, prepOnShiftCount: prepOnShift.size },
   };
   return assessPrepOpportunities(facts, cfg, nowReal);
 }

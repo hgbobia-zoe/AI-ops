@@ -21,6 +21,15 @@
 // is already removed from the crew the caller passes). We NEVER recommend work that would run past it — if
 // it would need OT, the finding downgrades to `prep_window_threatened`/`prep_window_missed` (informational),
 // never an actionable "load it now".
+//
+// STAFFING-AWARE ESCALATION (gates reflect reality, not the clock): a prep crew ON SHIFT NOW
+// (`crew.prepOnShiftCount > 0`) is actively loading, so the window tightening toward their shift-end is
+// EXPECTED — escalating it to MEDIUM/HIGH would cry wolf at the crew doing the work. So we only let the
+// CLOCK escalate an open/closing window when it is UNSTAFFED (no prep crew on). A STAFFED window stays
+// LOW/informational; an UNSTAFFED, closing window still escalates (that is the real, page-worthy risk).
+// Honest caveat: staffing is observable, loading COMPLETION is not — so "staffed" says a crew is on, not
+// that the load is done or that the crew is big enough. The genuinely-unaddressed branches (blocker, crew
+// unverified, no feasible in-shift window, capacity-limited) are independent of staffing and unchanged.
 
 import type { RiskFinding, RiskSeverity } from "@/lib/risk/types";
 
@@ -98,6 +107,15 @@ export interface PrepCrew {
   availableCount: number;
   /** Their shift-end instants (Unix seconds), only those after `now`. The MIN of these is the human cutoff. */
   shiftEndUnix: number[];
+  /** Distinct PREP (warehouse) crew ON-SHIFT NOW — the people who actually prep & load the trucks (a
+   *  subset of `availableCount`, drivers excluded). This is the STAFFING/COVERAGE signal: when > 0, a
+   *  prep crew is on today for the load, so the prep window being open/closing is EXPECTED and handled —
+   *  the clock alone must NOT escalate it (that would cry wolf at the very crew doing the loading). When
+   *  0 (no prep crew on shift now), a closing window is genuinely unaddressed and WORTH paging.
+   *  NOTE: this is observable staffing only — it does NOT verify the crew is big enough for the load, that
+   *  they are loading THIS truck, or that loading is complete (there is no loading telemetry). Optional for
+   *  test ergonomics; absent is treated as UNSTAFFED (0), preserving the pre-staffing clock-only behavior. */
+  prepOnShiftCount?: number;
 }
 
 export interface PrepFacts {
@@ -130,11 +148,25 @@ function windowLabel(iso: string | null, tz: string): string {
   return clockIn(tz, Math.floor(t / 1000));
 }
 
-/** The honest "what is unknown" note — ALWAYS states the loading-telemetry gap, plus any softer inputs. */
+function prepStaffedOf(crew: PrepCrew): boolean {
+  return (crew.prepOnShiftCount ?? 0) > 0;
+}
+
+/** The honest "what is unknown" note — ALWAYS states the loading-telemetry gap, plus any softer inputs,
+ *  plus an honest statement of whether the prep is STAFFED (observable) vs unaddressed. */
 function buildWhatsUnknown(truck: PrepTruckState, crew: PrepCrew): string {
   const parts = ["No loading telemetry exists, so this flags the UNVERIFIED prep window — it does not assert the truck is unloaded."];
   if (!truck.returnVerified) parts.push("Truck return is not confirmed (no warehouse-arrival tap); availability is inferred from route status and stop times.");
-  if (!crew.verified) parts.push("Crew availability could not be verified (Connecteam unreachable).");
+  if (!crew.verified) {
+    parts.push("Crew availability could not be verified (Connecteam unreachable).");
+  } else if (prepStaffedOf(crew)) {
+    // STAFFING is observable even though loading completion is not. Say what we DO and DON'T know.
+    parts.push(
+      `Prep is STAFFED: ${crew.prepOnShiftCount} prep crew on shift now for the load, so the window is being worked — but crew size vs. load is not validated and completion is unconfirmed.`,
+    );
+  } else {
+    parts.push("No prep crew is on shift now for this load, so loading is UNADDRESSED (not merely unverified).");
+  }
   return parts.join(" ");
 }
 
@@ -247,6 +279,13 @@ export function assessPrepOpportunities(facts: PrepFacts, config: Partial<PrepOp
     const loadMinutes = estimateLoadMinutes(r, cfg);
     const whatsUnknown = buildWhatsUnknown(truck, crew);
     const confidence: "low" | "moderate" = truck.returnVerified && crew.verified ? "moderate" : "low";
+    // STAFFING-AWARE escalation (gates reflect reality). A prep crew on shift NOW is loading the trucks,
+    // so the window naturally tightening toward their shift-end (the cutoff) is EXPECTED — not a risk.
+    // We therefore only let the CLOCK escalate the open/closing window when it is UNSTAFFED. The
+    // genuinely-unaddressed branches (blocker, crew unverified, no feasible window, capacity-limited) are
+    // untouched by this — those are real conditions regardless of who is nominally on shift.
+    const prepStaffed = prepStaffedOf(crew);
+    const staffedMeta = { prepStaffed, prepOnShiftCount: crew.prepOnShiftCount ?? 0 };
 
     // (4) A real blocking dependency → surface it, never a load rec that can't happen.
     if (r.blocker) {
@@ -365,44 +404,72 @@ export function assessPrepOpportunities(facts: PrepFacts, config: Partial<PrepOp
       continue;
     }
 
-    // Window closing (remaining small) → THREATENED, escalate as the cutoff nears.
+    // Window closing (remaining small). STAFFING-AWARE:
+    //  • STAFFED → the window tightening toward the prep crew's shift-end is EXPECTED and handled; do NOT
+    //    escalate on the clock. Surface it as an on-track, informational OPEN window (LOW) — no paging.
+    //  • UNSTAFFED → no prep crew is on to load it and the window is closing → GENUINE, page-worthy risk;
+    //    escalate THREATENED on the clock (MEDIUM, then HIGH as the cutoff nears), exactly as before.
     if (remainingMin <= cfg.threatenedMinutes) {
       out.push(
-        toFinding(
-          {
-            r,
-            riskType: "prep_window_threatened",
-            severity: remainingMin <= cfg.threatenedMinutes / 2 ? "HIGH" : "MEDIUM",
-            confidence,
-            whatsUnknown,
-            loadMinutes,
-            latestSafeStartUnix,
-            remainingMin,
-            recommendedAction: `Window closing — load ${r.truckId} now (or confirm it can wait).`,
-            reason: `Only ~${Math.round(remainingMin)} min of in-shift slack remains before the cutoff.`,
-          },
-          facts.displayTz,
-        ),
+        prepStaffed
+          ? toFinding(
+              {
+                r,
+                riskType: "prep_window_open",
+                severity: "LOW",
+                confidence,
+                whatsUnknown,
+                loadMinutes,
+                latestSafeStartUnix,
+                remainingMin,
+                recommendedAction: `Prep crew is on shift loading ${r.truckId} for ${eventLabelOf(r)}; no action needed unless they flag a problem.`,
+                reason: `A prep crew is on shift now, so the window closing toward their shift-end is expected (~${Math.round(remainingMin)} min of in-shift slack).`,
+                extraMeta: staffedMeta,
+              },
+              facts.displayTz,
+            )
+          : toFinding(
+              {
+                r,
+                riskType: "prep_window_threatened",
+                severity: remainingMin <= cfg.threatenedMinutes / 2 ? "HIGH" : "MEDIUM",
+                confidence,
+                whatsUnknown,
+                loadMinutes,
+                latestSafeStartUnix,
+                remainingMin,
+                recommendedAction: `No prep crew is on shift and the window is closing — load ${r.truckId} now or get a prep crew on it.`,
+                reason: `No prep crew is on shift to load it and only ~${Math.round(remainingMin)} min of in-shift slack remains before the cutoff.`,
+                extraMeta: staffedMeta,
+              },
+              facts.displayTz,
+            ),
       );
       openSlots -= 1; // a threatened-but-feasible truck still occupies crew capacity
       continue;
     }
 
-    // (1) Actionable: truck free, crew available, comfortable in-shift window remains.
+    // (1) Comfortable in-shift window remains. STAFFING-AWARE: a STAFFED window is on track → stays LOW
+    // (informational), never nudged up by the clock. An UNSTAFFED window still nudges LOW→MEDIUM as it
+    // tightens, so a load with nobody on it surfaces before it becomes a closing-window emergency.
     out.push(
       toFinding(
         {
           r,
           riskType: "prep_window_open",
-          // Advisory by default; nudges up as the window tightens.
-          severity: remainingMin >= cfg.threatenedMinutes * 2 ? "LOW" : "MEDIUM",
+          severity: prepStaffed ? "LOW" : remainingMin >= cfg.threatenedMinutes * 2 ? "LOW" : "MEDIUM",
           confidence,
           whatsUnknown,
           loadMinutes,
           latestSafeStartUnix,
           remainingMin,
-          recommendedAction: `Load ${r.truckId} for ${eventLabelOf(r)} today (latest safe start ${clockIn(facts.displayTz, latestSafeStartUnix)}).`,
-          reason: `A feasible in-shift window remains (~${Math.round(remainingMin)} min of slack).`,
+          recommendedAction: prepStaffed
+            ? `Prep crew is on shift loading ${r.truckId} for ${eventLabelOf(r)}; on track (latest safe start ${clockIn(facts.displayTz, latestSafeStartUnix)}).`
+            : `No prep crew is on shift yet — plan to load ${r.truckId} for ${eventLabelOf(r)} today (latest safe start ${clockIn(facts.displayTz, latestSafeStartUnix)}).`,
+          reason: prepStaffed
+            ? `A prep crew is on shift and a feasible in-shift window remains (~${Math.round(remainingMin)} min of slack).`
+            : `A feasible in-shift window remains (~${Math.round(remainingMin)} min of slack), but no prep crew is on shift yet.`,
+          extraMeta: staffedMeta,
         },
         facts.displayTz,
       ),
