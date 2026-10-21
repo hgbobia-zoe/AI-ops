@@ -78,7 +78,7 @@ export function SalesShell({
   const pathname = usePathname();
   const seg = pathname.split("/")[2] ?? "";
   // Analytical / full-width sub-views render themselves; the shared header + master-detail step aside.
-  if (seg === "bid" || seg === "lost" || seg === "trends" || seg === "status") return <>{children}</>;
+  if (seg === "bid" || seg === "lost" || seg === "trends" || seg === "status" || seg === "outreach") return <>{children}</>;
 
   // Board is the default view (/salesos redirects to /salesos/board). The worklist is rendered by this
   // shell; every other path (board, table, a lead-id deep link) renders its own page as children under
