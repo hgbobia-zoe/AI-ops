@@ -1167,6 +1167,27 @@ export function getPipelineBookingsInRange(start: string, end: string, opts?: { 
   ).map(toBookingView);
 }
 
+/** Candidates for the e-signature cutoff sweep (src/lib/salesos/esignCutoff.ts): UNSIGNED, non-archived,
+ *  non-cancelled/lost bookings whose event_date falls in [startYmd, endYmd]. `signed = 0` is our honest
+ *  proxy for "online signature still relevant" — Goodshuffle does not expose the online-signing toggle to
+ *  our pull, and a project that is already SIGNED no longer needs online signing turned off. The engine
+ *  then applies the pure business-day rule (isWithinBusinessDays) to this small window. Soonest first. */
+export function esignCutoffCandidates(startYmd: string, endYmd: string): BookingView[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM bookings
+         WHERE event_date IS NOT NULL AND event_date >= ? AND event_date <= ?
+           AND COALESCE(signed,0) = 0
+           AND COALESCE(archived,0) = 0
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
+           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
+         ORDER BY event_date ASC`,
+      )
+      .all(startYmd, endYmd) as Record<string, unknown>[]
+  ).map(toBookingView);
+}
+
 /** Distinct calendar years that have at least one non-cancelled/lost booking, ascending — for the
  *  Sales year navigator so we only offer years that actually hold data. */
 export function getBookingYears(): number[] {
@@ -2263,6 +2284,30 @@ export function pendingDeliveryFeeOp(transactionId: string, amount: number): { i
     )
     .get(String(transactionId), amount) as { id: string } | undefined;
   return row ? { id: row.id } : null;
+}
+
+/** Has a disable_esignature op EVER been queued for this project (any status)? Idempotency guard for the
+ *  e-signature cutoff sweep: once we've queued the "turn online signing off" write for a project, we never
+ *  queue it again — the team can re-enable or sign in person in Goodshuffle, and a re-disable would fight
+ *  that human choice (and spam sales-ai). Unlike the delivery-fee guard this matches ANY status (not just
+ *  pending): the intent is strictly once-per-project, for the project's lifetime. */
+export function disableEsignOpExists(transactionId: string): boolean {
+  if (!transactionId) return false;
+  const row = getDb()
+    .prepare("SELECT 1 FROM gs_outbox WHERE op = 'disable_esignature' AND transaction_id = ? LIMIT 1")
+    .get(String(transactionId));
+  return Boolean(row);
+}
+
+/** disable_esignature ops filtered by status (default 'done') — so the e-signature cutoff sweep can find
+ *  the writes Goodshuffle has CONFIRMED and post the honest "signature disabled" follow-up (once each).
+ *  Newest first; returns the id + project + label the announcement needs. */
+export function listDisableEsignOps(status: GsOutboxItem["status"] = "done"): GsOutboxItem[] {
+  return (
+    getDb()
+      .prepare("SELECT * FROM gs_outbox WHERE op = 'disable_esignature' AND status = ? ORDER BY updated_at DESC")
+      .all(status) as GsOutboxRow[]
+  ).map(toGsItem);
 }
 
 /** Current status of one gs_outbox op (for the app to poll a write it just queued). Returns null when the

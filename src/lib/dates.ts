@@ -159,6 +159,61 @@ export function isoToOpsLocalInput(iso: string | null): string {
   return `${p.year}-${p.month}-${p.day}T${hour}:${p.minute}`;
 }
 
+// ── Business-day math (ops timezone) ────────────────────────────────────────────────────────────────
+// Used by the e-signature cutoff (src/lib/salesos/esignCutoff.ts): disable online signing N BUSINESS days
+// before an event. "Business day" = Mon–Fri. Holidays are intentionally OUT OF SCOPE here — a public-
+// holiday calendar would need a jurisdiction + an annual data source we don't have, so a holiday counts
+// as a business day for now; the small effect is that a cutoff MAY fire one calendar day earlier than a
+// holiday-aware version would. Documented so a later holiday feed is a drop-in, not a surprise.
+
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Is `ymd` (a plain calendar day) a weekday (Mon–Fri)? Parsed as UTC so the weekday is tz-stable. */
+export function isBusinessDay(ymd: string): boolean {
+  if (!YMD_RE.test(ymd)) return false;
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0 Sun … 6 Sat
+  return dow >= 1 && dow <= 5;
+}
+
+/**
+ * Business days (Mon–Fri) from TODAY (in the ops timezone) to the event day `eventYmd`:
+ *   • event is today            → 0
+ *   • event is in the future    → count of weekdays strictly after today, up to and including the event
+ *                                  (so Mon→Thu = 3: Tue, Wed, Thu). Weekends don't count.
+ *   • event is in the past      → NEGATIVE (the weekday count back to it), so callers can exclude it
+ *   • malformed date            → NaN
+ * Pure given `now`, so it's unit-testable across weekend spans and the exact boundary.
+ */
+export function businessDaysUntil(eventYmd: string, now: Date = new Date()): number {
+  if (!YMD_RE.test(eventYmd)) return NaN;
+  const today = todayInOpsTz(now);
+  if (eventYmd === today) return 0;
+  let count = 0;
+  if (eventYmd > today) {
+    let cur = today;
+    while (cur < eventYmd) {
+      cur = shiftYmd(cur, 1);
+      if (isBusinessDay(cur)) count++;
+    }
+    return count;
+  }
+  // Past: walk forward from the event to today and negate, so a past event reads as < 0.
+  let cur = eventYmd;
+  while (cur < today) {
+    cur = shiftYmd(cur, 1);
+    if (isBusinessDay(cur)) count++;
+  }
+  return -count;
+}
+
+/** True when `eventYmd` is today or up to `n` business days out (never for a past event). `n` = 3 for the
+ *  e-signature cutoff. Weekends are excluded by businessDaysUntil, so Fri→next-Wed is 3 business days. */
+export function isWithinBusinessDays(eventYmd: string, n: number, now: Date = new Date()): boolean {
+  const d = businessDaysUntil(eventYmd, now);
+  return Number.isFinite(d) && d >= 0 && d <= n;
+}
+
 /**
  * Inverse of isoToOpsLocalInput: interpret a `datetime-local` wall time (no tz) in the OPERATING timezone
  * and return the absolute UTC ISO instant. Never `new Date("<local>")` — that reads the string in the

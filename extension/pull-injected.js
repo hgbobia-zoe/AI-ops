@@ -188,13 +188,14 @@ function zoePull(apiBase, tier) {
       const emailOps = all.filter((o) => o.op === "email_send" && o.transactionId && o.payload && o.payload.content);
       const taskOps = all.filter((o) => o.op === "create_gs_task" && o.transactionId && o.payload && o.payload.title);
       const provOps = all.filter((o) => (o.op === "provision_user" || o.op === "revoke_user") && o.payload && o.payload.system);
+      const esignOps = all.filter((o) => o.op === "disable_esignature" && o.transactionId);
       // Ops this content-script drainer can't action (e.g. create_project, which needs a popup created
       // from a real user gesture — a timer-driven content script has none, so the office bookmarklet or a
       // Playwright runner drains those). Surfaced in the result so they're VISIBLE, never silently
       // ignored forever. Keep this set in sync with the handlers below + gsPull.ts.
-      const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1 };
+      const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1, disable_esignature: 1 };
       const unhandledOps = all.filter((o) => !HANDLED[o.op]);
-      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, emails = 0, tasks = 0, provisioned = 0, chain = Promise.resolve();
+      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, emails = 0, tasks = 0, provisioned = 0, esigns = 0, chain = Promise.resolve();
       // provision_user / revoke_user: People Lifecycle access provisioning via REPLAY. Mirrors
       // src/lib/gsPull.ts — gated on the captured endpoint (src/lib/people/provisioningEndpoints.ts). This
       // content script runs ONLY on pro.goodshuffle.com, so it can replay the GOODSHUFFLE invite/disable once
@@ -275,8 +276,24 @@ function zoePull(apiBase, tier) {
         const body = new URLSearchParams({ taskID: "", taskText: text, taskAssignedTransactionID: String(o.transactionId), taskAssignedUserID: "", taskDueDateStr: gsDueStr(), fromProjectView: "true" });
         return fetch("/app/task/createTask", { method: "POST", headers: { "x-requested-with": "XMLHttpRequest", "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, credentials: "include", body }).then((r) => r.ok).then((ok) => { if (ok) { tasks++; return ackOp(o.id, true); } /* leave PENDING on failure so it retries */ }).catch(() => { /* leave PENDING; never disrupt the rest of the drain */ });
       }); });
-      return chain.then(() => ({ pushed, failed, notes, team, fees, emails, tasks, provisioned, unhandled: unhandledOps.length }));
-    }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0, fees: 0, emails: 0, tasks: 0, provisioned: 0, unhandled: 0 }));
+      // disable_esignature: turn OFF online signing on the project N business days before the event, so the
+      // contract signs IN PERSON (queued by src/lib/salesos/esignCutoff.ts). CAPTURE-NEEDED: the Goodshuffle
+      // internal request that disables online signing has NOT been captured yet. Do the toggle ONCE in the
+      // GSPRO UI on a TEST project while recording the browser network tab, then fill GS_DISABLE_ESIGN below
+      // (method + path + bodyType "form"|"json" + a body builder from the transactionId). Until then this is
+      // a NO-OP that leaves the op PENDING — it NEVER fabricates/guesses a request (honest-when-unobservable).
+      // Keep this constant + the body shape in sync with src/lib/gsPull.ts (bookmarklet parity).
+      const GS_DISABLE_ESIGN = null; // e.g. { method:"POST", path:"/app/vendorTransaction/…", bodyType:"form", body:(tx)=>({ transactionID:String(tx), /* captured field */ }) }
+      esignOps.forEach((o) => { chain = chain.then(() => {
+        if (!GS_DISABLE_ESIGN || !GS_DISABLE_ESIGN.path) return; // CAPTURE-PENDING: leave pending, no request
+        const ep = GS_DISABLE_ESIGN; const data = ep.body ? ep.body(o.transactionId) : { transactionID: String(o.transactionId) };
+        const headers = { "x-requested-with": "XMLHttpRequest", accept: "application/json" }; let body;
+        if (ep.bodyType === "json") { headers["content-type"] = "application/json"; body = JSON.stringify(data); }
+        else { headers["content-type"] = "application/x-www-form-urlencoded"; body = new URLSearchParams(data).toString(); }
+        return fetch(ep.path, { method: ep.method || "POST", headers, credentials: "include", body }).then((r) => r.ok).then((ok) => { if (ok) esigns++; else failed++; return ackOp(o.id, ok, "disable_esignature_failed"); }).catch(() => { failed++; return ackOp(o.id, false, "disable_esignature_error"); });
+      }); });
+      return chain.then(() => ({ pushed, failed, notes, team, fees, emails, tasks, provisioned, esigns, unhandled: unhandledOps.length }));
+    }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0, fees: 0, emails: 0, tasks: 0, provisioned: 0, esigns: 0, unhandled: 0 }));
   }
 
   return loggedInProbe().then((ok) => {
