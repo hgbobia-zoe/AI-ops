@@ -22,3 +22,11 @@ export function autoPacketEnabled(): boolean {
 export function smsSendEnabled(): boolean {
   return process.env.SMS_SEND_ENABLED === "true";
 }
+
+// The AI CUSTOMER-ATTENTION heads-up on the debrief. DEFAULT ON (the owner wants it): the only way to
+// disable it is to set CUSTOMER_ATTENTION_ENABLED="false" explicitly. It degrades silently to no line when
+// the LLM is unavailable (customerAttentionNote returns undefined), and it is attempted ONLY on the debrief
+// send path (gated by the same switches), so it adds no always-on cost. Never blocks a debrief.
+export function customerAttentionEnabled(): boolean {
+  return process.env.CUSTOMER_ATTENTION_ENABLED !== "false";
+}

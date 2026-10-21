@@ -37,15 +37,19 @@ export interface DispatchArgs {
   touch: CommsTouch;
   workerPhone?: string | null;
   link?: string | null;
+  /** The AI customer-attention heads-up for this route, computed UPSTREAM (async) once per route and passed
+   *  in as a precomputed string (same contract as `link`). null/undefined → the {customerAttention} line
+   *  drops. Never computed here, so this send path stays sync and the LLM can never block a debrief. */
+  customerAttention?: string | null;
   actor?: string;
 }
 
 /** Build + persist the packet, render the touch, then preview (gated) or send (switch on). */
 export async function dispatchPacketTouch(args: DispatchArgs): Promise<TouchDispatch> {
-  const { shift, assignment, ctx, touch, workerPhone, link = null, actor = "system" } = args;
+  const { shift, assignment, ctx, touch, workerPhone, link = null, customerAttention = null, actor = "system" } = args;
   const packet = buildShiftPacket(shift, assignment, ctx);
   const version = saveShiftPacket(packet);
-  const body = renderPacketTouch(packet, touch, link);
+  const body = renderPacketTouch(packet, touch, link, customerAttention);
 
   // Master switch OFF -> preview/record-only. The packet exists; nothing is sent; packet_sent_at stays null.
   if (!shiftCommsEnabled()) {

@@ -13,9 +13,11 @@ import { renderAllTouches } from "@/lib/scheduling/commsTemplates";
 import { buildShiftPacket } from "@/lib/scheduling/packet";
 import { dispatchPacketTouch } from "@/lib/scheduling/packetSend";
 import { buildSharedPacketContext, assignmentPacketInputs } from "@/lib/scheduling/packetDispatch";
+import { customerAttentionNote } from "@/lib/scheduling/customerAttention";
 import type { CommsTouch } from "@/lib/scheduling/commsTemplates";
-import { shiftCommsEnabled } from "@/lib/scheduling/commsFlag";
+import { shiftCommsEnabled, customerAttentionEnabled } from "@/lib/scheduling/commsFlag";
 import { publicOrigin } from "@/lib/http/origin";
+import { getRoutesForDate } from "@/lib/db/repo";
 import { getUsers, type CrewMember } from "@/lib/connecteam";
 
 export const dynamic = "force-dynamic";
@@ -44,17 +46,25 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // Shared context: truck, route stops, supervisor. Coworkers differ per worker (exclude self).
   const shared = buildSharedPacketContext(shift, users);
 
+  // AI customer-attention heads-up — computed once per route (not per worker), same as the auto path. Flag
+  // default-on; returns null when there is no signal or the LLM is unavailable (the line then drops).
+  let customerAttention: string | null = null;
+  if (customerAttentionEnabled() && shift.routeId && shift.truckId) {
+    const route = getRoutesForDate(shift.truckId, shift.date).find((r) => r.routeId === shift.routeId);
+    if (route) customerAttention = (await customerAttentionNote(route)) ?? null;
+  }
+
   const assignments = [];
   for (const a of live) {
     const { ctx, workerPhone, link } = assignmentPacketInputs(shift, a, live, shared, users, origin, actor);
     const packet = buildShiftPacket(shift, a, ctx);
-    const dispatch = await dispatchPacketTouch({ shift, assignment: a, ctx, touch, workerPhone, link, actor });
+    const dispatch = await dispatchPacketTouch({ shift, assignment: a, ctx, touch, workerPhone, link, customerAttention, actor });
     assignments.push({
       assignmentId: a.id,
       displayName: a.displayName ?? a.instaworkWorker ?? "Worker",
       workerKind: a.workerKind,
       version: packet.version,
-      touches: renderAllTouches(packet, link),
+      touches: renderAllTouches(packet, link, customerAttention),
       dispatch,
     });
   }
