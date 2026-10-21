@@ -201,3 +201,76 @@ describe("assessPrepOpportunities — operational prep-window detection (12 case
     expect(f).toEqual([]);
   });
 });
+
+// ── STAFFING-AWARE escalation — the Smith (2026-10-22) false-alarm fix ───────────────────────────────
+// A small load (0 stops/items → 45 min) with a shift ending 3 PM today puts "now" (2 PM) inside the
+// closing window: remaining = (15:00 − 45m) − 14:00 = 15 min, i.e. ≤ threatenedMinutes/2 → HIGH on the
+// clock. The ONLY difference between these cases is whether a PREP crew is on shift.
+describe("assessPrepOpportunities — staffing-aware prep window (Smith false-alarm fix)", () => {
+  const smallRoute = (over: Partial<PrepTomorrowRoute> = {}) => route("NPR-1", { stopCount: 0, itemCount: 0, ...over });
+
+  it("STAFFED + window closing on the clock → does NOT escalate to HIGH (stays LOW, open/informational)", () => {
+    const f = assessPrepOpportunities(
+      facts({
+        routes: [smallRoute()],
+        crew: crew({ shiftEndUnix: [todayUnix(15)], availableCount: 2, prepOnShiftCount: 2 }), // Adrane + Alain on
+      }),
+      {},
+      NOW,
+    );
+    // No HIGH, no "threatened" page — it is being worked by the on-shift prep crew.
+    expect(f.filter((x) => x.severity === "HIGH")).toHaveLength(0);
+    expect(byType(f, "prep_window_threatened")).toHaveLength(0);
+    const open = byType(f, "prep_window_open");
+    expect(open).toHaveLength(1);
+    expect(open[0].severity).toBe("LOW");
+    expect(open[0].metadata?.prepStaffed).toBe(true);
+    expect(open[0].metadata?.prepOnShiftCount).toBe(2);
+    // Honest copy: states prep is STAFFED, not that loading is done.
+    expect(String(open[0].metadata?.whatsUnknown)).toMatch(/prep is staffed/i);
+    expect(open[0].recommendedAction).toMatch(/prep crew is on shift/i);
+  });
+
+  it("UNSTAFFED + window closing on the clock → DOES escalate (threatened HIGH), honest copy", () => {
+    const f = assessPrepOpportunities(
+      facts({
+        routes: [smallRoute()],
+        crew: crew({ shiftEndUnix: [todayUnix(15)], availableCount: 1, prepOnShiftCount: 0 }), // a driver, no prep crew
+      }),
+      {},
+      NOW,
+    );
+    const th = byType(f, "prep_window_threatened");
+    expect(th).toHaveLength(1);
+    expect(th[0].severity).toBe("HIGH");
+    expect(th[0].metadata?.prepStaffed).toBe(false);
+    expect(String(th[0].metadata?.whatsUnknown)).toMatch(/no prep crew is on shift/i);
+    expect(th[0].recommendedAction).toMatch(/no prep crew is on shift/i);
+  });
+
+  it("STAFFED comfortable window → stays LOW (clock never nudges a staffed load up to MEDIUM)", () => {
+    // remaining = (16:00 − 45m) − 14:00 = 75 min → below threatenedMinutes*2 (90) → MEDIUM when UNSTAFFED.
+    const base = { routes: [smallRoute()] as PrepTomorrowRoute[] };
+    const staffed = assessPrepOpportunities(
+      facts({ ...base, crew: crew({ shiftEndUnix: [todayUnix(16)], availableCount: 2, prepOnShiftCount: 2 }) }),
+      {},
+      NOW,
+    );
+    const unstaffed = assessPrepOpportunities(
+      facts({ ...base, crew: crew({ shiftEndUnix: [todayUnix(16)], availableCount: 1, prepOnShiftCount: 0 }) }),
+      {},
+      NOW,
+    );
+    expect(byType(staffed, "prep_window_open")[0].severity).toBe("LOW"); // staffed → not nudged up
+    expect(byType(unstaffed, "prep_window_open")[0].severity).toBe("MEDIUM"); // unstaffed → the clock nudges it
+  });
+
+  it("omitted prepOnShiftCount is treated as UNSTAFFED → preserves pre-staffing clock-only behavior", () => {
+    const f = assessPrepOpportunities(
+      facts({ routes: [smallRoute()], crew: crew({ shiftEndUnix: [todayUnix(15)], availableCount: 1 }) }), // no prepOnShiftCount
+      {},
+      NOW,
+    );
+    expect(byType(f, "prep_window_threatened").filter((x) => x.severity === "HIGH")).toHaveLength(1);
+  });
+});
