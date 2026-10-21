@@ -71,6 +71,18 @@ const MILD: [RegExp, string][] = [
 const PROFANITY = /\b(damn|hell|crap|bullshit|wtf|f[\*u]ck|shit|ass(hole)?)\b/i;
 const POSITIVE = /\b(thank you|thanks|great|perfect|appreciate|wonderful|awesome|excellent|love it|so happy|pleasure)\b/i;
 
+/** Cue labels that signal genuine emotional frustration / escalation (STRONG + MODERATE + profanity +
+ *  shouting), as opposed to the factual MILD cues ("late", "broken / damaged", "missing") that make a
+ *  call negative without the caller being angry. Used to title a call alert honestly: a frustrated /
+ *  escalation caller vs. a negative-tone operational report. Derived from the lists above so it never
+ *  drifts out of sync. */
+export const ESCALATION_CUE_LABELS: ReadonlySet<string> = new Set<string>([
+  ...STRONG.map(([, label]) => label),
+  ...MODERATE.map(([, label]) => label),
+  "profanity",
+  "shouting (caps)",
+]);
+
 /** Deterministic negativity score for a piece of call text. Pure — no I/O, fully testable. */
 export function heuristicSentiment(text: string | null | undefined): Sentiment {
   const t = (text ?? "").trim();
