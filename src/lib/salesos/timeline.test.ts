@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLeadTimeline, timelineLastActivity, timelineLastOutbound } from "./timeline";
+import { buildLeadTimeline, timelineLastActivity, timelineLastOutbound, leadTouchSummary } from "./timeline";
 import { saveBookings, saveLeadNotes, insertCommsEventIfNew, insertCallEventIfNew, saveEmailEvents } from "@/lib/db/repo";
 
 // DATABASE_PATH is ":memory:" (vitest.config.ts). Unique ids keep tests isolated in the shared DB.
@@ -59,5 +59,48 @@ describe("buildLeadTimeline", () => {
 
   it("returns an empty timeline for an unknown booking (no fabrication)", () => {
     expect(buildLeadTimeline("TL-does-not-exist")).toEqual([]);
+  });
+});
+
+describe("leadTouchSummary — cockpit last-touch + recently-contacted signal", () => {
+  it("newest dated entry is the last touch; newest dated outbound feeds the recently-contacted guard", () => {
+    const id = "LT-dated-1";
+    saveBookings([{ bookingId: id, eventName: "A", clientName: "A", clientPhone: "301-555-7777", eventDate: "2030-01-01", signed: false }]);
+    insertCommsEventIfNew({ providerId: "lt-out", leadId: id, direction: "outbound", channel: "sms", body: "we reached out", actor: "HG", occurredAt: "2027-05-01T10:00:00.000Z" });
+    insertCommsEventIfNew({ providerId: "lt-in", leadId: id, direction: "inbound", channel: "sms", body: "they replied", occurredAt: "2027-05-02T10:00:00.000Z" });
+    const s = leadTouchSummary(id);
+    expect(s.lastTouch?.whenIso).toBe("2027-05-02T10:00:00.000Z"); // newest of any direction (inbound)
+    expect(s.lastTouch?.what).toBe("Inbound text");
+    expect(s.lastOutboundAt).toBe("2027-05-01T10:00:00.000Z"); // newest OUT only
+  });
+
+  it("a quote-send alone counts as a real last touch AND an outbound touch (never 'none logged')", () => {
+    const id = "LT-quote-1";
+    saveBookings([{ bookingId: id, eventName: "Q", clientName: "Q", eventDate: "2030-01-01", signed: false }]);
+    saveLeadNotes([{ bookingId: id, quoteSentAt: "2027-06-01T12:00:00.000Z" }]);
+    const s = leadTouchSummary(id);
+    expect(s.lastTouch).not.toBeNull();
+    expect(s.lastTouch?.what.toLowerCase()).toContain("quote");
+    expect(s.lastOutboundAt).toBe("2027-06-01T12:00:00.000Z");
+  });
+
+  it("falls back to an UNDATED internal-note touch when there is no dated activity (honest, whenIso null)", () => {
+    const id = "LT-note-1";
+    saveBookings([{ bookingId: id, eventName: "N", clientName: "N", eventDate: "2030-01-01", signed: false }]);
+    saveLeadNotes([{ bookingId: id, internalNotes: "HG - 9/6 - first call\nHG - 9/7 - second call" }]);
+    const s = leadTouchSummary(id);
+    expect(s.lastTouch).not.toBeNull();
+    expect(s.lastTouch?.what).toBe("Logged note");
+    expect(s.lastTouch?.whenIso).toBeNull(); // undated — we never fabricate an instant
+    expect(s.lastTouch?.rawDate).toBe("9/7"); // the most recently WRITTEN note's date token, as written
+    expect(s.lastOutboundAt).toBeNull(); // undated notes never trip the recently-contacted guard
+  });
+
+  it("a genuinely empty lead honestly has no last touch and no outbound signal", () => {
+    const id = "LT-empty-1";
+    saveBookings([{ bookingId: id, eventName: "E", clientName: "E", eventDate: "2030-01-01", signed: false }]);
+    const s = leadTouchSummary(id);
+    expect(s.lastTouch).toBeNull();
+    expect(s.lastOutboundAt).toBeNull();
   });
 });

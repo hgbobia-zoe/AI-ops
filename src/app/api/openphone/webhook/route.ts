@@ -5,7 +5,8 @@
 
 import { NextResponse } from "next/server";
 import { verifyOpenphoneSignature, openphoneSigningKey } from "@/lib/comms/openphone";
-import { ingestCallEvent, ingestInboundSms, type IngestCallInput } from "@/lib/comms/service";
+import { ingestCallEvent, ingestInboundSms, ingestOutboundSms, type IngestCallInput } from "@/lib/comms/service";
+import { initialsOf } from "@/lib/salesos/noteFormat";
 import { insertAudit } from "@/lib/db/repo";
 
 export const dynamic = "force-dynamic";
@@ -90,6 +91,31 @@ export async function POST(req: Request): Promise<NextResponse> {
     if (!msgId || !from) return NextResponse.json({ ok: true, ignored: "message missing id/from" });
     try {
       ingestInboundSms({ providerId: msgId, from, to: firstTo(obj.to), body, occurredAt: obj.createdAt ?? payload.createdAt ?? null });
+    } catch {
+      /* best-effort */
+    }
+    return NextResponse.json({ ok: true, received: type });
+  }
+
+  // Outbound rep SMS (a text sent from Quo) → capture on the unified timeline, matched to the lead by the
+  // CUSTOMER number (the `to`). OpenPhone marks these `message.delivered` / `message.sent` with
+  // direction "outgoing". HONEST DEPENDENCY: this only fires if the Quo/OpenPhone webhook subscription is
+  // configured to SEND outbound message events to us — the inbound subscription alone does NOT include
+  // them. The handler is ready either way; it simply receives nothing until that subscription is enabled.
+  if (type === "message.delivered" || type === "message.sent" || (type.startsWith("message") && obj.direction === "outgoing")) {
+    const msgId = (obj.id ?? "").trim();
+    const to = firstTo(obj.to);
+    const body = (obj.body ?? obj.text ?? "").trim();
+    if (!msgId || !to) return NextResponse.json({ ok: true, ignored: "outbound message missing id/to" });
+    try {
+      ingestOutboundSms({
+        providerId: msgId,
+        from: (obj.from ?? "").trim() || null,
+        to,
+        body,
+        actor: initialsOf(agentNameOf(obj) ?? null),
+        occurredAt: obj.createdAt ?? payload.createdAt ?? null,
+      });
     } catch {
       /* best-effort */
     }

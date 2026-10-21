@@ -207,3 +207,61 @@ export function timelineLastActivity(entries: TimelineEntry[]): TimelineEntry | 
 export function timelineLastOutbound(entries: TimelineEntry[]): TimelineEntry | null {
   return entries.find((e) => e.at != null && e.direction === "out") ?? null;
 }
+
+// ── Cockpit-facing last-touch (the Bulk Review-and-Fire "Last touch" column + its recently-contacted
+//    guard). These derive from the FULL merged timeline above — comms_events AND call_events AND
+//    email_events AND the Goodshuffle internal-note touch log AND the quote-send milestone — NOT just the
+//    comms_events rows. That is the fix: a Quote-Sent lead that was actually worked (quote sent, a rep
+//    note) must never read "none logged" just because no inbound comms row exists.
+
+export interface LeadLastTouch {
+  what: string; // friendly label, e.g. "Outbound text" / "Inbound email" / "Logged note" / "Outbound quote"
+  whenIso: string | null; // ISO instant when the entry is dated; null for an undated internal-note line
+  rawDate: string | null; // the note's date token exactly as written (e.g. "9/7") when undated; else null
+  channel: TimelineChannel;
+  direction: "in" | "out" | null;
+}
+
+/** A human label for a timeline entry in the cockpit's "Last touch" column. Keeps the existing
+ *  "Outbound/Inbound <channel>" shape the UI expects; note lines read "Logged note". */
+function describeTouch(e: TimelineEntry): string {
+  if (e.channel === "note") return "Logged note";
+  const dir = e.direction === "out" ? "Outbound" : e.direction === "in" ? "Inbound" : "";
+  const kind =
+    e.channel === "sms" ? "text" : e.channel === "call" ? "call" : e.channel === "email" ? "email" : e.channel === "quote" ? "quote" : e.channel;
+  const label = `${dir} ${kind}`.trim();
+  return label || e.title;
+}
+
+export interface LeadTouchSummary {
+  /** The latest REAL touch of any kind: the newest DATED entry, falling back to the most recently
+   *  WRITTEN undated note (so a worked-but-undated lead is still "logged"). null ONLY when the timeline
+   *  is genuinely empty — then "none logged" is the honest answer. */
+  lastTouch: LeadLastTouch | null;
+  /** The newest DATED outbound instant (a text/call/email/quote WE sent) — the signal the double-contact
+   *  guard keys off. Undated note lines are deliberately excluded: we can't honestly claim a note
+   *  happened within N hours without a reliable instant. null when no dated outbound touch exists. */
+  lastOutboundAt: string | null;
+}
+
+/** Last-touch + recently-contacted signal for the Bulk Review-and-Fire cockpit, built from ONE pass over
+ *  buildLeadTimeline (the same merged source the context-aware draft reads). This replaces the old
+ *  comms_events-only last-touch, which showed "none logged" for a lead the team had quoted and texted. */
+export function leadTouchSummary(bookingId: string): LeadTouchSummary {
+  const tl = buildLeadTimeline(bookingId);
+
+  let entry: TimelineEntry | null = timelineLastActivity(tl); // newest DATED entry of any kind
+  if (!entry) {
+    // No dated activity, but the lead may still carry undated internal-note touches. datedNoteLines is
+    // oldest-first, so the LAST undated entry is the most recently written note — an honest "last touch"
+    // even though we can't place it on an exact instant.
+    const undated = tl.filter((e) => e.at == null);
+    entry = undated.length ? undated[undated.length - 1] : null;
+  }
+
+  const lastTouch: LeadLastTouch | null = entry
+    ? { what: describeTouch(entry), whenIso: entry.at, rawDate: entry.rawDate ?? null, channel: entry.channel, direction: entry.direction }
+    : null;
+
+  return { lastTouch, lastOutboundAt: timelineLastOutbound(tl)?.at ?? null };
+}
