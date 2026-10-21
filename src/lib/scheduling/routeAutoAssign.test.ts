@@ -30,7 +30,7 @@ describe("planRouteAutoAssign (pure)", () => {
 
   it("falls back to the PROMPT when more than one route is eligible (ambiguous)", () => {
     const plan = planRouteAutoAssign(
-      result([person({ userId: 2, fillRole: "field", role: "prep", eligibleRouteIds: ["r1", "r2"], suggestedRouteId: "r2" })]),
+      result([person({ userId: 2, fillRole: "driver", role: "driver", eligibleRouteIds: ["r1", "r2"], suggestedRouteId: "r2" })]),
     );
     expect(plan.autoAssign).toHaveLength(0);
     expect(plan.prompt).toHaveLength(1);
@@ -38,15 +38,42 @@ describe("planRouteAutoAssign (pure)", () => {
     expect(plan.prompt[0].reason).toContain("ambiguous");
   });
 
-  it("splits a mixed batch: unambiguous auto-assigns, ambiguous prompts", () => {
+  it("splits a mixed batch: unambiguous driver auto-assigns, ambiguous driver prompts", () => {
     const plan = planRouteAutoAssign(
       result([
         person({ userId: 1, eligibleRouteIds: ["r1"] }),
-        person({ userId: 2, fillRole: "field", role: "prep", eligibleRouteIds: ["r1", "r2"] }),
+        person({ userId: 2, fillRole: "driver", role: "driver", eligibleRouteIds: ["r1", "r2"] }),
       ]),
     );
     expect(plan.autoAssign.map((a) => a.userId)).toEqual([1]);
     expect(plan.prompt.map((p) => p.userId)).toEqual([2]);
+  });
+
+  it("NEVER auto-assigns a prep (warehouse) worker, even with exactly one eligible field route → PROMPT", () => {
+    const plan = planRouteAutoAssign(
+      result([person({ userId: 5, role: "prep", fillRole: "field", eligibleRouteIds: ["r1"], suggestedRouteId: "r1" })]),
+    );
+    expect(plan.autoAssign).toHaveLength(0);
+    expect(plan.prompt).toHaveLength(1);
+    expect(plan.prompt[0]).toMatchObject({ userId: 5, suggestedRouteId: "r1", eligibleRouteIds: ["r1"] });
+    expect(plan.prompt[0].reason).toContain("warehouse/prep");
+  });
+
+  it("NEVER auto-assigns an office/admin ('other') worker to a route (defense in depth) → PROMPT", () => {
+    const plan = planRouteAutoAssign(
+      result([person({ userId: 6, role: "other", fillRole: "field", eligibleRouteIds: ["r1"], suggestedRouteId: "r1" })]),
+    );
+    expect(plan.autoAssign).toHaveLength(0);
+    expect(plan.prompt).toHaveLength(1);
+    expect(plan.prompt[0].reason).toContain("not auto-routed");
+  });
+
+  it("STILL auto-assigns a genuine driver with one eligible route (field/driver crew is unaffected)", () => {
+    const plan = planRouteAutoAssign(
+      result([person({ userId: 7, role: "driver", fillRole: "driver", eligibleRouteIds: ["r1"] })]),
+    );
+    expect(plan.autoAssign.map((a) => a.userId)).toEqual([7]);
+    expect(plan.prompt).toHaveLength(0);
   });
 
   it("Connecteam unreachable → empty plan (honest unknown, never auto-writes)", () => {

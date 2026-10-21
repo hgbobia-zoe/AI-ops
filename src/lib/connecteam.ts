@@ -196,10 +196,15 @@ export interface CrewMember {
 
 // Map a Title to an ops role. Drivers drive on the event day; warehouse associates +
 // event asset processors prep/load (and process returns) — typically the day before.
+// Recognize the common warehouse/prep title words so a back-of-warehouse person is classified as "prep"
+// (not the "other"/office fallthrough). This keeps them off the AUTO route path the same way "other" is:
+// only a genuine "driver" is auto-route-eligible (see routeAutoAssign.isAutoRouteEligible). The safe
+// default for an UNrecognized title stays "other" (non-crew, never auto-routed) — we never guess an
+// unproven worker onto a delivery route.
 export function roleFromTitle(title?: string): CrewRole {
   const t = (title || "").toLowerCase();
   if (t.includes("driver")) return "driver";
-  if (t.includes("warehouse") || t.includes("asset")) return "prep";
+  if (t.includes("warehouse") || t.includes("asset") || t.includes("prep") || t.includes("loader")) return "prep";
   return "other";
 }
 
