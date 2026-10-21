@@ -62,7 +62,11 @@ function routeLabel(r: Route): string {
  * Build the suggested shifts for ONE day's routes. Driver + field shifts land on the event day;
  * the prep shift lands the day before. Pure — pass the day's routes (all trucks) and get a draft.
  */
-export function buildDemand(routes: Route[], cfg: RiskConfig = DEFAULT_RISK_CONFIG): DemandShift[] {
+export function buildDemand(
+  routes: Route[],
+  cfg: RiskConfig = DEFAULT_RISK_CONFIG,
+  heavyKeywords?: string[],
+): DemandShift[] {
   const active = routes.filter((r) => r.status !== "done" && r.stops.length > 0);
   if (active.length === 0) return [];
 
@@ -90,8 +94,8 @@ export function buildDemand(routes: Route[], cfg: RiskConfig = DEFAULT_RISK_CONF
       reasons: ["1 driver per route"],
     });
 
-    // FIELD — helpers beyond the driver, from the route's tent/item rules.
-    const need = crewForRoute(r.stops.map((s) => s.items ?? []));
+    // FIELD — helpers beyond the driver, from the route's tent/item/heavy rules.
+    const need = crewForRoute(r.stops.map((s) => s.items ?? []), heavyKeywords);
     const extra = need.crew - 1;
     if (extra > 0) {
       out.push({

@@ -9,6 +9,7 @@
 // saveSettings(). Not imported by any client component.
 
 import { getDb } from "@/lib/db";
+import { DEFAULT_HEAVY_ITEM_KEYWORDS } from "@/lib/crewRules";
 
 export interface MessageTemplates {
   // Delivery (drop-off) texts.
@@ -67,6 +68,10 @@ export interface AppSettings {
   /** Line-item names (case-insensitive substrings) that mark a stop as having the Event Readiness Service,
    *  so the debrief names that customer for setup (see scheduling/packetDispatch.ts). */
   eventReadinessKeywords: string[];
+  /** Goodshuffle line-item names (case-insensitive substrings) that mark an item as HEAVY, so the crew-size
+   *  rules floor the event's required crew at 2 (see crewRules.ts). Default matches the Antique Rustic Solid
+   *  Pine Folding Farm Table; the in-code default (DEFAULT_HEAVY_ITEM_KEYWORDS) is the floor before any edit. */
+  heavyItemKeywords: string[];
   /** Optional override for the NON-FINANCIAL "current operating year" boundary (see
    *  dates.ts:currentOperatingYearStart). A bare year ("2026") or a full date ("2026-01-01"); null/unset
    *  means "compute Jan 1 of the current year dynamically". Financial paths ignore this entirely. */
@@ -174,6 +179,7 @@ export function defaultSettings(): AppSettings {
     specialtyItemKeywords: envJson<string[]>(process.env.SPECIALTY_ITEM_KEYWORDS, DEFAULT_SPECIALTY_KEYWORDS),
     premiumWindowKeywords: envJson<string[]>(process.env.PREMIUM_WINDOW_KEYWORDS, DEFAULT_PREMIUM_WINDOW_KEYWORDS),
     eventReadinessKeywords: envJson<string[]>(process.env.EVENT_READINESS_KEYWORDS, DEFAULT_EVENT_READINESS_KEYWORDS),
+    heavyItemKeywords: envJson<string[]>(process.env.HEAVY_ITEM_KEYWORDS, DEFAULT_HEAVY_ITEM_KEYWORDS),
     operatingYearStart: process.env.OPERATING_YEAR_START || null,
   };
 }
@@ -241,6 +247,7 @@ function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSetting
     specialtyItemKeywords: over.specialtyItemKeywords ?? base.specialtyItemKeywords,
     premiumWindowKeywords: over.premiumWindowKeywords ?? base.premiumWindowKeywords,
     eventReadinessKeywords: over.eventReadinessKeywords ?? base.eventReadinessKeywords,
+    heavyItemKeywords: over.heavyItemKeywords ?? base.heavyItemKeywords,
   };
 }
 

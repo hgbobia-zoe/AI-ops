@@ -10,6 +10,7 @@
 import { getRouteById, getUpcomingItemStops } from "@/lib/db/repo";
 import { getShiftsForDate } from "@/lib/scheduling/store";
 import { crewForRoute } from "@/lib/crewRules";
+import { getSettings } from "@/lib/settings";
 import { normalizeItem, peakItemDemand } from "@/lib/inventory/inventory";
 import { getRiskQueue } from "@/lib/risk/store";
 import type { RiskFinding, RiskCategory, RiskSeverity } from "@/lib/risk/types";
@@ -89,7 +90,7 @@ export function resolveStaffing(id: EventId, view: EventView): StaffingFact | nu
   const route = getRouteById(routeId);
   if (!route) return null;
 
-  const need = crewForRoute(route.stops.map((s) => s.items ?? []));
+  const need = crewForRoute(route.stops.map((s) => s.items ?? []), getSettings().heavyItemKeywords);
 
   const routeShifts = getShiftsForDate(route.date).filter((s) => s.routeId === routeId);
   const verified = routeShifts.length > 0;

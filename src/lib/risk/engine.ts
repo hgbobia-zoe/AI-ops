@@ -325,13 +325,14 @@ function assessSetupCrew(
   routes: EngineRoute[],
   fieldCrewScheduled: number,
   now: Date,
+  heavyItemKeywords?: string[],
 ): RiskFinding[] {
   const active = routes.filter((r) => r.status !== "done");
-  const need = active.reduce((sum, r) => sum + crewForRoute(r.stops.map((s) => s.items ?? [])).crew, 0);
+  const need = active.reduce((sum, r) => sum + crewForRoute(r.stops.map((s) => s.items ?? []), heavyItemKeywords).crew, 0);
   if (need <= fieldCrewScheduled) return [];
   const days = daysUntil(date, now);
   const tentRoutes = active
-    .map((r) => ({ r, need: crewForRoute(r.stops.map((s) => s.items ?? [])) }))
+    .map((r) => ({ r, need: crewForRoute(r.stops.map((s) => s.items ?? []), heavyItemKeywords) }))
     .filter((x) => x.need.hasTent);
   return [
     {
@@ -387,6 +388,9 @@ export interface AssessDayInput {
   /** Whether Connecteam staffing data was actually retrieved. When false, staffing rules are
    *  SKIPPED (not guessed) and a single UNVERIFIED finding is emitted for the day. Default true. */
   staffingVerified?: boolean;
+  /** Heavy-item match list for the crew-size rules (settings.heavyItemKeywords). Optional — crewRules falls
+   *  back to its in-code default floor when omitted, so existing callers keep working unchanged. */
+  heavyItemKeywords?: string[];
   now: Date;
   config?: Partial<RiskConfig>;
 }
@@ -402,7 +406,7 @@ export function assessDay(input: AssessDayInput): RiskFinding[] {
   if (verified) {
     out.push(
       ...assessWarehouse(input.date, input.routes, input.warehouseShifts ?? [], input.now, cfg),
-      ...assessSetupCrew(input.date, input.routes, input.fieldCrewScheduled ?? input.driverShifts.length, input.now),
+      ...assessSetupCrew(input.date, input.routes, input.fieldCrewScheduled ?? input.driverShifts.length, input.now, input.heavyItemKeywords),
       ...assessUnload(input.date, input.routes, input.unloadCovered, input.now),
     );
   } else if (active.length > 0) {

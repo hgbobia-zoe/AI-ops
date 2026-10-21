@@ -7,6 +7,8 @@ import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate } from "@/lib/db/repo";
 import { buildDemand } from "@/lib/scheduling/demand";
 import { syncDemand } from "@/lib/scheduling/store";
+import { DEFAULT_RISK_CONFIG } from "@/lib/risk/types";
+import { getSettings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +28,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   if (routes.length === 0) return NextResponse.json({ shifts: [], note: "no routes" });
 
-  const demand = buildDemand(routes);
+  const demand = buildDemand(routes, DEFAULT_RISK_CONFIG, getSettings().heavyItemKeywords);
   const shifts = syncDemand(date, demand);
   return NextResponse.json({ shifts });
 }

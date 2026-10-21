@@ -53,4 +53,9 @@ describe("renderTemplate", () => {
     expect(s.premiumWindowKeywords).toContain("arrival window"); // the catch-all for every window product
     expect(s.eventReadinessKeywords).toContain("event readiness");
   });
+
+  it("ships an editable heavy-item keyword default that matches the folding farm table", () => {
+    const s = defaultSettings();
+    expect(s.heavyItemKeywords).toContain("folding farm table");
+  });
 });

@@ -74,6 +74,8 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     // Driver-debrief line-item keyword lists (normalized to lowercase, de-duped).
     premiumWindowKeywords: strList(b.premiumWindowKeywords, current.premiumWindowKeywords),
     eventReadinessKeywords: strList(b.eventReadinessKeywords, current.eventReadinessKeywords),
+    // Heavy-item keywords for the crew-size floor (crewRules): any match floors required crew at 2.
+    heavyItemKeywords: strList(b.heavyItemKeywords, current.heavyItemKeywords),
     // Not edited from the /admin settings form — preserve the operating-year override as-is.
     operatingYearStart: current.operatingYearStart ?? null,
   };

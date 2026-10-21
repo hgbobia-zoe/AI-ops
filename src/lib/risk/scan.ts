@@ -326,6 +326,7 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
       fieldCrewScheduled: distinctFieldCrew(crewD.shifts),
       unloadCovered,
       staffingVerified,
+      heavyItemKeywords: getSettings().heavyItemKeywords,
       now,
     });
     allFindings.push(...dayFindings);
