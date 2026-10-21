@@ -135,6 +135,65 @@ describe("salesos search — matchesState (the state-filter predicate)", () => {
   });
 });
 
+describe("salesos board — state filter narrows CARDS, never collapses COLUMNS", () => {
+  // Mirrors SalesBoard's `visible` memo: the board keeps ALL columns and filters each column's cards by
+  // matchesState(card.status) && matchesQuery(card). A state filter must leave every column present
+  // (Jira-style) with only the matching-status column populated — NOT switch to a single-column view.
+  const columns = ["new", "quote_sent", "action_needed", "signed"] as const;
+  type Card = { id: string; status: (typeof columns)[number]; name: string };
+  const cardsByColumn: Record<string, Card[]> = {
+    new: [{ id: "1", status: "new", name: "Alpha" }],
+    quote_sent: [
+      { id: "2", status: "quote_sent", name: "Bravo" },
+      { id: "3", status: "quote_sent", name: "Charlie" },
+    ],
+    action_needed: [{ id: "4", status: "action_needed", name: "Delta" }],
+    signed: [{ id: "5", status: "signed", name: "Echo" }],
+  };
+  const visibleByColumn = (stateFilter: string | null, q: string): Record<string, Card[]> => {
+    const out: Record<string, Card[]> = {};
+    for (const col of columns) {
+      out[col] = cardsByColumn[col].filter((c) => matchesState(c.status, stateFilter) && matchesQuery({ id: c.id, eventName: c.name }, q));
+    }
+    return out;
+  };
+
+  it("keeps every column present when a state is selected (board never collapses)", () => {
+    const v = visibleByColumn("quote_sent", "");
+    expect(Object.keys(v)).toEqual(["new", "quote_sent", "action_needed", "signed"]);
+  });
+
+  it("populates only the matching-status column; the others empty out", () => {
+    const v = visibleByColumn("quote_sent", "");
+    expect(v.quote_sent.map((c) => c.id)).toEqual(["2", "3"]);
+    expect(v.new).toEqual([]);
+    expect(v.action_needed).toEqual([]);
+    expect(v.signed).toEqual([]);
+  });
+
+  it("shows all columns' cards when the filter is cleared (All)", () => {
+    const v = visibleByColumn(null, "");
+    expect(v.new).toHaveLength(1);
+    expect(v.quote_sent).toHaveLength(2);
+    expect(v.action_needed).toHaveLength(1);
+    expect(v.signed).toHaveLength(1);
+  });
+
+  it("composes with search — both the state filter and the query narrow the cards", () => {
+    const v = visibleByColumn("quote_sent", "charlie");
+    expect(v.quote_sent.map((c) => c.id)).toEqual(["3"]); // Bravo dropped by the query
+    expect(v.new).toEqual([]);
+  });
+
+  it("honest shown/total counts: shown = visible cards across ALL columns, total = every card", () => {
+    const total = columns.reduce((n, col) => n + cardsByColumn[col].length, 0);
+    const v = visibleByColumn("quote_sent", "");
+    const shown = columns.reduce((n, col) => n + v[col].length, 0);
+    expect(total).toBe(5);
+    expect(shown).toBe(2); // only the two Quote Sent cards
+  });
+});
+
 describe("salesos search — normalizeQuery", () => {
   it("trims and lowercases", () => {
     expect(normalizeQuery("  Abby CARTER ")).toBe("abby carter");
