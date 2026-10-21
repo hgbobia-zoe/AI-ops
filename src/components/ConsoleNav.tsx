@@ -166,6 +166,7 @@ const GROUPS: Group[] = [
     blades: [
       { href: "/sales", label: "Sales", icon: TrendingUp },
       { href: "/salesos", label: "Sales OS", icon: Target },
+      { href: "/salesos/outreach", label: "Bulk Outreach", icon: Send, manage: true },
       { href: "/salesos/status", label: "Pipeline Status", icon: ClipboardList, financial: true },
       { href: "/coaching", label: "Coaching", icon: GraduationCap, coaching: true },
       { href: "/customers", label: "Customers", icon: Contact },

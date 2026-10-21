@@ -1,25 +1,16 @@
 // Send a reviewed outreach text to a lead via Quo (OpenPhone). CUSTOMER-FACING: the rep drafts/edits
-// the copy and clicks Send (per-message human approval). Two guardrails on top of that:
-//   • SMS_SEND_ENABLED must be "true" — a deliberate master switch, so nothing goes out until it's on.
-//   • an identical text to the same number within 2 minutes is treated as a duplicate (no re-send).
-// The number is always the lead's own phone on file (never a caller-supplied recipient). Every send is
-// logged to the messages table.
+// the copy and clicks Send (per-message human approval). The actual send (gate SMS_SEND_ENABLED, dedupe,
+// provider call, messages/note/audit/timeline logging) lives in the shared sendLeadSms helper, which the
+// bulk Review-and-Fire panel reuses so both go through the one sanctioned gated path. This route resolves
+// the sender attribution from the session, then delegates.
 
 import { NextResponse } from "next/server";
-import { randomUUID } from "node:crypto";
-import { getBookingById, insertMessage, smsRecentlySent, insertCommsEventIfNew } from "@/lib/db/repo";
-import { sendSms } from "@/lib/notify/sms";
-import { getSettings } from "@/lib/settings";
+import { getBookingById } from "@/lib/db/repo";
+import { sendLeadSms, SMS_MAX_LEN } from "@/lib/salesos/smsSend";
 import { viewerInitials, viewerQuoUserId, authEnabled } from "@/lib/auth/getSession";
 import { openphoneUserInitials } from "@/lib/comms/openphone";
-import { syncTouchpointNote, shortHash } from "@/lib/comms/noteSync";
-import { logSalesEvent } from "@/lib/salesos/audit";
-import { todayInOpsTz } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
-
-const MAX_LEN = 1000;
-const DEDUPE_MS = 120_000;
 
 export async function POST(req: Request): Promise<NextResponse> {
   if (process.env.SMS_SEND_ENABLED !== "true") {
@@ -42,53 +33,17 @@ export async function POST(req: Request): Promise<NextResponse> {
   const userId = authEnabled() ? linkedQuo : ((body.userId ?? "").trim() || linkedQuo || undefined);
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
   if (!text) return NextResponse.json({ error: "message body required" }, { status: 400 });
-  if (text.length > MAX_LEN) return NextResponse.json({ error: `message too long (max ${MAX_LEN})` }, { status: 400 });
+  if (text.length > SMS_MAX_LEN) return NextResponse.json({ error: `message too long (max ${SMS_MAX_LEN})` }, { status: 400 });
 
   const lead = getBookingById(id);
   if (!lead) return NextResponse.json({ error: "lead not found" }, { status: 404 });
-  const phone = (lead.clientPhone ?? "").trim();
-  if (!phone) return NextResponse.json({ ok: false, error: "No phone number on file for this lead." });
+  if (!(lead.clientPhone ?? "").trim()) return NextResponse.json({ ok: false, error: "No phone number on file for this lead." });
 
-  // Idempotency — never double-text the same message.
-  if (smsRecentlySent(phone, text, new Date(Date.now() - DEDUPE_MS).toISOString())) {
-    return NextResponse.json({ ok: true, duplicate: true, message: "That exact text was just sent — not sending again." });
-  }
+  // Initials: the picked Quo rep first (Quo's own record matches), then the signed-in user, else "Zoe team".
+  const initials = (userId ? await openphoneUserInitials(userId) : null) ?? (await viewerInitials());
+  const res = await sendLeadSms({ id, body: text, userId, initials, edited: Boolean(body.edited) });
 
-  const res = await sendSms(phone, text, { userId });
-  insertMessage({
-    channel: "sms",
-    provider: getSettings().smsProvider,
-    toPhone: phone,
-    body: text,
-    providerMsgId: res.providerMsgId,
-    status: res.ok ? "sent" : res.skipped ? "skipped" : "failed",
-    error: res.error,
-  });
-
-  if (res.ok) {
-    // Log the sent text back into the Goodshuffle project's INTERNAL notes so the outreach trail stays
-    // complete. Queued for a logged-in session to write (the server can't call Goodshuffle directly), and
-    // gated behind GS_NOTE_SYNC_ENABLED + deduped on the provider message id.
-    try {
-      // Initials: the picked Quo rep first (Quo's own record matches), then the signed-in user, else "Zoe team".
-      const initials = (userId ? await openphoneUserInitials(userId) : null) ?? (await viewerInitials());
-      syncTouchpointNote({
-        kind: "text",
-        messageId: res.providerMsgId || `${id}:${shortHash(text)}`,
-        transactionId: id,
-        repInitials: initials,
-        clientName: lead.clientName,
-        snippet: text,
-        dateYmd: todayInOpsTz(),
-      });
-      // Sales audit trail: who sent it, and whether they edited the AI draft first.
-      await logSalesEvent("MESSAGE_SENT", id, { chars: text.length, to: phone.slice(-4), sender: initials ?? "SalesOS", edited: Boolean(body.edited) });
-      // Unified timeline: record the outbound side of the conversation.
-      insertCommsEventIfNew({ providerId: res.providerMsgId || `out-${randomUUID()}`, leadId: id, direction: "outbound", channel: "sms", toPhone: phone, body: text, actor: initials ?? "SalesOS", occurredAt: new Date().toISOString() });
-    } catch {
-      /* note + audit are best-effort — never fail the send over them */
-    }
-    return NextResponse.json({ ok: true, providerMsgId: res.providerMsgId });
-  }
+  if (res.ok && res.duplicate) return NextResponse.json({ ok: true, duplicate: true, message: "That exact text was just sent — not sending again." });
+  if (res.ok) return NextResponse.json({ ok: true, providerMsgId: res.providerMsgId });
   return NextResponse.json({ ok: false, error: res.error ?? "send failed", skipped: res.skipped });
 }
