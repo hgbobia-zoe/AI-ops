@@ -244,12 +244,9 @@ export interface LeadTouchSummary {
   lastOutboundAt: string | null;
 }
 
-/** Last-touch + recently-contacted signal for the Bulk Review-and-Fire cockpit, built from ONE pass over
- *  buildLeadTimeline (the same merged source the context-aware draft reads). This replaces the old
- *  comms_events-only last-touch, which showed "none logged" for a lead the team had quoted and texted. */
-export function leadTouchSummary(bookingId: string): LeadTouchSummary {
-  const tl = buildLeadTimeline(bookingId);
-
+/** The last-touch + recently-contacted signal, derived from an ALREADY-BUILT timeline (so callers that
+ *  also need the touchpoint strip build the merged timeline exactly once). */
+function summarizeTimeline(tl: TimelineEntry[]): LeadTouchSummary {
   let entry: TimelineEntry | null = timelineLastActivity(tl); // newest DATED entry of any kind
   if (!entry) {
     // No dated activity, but the lead may still carry undated internal-note touches. datedNoteLines is
@@ -264,4 +261,74 @@ export function leadTouchSummary(bookingId: string): LeadTouchSummary {
     : null;
 
   return { lastTouch, lastOutboundAt: timelineLastOutbound(tl)?.at ?? null };
+}
+
+/** Last-touch + recently-contacted signal for the Bulk Review-and-Fire cockpit, built from ONE pass over
+ *  buildLeadTimeline (the same merged source the context-aware draft reads). This replaces the old
+ *  comms_events-only last-touch, which showed "none logged" for a lead the team had quoted and texted. */
+export function leadTouchSummary(bookingId: string): LeadTouchSummary {
+  return summarizeTimeline(buildLeadTimeline(bookingId));
+}
+
+// ── Touch-point strip for the cockpit's under-row timeline viz ────────────────────────────────────────
+// A bounded, serializable slice of the merged timeline, shaped for the client `LeadTouchTimeline`
+// component. FACTS ONLY: every entry is a real stored touch; nothing is synthesized. Dated entries carry
+// an ISO instant; an undated internal-note line keeps its written date token and `iso` stays null (it is
+// never placed on a fabricated instant). The array is ordered oldest → newest so the strip renders
+// left-to-right, with undated notes (which cannot be placed chronologically) kept at the left, clearly
+// marked undated by the component.
+
+export interface LeadTouchpoint {
+  channel: TimelineChannel;
+  direction: "in" | "out" | null;
+  title: string; // the entry's own descriptive title, e.g. "Quote emailed" / "Text from client"
+  iso: string | null; // ISO instant when dated; null for an undated internal-note line
+  dateToken: string | null; // the note's date token exactly as written (e.g. "9/7") when undated; else null
+  preview: string | null; // the real captured text/subject/note line (for the hover card); never invented
+  isQuote: boolean; // the quote-send milestone — the visual anchor of the strip
+}
+
+const toTouchpoint = (e: TimelineEntry): LeadTouchpoint => ({
+  channel: e.channel,
+  direction: e.direction,
+  title: e.title,
+  iso: e.at,
+  dateToken: e.at ? null : e.rawDate ?? null,
+  preview: e.detail ?? null,
+  isQuote: e.channel === "quote",
+});
+
+export interface ShapedTouchpoints {
+  touchpoints: LeadTouchpoint[]; // oldest → newest, bounded to `limit`
+  earlier: number; // how many real touches exist BEFORE this bounded window (for a "+K earlier" affordance)
+}
+
+/** Shape a bounded, chronological touch-point slice from a merged timeline. Keeps the most recent `limit`
+ *  DATED touches (the ones we can place), filling any remaining budget with the most recently-written
+ *  undated notes. Returns them oldest → newest (undated notes first) plus the count of older touches that
+ *  did not fit. An empty timeline yields an empty array — the honest "no activity yet" state. */
+export function shapeTouchpoints(tl: TimelineEntry[], limit = 12): ShapedTouchpoints {
+  const dated = tl.filter((e) => e.at != null); // newest-first (buildLeadTimeline order)
+  const undated = tl.filter((e) => e.at == null); // note log, oldest-first (written order)
+  const recentDated = dated.slice(0, limit); // most-recent `limit`, still newest-first
+  const budget = Math.max(0, limit - recentDated.length);
+  const shownUndated = budget > 0 ? undated.slice(Math.max(0, undated.length - budget)) : [];
+  const earlier = dated.length - recentDated.length + (undated.length - shownUndated.length);
+  // oldest → newest for left-to-right rendering: undated notes (no instant) first, then dated ascending.
+  const touchpoints = [...shownUndated.map(toTouchpoint), ...recentDated.slice().reverse().map(toTouchpoint)];
+  return { touchpoints, earlier };
+}
+
+export interface LeadTouchContext extends LeadTouchSummary {
+  touchpoints: LeadTouchpoint[];
+  touchpointsEarlier: number;
+}
+
+/** The cockpit's full per-lead touch context — last-touch summary + the bounded touch-point strip — from
+ *  ONE buildLeadTimeline pass (so a cohort of ~50 leads builds each timeline once, not twice). */
+export function leadTouchContext(bookingId: string, limit = 12): LeadTouchContext {
+  const tl = buildLeadTimeline(bookingId);
+  const summary = summarizeTimeline(tl);
+  const { touchpoints, earlier } = shapeTouchpoints(tl, limit);
+  return { ...summary, touchpoints, touchpointsEarlier: earlier };
 }
