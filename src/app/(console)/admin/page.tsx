@@ -6,7 +6,7 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2 } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2, Users } from "lucide-react";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
 import { SeoCredentialSettings } from "@/components/SeoCredentialSettings";
@@ -41,6 +41,7 @@ interface Settings {
   gpsVehicleIds: Record<string, string>;
   premiumWindowKeywords: string[];
   eventReadinessKeywords: string[];
+  heavyItemKeywords: string[];
 }
 
 // Each slot has a delivery and a pickup variant; the toggle picks which set is edited.
@@ -387,6 +388,21 @@ export default function AdminPage() {
               hint="Names the customer in the debrief so the crew plans setup time."
               value={s.eventReadinessKeywords ?? []}
               onChange={(v) => setS({ ...s, eventReadinessKeywords: v })}
+            />
+          </Section>
+
+          {/* Crew-size rules — heavy items that always need a second person on the truck. */}
+          <Section icon={<Users className="size-4" />} title="Crew size rules">
+            <p className="text-sm text-muted-foreground">
+              Any order whose line items match one of these keywords always needs at least 2 people on the
+              delivery. Match is by name, case-insensitive, any part of the name. This only ever raises the crew
+              floor, so a big tent that already needs more crew is unaffected. Separate keywords with commas.
+            </p>
+            <KeywordList
+              label="Heavy items (require 2 or more crew)"
+              hint='Default "folding farm table" catches the Antique Rustic Solid Pine Folding Farm Table (96 inch, big and heavy) without tripping on a plain table. Add other heavy items as needed.'
+              value={s.heavyItemKeywords ?? []}
+              onChange={(v) => setS({ ...s, heavyItemKeywords: v })}
             />
           </Section>
 

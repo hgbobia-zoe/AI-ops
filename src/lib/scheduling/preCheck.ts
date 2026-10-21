@@ -20,6 +20,7 @@
 import { crewForRoute } from "@/lib/crewRules";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate } from "@/lib/db/repo";
+import { getSettings } from "@/lib/settings";
 import { getShiftsForDate } from "./store";
 import { recommendCrew, type RecommendContext } from "./availability";
 import { assignmentWindowsFromShifts, getDayAvailabilityCached } from "./eligibilityInputs";
@@ -126,8 +127,8 @@ export interface RoutePreCheck extends RouteGap {
 
 /** Required route crew from the SAME rule the demand generator uses: 1 driver + (crewForRoute − 1) helpers.
  *  A route always needs a driver; tent/size rules decide the helper count. */
-export function requiredCrewForRoute(route: Route): RoleCount {
-  const need = crewForRoute(route.stops.map((s) => s.items ?? []));
+export function requiredCrewForRoute(route: Route, heavyKeywords?: string[]): RoleCount {
+  const need = crewForRoute(route.stops.map((s) => s.items ?? []), heavyKeywords);
   return { driver: 1, field: Math.max(0, need.crew - 1) };
 }
 
@@ -149,7 +150,7 @@ export function preCheckGateForShift(shift: Pick<StaffShift, "routeId" | "truckI
   const route = getRoutesForDate(shift.truckId, shift.date).find((r) => r.routeId === shift.routeId);
   if (!route || route.status === "done") return null;
   const routeShifts = getShiftsForDate(shift.date).filter((s) => s.routeId === route.routeId);
-  const required = requiredCrewForRoute(route);
+  const required = requiredCrewForRoute(route, getSettings().heavyItemKeywords);
   const assigned = assignedCrewForRoute(route, routeShifts);
   return computeRouteGap({ requiredByRole: required, assignedByRole: assigned });
 }
@@ -163,6 +164,7 @@ export async function routePreChecksForDate(date: string): Promise<RoutePreCheck
   if (routes.length === 0) return [];
 
   const shifts = getShiftsForDate(date);
+  const heavyItemKeywords = getSettings().heavyItemKeywords;
   const truckName = (id: string): string => trucks.find((t) => t.truckId === id)?.name ?? id;
 
   // Connecteam feeds for the candidate lookup (shared across routes). Honest reachability throughout.
@@ -184,7 +186,7 @@ export async function routePreChecksForDate(date: string): Promise<RoutePreCheck
   const out: RoutePreCheck[] = [];
   for (const route of routes) {
     const routeShifts = shifts.filter((s) => s.routeId === route.routeId);
-    const required = requiredCrewForRoute(route);
+    const required = requiredCrewForRoute(route, heavyItemKeywords);
     const assigned = assignedCrewForRoute(route, routeShifts);
     const gap = computeRouteGap({ requiredByRole: required, assignedByRole: assigned });
 
