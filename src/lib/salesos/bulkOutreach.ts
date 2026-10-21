@@ -16,7 +16,7 @@ import { draftLeadOutreach } from "./outreachService";
 import { stripSignOff, humanize } from "./outreach";
 import { STAGE_LABEL } from "./calc";
 import { todayInOpsTz } from "@/lib/dates";
-import { getLatestOutboundForLead, getLatestCommsRowForLead } from "@/lib/db/repo";
+import { leadTouchSummary } from "./timeline";
 import { createApproval, decideApproval, type ApprovalActionType, type ApprovalCard } from "@/lib/aiorg/approvals";
 import { sendLeadSms } from "./smsSend";
 
@@ -115,18 +115,22 @@ export async function buildBulkOutreachCohort(repFirstName?: string | null): Pro
     const body = draft?.draft.sms?.trim() || "";
     const draftFailed = body.length === 0;
 
-    const lastOut = getLatestOutboundForLead(card.id);
+    // Last touch + recently-contacted both derive from the FULL merged timeline (comms + calls + emails +
+    // the Goodshuffle note log + the quote-send), NOT just the comms_events rows — so a quoted/worked lead
+    // never shows "none logged", and the double-contact guard sees the quote-send / rep touches too.
+    const touch = leadTouchSummary(card.id);
     const recentlyContacted = (() => {
-      const h = hoursSince(lastOut?.occurredAt ?? lastOut?.ts ?? null);
+      const h = hoursSince(touch.lastOutboundAt);
       return h != null && h < RECENTLY_CONTACTED_HOURS;
     })();
 
-    const lastRow = getLatestCommsRowForLead(card.id);
-    const lastTouch: BulkLastTouch | null = lastRow
+    const lastTouch: BulkLastTouch | null = touch.lastTouch
       ? {
-          what: `${lastRow.direction === "inbound" ? "Inbound" : "Outbound"} ${lastRow.channel || "message"}`.trim(),
-          when: relativeWhen(lastRow.occurredAt ?? lastRow.ts, today),
-          whenIso: lastRow.occurredAt ?? lastRow.ts ?? null,
+          what: touch.lastTouch.what,
+          // Dated entries get a relative label ("3d ago"); an undated internal-note line keeps its date
+          // token exactly as the team wrote it ("9/7") — never a fabricated instant.
+          when: touch.lastTouch.whenIso ? relativeWhen(touch.lastTouch.whenIso, today) : touch.lastTouch.rawDate ?? "",
+          whenIso: touch.lastTouch.whenIso,
         }
       : null;
 

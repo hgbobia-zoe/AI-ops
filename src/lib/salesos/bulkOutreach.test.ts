@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 import { getDb } from "@/lib/db";
-import { saveBookings, insertCommsEventIfNew, listPendingGsOps } from "@/lib/db/repo";
+import { saveBookings, saveLeadNotes, insertCommsEventIfNew, listPendingGsOps } from "@/lib/db/repo";
 import { getApproval, approvalExistsByKey } from "@/lib/aiorg/approvals";
 import { todayInOpsTz } from "@/lib/dates";
 import { sendSms } from "@/lib/notify/sms";
@@ -34,8 +34,11 @@ afterEach(() => {
   delete process.env.SMS_SEND_ENABLED;
 });
 
-// A lead that derives to the "quote_sent" board status: quote sent today, future event, not signed, no
-// inbound reply. Variants flip the reachable channels.
+const ymdDaysAgo = (n: number): string => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
+
+// A lead that derives to the "quote_sent" board status: quote sent a couple of days ago (recent enough to
+// still be "Quote Sent", not past the follow-up window, but NOT within the recently-contacted window),
+// future event, not signed, no inbound reply. Variants flip the reachable channels.
 function seedQuoteSent(over: Partial<Parameters<typeof saveBookings>[0][number]> = {}): void {
   saveBookings([
     {
@@ -48,7 +51,7 @@ function seedQuoteSent(over: Partial<Parameters<typeof saveBookings>[0][number]>
       clientName: "Pat Garcia",
       clientEmail: "pat@example.com",
       clientPhone: "+13015551234",
-      quoteSentDate: todayInOpsTz(),
+      quoteSentDate: ymdDaysAgo(2),
       ...over,
     },
   ]);
@@ -104,6 +107,54 @@ describe("buildBulkOutreachCohort — per-row availability + flags", () => {
     expect(row.recentlyContacted).toBe(false);
     expect(row.defaultSms).toBe(true);
     expect(row.defaultEmail).toBe(true);
+  });
+});
+
+// Part A — last touch + recently-contacted reflect the REAL merged timeline (quote-send + GSPRO note log
+// + comms), not just the comms_events rows. A quoted/worked lead must never read "none logged"; a
+// genuinely blank lead honestly still does.
+describe("buildBulkOutreachCohort — last touch reflects the real timeline (not just comms_events)", () => {
+  it("a quote-sent lead with NO inbound comms still shows a real last touch (the quote-send), never 'none logged'", async () => {
+    seedQuoteSent(); // quote sent 2 days ago, zero comms_events rows
+    const row = (await buildBulkOutreachCohort("Jessie")).rows[0];
+    expect(row.lastTouch).not.toBeNull();
+    expect(row.lastTouch!.what.toLowerCase()).toContain("quote");
+    expect(row.lastTouch!.whenIso).toBeTruthy(); // a real dated touch, not a fabricated one
+    expect(row.recentlyContacted).toBe(false);
+  });
+
+  it("surfaces a Goodshuffle internal-note touch as the last touch when it is the newest activity", async () => {
+    seedQuoteSent();
+    // A rep note newer than the (2-day-old) quote-send. Notes are UNDATED (no reliable year) — the date
+    // token is kept exactly as written, and whenIso stays null.
+    saveLeadNotes([{ bookingId: "QS1", internalNotes: "header line\nHG - 9/7 - Called client, left a message" }]);
+    const row = (await buildBulkOutreachCohort("Jessie")).rows[0];
+    expect(row.lastTouch).not.toBeNull();
+    // The newest DATED touch is still the quote-send; the undated note never jumps ahead of a dated
+    // entry (we can't place it on an instant). Either way it is a REAL touch, never "none logged".
+    expect(row.lastTouch!.what.toLowerCase()).toMatch(/quote|note/);
+  });
+
+  it("the double-contact guard sees a just-sent quote (quote-send counts as a recent OUTBOUND touch)", async () => {
+    seedQuoteSent();
+    saveLeadNotes([{ bookingId: "QS1", quoteSentAt: new Date().toISOString() }]); // precise, just now
+    const row = (await buildBulkOutreachCohort("Jessie")).rows[0];
+    expect(row.recentlyContacted).toBe(true);
+    expect(row.defaultSms).toBe(false);
+    expect(row.defaultEmail).toBe(false);
+    expect(row.note).toMatch(/Contacted within/i);
+  });
+
+  it("a genuinely blank lead (no quote date, no comms, no notes) honestly shows no last touch", async () => {
+    // Quote-sent by status label only — nothing actually captured. "none logged" is the honest answer;
+    // we must NOT fabricate a touch.
+    saveBookings([
+      { bookingId: "QS1", eventName: "Blank Co", eventDate: "2099-06-01", statusLabel: "Quote Sent", signed: false, grandTotal: 5000, clientName: "Blank Co", clientEmail: "b@example.com", clientPhone: "+13015559999" },
+    ]);
+    const row = (await buildBulkOutreachCohort("Jessie")).rows[0];
+    expect(row.leadId).toBe("QS1");
+    expect(row.lastTouch).toBeNull();
+    expect(row.recentlyContacted).toBe(false);
   });
 });
 

@@ -262,3 +262,58 @@ export function ingestInboundSms(input: InboundSmsInput): InboundSmsResult {
   }
   return { recorded: true, leadId };
 }
+
+export interface OutboundSmsInput {
+  providerId: string; // OpenPhone message id (idempotency — the SAME id the app's own send captured)
+  from?: string | null; // our Quo number (sender)
+  to: string; // the customer number we texted
+  body: string;
+  actor?: string | null; // the rep / sender label when the event carries one; null when unknown
+  occurredAt?: string | null;
+}
+
+export interface OutboundSmsResult {
+  recorded: boolean;
+  leadId: string | null;
+  duplicate?: boolean;
+}
+
+/** Ingest an OUTBOUND customer SMS surfaced by the Quo/OpenPhone webhook (a text a rep sent from Quo).
+ *  Matches the lead by the CUSTOMER number (`to`) — the exact same booking-by-phone lookup the inbound
+ *  path uses — and records it on the unified timeline as an outbound comms event. FACT only: we log a
+ *  touch we actually received a provider event for, never an inferred one.
+ *
+ *  Idempotent on the provider message id: because the app's own sender (sendLeadSms) already inserts an
+ *  outbound comms row keyed by the SAME OpenPhone message id, a webhook for an app-originated send
+ *  de-dupes to a no-op here and is NOT double-counted; only a text sent directly in the Quo app (which
+ *  the app never recorded) produces a fresh row. That new-insert case also gets a MESSAGE_SENT audit
+ *  entry, so a rep's Quo-app text shows in the sales audit trail too. */
+export function ingestOutboundSms(input: OutboundSmsInput): OutboundSmsResult {
+  const digits = last10(input.to);
+  const lead = digits ? getBookingByPhoneDigits(digits) : null;
+  const leadId = lead?.bookingId ?? null;
+
+  const id = insertCommsEventIfNew({
+    providerId: input.providerId,
+    leadId,
+    direction: "outbound",
+    channel: "sms",
+    fromPhone: input.from ?? null,
+    toPhone: input.to,
+    body: input.body,
+    actor: input.actor ?? null,
+    occurredAt: input.occurredAt ?? null,
+  });
+  if (!id) return { recorded: false, leadId, duplicate: true };
+
+  // Fresh capture (a Quo-app send the app never recorded) → add the audit trail entry. Skipped on the
+  // dedup no-op above, so an app-originated send is never audited twice.
+  if (leadId) {
+    try {
+      logSalesEventBy("MESSAGE_SENT", leadId, input.actor?.trim() || "Quo", { preview: input.body.slice(0, 140), source: "quo_webhook" });
+    } catch {
+      /* audit is best-effort */
+    }
+  }
+  return { recorded: true, leadId };
+}
