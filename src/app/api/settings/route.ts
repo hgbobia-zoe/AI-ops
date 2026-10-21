@@ -74,6 +74,8 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     // Driver-debrief line-item keyword lists (normalized to lowercase, de-duped).
     premiumWindowKeywords: strList(b.premiumWindowKeywords, current.premiumWindowKeywords),
     eventReadinessKeywords: strList(b.eventReadinessKeywords, current.eventReadinessKeywords),
+    // Not edited from the /admin settings form — preserve the operating-year override as-is.
+    operatingYearStart: current.operatingYearStart ?? null,
   };
 }
 

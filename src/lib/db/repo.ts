@@ -3,7 +3,8 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "./index";
-import { todayInOpsTz } from "@/lib/dates";
+import { todayInOpsTz, currentOperatingYearStart } from "@/lib/dates";
+import { getSettings } from "@/lib/settings";
 import { logChange } from "@/lib/history/store";
 import { detectLinenItems } from "@/lib/salesos/linen";
 import { slackNotify } from "@/lib/notify/slack";
@@ -1116,6 +1117,17 @@ function runCancelSafeguard(ctx: CancelSafeguardCtx): void {
   });
 }
 
+/**
+ * Start of the current operating year (Jan 1, ops-tz), honoring the optional settings override. This is
+ * the ONE boundary the NON-FINANCIAL booking queries below use to exclude prior years (so old seasons do
+ * not slow things down and the current book stays current); it includes current-year AND future-dated
+ * rows. FINANCIAL queries never call this — they keep full multi-year history. One-line tunable via
+ * settings.operatingYearStart (or OPERATING_YEAR_START).
+ */
+function operatingYearStart(): string {
+  return currentOperatingYearStart(new Date(), getSettings().operatingYearStart ?? null);
+}
+
 /** Booked events on/after `startYmd`, soonest first (the forward pipeline). Dated only. Excludes
  *  cancelled/lost — those aren't pipeline. Each row carries `signed` so the UI can split committed
  *  contracts from open quotes. */
@@ -1278,17 +1290,21 @@ export interface QuoteStageSnapshot {
   stageSigned: number; // "Contract Signed" / signed flag = won
 }
 
-/** Where the active quotes stand now, by Goodshuffle stage — all non-archived, non-Lost bookings (any
- *  date), to match GS's Projects stage counts. Not scoped to any window: a current status snapshot. */
+/** Where the active quotes stand now, by Goodshuffle stage — all non-archived, non-Lost bookings, to
+ *  match GS's Projects stage counts. A current status snapshot (not windowed to a specific range), but
+ *  NON-FINANCIAL, so it is bounded to the current operating year onward (prior-year rows are stale
+ *  phantoms GS would have archived). Undated (in-flight) quotes are kept so a brand-new quote still
+ *  counts; current + future events are kept, only older-than-this-year are dropped. */
 export function getQuoteStageSnapshot(): QuoteStageSnapshot {
   const rows = getDb()
     .prepare(
       `SELECT status_label, signed FROM bookings
        WHERE COALESCE(archived,0) = 0
          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
-         AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'`,
+         AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
+         AND (event_date IS NULL OR event_date >= ?)`,
     )
-    .all() as { status_label: string | null; signed: number | null }[];
+    .all(operatingYearStart()) as { status_label: string | null; signed: number | null }[];
   let stageNew = 0, stageQuoteSent = 0, stageActionNeeded = 0, stageSigned = 0;
   for (const r of rows) {
     const s = (r.status_label ?? "").toLowerCase();
@@ -1335,9 +1351,11 @@ export function getBookingRevenueByIds(ids: string[]): Map<string, number | null
   return out;
 }
 
-/** All bookings (for Customer Intelligence aggregation). */
+/** All bookings (for Customer Intelligence + sales-trends/win-loss aggregation). FULL multi-year history
+ *  on purpose — these are cross-year analytics, so this is NOT bounded to the operating year. Presented
+ *  newest-first (the house default; every consumer re-aggregates, so order is not load-bearing). */
 export function getAllBookings(): BookingView[] {
-  return (getDb().prepare("SELECT * FROM bookings ORDER BY event_date").all() as Record<string, unknown>[]).map(toBookingView);
+  return (getDb().prepare("SELECT * FROM bookings ORDER BY COALESCE(event_date,'') DESC").all() as Record<string, unknown>[]).map(toBookingView);
 }
 
 /** Most-recently-created projects first (for the delivery calculator's "prefill from a project" picker —

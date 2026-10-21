@@ -36,6 +36,29 @@ export function todayInOpsTz(d: Date = new Date()): string {
   return ymdInTz(process.env.ETA_TIMEZONE || DEFAULT_TZ, d);
 }
 
+/**
+ * The ISO date (`YYYY-MM-DD`) for the start of the CURRENT OPERATING YEAR — Jan 1 of the current
+ * calendar year in the operating timezone (so it rolls over with the clock, never hardcoded). This is
+ * the single boundary the SERVER-SIDE, NON-FINANCIAL data paths use to exclude prior years: treat it as
+ * ">= start of current year", which keeps current-year AND future-dated records and drops only older
+ * ones. Financial paths DO NOT use this — they keep full multi-year history.
+ *
+ * DYNAMIC + centralized: callers pass the optional settings override (see settings.operatingYearStart),
+ * which may be a bare year (`"2026"`) or a full date (`"2026-01-01"`); anything else falls back to the
+ * computed current-year start. Pure (no DB) so it's safe on the client too; the DB override is resolved
+ * by the server-side caller and handed in.
+ */
+export function currentOperatingYearStart(now: Date = new Date(), override?: string | null): string {
+  if (override) {
+    const t = override.trim();
+    if (/^\d{4}$/.test(t)) return `${t}-01-01`;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+    // Malformed override → ignore it and fall through to the computed current-year start.
+  }
+  const year = todayInOpsTz(now).slice(0, 4);
+  return `${year}-01-01`;
+}
+
 /** Shift a `YYYY-MM-DD` string by `days` (may be negative); returns `YYYY-MM-DD`. */
 export function shiftYmd(ymd: string, days: number): string {
   const [y, m, d] = ymd.split("-").map(Number);
