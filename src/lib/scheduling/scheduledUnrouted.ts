@@ -34,6 +34,9 @@ export interface ScheduledPerson {
   userId: number;
   name: string;
   role: CrewRole;
+  /** Title-derived: may this worker be AUTO-routed? driver or warehouse → true; asset-prep/other/empty →
+   *  false. Carried from the roster CrewMember (connecteam.routeEligibleFromTitle). Separate from `role`. */
+  routeEligible: boolean;
   title: string | null;
   window: { start: number; end: number } | null;
 }
@@ -63,6 +66,9 @@ export interface ScheduledUnroutedPerson {
   name: string;
   /** The Connecteam role (driver / prep / other) — "other" is never surfaced. */
   role: CrewRole;
+  /** Title-derived AUTO-route eligibility (driver or warehouse → true; asset-prep/other/empty → false).
+   *  The auto-assign planner gates on this; the one-click prompt still surfaces route-ineligible prep. */
+  routeEligible: boolean;
   /** The route seat this person can fill, following candidateRoles (driver→driver, prep→field). */
   fillRole: RouteCrewRole;
   title: string | null;
@@ -135,6 +141,7 @@ export function detectScheduledUnrouted(input: ScheduledUnroutedInput): Schedule
       userId: p.userId,
       name: p.name,
       role: p.role,
+      routeEligible: p.routeEligible,
       fillRole,
       title: p.title,
       window: p.window,
@@ -166,7 +173,7 @@ export function collapseScheduledPeople(shifts: CrewShift[]): ScheduledPerson[] 
     for (const a of cs.assignees) {
       const prev = byUser.get(a.userId);
       if (!prev) {
-        byUser.set(a.userId, { userId: a.userId, name: a.name, role: a.role, title: a.title ?? null, window: win });
+        byUser.set(a.userId, { userId: a.userId, name: a.name, role: a.role, routeEligible: a.routeEligible ?? false, title: a.title ?? null, window: win });
       } else if (win && (!prev.window || win.start < prev.window.start)) {
         // Keep the person's earliest real shift window — do NOT span across separate shifts.
         prev.window = win;

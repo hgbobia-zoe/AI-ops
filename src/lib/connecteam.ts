@@ -187,6 +187,12 @@ export interface CrewMember {
   userType?: string;
   /** The Connecteam "Title" custom field, e.g. "Driver", "Warehouse Associate". */
   title?: string;
+  /** May this worker be AUTO-assigned onto a delivery route? Title-derived (routeEligibleFromTitle): a
+   *  DRIVER or a WAREHOUSE associate (warehouse helps deliver on the ground) → true; an ASSET-PREP /
+   *  back-of-warehouse title (e.g. "Event Asset Processor"), office/"other", or an empty title → false.
+   *  SEPARATE from `role`: a warehouse worker is still role "prep" (so loading-coverage counts them); this
+   *  flag only says whether that prep worker can go on a route. */
+  routeEligible: boolean;
   /** Seniority anchor (ISO date) — the hire/start-date custom field if present, else the account-created
    *  date. Earlier = more senior. null when Connecteam exposed neither (then the router treats them as the
    *  newest, never fabricating tenure). Used by the driver seniority router (scheduling/driverSeniority.ts). */
@@ -206,6 +212,23 @@ export function roleFromTitle(title?: string): CrewRole {
   if (t.includes("driver")) return "driver";
   if (t.includes("warehouse") || t.includes("asset") || t.includes("prep") || t.includes("loader")) return "prep";
   return "other";
+}
+
+/**
+ * Whether a Title makes a worker eligible for the AUTO delivery-route path. Warehouse associates help
+ * deliver on the ground, so DRIVER and WAREHOUSE both qualify. An ASSET-PREP / back-of-warehouse title
+ * (e.g. "Event Asset Processor"), office/"other", or an empty title does NOT. Keyword precedence: driver,
+ * then warehouse (route-eligible), then asset/prep-only (not route-eligible) — so a "Warehouse Asset …"
+ * title still qualifies via "warehouse". This is SEPARATE from roleFromTitle's coarse role: a warehouse
+ * worker is still role "prep" (loading-coverage counts them), and this flag additionally says they may go
+ * on a route. Honest default: an unrecognized/empty title is NOT route-eligible — we never guess an
+ * unproven worker onto a delivery route.
+ */
+export function routeEligibleFromTitle(title?: string): boolean {
+  const t = (title || "").toLowerCase();
+  if (t.includes("driver")) return true;
+  if (t.includes("warehouse")) return true;
+  return false; // asset / prep-only, office/"other", or empty → not route-eligible for the auto path
 }
 
 /** Pull the "Title" custom field value off a raw Connecteam user. */
@@ -311,6 +334,7 @@ async function getUsersUncached(): Promise<Map<number, CrewMember>> {
       title,
       seniorityDate: seniorityDateOf(u),
       role: roleFromTitle(title),
+      routeEligible: routeEligibleFromTitle(title),
     });
   }
   return map;
@@ -420,7 +444,7 @@ async function getCrewForDateSafeUncached(date: string): Promise<CrewDayResult> 
         isPublished: typeof s.isPublished === "boolean" ? (s.isPublished as boolean) : undefined,
         lastModifiedUnix: shiftLastModifiedUnix(s) ?? undefined,
         assignees: ids.map(
-          (id): CrewMember => users.get(id) ?? { userId: id, name: `#${id}`, role: "other" },
+          (id): CrewMember => users.get(id) ?? { userId: id, name: `#${id}`, role: "other", routeEligible: false },
         ),
       });
     }

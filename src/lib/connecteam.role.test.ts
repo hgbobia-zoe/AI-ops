@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { roleFromTitle } from "./connecteam";
+import { roleFromTitle, routeEligibleFromTitle } from "./connecteam";
 
 describe("roleFromTitle (Connecteam Title → ops CrewRole)", () => {
   it("classifies drivers", () => {
@@ -21,5 +21,37 @@ describe("roleFromTitle (Connecteam Title → ops CrewRole)", () => {
     expect(roleFromTitle("Executive Assistant")).toBe("other");
     expect(roleFromTitle("")).toBe("other");
     expect(roleFromTitle(undefined)).toBe("other");
+  });
+
+  it("coarse 'prep' role STILL includes warehouse AND asset workers (loading-coverage bucket unchanged)", () => {
+    // Both load trucks at the warehouse, so both must stay role "prep" for the prep-window staffing fix.
+    expect(roleFromTitle("Warehouse Associate")).toBe("prep");
+    expect(roleFromTitle("Event Asset Processor")).toBe("prep");
+  });
+});
+
+describe("routeEligibleFromTitle (title-derived AUTO-route eligibility)", () => {
+  it("driver OR warehouse is route-eligible (warehouse helps deliver on the ground)", () => {
+    expect(routeEligibleFromTitle("Driver")).toBe(true);
+    expect(routeEligibleFromTitle("Delivery Driver")).toBe(true);
+    expect(routeEligibleFromTitle("Warehouse Associate")).toBe(true);
+    expect(routeEligibleFromTitle("Warehouse Asset Handler")).toBe(true); // warehouse precedes asset
+  });
+
+  it("asset-prep / office / untitled are NOT route-eligible", () => {
+    expect(routeEligibleFromTitle("Event Asset Processor")).toBe(false); // back of warehouse
+    expect(routeEligibleFromTitle("Prep")).toBe(false);
+    expect(routeEligibleFromTitle("Co-Founder")).toBe(false);
+    expect(routeEligibleFromTitle("Executive Assistant")).toBe(false);
+    expect(routeEligibleFromTitle("")).toBe(false);
+    expect(routeEligibleFromTitle(undefined)).toBe(false);
+  });
+
+  it("role and route-eligibility are independent for a warehouse worker (prep role, yet route-eligible)", () => {
+    expect(roleFromTitle("Warehouse Associate")).toBe("prep");
+    expect(routeEligibleFromTitle("Warehouse Associate")).toBe(true);
+    // asset-prep: same prep role, but NOT route-eligible
+    expect(roleFromTitle("Event Asset Processor")).toBe("prep");
+    expect(routeEligibleFromTitle("Event Asset Processor")).toBe(false);
   });
 });

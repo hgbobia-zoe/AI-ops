@@ -8,7 +8,8 @@ const H = 3600;
 const BASE = 1_760_000_000; // arbitrary fixed epoch
 
 function person(p: Partial<ScheduledPerson> & { userId: number; role: ScheduledPerson["role"] }): ScheduledPerson {
-  return { name: `U${p.userId}`, title: null, window: { start: BASE, end: BASE + 8 * H }, ...p };
+  // Default routeEligible mirrors the live mapping (driver route-eligible); tests override per case.
+  return { name: `U${p.userId}`, title: null, routeEligible: p.role === "driver", window: { start: BASE, end: BASE + 8 * H }, ...p };
 }
 
 function routeCand(p: Partial<UnroutedRouteCandidate> & { routeId: string }): UnroutedRouteCandidate {
@@ -47,6 +48,24 @@ describe("detectScheduledUnrouted (pure)", () => {
     );
     expect(r.people).toHaveLength(1);
     expect(r.people[0]).toMatchObject({ userId: 2, fillRole: "field", suggestedRouteId: "r1" });
+  });
+
+  it("carries the title-derived routeEligible through to the surfaced person (warehouse true, asset false)", () => {
+    const warehouse = detectScheduledUnrouted(
+      input({
+        scheduled: [person({ userId: 2, role: "prep", routeEligible: true })], // warehouse associate
+        routes: [routeCand({ routeId: "r1", gapByRole: { driver: 0, field: 2 } })],
+      }),
+    );
+    expect(warehouse.people[0]).toMatchObject({ userId: 2, fillRole: "field", routeEligible: true });
+
+    const asset = detectScheduledUnrouted(
+      input({
+        scheduled: [person({ userId: 3, role: "prep", routeEligible: false })], // asset-prep (back of warehouse)
+        routes: [routeCand({ routeId: "r1", gapByRole: { driver: 0, field: 2 } })],
+      }),
+    );
+    expect(asset.people[0]).toMatchObject({ userId: 3, fillRole: "field", routeEligible: false });
   });
 
   it("never surfaces office/admin ('other') crew", () => {
@@ -135,7 +154,7 @@ describe("collapseScheduledPeople (pure) — the '7:30a – 2:30a' bug", () => {
       timezone: "America/New_York",
       isOpen: false,
       title: "Driver",
-      assignees: assignees.map((a) => ({ userId: a.userId, name: a.name, role: "driver" as const })),
+      assignees: assignees.map((a) => ({ userId: a.userId, name: a.name, role: "driver" as const, routeEligible: true })),
     };
   }
 
@@ -166,7 +185,7 @@ describe("collapseScheduledPeople (pure) — the '7:30a – 2:30a' bug", () => {
 
 describe("detectScheduledUnrouted (pure) — unreachable", () => {
   function person(p: Partial<ScheduledPerson> & { userId: number; role: ScheduledPerson["role"] }): ScheduledPerson {
-    return { name: `U${p.userId}`, title: null, window: { start: BASE, end: BASE + 8 * H }, ...p };
+    return { name: `U${p.userId}`, title: null, routeEligible: p.role === "driver", window: { start: BASE, end: BASE + 8 * H }, ...p };
   }
   function routeCand(p: Partial<UnroutedRouteCandidate> & { routeId: string }): UnroutedRouteCandidate {
     return { truckId: "E450", truckName: `Truck ${p.routeId}`, window: { start: BASE + H, end: BASE + 6 * H }, gapByRole: { driver: 0, field: 0 }, ...p };

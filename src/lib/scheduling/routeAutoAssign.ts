@@ -14,23 +14,21 @@
 // or more routes fit (e.g. a field helper who could join either truck, or a driver whose unset window
 // overlaps several), the choice is genuinely a human's — we fall back to the prompt rather than pick wrong.
 
-import type { ScheduledUnroutedResult } from "./scheduledUnrouted";
+import type { ScheduledUnroutedResult, ScheduledUnroutedPerson } from "./scheduledUnrouted";
 import type { RouteCrewRole } from "./preCheck";
-import type { CrewRole } from "@/lib/connecteam";
 
 /**
- * Which Connecteam crew roles the AUTO path may SILENTLY place on a route without a human. Only a genuine
- * internal DRIVER is auto-route-eligible: they fill a driver seat, which is their actual job. A "prep"
- * (warehouse / asset-processor) worker is BACK-OF-WAREHOUSE — the detector maps them to a field-helper seat
- * so a dispatcher CAN one-click them onto a route by hand (manual), but the engine must never auto-route
- * them; field/delivery is not their job. Office/admin ("other") is non-crew and never eligible. Any role we
- * don't positively recognize as driver is treated as NOT auto-eligible — we never guess an unproven worker
- * onto a delivery route (RULES CALCULATE; honest; if field-eligibility isn't established, don't auto-assign).
- * Mirrors the #81 office exclusion: non-field/driver crew are excluded from the automatic path, manual is
- * untouched.
+ * Whether the AUTO path may SILENTLY place this scheduled person on a delivery route without a human. Keys
+ * on the TITLE-derived `routeEligible` signal computed at classification time (connecteam.routeEligibleFromTitle):
+ * a DRIVER or a WAREHOUSE associate (warehouse helps deliver on the ground) → eligible; an ASSET-PREP /
+ * back-of-warehouse worker ("Event Asset Processor"), office/"other", or an untitled worker → NOT eligible.
+ * It keys on `routeEligible` rather than the coarse `role` because warehouse and asset-prep share role "prep"
+ * (both load trucks, so "prep" must stay a single loading-coverage bucket) — only the title tells them apart.
+ * A route-ineligible prep worker is still surfaced to the dispatcher's one-click PROMPT (manual is untouched);
+ * only the automatic path excludes them. Honest default: an unproven/untitled worker is never auto-routed.
  */
-export function isAutoRouteEligible(role: CrewRole): boolean {
-  return role === "driver";
+export function isAutoRouteEligible(person: Pick<ScheduledUnroutedPerson, "routeEligible">): boolean {
+  return person.routeEligible === true;
 }
 
 /** One person the engine will AUTO-ASSIGN to a specific route (unambiguous match). */
@@ -71,10 +69,11 @@ export function planRouteAutoAssign(result: ScheduledUnroutedResult): RouteAutoA
   const prompt: PromptDecision[] = [];
 
   for (const p of result.people) {
-    // AUTO-path role gate (the fix for a warehouse/prep worker landing on a delivery route): only a genuine
-    // driver may be auto-routed. A prep/office worker whom the detector surfaced for the field-helper seat is
-    // NEVER auto-assigned — they fall to the prompt so a dispatcher decides deliberately. Manual stays open.
-    const autoEligible = isAutoRouteEligible(p.role);
+    // AUTO-path eligibility gate (the fix for a back-of-warehouse worker landing on a delivery route): a
+    // DRIVER or WAREHOUSE associate may be auto-routed; an ASSET-PREP / office worker the detector surfaced
+    // for the field-helper seat is NEVER auto-assigned — they fall to the prompt so a dispatcher decides
+    // deliberately. Keys on the title-derived routeEligible signal (warehouse vs asset share role "prep").
+    const autoEligible = isAutoRouteEligible(p);
     const unambiguous = autoEligible && p.eligibleRouteIds.length === 1 && p.suggestedRouteId != null;
     if (unambiguous) {
       autoAssign.push({
@@ -92,7 +91,7 @@ export function planRouteAutoAssign(result: ScheduledUnroutedResult): RouteAutoA
         suggestedRouteId: p.suggestedRouteId,
         eligibleRouteIds: p.eligibleRouteIds,
         reason: !autoEligible
-          ? `${p.role === "prep" ? "warehouse/prep" : "non-driver"} worker — not auto-routed; a dispatcher assigns route crew manually`
+          ? `${p.role === "prep" ? "asset-prep (back of warehouse)" : "non-route-eligible"} worker — not auto-routed; a dispatcher assigns route crew manually`
           : p.eligibleRouteIds.length > 1
             ? `fits ${p.eligibleRouteIds.length} routes — ambiguous, a dispatcher picks`
             : "no single unambiguous route — left for the prompt",
