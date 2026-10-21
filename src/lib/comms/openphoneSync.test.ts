@@ -9,7 +9,7 @@ vi.mock("./openphone", () => ({
 }));
 
 import { getCustomerTextThread, openphoneApiKey } from "./openphone";
-import { syncLeadTextThread, syncActiveLeadTextThreads } from "./openphoneSync";
+import { syncLeadTextThread, syncActiveLeadTextThreads, ensureLeadThreadSynced } from "./openphoneSync";
 import { saveBookings, getCommsForLead } from "@/lib/db/repo";
 import { todayInOpsTz } from "@/lib/dates";
 
@@ -94,6 +94,54 @@ describe("syncLeadTextThread", () => {
     mockThread.mockRejectedValue(new Error("boom"));
     const r = await syncLeadTextThread("OPS-lead-4", "3015559999");
     expect(r.inserted).toBe(0); // swallowed
+  });
+});
+
+describe("Holly's thread lands in comms_events", () => {
+  it("backfills her full two-way thread, attached to her lead, idempotent on re-run", async () => {
+    // The exact failure the fix targets: Holly's lead (231885765, +12023066780) had the full OpenPhone
+    // thread but almost none of it in comms_events. After the sync runs, her thread is present + attached.
+    const id = "231885765";
+    mockThread.mockResolvedValue([
+      msg({ id: "holly-out-1", direction: "outbound", body: "I sent the agreement over, let me know if you have questions", occurredAt: "2027-05-01T14:00:00.000Z" }),
+      msg({ id: "holly-in-1", direction: "inbound", body: "I was already helped by Jessie, thank you", occurredAt: "2027-05-01T15:00:00.000Z" }),
+    ]);
+    const r = await syncLeadTextThread(id, "+12023066780");
+    expect(r.inserted).toBe(2);
+
+    const stored = getCommsForLead(id, 50);
+    expect(stored).toHaveLength(2);
+    expect(stored.every((c) => c.leadId === id)).toBe(true);
+    expect(stored.map((c) => c.direction).sort()).toEqual(["inbound", "outbound"]);
+    expect(stored.some((c) => (c.body ?? "").includes("sent the agreement"))).toBe(true);
+    expect(stored.some((c) => (c.body ?? "").includes("already helped by Jessie"))).toBe(true);
+
+    // Re-running (the periodic job + the on-demand wrapper both hit the same thread) never double-counts.
+    const again = await syncLeadTextThread(id, "+12023066780");
+    expect(again.inserted).toBe(0);
+    expect(getCommsForLead(id, 50)).toHaveLength(2);
+  });
+});
+
+describe("ensureLeadThreadSynced", () => {
+  it("syncs on demand when configured, and is a no-op (no API call) when the key is unset", async () => {
+    const id = "ENSURE-1";
+    mockThread.mockResolvedValue([msg({ id: "e-in-1", direction: "inbound", body: "quick question" })]);
+    const r = await ensureLeadThreadSynced(id, "2025551234");
+    expect(r.inserted).toBe(1);
+    expect(getCommsForLead(id, 50)).toHaveLength(1);
+
+    mockKey.mockReturnValue(null); // unconfigured
+    mockThread.mockClear();
+    const noop = await ensureLeadThreadSynced("ENSURE-2", "2025559999");
+    expect(noop.inserted).toBe(0);
+    expect(mockThread).not.toHaveBeenCalled(); // key gate short-circuits before the API
+  });
+
+  it("never throws when the API layer rejects", async () => {
+    mockThread.mockRejectedValue(new Error("boom"));
+    const r = await ensureLeadThreadSynced("ENSURE-3", "2025550000");
+    expect(r.inserted).toBe(0);
   });
 });
 

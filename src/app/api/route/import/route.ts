@@ -14,6 +14,7 @@ import { recordPull, logImport } from "@/lib/pull/state";
 import { reconcileStops, forceReconcileStops } from "@/lib/ingest/reconcile";
 import { consumeForceResync } from "@/lib/ingest/forceResync";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
+import { syncActiveLeadTextThreads } from "@/lib/comms/openphoneSync";
 import type { Stop } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,22 @@ function maybePreMintEtaLinks(): void {
   if (now - _lastPreMintAt < 4 * 60_000) return;
   _lastPreMintAt = now;
   void runEtaPreMintTick().catch(() => {});
+}
+
+// Same story for the two-way SMS sync (openphone-message-sync): it lives in the server bucket, which runs
+// ONLY on the runtime tick (RUNTIME_TOKEN) — and that off-machine clock may be unset in prod, so the sync
+// was never actually running and leads' text threads (e.g. Holly's) stayed empty in comms_events. Back it
+// off the OFFICE PULL too, exactly like the eta pre-mint: it fires whenever the office machine pulls routes
+// (~every 3 min), so the active leads' full inbound+outbound threads backfill on the normal pull cadence,
+// independent of the runtime clock. Key-gated inside syncActiveLeadTextThreads (no-op without an OpenPhone
+// key), throttled here so a burst of per-(truck,date) imports triggers at most one pass, idempotent (upserts
+// dedupe on the OpenPhone message id). Fire-and-forget; NEVER blocks or fails the import.
+let _lastThreadSyncAt = 0;
+function maybeSyncLeadThreads(): void {
+  const now = Date.now();
+  if (now - _lastThreadSyncAt < 4 * 60_000) return;
+  _lastThreadSyncAt = now;
+  void syncActiveLeadTextThreads().catch(() => {});
 }
 
 // CORS: allow the "Pull Zoe Routes" bookmarklet — which runs INSIDE a logged-in
@@ -148,6 +165,10 @@ export async function POST(req: Request): Promise<NextResponse> {
     // Pre-mint Ignition tracking links for upcoming stops + check Ignition health — off the office pull,
     // so it runs even when the runtime clock (RUNTIME_TOKEN) isn't set. Throttled, non-blocking.
     maybePreMintEtaLinks();
+
+    // Backfill the active leads' two-way SMS threads off the office pull too (same reason: the server-bucket
+    // runtime tick may not be firing). Throttled, key-gated, idempotent, non-blocking.
+    maybeSyncLeadThreads();
 
     return json({ ok: true, routeId, stops: stops.length, kept: keptCount, firstStopId: stops[0]?.stopId });
   } catch (e) {

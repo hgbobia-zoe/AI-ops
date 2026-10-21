@@ -53,6 +53,20 @@ export async function syncLeadTextThread(bookingId: string, phone: string | null
   }
 }
 
+/** On-demand single-lead sync for the moment correctness matters most (e.g. just before the action-item
+ *  detector reads a lead's thread), so detection always runs on the CURRENT two-way thread even when the
+ *  periodic job (openphone-message-sync) is behind. A thin, explicit wrapper over syncLeadTextThread:
+ *  key-gated (no-op without an OpenPhone API key, so it never fans out a pointless API call), bounded to
+ *  the one lead, and best-effort — it NEVER throws (syncLeadTextThread already swallows errors; the key
+ *  gate and this signature make the contract obvious at the call site). */
+export async function ensureLeadThreadSynced(
+  bookingId: string,
+  phone: string | null | undefined,
+): Promise<{ inserted: number }> {
+  if (!openphoneApiKey()) return { inserted: 0 }; // honest no-op when unconfigured
+  return syncLeadTextThread(bookingId, phone);
+}
+
 export interface SyncActiveOpts {
   /** Max leads to sync in one run (default DEFAULT_LEAD_CAP). */
   cap?: number;
