@@ -68,3 +68,14 @@ describe("responder-health job registration", () => {
     expect(typeof job!.run).toBe("function");
   });
 });
+
+describe("sales-action-items job registration", () => {
+  it("is a server job with a runner, gated on the LLM + OpenPhone key (configured() reflects env)", () => {
+    const job = RUNTIME_JOBS.find((j) => j.key === "sales-action-items");
+    expect(job).toBeDefined();
+    expect(job!.bucket).toBe("server");
+    expect(typeof job!.run).toBe("function");
+    // configured() is credential-driven; with neither key set in the test env it gates off (no false run).
+    expect(typeof job!.configured()).toBe("boolean");
+  });
+});

@@ -30,6 +30,7 @@ import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { runScan } from "@/lib/risk/scan";
 import { runSalesAiJob, salesAiEnabled } from "@/lib/salesos/salesAiJob";
 import { syncActiveLeadTextThreads } from "@/lib/comms/openphoneSync";
+import { runActionItemsJob, actionItemsConfigured } from "@/lib/salesos/actionItems";
 import { openphoneApiKey } from "@/lib/comms/openphone";
 import { runEsignCutoffSweep, esignCutoffEnabled } from "@/lib/salesos/esignCutoff";
 import { getRiskQueue } from "@/lib/risk/store";
@@ -346,6 +347,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     run: async () => {
       const r = await syncActiveLeadTextThreads();
       return { ok: true, detail: `${r.leads} lead${r.leads === 1 ? "" : "s"} synced, ${r.inserted} new message${r.inserted === 1 ? "" : "s"}` };
+    },
+  },
+  {
+    key: "sales-action-items",
+    label: "Customer action-item detection (open asks)",
+    bucket: "server",
+    configured: actionItemsConfigured,
+    note: "Catches the asks a customer raised that still need a human response (e.g. 'strike paragraph 24 of the T&C', 'difference between a 500 vs 300 lb block?') so the AI's follow-ups stop missing them. Per active/quote-sent lead: syncs the current two-way thread on demand, then an LLM extracts the OPEN customer asks (contract-change / pricing / product / scheduling / decision / objection) — quoting the customer's OWN words, never inventing an ask — and surfaces them as a deduped Slack alert to the sales channel plus a persisted per-lead record the outreach context can read. RULES CALCULATE (gather/dedupe/resolve/gate deterministic), AI INTERPRETS (the extraction). DETECT + SURFACE ONLY: never drafts or sends a reply; an item auto-clears only on a real signal (a later outbound after the ask), else it stays open. Gated by LLM + OpenPhone key, bounded to the busiest conversations, self-throttled (default once/60m), outage-safe (skips + logs when the LLM is unreachable; one lead failing never aborts the run).",
+    run: async () => {
+      const r = await runActionItemsJob();
+      return { ok: r.ok, detail: r.detail };
     },
   },
   {
