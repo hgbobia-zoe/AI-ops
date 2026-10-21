@@ -36,6 +36,7 @@ export const SHIFT_COMMS_TEMPLATES: Record<CommsTouch, string> = {
     "Truck: {truck}.\n" +
     "Working with: {crew}.\n" +
     "{clockLine}\n" +
+    "{customerAttention}\n" +
     "Questions: {dispatch}",
   day_before:
     "Reminder for tomorrow {date}: {role}.\n" +
@@ -43,6 +44,7 @@ export const SHIFT_COMMS_TEMPLATES: Record<CommsTouch, string> = {
     "Truck: {truck}.\n" +
     "Working with: {crew}.\n" +
     "{clockLine}\n" +
+    "{customerAttention}\n" +
     "Questions: {dispatch}",
   refresher:
     "Shift soon: {role}. Report {reportTime} at the warehouse: 12712 Rock Creek Mill Rd, Unit 4A (lower end, end of the cul-de-sac). Truck: {truck}.\n" +
@@ -50,6 +52,7 @@ export const SHIFT_COMMS_TEMPLATES: Record<CommsTouch, string> = {
     "{clockLine}\n" +
     "{timingNote}\n" +
     "{readinessNote}\n" +
+    "{customerAttention}\n" +
     "Delivery route details: {link}\n" +
     "Questions {dispatch}.",
 };
@@ -102,8 +105,10 @@ function readinessNotePhrase(route: ShiftPacket["operations"]["route"]): string 
 }
 
 /** Build the token map for a packet. Null facts become "TBD" (honest). {link} is refresher-only and
- *  dropped by renderTemplate when null. */
-function packetVars(p: ShiftPacket, link: string | null): Record<string, string | undefined> {
+ *  dropped by renderTemplate when null. {customerAttention} is the AI customer-attention heads-up computed
+ *  UPSTREAM (async) and passed in here as a precomputed string, exactly like {link} — this renderer stays
+ *  PURE and SYNC (no LLM inside). An undefined value drops the line (renderTemplate drops unfilled tokens). */
+function packetVars(p: ShiftPacket, link: string | null, customerAttention: string | null): Record<string, string | undefined> {
   return {
     name: orTbd(p.assignment.displayName),
     role: ROLE_WORD[p.identity.role],
@@ -114,21 +119,32 @@ function packetVars(p: ShiftPacket, link: string | null): Record<string, string 
     clockLine: clockLine(p.timekeeping),
     timingNote: timingNotePhrase(p.operations.route),
     readinessNote: readinessNotePhrase(p.operations.route),
+    customerAttention: customerAttention ?? undefined,
     dispatch: p.dispatch.phone,
     link: link ?? undefined,
   };
 }
 
-/** Render one touch's message from the packet. Pure + deterministic. */
-export function renderPacketTouch(packet: ShiftPacket, touch: CommsTouch, link: string | null = null): string {
-  return renderTemplate(SHIFT_COMMS_TEMPLATES[touch], packetVars(packet, link));
+/** Render one touch's message from the packet. Pure + deterministic + SYNC. The AI customer-attention
+ *  heads-up (when any) is passed in as a precomputed string, the same way {link} is. */
+export function renderPacketTouch(
+  packet: ShiftPacket,
+  touch: CommsTouch,
+  link: string | null = null,
+  customerAttention: string | null = null,
+): string {
+  return renderTemplate(SHIFT_COMMS_TEMPLATES[touch], packetVars(packet, link, customerAttention));
 }
 
 /** Render all three touches (for the dispatcher preview). */
-export function renderAllTouches(packet: ShiftPacket, link: string | null = null): Record<CommsTouch, string> {
+export function renderAllTouches(
+  packet: ShiftPacket,
+  link: string | null = null,
+  customerAttention: string | null = null,
+): Record<CommsTouch, string> {
   return {
-    on_assign: renderPacketTouch(packet, "on_assign", link),
-    day_before: renderPacketTouch(packet, "day_before", link),
-    refresher: renderPacketTouch(packet, "refresher", link),
+    on_assign: renderPacketTouch(packet, "on_assign", link, customerAttention),
+    day_before: renderPacketTouch(packet, "day_before", link, customerAttention),
+    refresher: renderPacketTouch(packet, "refresher", link, customerAttention),
   };
 }

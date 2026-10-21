@@ -51,8 +51,17 @@ function zoePull(apiBase, tier) {
         return { bookingId: String(p.id), eventName: p.eventName || "", eventDate: d2(p.logistics_start_date), statusLabel: p.statusLabel || "", signed: !!p.signed, archived: !!p.archived, grandTotalCents: p.grand_total, contractTotalCents: p.contract_subtotal, amountPaidCents: p.amount_paid, amountDueCents: p.amount_due, clientName: p.client_name || "", clientEmail: p.client_email || "", clientPhone: p.client_phone || "", quoteSentDate: d2(p.quote_sent_date), dateCreated: d2(p.date_created), venue: p.venueLabel || "", location: p.cityStateZipCounty || "" };
       });
       if (!recs.length) return { saved: 0, partial: pErr };
+      // Capture comms for OPEN leads AND SIGNED near-term deliveries (within today..+3 days), so the driver
+      // debrief can read the office's customer-attention notes before delivery day. Union, deduped (open
+      // first), capped at 100. MIRRORS selectNoteCaptureIds() in src/lib/gsPull.ts (unit-tested).
       const todayY = new Date().toISOString().slice(0, 10);
-      const openIds = Object.keys(all).filter((id) => { const p = all[id]; if (p.signed) return false; const s = (p.statusLabel || "").toLowerCase(); if (s.indexOf("lost") >= 0 || s.indexOf("cancel") >= 0 || s.indexOf("dead") >= 0) return false; const d = d2(p.logistics_start_date); return !d || d >= todayY; }).slice(0, 80);
+      const horizonY = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+      const openIds = [], signedIds = [];
+      Object.keys(all).forEach((id) => { const p = all[id]; const d = d2(p.logistics_start_date);
+        if (p.signed) { if (d && d >= todayY && d <= horizonY) signedIds.push(id); return; }
+        const s = (p.statusLabel || "").toLowerCase(); if (s.indexOf("lost") >= 0 || s.indexOf("cancel") >= 0 || s.indexOf("dead") >= 0) return;
+        if (!d || d >= todayY) openIds.push(id); });
+      const seenCap = {}, captureIds = []; openIds.concat(signedIds).forEach((id) => { if (!seenCap[id]) { seenCap[id] = 1; captureIds.push(id); } }); const capIds = captureIds.slice(0, 100);
       function titlesFrom(lists) { const t = []; function w(o, d) { if (!o || typeof o !== "object" || d > 7) return; if (Object.prototype.toString.call(o) === "[object Array]") { for (let k = 0; k < o.length; k++) w(o[k], d + 1); return; } if (o.itemTitle) t.push(o.itemTitle); for (const kk in o) w(o[kk], d + 1); } (lists || []).forEach((gj) => { w(gj, 0); }); return t; }
       // Quote sent/opened from the client email thread (getMessagesForTransaction). sent = earliest
       // outbound quote email; opened = latest client open. Prefer emails whose subject mentions "quote",
@@ -75,8 +84,8 @@ function zoePull(apiBase, tier) {
       function pullNotes() {
         const notes = [];
         function one(i) {
-          if (i >= openIds.length) return Promise.resolve();
-          const id = openIds[i];
+          if (i >= capIds.length) return Promise.resolve();
+          const id = capIds[i];
           const pCV = fetch("/app/vendorTransaction/initContractView?transactionID=" + id, H).then((r) => (r.ok ? r.json() : null)).catch(() => null);
           const pMsg = fetch("/app/conversation/getMessagesForTransaction?transactionID=" + id, H).then((r) => (r.ok ? r.json() : null)).catch(() => null);
           return Promise.all([pCV, pMsg]).then((res) => {
