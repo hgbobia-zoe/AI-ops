@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { planRouteAutoAssign } from "./routeAutoAssign";
+import { planRouteAutoAssign, isAutoRouteEligible } from "./routeAutoAssign";
+import { roleFromTitle } from "@/lib/connecteam";
 import type { ScheduledUnroutedPerson, ScheduledUnroutedResult } from "./scheduledUnrouted";
 
 function person(p: Partial<ScheduledUnroutedPerson> & { userId: number; eligibleRouteIds: string[] }): ScheduledUnroutedPerson {
@@ -74,6 +75,15 @@ describe("planRouteAutoAssign (pure)", () => {
     );
     expect(plan.autoAssign.map((a) => a.userId)).toEqual([7]);
     expect(plan.prompt).toHaveLength(0);
+  });
+
+  it("only a driver is auto-route-eligible; an untitled worker (no Title → 'other') is NOT auto-routed", () => {
+    expect(isAutoRouteEligible("driver")).toBe(true);
+    expect(isAutoRouteEligible("prep")).toBe(false);
+    expect(isAutoRouteEligible("other")).toBe(false);
+    // auto-exclusion still holds for a new hire with no Title: roleFromTitle("") === "other" → not eligible.
+    expect(isAutoRouteEligible(roleFromTitle(""))).toBe(false);
+    expect(isAutoRouteEligible(roleFromTitle(undefined))).toBe(false);
   });
 
   it("Connecteam unreachable → empty plan (honest unknown, never auto-writes)", () => {

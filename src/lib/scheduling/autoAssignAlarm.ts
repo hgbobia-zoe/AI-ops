@@ -18,6 +18,10 @@ const KEYS = {
   /** The auto-debrief tick failed to send a debrief for a staffed route (provider failure) — a worker's
    *  pre-shift debrief silently did not go out. */
   debriefSilent: "scheduling.alarm.debriefSilent",
+  /** One or more SCHEDULED workers have no Connecteam Title set, so their crew role can't be determined.
+   *  They are never auto-assigned (roleFromTitle -> "other" -> not auto-route-eligible), but a human must
+   *  set the Title so the gap is fixed, not silently dropped. */
+  untitledWorkers: "scheduling.alarm.untitledWorkers",
 } as const;
 
 export type SchedulingAlarmKind = keyof typeof KEYS;

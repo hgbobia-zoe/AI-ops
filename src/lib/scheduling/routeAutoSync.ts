@@ -48,6 +48,7 @@ import { syncInternalAssignments } from "./assignments";
 import { routeAssignWindow, requiredCrewForRoute, assignedCrewForRoute, computeRouteGap } from "./preCheck";
 import { scheduledUnroutedForDate } from "./scheduledUnrouted";
 import { planRouteAutoAssign, type RouteAutoAssignPlan } from "./routeAutoAssign";
+import { detectUntitledWorkers, type UntitledWorker } from "./untitledWorkers";
 import { resolveDriverSeniority, type SeniorityRouteMeta } from "./driverSeniority";
 import { routeSpecialty } from "./routeSpecialty";
 import { trackWindow, routeOwnWindow } from "./routeRatchet";
@@ -442,6 +443,9 @@ export interface RouteAutoSyncDayResult {
   /** Present routes that need a driver but have NONE assigned (route row empty AND no driver shift) after
    *  the sync — the driverless-route alarm's signal for this day. */
   driverlessRequiredRoutes: number;
+  /** Scheduled workers this day with no Connecteam Title set (role undeterminable). Never auto-assigned;
+   *  surfaced so a human sets the Title. Empty when Connecteam presence couldn't be read (honest unknown). */
+  untitledScheduled: UntitledWorker[];
 }
 
 const EMPTY_DAY = (date: string): RouteAutoSyncDayResult => ({
@@ -458,6 +462,7 @@ const EMPTY_DAY = (date: string): RouteAutoSyncDayResult => ({
   alreadyInCt: 0,
   driverRowsSet: 0,
   driverlessRequiredRoutes: 0,
+  untitledScheduled: [],
 });
 
 /** HH:MM in the ops timezone (ET) for narration; "TBD" when unknown. */
@@ -673,6 +678,11 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   const ctUserIds = new Set<number>();
   for (const s of crew.shifts) for (const a of s.assignees) ctUserIds.add(a.userId);
 
+  // VISIBILITY: scheduled workers with no Connecteam Title (role undeterminable). They are already SAFE
+  // (roleFromTitle -> "other" -> never auto-routed); this only surfaces the gap so a human sets the Title.
+  // Flag a genuinely EMPTY title only — a titled "other" (Co-Founder, etc.) is legitimate non-crew, not a gap.
+  out.untitledScheduled = detectUntitledWorkers(crew.shifts.flatMap((s) => s.assignees));
+
   const appShifts = getShiftsForDate(date);
   const createPlan = planRouteConnecteamCreate({ appShifts, connecteamUserIds: [...ctUserIds] });
   out.alreadyInCt = createPlan.skipped;
@@ -706,6 +716,9 @@ export interface RouteAutoSyncTickResult {
   driverRowsSet: number;
   /** Present routes (across reachable days) that need a driver but have none assigned after the sweep. */
   driverlessRequiredRoutes: number;
+  /** Distinct scheduled workers (across reachable days) with no Connecteam Title set — flagged, never
+   *  auto-assigned. The untitled-worker alarm's signal for the sweep. */
+  untitledWorkers: number;
 }
 
 /** The ops-channel link for the scheduling board (request-less; uses PUBLIC_BASE_URL like preCheckNotify). */
@@ -734,6 +747,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
       unreachableDays: 0,
       driverRowsSet: 0,
       driverlessRequiredRoutes: 0,
+      untitledWorkers: 0,
     };
   }
   const today = todayInOpsTz();
@@ -747,6 +761,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
   let reachableDays = 0;
   let driverRowsSet = 0;
   let driverlessRequiredRoutes = 0;
+  const untitledByUser = new Map<number, string>(); // distinct untitled scheduled workers across reachable days
   for (const d of dates) {
     try {
       const r = await reconcileRouteAutoSyncForDate(d);
@@ -762,11 +777,13 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
       flagged += r.mixedFlagged;
       driverRowsSet += r.driverRowsSet;
       driverlessRequiredRoutes += r.driverlessRequiredRoutes;
+      for (const u of r.untitledScheduled) if (!untitledByUser.has(u.userId)) untitledByUser.set(u.userId, u.name);
     } catch {
       unreachable += 1; // a thrown day is an unknown, not a zero — skip it
     }
   }
   const ok = reachableDays > 0;
+  const untitled = [...untitledByUser.entries()].map(([userId, name]) => ({ userId, name }));
 
   // FAIL-LOUD: if we actually reached Connecteam (we KNOW the roster) and present route(s) still need a
   // driver with none assigned, page the ops channel (2h-deduped, one "recovered" note). Only when
@@ -785,12 +802,31 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
     }
   }
 
+  // VISIBILITY ALARM: scheduled worker(s) with no Connecteam Title (role undeterminable). They are never
+  // auto-assigned (no title maps to "other"), but a human must set the Title so the gap is fixed, not
+  // silently dropped. Reuses the SAME 2h-deduped cool-off, only when we actually read the roster (honest).
+  if (reachableDays > 0) {
+    const { alert } = recordSchedulingAlarm("untitledWorkers", untitled.length > 0);
+    if (alert === "down") {
+      const names = untitled.map((u) => u.name).join(", ");
+      void slackNotify(
+        [
+          `Scheduling: ${untitled.length} scheduled worker${untitled.length === 1 ? "" : "s"} ${untitled.length === 1 ? "has" : "have"} no Title set in Connecteam, so their role cannot be determined: ${names}.`,
+          `Set a Title (Driver, Warehouse, etc.) in Connecteam and approve the role. Until then they will not be auto-assigned to any route.`,
+        ].join("\n"),
+      ).catch(() => {});
+    } else if (alert === "recovered") {
+      void slackNotify("Scheduling: every scheduled worker now has a Title in Connecteam. Untitled-worker alarm cleared.").catch(() => {});
+    }
+  }
+
   const seniorityNote = seniorityAssigned ? ` (${seniorityAssigned} by seniority)` : "";
   const expandedNote = windowsExpanded ? `, ${windowsExpanded} shift${windowsExpanded === 1 ? "" : "s"} adjusted to the route` : "";
   const driverRowNote = driverRowsSet ? `, ${driverRowsSet} route driver${driverRowsSet === 1 ? "" : "s"} reconciled` : "";
   const driverlessNote = driverlessRequiredRoutes ? `, ${driverlessRequiredRoutes} route${driverlessRequiredRoutes === 1 ? "" : "s"} still need a driver` : "";
+  const untitledNote = untitled.length ? `, ${untitled.length} untitled worker${untitled.length === 1 ? "" : "s"} flagged` : "";
   const detail = reachableDays === 0
     ? `Connecteam unreachable (${unreachable}/${dates.length} days) — skipped, nothing written`
-    : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned${seniorityNote}${expandedNote}${driverRowNote}, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent), ${flagged} flagged${driverlessNote}${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
-  return { ok, detail, days: reachableDays, autoAssigned, seniorityAssigned, windowsExpanded, ctCreated, flagged, unreachableDays: unreachable, driverRowsSet, driverlessRequiredRoutes };
+    : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned${seniorityNote}${expandedNote}${driverRowNote}, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent), ${flagged} flagged${driverlessNote}${untitledNote}${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
+  return { ok, detail, days: reachableDays, autoAssigned, seniorityAssigned, windowsExpanded, ctCreated, flagged, unreachableDays: unreachable, driverRowsSet, driverlessRequiredRoutes, untitledWorkers: untitled.length };
 }
