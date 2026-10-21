@@ -18,6 +18,8 @@ import {
 } from "@/lib/db/repo";
 import { generateRecap } from "@/lib/coach/recap";
 import { analyzeSentiment } from "./sentiment";
+import { callAlertTitle } from "./callAlert";
+import { classifyReason } from "./reasons";
 import { getCallTranscript, getCallSummary, getCallDetails, openphoneUserInitials } from "./openphone";
 import { slackNotifyAlert } from "@/lib/notify/slack";
 import { decideCallNote } from "@/lib/salesos/callNote";
@@ -206,8 +208,11 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   const reasons = s.reasons.length ? `\n> ${s.reasons.join(" · ")}` : "";
   const src = transcript ? "transcript" : "AI summary";
   const project = booking ? `\n<https://pro.goodshuffle.com/app/project/detail?id=${booking.bookingId}|${(booking.eventName ?? "").trim() || "Open the project in Goodshuffle"}>` : "";
+  // Title is a PURE function of what we actually detected (frustration/escalation vs. a nameable
+  // operational signal vs. a plain flagged insight) — never a blanket "Frustrated caller" for every call.
+  const title = callAlertTitle(s, classifyReason(text).reason);
   const msg =
-    `:rotating_light: *Frustrated caller* — ${who}\n` +
+    `${title.emoji} *${title.heading}* — ${who}\n` +
     `Negative tone on a ${dir === "outgoing" ? "call we made" : "call in"} (from the ${src}). Confidence ${conf}.${reasons}${project}\n` +
     `_Review the call in OpenPhone and consider a follow-up._`;
 
