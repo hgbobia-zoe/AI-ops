@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ymdInTz, todayInOpsTz, formatClockTime, isoToOpsLocalInput, opsLocalInputToIso } from "./dates";
+import { ymdInTz, todayInOpsTz, formatClockTime, isoToOpsLocalInput, opsLocalInputToIso, currentOperatingYearStart } from "./dates";
 
 describe("ymdInTz", () => {
   it("formats as YYYY-MM-DD", () => {
@@ -30,6 +30,32 @@ describe("todayInOpsTz", () => {
       if (prev === undefined) delete process.env.ETA_TIMEZONE;
       else process.env.ETA_TIMEZONE = prev;
     }
+  });
+});
+
+describe("currentOperatingYearStart", () => {
+  it("returns Jan 1 of the current calendar year in the operating timezone (dynamic, not hardcoded)", () => {
+    const prev = process.env.ETA_TIMEZONE;
+    process.env.ETA_TIMEZONE = "America/New_York";
+    try {
+      // Late-night UTC that is still the PREVIOUS year in ET — the year must follow ET, not UTC.
+      expect(currentOperatingYearStart(new Date("2027-01-01T02:00:00Z"))).toBe("2026-01-01");
+      expect(currentOperatingYearStart(new Date("2026-06-15T12:00:00Z"))).toBe("2026-01-01");
+      expect(currentOperatingYearStart(new Date("2028-06-15T12:00:00Z"))).toBe("2028-01-01");
+    } finally {
+      if (prev === undefined) delete process.env.ETA_TIMEZONE;
+      else process.env.ETA_TIMEZONE = prev;
+    }
+  });
+
+  it("honors a settings override (bare year or full date), ignoring a malformed one", () => {
+    const now = new Date("2026-06-15T12:00:00Z");
+    expect(currentOperatingYearStart(now, "2025")).toBe("2025-01-01"); // bare year
+    expect(currentOperatingYearStart(now, "2024-03-01")).toBe("2024-03-01"); // full date
+    expect(currentOperatingYearStart(now, "  2023  ")).toBe("2023-01-01"); // trimmed
+    expect(currentOperatingYearStart(now, "garbage")).toBe("2026-01-01"); // falls back to computed
+    expect(currentOperatingYearStart(now, null)).toBe("2026-01-01");
+    expect(currentOperatingYearStart(now, "")).toBe("2026-01-01");
   });
 });
 

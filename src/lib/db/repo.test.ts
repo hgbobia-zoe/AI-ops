@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   advanceNextStop,
   enqueueEtaLinkMint,
+  getAllBookings,
+  getBookingsRevenueInRange,
+  getQuoteStageSnapshot,
   getRoute,
   insertEventIfNew,
   saveBookings,
@@ -184,5 +187,59 @@ describe("advanceNextStop", () => {
     expect(next?.dayOfName).toBe("Jordan");
     // Nothing after the last stop.
     expect(advanceNextStop(routeId, 2)).toBeNull();
+  });
+});
+
+// ── Backend newest-first + current-operating-year boundary (non-financial vs financial) ───────────────
+// Pin the operating-year boundary to 2026 via the override so these are deterministic regardless of the
+// real clock. Exercises: a NON-FINANCIAL query excludes a prior-year row but keeps current + future +
+// undated; a FINANCIAL query still sees the prior-year row (full multi-year history); newest-first order.
+describe("current-operating-year boundary + newest-first ordering", () => {
+  const prevEnv = process.env.OPERATING_YEAR_START;
+  beforeAll(() => {
+    process.env.OPERATING_YEAR_START = "2026";
+  });
+  afterAll(() => {
+    if (prevEnv === undefined) delete process.env.OPERATING_YEAR_START;
+    else process.env.OPERATING_YEAR_START = prevEnv;
+  });
+
+  it("getQuoteStageSnapshot (non-financial) drops prior-year quotes but keeps current/future/undated", () => {
+    const base = getQuoteStageSnapshot();
+    // A 2024 OPEN quote — prior year → must NOT change the active-stage counts.
+    saveBookings([{ bookingId: "OY-2024", eventName: "Old Gala", statusLabel: "Quote", signed: false, eventDate: "2024-05-01" }]);
+    const afterOld = getQuoteStageSnapshot();
+    expect(afterOld.stageQuoteSent).toBe(base.stageQuoteSent);
+
+    // A 2027 OPEN quote — future-dated → MUST be included (not "only 2026").
+    saveBookings([{ bookingId: "OY-2027", eventName: "Future Gala", statusLabel: "Quote", signed: false, eventDate: "2027-03-01" }]);
+    const afterFuture = getQuoteStageSnapshot();
+    expect(afterFuture.stageQuoteSent).toBe(afterOld.stageQuoteSent + 1);
+
+    // An UNDATED open quote (brand-new, no event date yet) → kept.
+    saveBookings([{ bookingId: "OY-UND", eventName: "Undated Quote", statusLabel: "Quote", signed: false, eventDate: null }]);
+    const afterUndated = getQuoteStageSnapshot();
+    expect(afterUndated.stageQuoteSent).toBe(afterFuture.stageQuoteSent + 1);
+  });
+
+  it("getBookingsRevenueInRange (financial) still returns the prior-year row — full history, not year-bounded", () => {
+    saveBookings([
+      { bookingId: "FIN-2024", eventName: "Old Signed", statusLabel: "Signed", signed: true, grandTotal: 7777, eventDate: "2024-07-04" },
+    ]);
+    const rev = getBookingsRevenueInRange("2024-01-01", "2024-12-31");
+    expect(rev.signedCount).toBeGreaterThanOrEqual(1);
+    expect(rev.signed ?? 0).toBeGreaterThanOrEqual(7777);
+  });
+
+  it("getAllBookings presents newest event_date first", () => {
+    saveBookings([
+      { bookingId: "ORD-A", eventName: "A", eventDate: "2024-05-01" },
+      { bookingId: "ORD-C", eventName: "C", eventDate: "2027-03-01" },
+      { bookingId: "ORD-B", eventName: "B", eventDate: "2026-07-01" },
+    ]);
+    const mine = getAllBookings()
+      .filter((b) => ["ORD-A", "ORD-B", "ORD-C"].includes(b.bookingId))
+      .map((b) => b.bookingId);
+    expect(mine).toEqual(["ORD-C", "ORD-B", "ORD-A"]); // 2027, 2026, 2024 — descending
   });
 });

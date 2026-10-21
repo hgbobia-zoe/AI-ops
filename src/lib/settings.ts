@@ -67,6 +67,10 @@ export interface AppSettings {
   /** Line-item names (case-insensitive substrings) that mark a stop as having the Event Readiness Service,
    *  so the debrief names that customer for setup (see scheduling/packetDispatch.ts). */
   eventReadinessKeywords: string[];
+  /** Optional override for the NON-FINANCIAL "current operating year" boundary (see
+   *  dates.ts:currentOperatingYearStart). A bare year ("2026") or a full date ("2026-01-01"); null/unset
+   *  means "compute Jan 1 of the current year dynamically". Financial paths ignore this entirely. */
+  operatingYearStart: string | null;
 }
 
 export interface PrepOpportunitySettings {
@@ -170,6 +174,7 @@ export function defaultSettings(): AppSettings {
     specialtyItemKeywords: envJson<string[]>(process.env.SPECIALTY_ITEM_KEYWORDS, DEFAULT_SPECIALTY_KEYWORDS),
     premiumWindowKeywords: envJson<string[]>(process.env.PREMIUM_WINDOW_KEYWORDS, DEFAULT_PREMIUM_WINDOW_KEYWORDS),
     eventReadinessKeywords: envJson<string[]>(process.env.EVENT_READINESS_KEYWORDS, DEFAULT_EVENT_READINESS_KEYWORDS),
+    operatingYearStart: process.env.OPERATING_YEAR_START || null,
   };
 }
 
