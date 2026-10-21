@@ -3994,3 +3994,50 @@ export function getEmailEventsForLead(bookingId: string, limit = 50): EmailEvent
       .all(bookingId, limit) as Record<string, unknown>[]
   ).map(toEmailEvent);
 }
+
+// ── Web lead intake (append-only; see src/lib/intake/webLead.ts + /api/intake/lead) ────────────────────
+
+/** Dedupe guard for the structured web-lead receiver: has a create_project op for the SAME contact
+ *  (normalized email and/or phone) been enqueued within the window (default 48h)? Keyed on the `leadEmail`
+ *  / `leadPhone` the web-lead create op stashes in its payload — guided-intake create ops carry neither,
+ *  so they never match. Matches ANY status within the window (a project already made for this contact is
+ *  still a duplicate). Mirrors the pendingCreateOpExists / pendingDeliveryFeeOp payload-match shape. */
+export function recentLeadCreateOpExists(emailKey: string, phoneKey: string, windowMs = 48 * 60 * 60 * 1000): boolean {
+  if (!emailKey && !phoneKey) return false;
+  const cutoff = new Date(Date.now() - windowMs).toISOString();
+  const row = getDb()
+    .prepare(
+      `SELECT 1 FROM gs_outbox WHERE op = 'create_project' AND created_at > ?
+         AND ( (? != '' AND json_extract(payload, '$.leadEmail') = ?)
+            OR (? != '' AND json_extract(payload, '$.leadPhone') = ?) )
+       LIMIT 1`,
+    )
+    .get(cutoff, emailKey, emailKey, phoneKey, phoneKey);
+  return Boolean(row);
+}
+
+/** The acknowledgement-email bits a WEB-LEAD create op stashed in its payload (null for a guided intake or
+ *  when no create op exists). /api/gs/intake-result reads this to enqueue the ack email_send ONLY once
+ *  Goodshuffle has confirmed the project id — so the ack is tied to real project creation, never claimed
+ *  early. Newest matching op wins. */
+export function webLeadAckForIntake(intakeId: string): { content: string; subject: string } | null {
+  if (!intakeId) return null;
+  const row = getDb()
+    .prepare(
+      `SELECT payload FROM gs_outbox WHERE op = 'create_project'
+         AND json_extract(payload, '$.intakeId') = ? AND json_extract(payload, '$.kind') = 'web_lead'
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(intakeId) as { payload: string | null } | undefined;
+  if (!row || !row.payload) return null;
+  try {
+    const p = JSON.parse(row.payload) as { webLeadAck?: { content?: string; subject?: string } };
+    const ack = p.webLeadAck;
+    if (ack && typeof ack.content === "string" && ack.content) {
+      return { content: ack.content, subject: typeof ack.subject === "string" ? ack.subject : "" };
+    }
+  } catch {
+    /* malformed payload → no ack */
+  }
+  return null;
+}
