@@ -29,6 +29,7 @@ import { runWorkerPacketsTick } from "@/lib/scheduling/workerPackets";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { runScan } from "@/lib/risk/scan";
 import { runSalesAiJob, salesAiEnabled } from "@/lib/salesos/salesAiJob";
+import { runEsignCutoffSweep, esignCutoffEnabled } from "@/lib/salesos/esignCutoff";
 import { getRiskQueue } from "@/lib/risk/store";
 import { responderHealthNow, recordJobAlert, formatAge } from "@/lib/ai/responderHealth";
 import { runOutboxHealthTick } from "@/lib/aiorg/outboxHealth";
@@ -260,6 +261,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     run: async () => {
       const r = await runSalesAiJob();
       return { ok: r.ok, detail: salesAiEnabled() ? r.detail : "SALES_AI_ENABLED off — inert" };
+    },
+  },
+  {
+    key: "esign-cutoff",
+    label: "E-signature cutoff (disable online signing pre-event)",
+    bucket: "server",
+    configured: () => true, // app-owned; a healthy no-op until ESIGN_CUTOFF_ENABLED is flipped on
+    note: "Disables ONLINE signing N business days before the event (default 3, Mon-Fri; holidays out of scope) so contracts sign IN PERSON, not last-minute online. Each UNSIGNED, non-archived project that crosses the business-day window gets ONE Goodshuffle disable_esignature write queued (idempotent, once per project) and a Sales-bot update in sales-ai. OFF BY DEFAULT (ESIGN_CUTOFF_ENABLED): the GS disable endpoint is an uncaptured CAPTURE-NEEDED stub, so the op does NOT execute a fabricated request (it sits pending), and the announcement says the window was entered / signing is being turned off (PENDING) and is reversible / in-person signing still works, never claiming it is already off until the op CONFIRMS. 'online signature enabled' is proxied by signed=0 (unobservable toggle). Outage-safe, dedupes so it only acts as a project crosses the threshold.",
+    run: async () => {
+      const r = await runEsignCutoffSweep();
+      return { ok: r.ok, detail: esignCutoffEnabled() ? r.detail : "ESIGN_CUTOFF_ENABLED off — inert" };
     },
   },
   {

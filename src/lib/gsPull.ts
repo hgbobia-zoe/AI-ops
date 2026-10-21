@@ -288,6 +288,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var feeOps=all.filter(function(o){ return o.op==="set_delivery_fee" && o.transactionId && o.payload && o.payload.amount!=null; });
         var taskOps=all.filter(function(o){ return o.op==="create_gs_task" && o.transactionId && o.payload && o.payload.title; });
         var provOps=all.filter(function(o){ return (o.op==="provision_user"||o.op==="revoke_user") && o.payload && o.payload.system; });
+        var esignOps=all.filter(function(o){ return o.op==="disable_esignature" && o.transactionId; });
         var createOps=all.filter(function(o){ return o.op==="create_project" && o.payload && o.payload.intakeId; });
         if(SKIP_CREATE) createOps=[]; // a standalone Playwright runner drains creates by navigation instead of a popup
         // Goodshuffle only CREATES a project on a real navigation (a fetch just returns the SPA shell), so we
@@ -300,7 +301,22 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var createPopup=null;
         if(createOps.length){ try{ createPopup=window.open("/app/project/createNewProject","gscreate","width=520,height=640,left=40,top=40"); }catch(e){ createPopup=null; } }
         function popNewId(w){ return new Promise(function(resolve){ if(!w){ resolve(null); return; } var n=0; var iv=setInterval(function(){ n++; var got=null; try{ var h=w.location.href; if(h && h.indexOf("about:blank")<0){ var m=h.match(/[?&]id=(\\d+)/); if(m) got=m[1]; } }catch(e){} if(got){ clearInterval(iv); resolve(got); } else if(n>80){ clearInterval(iv); resolve(null); } }, 250); }); }
-        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, provisioned=0, chain=Promise.resolve();
+        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, provisioned=0, esigns=0, chain=Promise.resolve();
+        // disable_esignature: turn OFF online signing N business days before the event (queued by
+        // src/lib/salesos/esignCutoff.ts) so a contract signs IN PERSON, not last-minute online. CAPTURE-NEEDED:
+        // the Goodshuffle request that disables online signing has NOT been captured. Do it ONCE in the GSPRO UI
+        // on a TEST project while recording, then fill GS_DISABLE_ESIGN (method/path/bodyType/body). Until then
+        // this is a NO-OP that leaves the op PENDING — never invent a request (honest-when-unobservable). Keep in
+        // sync with extension/pull-injected.js (GS_DISABLE_ESIGN).
+        var GS_DISABLE_ESIGN=null; // e.g. {method:"POST",path:"/app/vendorTransaction/…",bodyType:"form",body:function(tx){return {transactionID:String(tx)};}}
+        esignOps.forEach(function(o){ chain=chain.then(function(){
+          if(!GS_DISABLE_ESIGN||!GS_DISABLE_ESIGN.path) return; // CAPTURE-PENDING: leave pending, no request
+          var ep=GS_DISABLE_ESIGN; var data=ep.body?ep.body(o.transactionId):{transactionID:String(o.transactionId)};
+          var headers={"x-requested-with":"XMLHttpRequest",accept:"application/json"}; var body;
+          if(ep.bodyType==="json"){ headers["content-type"]="application/json"; body=JSON.stringify(data); }
+          else { headers["content-type"]="application/x-www-form-urlencoded"; body=new URLSearchParams(data).toString(); }
+          return fetch(ep.path,{method:ep.method||"POST",headers:headers,credentials:"include",body:body}).then(function(r){ return r.ok; }).then(function(ok){ if(ok)esigns++; else failed++; return ackOp(o.id,ok,"disable_esignature_failed"); }).catch(function(){ failed++; return ackOp(o.id,false,"disable_esignature_error"); });
+        }); });
         // provision_user / revoke_user: People Lifecycle access provisioning via REPLAY. For a system whose
         // internal invite/disable endpoint has been CAPTURED (see src/lib/people/provisioningEndpoints.ts),
         // replay it same-origin from this logged-in session; while the endpoint is null (capture-pending) we
@@ -492,8 +508,8 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             });
           });
         });
-        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, created:created, fees:fees, tasks:tasks, provisioned:provisioned}; });
-      }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0, created:0, fees:0, tasks:0, provisioned:0}; });
+        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, created:created, fees:fees, tasks:tasks, provisioned:provisioned, esigns:esigns}; });
+      }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0, created:0, fees:0, tasks:0, provisioned:0, esigns:0}; });
     }
 
     // Finish a cycle: one-shot fades the banner; auto keeps a persistent status with the last-run time.

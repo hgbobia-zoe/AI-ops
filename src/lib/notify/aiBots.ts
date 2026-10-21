@@ -22,7 +22,10 @@ interface BotConfig extends BotPersona {
 export const BOTS: Record<BotId, BotConfig> = {
   scheduling: { name: "Scheduling Bot", icon: ":calendar:", defaultChannel: "finalized-delivery-schedules" },
   pricing: { name: "Pricing Bot", icon: ":moneybag:", defaultChannel: "delivery-pricing" },
-  sales: { name: "Sales Bot", icon: ":telephone_receiver:", defaultChannel: "ai-outbound-calls" },
+  // SALES domain lands in `sales-ai` (Sales OS leads/outreach, quote-open, the e-signature cutoff). Was
+  // "ai-outbound-calls"; consolidated here so every sales notification shares one channel. Override with
+  // SLACK_CHANNEL_SALES or the SALES_AI_SLACK_CHANNEL alias (resolved in channelFor). See notify/channels.ts.
+  sales: { name: "Sales Bot", icon: ":telephone_receiver:", defaultChannel: "sales-ai" },
   reviews: { name: "Customer Experience Bot", icon: ":star:", defaultChannel: "new-customer-reviews" },
   inventory: { name: "Inventory Bot", icon: ":package:", defaultChannel: "inventory-conflicts" },
   hiring: { name: "Hiring Bot", icon: ":handshake:", defaultChannel: "hiring" },
@@ -56,10 +59,13 @@ export function botForAgent(agentId: string): BotId {
 }
 
 /** The channel a bot posts to: an env override (SLACK_CHANNEL_<BOT>), else the bot's default, else the
- *  generic AI channel. Returns null only when nothing is configured at all. */
+ *  generic AI channel. Returns null only when nothing is configured at all. The SALES bot also honors the
+ *  SALES_AI_SLACK_CHANNEL alias (Part C central routing) so the team can point the sales-ai channel with a
+ *  single, obviously-named secret; the generic SLACK_CHANNEL_SALES still wins if both are set. */
 export function channelFor(bot: BotId): string | null {
   const override = process.env[`SLACK_CHANNEL_${bot.toUpperCase()}`]?.trim();
-  return override || BOTS[bot].defaultChannel || process.env.SLACK_AI_CHANNEL?.trim() || null;
+  const salesAlias = bot === "sales" ? process.env.SALES_AI_SLACK_CHANNEL?.trim() : undefined;
+  return override || salesAlias || BOTS[bot].defaultChannel || process.env.SLACK_AI_CHANNEL?.trim() || null;
 }
 
 /** A designed announcement, rendered as a Slack Block Kit card. Pass a plain string to botAnnounce instead
@@ -110,7 +116,7 @@ export function cardBlocks(card: BotCard): unknown[] {
 }
 
 /** Flatten a card to plain text — the notification/fallback text, and what the ops webhook (no Block Kit) posts. */
-function cardToText(card: BotCard): string {
+export function cardToText(card: BotCard): string {
   const lines = [`${card.emoji ? `${card.emoji} ` : ""}${card.title}`.trim()];
   for (const f of card.fields ?? []) lines.push(`${f.label}: ${f.value}`);
   if (card.body?.trim()) lines.push(card.body.trim());

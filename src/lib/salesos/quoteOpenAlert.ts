@@ -1,11 +1,14 @@
 // Quote-opened alert. When a client opens their quote email (Goodshuffle tracks this via the message
 // thread's messageOpenedDate, captured by the pull into bookings.quote_opened_at), that's the moment to
-// reach out — objections and questions are top of mind. We Slack the customer-alerts channel, but only
+// reach out — objections and questions are top of mind. This is a SALES notification, so (Part C) it now
+// routes to the `sales-ai` channel via the central domain map (notify("sales", ...)), posted AS the Sales
+// bot — NOT the customer-alerts channel (that stays for frustrated-caller alerts only). Still fires only
 // once per open and only when the open landed at least an hour after we sent the quote (so we don't ping
 // while they're glancing at the just-sent confirmation). Deterministic; runs after the notes ingest.
 
 import { pendingQuoteOpenAlerts, markQuoteOpenAlerted, type QuoteOpenCandidate } from "@/lib/db/repo";
-import { slackNotifyAlert, slackAlertConfigured } from "@/lib/notify/slack";
+import { slackBotConfigured, slackConfigured } from "@/lib/notify/slack";
+import { notify } from "@/lib/notify/channels";
 
 // We only ping on a FRESH open — the whole value is catching the client while they still have the quote
 // open and us on their mind, not hours later when the moment is cold. The office pull captures opens on a
@@ -40,14 +43,16 @@ function line(c: QuoteOpenCandidate): string {
 export async function runQuoteOpenAlerts(): Promise<number> {
   const candidates = pendingQuoteOpenAlerts();
   if (candidates.length === 0) return 0;
-  const configured = slackAlertConfigured();
+  // Sales transport = the Sales bot into sales-ai, with an ops-webhook fallback (notify("sales")). It can
+  // deliver when EITHER the bot token or the ops webhook is set; with neither it degrades to a clean skip.
+  const configured = slackBotConfigured() || slackConfigured();
   const now = Date.now();
   const windowMs = recentWindowMs();
   let sent = 0;
   for (const c of candidates) {
     const recent = now - Date.parse(c.quoteOpenedAt) <= windowMs;
     if (recent && configured) {
-      const res = await slackNotifyAlert(line(c));
+      const res = await notify("sales", line(c));
       if (res.ok) sent += 1;
       // Mark either way: a failed post shouldn't wedge on this open forever; a real new open will re-qualify.
     }

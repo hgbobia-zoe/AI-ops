@@ -1,13 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Capture Slack posts instead of hitting the network (no real posts in tests).
-const slackPosts: string[] = [];
-vi.mock("@/lib/notify/slack", () => ({
-  slackAlertConfigured: () => true,
-  slackNotifyAlert: async (text: string) => {
-    slackPosts.push(text);
+// Capture notifications instead of hitting the network. The quote-open alert is a SALES notification, so
+// (Part C) it routes through the central domain map notify("sales", ...) — we assert the DOMAIN here so the
+// routing is covered, not just the text.
+const slackPosts: { domain: string; message: unknown }[] = [];
+vi.mock("@/lib/notify/channels", () => ({
+  notify: async (domain: string, message: unknown) => {
+    slackPosts.push({ domain, message });
     return { ok: true } as const;
   },
+}));
+// The alert's "is Slack reachable at all" gate reads these; keep both on so the fixtures fire.
+vi.mock("@/lib/notify/slack", () => ({
+  slackBotConfigured: () => true,
+  slackConfigured: () => true,
 }));
 
 import { saveBookings, saveLeadNotes, pendingQuoteOpenAlerts, markQuoteOpenAlerted } from "@/lib/db/repo";
@@ -109,7 +115,8 @@ describe("runQuoteOpenAlerts", () => {
     const sent = await runQuoteOpenAlerts();
     expect(sent).toBe(1);
     expect(slackPosts.length).toBe(1);
-    expect(slackPosts[0]).toContain("Jane Doe just opened their quote (3h after we sent it)");
+    expect(slackPosts[0].domain).toBe("sales"); // routed to sales-ai, not customer-alerts
+    expect(String(slackPosts[0].message)).toContain("Jane Doe just opened their quote (3h after we sent it)");
     // Dedup — a second run with no newer open must not re-post.
     const again = await runQuoteOpenAlerts();
     expect(again).toBe(0);

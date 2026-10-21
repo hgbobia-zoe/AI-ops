@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { ymdInTz, todayInOpsTz, formatClockTime, isoToOpsLocalInput, opsLocalInputToIso, currentOperatingYearStart } from "./dates";
+import {
+  ymdInTz,
+  todayInOpsTz,
+  formatClockTime,
+  isoToOpsLocalInput,
+  opsLocalInputToIso,
+  currentOperatingYearStart,
+  isBusinessDay,
+  businessDaysUntil,
+  isWithinBusinessDays,
+} from "./dates";
 
 describe("ymdInTz", () => {
   it("formats as YYYY-MM-DD", () => {
@@ -84,5 +94,43 @@ describe("shift times are anchored to America/New_York, not the host tz", () => 
     expect(opsLocalInputToIso("")).toBeNull();
     // Round-trip: ET wall-clock → ISO → ET wall-clock is stable.
     expect(isoToOpsLocalInput(opsLocalInputToIso("2026-10-16T23:00"))).toBe("2026-10-16T23:00");
+  });
+});
+
+// Business-day math for the e-signature cutoff. Anchored to a known Monday (2026-10-19) in ET.
+describe("business-day helpers", () => {
+  const mon = new Date("2026-10-19T15:00:00Z"); // 11:00 AM ET on Mon 2026-10-19 → todayInOpsTz = 2026-10-19
+  const fri = new Date("2026-10-16T15:00:00Z"); // 11:00 AM ET on Fri 2026-10-16
+
+  it("isBusinessDay flags Mon–Fri, not the weekend", () => {
+    expect(isBusinessDay("2026-10-16")).toBe(true); // Fri
+    expect(isBusinessDay("2026-10-17")).toBe(false); // Sat
+    expect(isBusinessDay("2026-10-18")).toBe(false); // Sun
+    expect(isBusinessDay("2026-10-19")).toBe(true); // Mon
+    expect(isBusinessDay("nonsense")).toBe(false);
+  });
+
+  it("businessDaysUntil counts weekdays, excludes weekends, today = 0, past = negative", () => {
+    expect(businessDaysUntil("2026-10-19", mon)).toBe(0); // today
+    expect(businessDaysUntil("2026-10-20", mon)).toBe(1); // Tue
+    expect(businessDaysUntil("2026-10-22", mon)).toBe(3); // Thu — the exact 3-day boundary
+    expect(businessDaysUntil("2026-10-23", mon)).toBe(4); // Fri
+    expect(businessDaysUntil("2026-10-26", mon)).toBe(5); // next Mon (Sat/Sun skipped), not 7
+    expect(businessDaysUntil("2026-10-16", mon)).toBe(-1); // last Fri, in the past
+    expect(businessDaysUntil("bad-date", mon)).toBeNaN();
+  });
+
+  it("businessDaysUntil skips the weekend when counting across it", () => {
+    // From Fri, Wed is 3 business days away (Mon, Tue, Wed) — Sat/Sun don't count.
+    expect(businessDaysUntil("2026-10-21", fri)).toBe(3);
+    expect(businessDaysUntil("2026-10-19", fri)).toBe(1); // next Mon
+  });
+
+  it("isWithinBusinessDays(…, 3) selects 3-days-out, rejects 5-days-out and the past", () => {
+    expect(isWithinBusinessDays("2026-10-19", 3, mon)).toBe(true); //  today
+    expect(isWithinBusinessDays("2026-10-22", 3, mon)).toBe(true); //  exactly 3 biz days
+    expect(isWithinBusinessDays("2026-10-23", 3, mon)).toBe(false); // 4 biz days
+    expect(isWithinBusinessDays("2026-10-26", 3, mon)).toBe(false); // 5 biz days out
+    expect(isWithinBusinessDays("2026-10-16", 3, mon)).toBe(false); // in the past
   });
 });
