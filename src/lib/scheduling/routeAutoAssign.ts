@@ -16,6 +16,22 @@
 
 import type { ScheduledUnroutedResult } from "./scheduledUnrouted";
 import type { RouteCrewRole } from "./preCheck";
+import type { CrewRole } from "@/lib/connecteam";
+
+/**
+ * Which Connecteam crew roles the AUTO path may SILENTLY place on a route without a human. Only a genuine
+ * internal DRIVER is auto-route-eligible: they fill a driver seat, which is their actual job. A "prep"
+ * (warehouse / asset-processor) worker is BACK-OF-WAREHOUSE — the detector maps them to a field-helper seat
+ * so a dispatcher CAN one-click them onto a route by hand (manual), but the engine must never auto-route
+ * them; field/delivery is not their job. Office/admin ("other") is non-crew and never eligible. Any role we
+ * don't positively recognize as driver is treated as NOT auto-eligible — we never guess an unproven worker
+ * onto a delivery route (RULES CALCULATE; honest; if field-eligibility isn't established, don't auto-assign).
+ * Mirrors the #81 office exclusion: non-field/driver crew are excluded from the automatic path, manual is
+ * untouched.
+ */
+export function isAutoRouteEligible(role: CrewRole): boolean {
+  return role === "driver";
+}
 
 /** One person the engine will AUTO-ASSIGN to a specific route (unambiguous match). */
 export interface AutoAssignDecision {
@@ -55,7 +71,11 @@ export function planRouteAutoAssign(result: ScheduledUnroutedResult): RouteAutoA
   const prompt: PromptDecision[] = [];
 
   for (const p of result.people) {
-    const unambiguous = p.eligibleRouteIds.length === 1 && p.suggestedRouteId != null;
+    // AUTO-path role gate (the fix for a warehouse/prep worker landing on a delivery route): only a genuine
+    // driver may be auto-routed. A prep/office worker whom the detector surfaced for the field-helper seat is
+    // NEVER auto-assigned — they fall to the prompt so a dispatcher decides deliberately. Manual stays open.
+    const autoEligible = isAutoRouteEligible(p.role);
+    const unambiguous = autoEligible && p.eligibleRouteIds.length === 1 && p.suggestedRouteId != null;
     if (unambiguous) {
       autoAssign.push({
         userId: p.userId,
@@ -71,8 +91,9 @@ export function planRouteAutoAssign(result: ScheduledUnroutedResult): RouteAutoA
         fillRole: p.fillRole,
         suggestedRouteId: p.suggestedRouteId,
         eligibleRouteIds: p.eligibleRouteIds,
-        reason:
-          p.eligibleRouteIds.length > 1
+        reason: !autoEligible
+          ? `${p.role === "prep" ? "warehouse/prep" : "non-driver"} worker — not auto-routed; a dispatcher assigns route crew manually`
+          : p.eligibleRouteIds.length > 1
             ? `fits ${p.eligibleRouteIds.length} routes — ambiguous, a dispatcher picks`
             : "no single unambiguous route — left for the prompt",
       });
