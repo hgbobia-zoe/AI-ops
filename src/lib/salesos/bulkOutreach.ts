@@ -17,14 +17,8 @@ import { stripSignOff, humanize } from "./outreach";
 import { STAGE_LABEL } from "./calc";
 import { todayInOpsTz } from "@/lib/dates";
 import { getLatestOutboundForLead, getLatestCommsRowForLead } from "@/lib/db/repo";
-import {
-  createApproval,
-  decideApproval,
-  type ApprovalActionType,
-  type ApprovalCard,
-  type ApprovalStatus,
-  type DecisionResult,
-} from "@/lib/aiorg/approvals";
+import { createApproval, decideApproval, type ApprovalActionType, type ApprovalCard } from "@/lib/aiorg/approvals";
+import { sendLeadSms } from "./smsSend";
 
 /** Default email subject for a quote-sent follow-up — matches the single-send outreach proposer. */
 export const BULK_EMAIL_SUBJECT = "Following up on your event";
@@ -213,11 +207,14 @@ export interface BulkQueueItem {
   sms?: { body: string };
 }
 
+/** The display status for one fired channel. Email uses the approval lifecycle (queued / approved-held);
+ *  SMS reflects the REAL live send (sent / failed / held when the gate is off / already_sent on re-fire). */
+export type BulkChannelStatus = "queued" | "approved" | "sent" | "failed" | "held" | "already_sent";
+
 export interface BulkChannelResult {
   channel: "email" | "sms";
   approvalId: string;
-  outcome: DecisionResult["outcome"];
-  status: ApprovalStatus;
+  status: BulkChannelStatus;
   message: string;
 }
 
@@ -233,21 +230,35 @@ export interface BulkQueueSummary {
   rows: BulkQueueRowResult[];
   queuedEmail: number; // enqueued to the outbox (gate on) — queued, NOT confirmed delivered
   heldEmail: number; //   approved but gate off — recorded, nothing enqueued
-  heldSms: number; //     approved but held (no async SMS op)
-  duplicates: number; //  re-fire of an already-decided row/channel (idempotent no-op)
-  failed: number; //      the enqueue itself errored
+  sentSms: number; //     text actually delivered via the gated Quo sender
+  failedSms: number; //   the provider rejected the text (shown with its reason)
+  heldSms: number; //     approved but held — SMS_SEND_ENABLED is off, nothing sent
+  duplicates: number; //  re-fire of an already-decided/already-sent row/channel (idempotent no-op)
+  failed: number; //      an email outbox enqueue itself errored
   skipped: number; //     a requested channel that was unavailable or had no body
 }
 
-/** Fire the owner's approved selections through the EXISTING governed approval path. For each selected
- *  row+channel: createApproval (idempotent on the lead+channel+day key) then decideApproval("approve").
- *  This produces the identical governed op a single approval does — email_send queued (gate permitting),
- *  SMS held. `actor` is the human who clicked approve (recorded on the decision, never fabricated). */
-export function queueBulkOutreach(items: BulkQueueItem[], actor: string): BulkQueueSummary {
+/** Fire the owner's approved selections. For each selected row+channel it first records the governed
+ *  approval (createApproval, idempotent on the lead+channel+day key, then decideApproval("approve") for
+ *  the audit trail), then actually delivers:
+ *   • EMAIL → the governed gs_outbox email_send op (gate EMAIL_SEND_ENABLED) — identical to a single approval.
+ *   • SMS   → the app's own sanctioned live sender (sendLeadSms → /api/salesos/send-sms's path), gated by
+ *            SMS_SEND_ENABLED. Gate on → the text actually sends (sent / failed shown honestly); gate off →
+ *            held, nothing sent. Idempotent: a re-fire the same day resolves to the already-decided approval,
+ *            so the send is skipped and never double-texts.
+ *  `actor` is the human who clicked approve. `sms` carries the resolved Quo sender attribution (never
+ *  impersonation — the signed-in owner's own linked rep), passed straight through to sendLeadSms. */
+export async function queueBulkOutreach(
+  items: BulkQueueItem[],
+  actor: string,
+  sms: { userId?: string; initials?: string | null } = {},
+): Promise<BulkQueueSummary> {
   const today = todayInOpsTz();
   const rows: BulkQueueRowResult[] = [];
   let queuedEmail = 0;
   let heldEmail = 0;
+  let sentSms = 0;
+  let failedSms = 0;
   let heldSms = 0;
   let duplicates = 0;
   let failed = 0;
@@ -292,16 +303,29 @@ export function queueBulkOutreach(items: BulkQueueItem[], actor: string): BulkQu
           idempotencyKey: key,
         });
         const dec = decideApproval(appr.id, "approve", actor);
-        channels.push({ channel: "email", approvalId: appr.id, outcome: dec.outcome, status: dec.approval.status, message: dec.message });
-        if (dec.outcome === "executed_queued") queuedEmail++;
-        else if (dec.outcome === "held_gate_off") heldEmail++;
-        else if (dec.outcome === "already_decided") duplicates++;
-        else if (dec.outcome === "failed") failed++;
+        if (dec.outcome === "executed_queued") {
+          queuedEmail++;
+          channels.push({ channel: "email", approvalId: appr.id, status: "queued", message: dec.message });
+        } else if (dec.outcome === "held_gate_off") {
+          heldEmail++;
+          channels.push({ channel: "email", approvalId: appr.id, status: "held", message: dec.message });
+        } else if (dec.outcome === "already_decided") {
+          duplicates++;
+          channels.push({ channel: "email", approvalId: appr.id, status: "already_sent", message: "Already queued today — not re-queued." });
+        } else if (dec.outcome === "failed") {
+          failed++;
+          channels.push({ channel: "email", approvalId: appr.id, status: "failed", message: dec.message });
+        } else {
+          channels.push({ channel: "email", approvalId: appr.id, status: "approved", message: dec.message });
+        }
       }
     }
 
-    // SMS — mirrors the single outreach SMS approval: HELD (no async outbox op). Approving records the
-    // governed decision; the text itself still delivers from the human Sales lead panel send.
+    // SMS — the governed approval is still recorded (audit trail) via createApproval + decideApproval,
+    // then the text is ACTUALLY sent through the app's own sanctioned gated sender (sendLeadSms), the same
+    // path the single lead-panel send uses. The bulk approval key makes it idempotent: a fresh approve
+    // (held_no_path) proceeds to send once; a same-day re-fire (already_decided) is skipped, never
+    // double-texting. SMS_SEND_ENABLED off → sendLeadSms sends nothing and the row is honestly held.
     if (item.sms) {
       const body = (item.sms.body ?? "").trim();
       if (!lead.clientPhone.trim()) {
@@ -323,14 +347,32 @@ export function queueBulkOutreach(items: BulkQueueItem[], actor: string): BulkQu
           idempotencyKey: key,
         });
         const dec = decideApproval(appr.id, "approve", actor);
-        channels.push({ channel: "sms", approvalId: appr.id, outcome: dec.outcome, status: dec.approval.status, message: dec.message });
-        if (dec.outcome === "already_decided") duplicates++;
-        else if (dec.outcome === "held_no_path") heldSms++;
+        if (dec.outcome === "already_decided") {
+          // Idempotent: this row+channel was already approved/sent today — do not text again.
+          duplicates++;
+          channels.push({ channel: "sms", approvalId: appr.id, status: "already_sent", message: "Already sent today — not texting again." });
+        } else {
+          // Fresh approve → actually send through the sanctioned gated path.
+          const res = await sendLeadSms({ id: leadId, body, userId: sms.userId, initials: sms.initials ?? null });
+          if (res.disabled) {
+            heldSms++;
+            channels.push({ channel: "sms", approvalId: appr.id, status: "held", message: "SMS sending is off (SMS_SEND_ENABLED). Approved and recorded, but nothing was sent." });
+          } else if (res.ok && res.duplicate) {
+            duplicates++;
+            channels.push({ channel: "sms", approvalId: appr.id, status: "already_sent", message: "That exact text was just sent — not sending again." });
+          } else if (res.ok) {
+            sentSms++;
+            channels.push({ channel: "sms", approvalId: appr.id, status: "sent", message: "Text sent via Quo." });
+          } else {
+            failedSms++;
+            channels.push({ channel: "sms", approvalId: appr.id, status: "failed", message: res.error ?? "Send failed." });
+          }
+        }
       }
     }
 
     rows.push({ leadId, clientName, channels, skipped: rowSkipped });
   }
 
-  return { today, rows, queuedEmail, heldEmail, heldSms, duplicates, failed, skipped };
+  return { today, rows, queuedEmail, heldEmail, sentSms, failedSms, heldSms, duplicates, failed, skipped };
 }

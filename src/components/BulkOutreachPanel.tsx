@@ -22,9 +22,10 @@ interface Sel {
 type RowOutcome = { email?: { status: string; message: string }; sms?: { status: string; message: string }; skipped?: { channel: string; reason: string }[] };
 
 const outcomeTone = (status: string): string => {
-  if (status === "queued") return "text-positive";
+  if (status === "queued" || status === "sent") return "text-positive";
   if (status === "failed") return "text-critical";
-  return "text-attention"; // approved (held / gate off), etc.
+  if (status === "already_sent") return "text-meta";
+  return "text-attention"; // approved / held (gate off), etc.
 };
 
 export function BulkOutreachPanel({ cohort, showMoney }: { cohort: BulkOutreachCohort; showMoney: boolean }): React.JSX.Element {
@@ -121,7 +122,7 @@ export function BulkOutreachPanel({ cohort, showMoney }: { cohort: BulkOutreachC
       <header className="mb-4">
         <h1 className="text-[22px] font-medium tracking-tight">Bulk Review &amp; Fire — Quote Sent</h1>
         <p className="text-[12.5px] text-meta">
-          Every lead in the Quote Sent column with a refreshed next-step draft. Select rows and channels, then approve. Approval queues each one through the governed outbox (email) or records it as a held decision (text); nothing sends without your click.
+          Every lead in the Quote Sent column with a refreshed next-step draft. Select rows and channels, then approve. On approval, emails queue through the governed outbox and texts send through the gated Quo sender; nothing goes out without your click, and every send respects the comms gates below.
         </p>
       </header>
 
@@ -151,12 +152,20 @@ export function BulkOutreachPanel({ cohort, showMoney }: { cohort: BulkOutreachC
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> EMAIL_SEND_ENABLED is off. Approved emails are recorded and held, not sent, until the gate is turned on.
         </p>
       )}
+      {!cohort.smsGateOn && (
+        <p className="mb-3 flex items-start gap-1.5 border border-border px-3 py-2 text-[12px] text-attention">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> SMS_SEND_ENABLED is off. Approved texts are recorded and held, not sent, until the gate is turned on.
+        </p>
+      )}
       {error && <p className="mb-3 border border-border px-3 py-2 text-[12px] text-critical">{error}</p>}
       {summary && (
-        <p className="mb-3 border border-border px-3 py-2 text-[12px] text-positive">
-          Queued {summary.queuedEmail} email{summary.queuedEmail === 1 ? "" : "s"} to the outbox, held {summary.heldSms} text{summary.heldSms === 1 ? "" : "s"} and {summary.heldEmail} gated email{summary.heldEmail === 1 ? "" : "s"}
-          {summary.duplicates ? `, ${summary.duplicates} already queued today` : ""}
-          {summary.failed ? `, ${summary.failed} failed` : ""}. Nothing is confirmed delivered until the office sync reports it landed.
+        <p className="mb-3 border border-border px-3 py-2 text-[12px] text-tertiary-text">
+          <span className="text-positive">Sent {summary.sentSms} text{summary.sentSms === 1 ? "" : "s"}</span> and queued {summary.queuedEmail} email{summary.queuedEmail === 1 ? "" : "s"} to the outbox
+          {summary.heldSms ? `, held ${summary.heldSms} text${summary.heldSms === 1 ? "" : "s"} (SMS gate off)` : ""}
+          {summary.heldEmail ? `, held ${summary.heldEmail} email${summary.heldEmail === 1 ? "" : "s"} (email gate off)` : ""}
+          {summary.duplicates ? `, ${summary.duplicates} already done today` : ""}
+          {summary.failedSms ? `, ${summary.failedSms} text${summary.failedSms === 1 ? "" : "s"} failed` : ""}
+          {summary.failed ? `, ${summary.failed} email enqueue${summary.failed === 1 ? "" : "s"} failed` : ""}. Texts are delivered live; queued emails confirm once the office sync reports they landed.
         </p>
       )}
 
