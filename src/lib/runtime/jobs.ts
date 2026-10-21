@@ -29,6 +29,8 @@ import { runWorkerPacketsTick } from "@/lib/scheduling/workerPackets";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { runScan } from "@/lib/risk/scan";
 import { runSalesAiJob, salesAiEnabled } from "@/lib/salesos/salesAiJob";
+import { syncActiveLeadTextThreads } from "@/lib/comms/openphoneSync";
+import { openphoneApiKey } from "@/lib/comms/openphone";
 import { runEsignCutoffSweep, esignCutoffEnabled } from "@/lib/salesos/esignCutoff";
 import { getRiskQueue } from "@/lib/risk/store";
 import { responderHealthNow, recordJobAlert, formatAge } from "@/lib/ai/responderHealth";
@@ -333,6 +335,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     run: async () => {
       const r = await runExceptionResolutionTick();
       return { ok: r.ok, detail: r.detail };
+    },
+  },
+  {
+    key: "openphone-message-sync",
+    label: "OpenPhone SMS sync (two-way text history)",
+    bucket: "server",
+    configured: () => !!openphoneApiKey(),
+    note: "Keeps the sales timeline's two-way SMS history complete via the OpenPhone API, independent of the webhook: BACKFILLS past texts a webhook could never recover and captures texts sent/received NATIVELY in Quo that the app never recorded. Syncs the active/open pipeline leads with a phone on file (reuses getPipelineLeads; unsigned leads first, capped per run so we don't hammer the API), one lead at a time. Every message upserts into comms_events keyed by its OpenPhone message id (provider_id UNIQUE), so it dedupes against the webhook, the app's own sender, and prior runs — running both paths never double-counts. FACTS ONLY: inserts exactly what the API returns, never a synthesized message. Key-gated (no-op without an OpenPhone API key), bounded, best-effort (one lead failing never aborts the rest), never throws into the tick.",
+    run: async () => {
+      const r = await syncActiveLeadTextThreads();
+      return { ok: true, detail: `${r.leads} lead${r.leads === 1 ? "" : "s"} synced, ${r.inserted} new message${r.inserted === 1 ? "" : "s"}` };
     },
   },
   {
