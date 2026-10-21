@@ -99,4 +99,57 @@ describe("POST /api/gs/projects — orphan prune", () => {
     expect(json.pruned).toBe(10);
     expect(activeCount()).toBe(100);
   });
+
+  it("scope defaults to 'full' when absent (back-compat: an absent scope still prunes)", async () => {
+    seedOrphans(10);
+    const res = await POST(req(pullBody(100))); // no scope field
+    const json = (await res.json()) as { pruned: number; scope: string };
+    expect(json.scope).toBe("full");
+    expect(json.pruned).toBe(10); // behaved exactly like the pre-two-tier full pull
+  });
+});
+
+// The CRITICAL safety invariant: a scope:"active" pull carries no archived rows, so it must NEVER be
+// allowed to prune — otherwise every archived project would look like an orphan and get mass-archived.
+describe("POST /api/gs/projects — active lane NEVER prunes", () => {
+  // Seed N ARCHIVED rows directly (what the DB looks like after many full pulls have accumulated history).
+  function seedArchived(n: number): void {
+    const rows: BookingRecord[] = [];
+    for (let i = 1; i <= n; i++) rows.push({ bookingId: `ARCHIVED-${i}`, eventName: `Old ${i}`, statusLabel: "Won", archived: true });
+    saveBookings(rows);
+  }
+  const archivedCount = (): number =>
+    (getDb().prepare("SELECT COUNT(*) AS c FROM bookings WHERE COALESCE(archived,0) = 1").get() as { c: number }).c;
+
+  it("a small active pull NEVER archives anything, even with thousands of archived rows in the DB", async () => {
+    seedArchived(3000); // a realistic full-history DB
+    seedOrphans(5); // 5 active rows that are NOT in the active pull (would be orphans on a full pull)
+    const res = await POST(req(pullBody(10, { scope: "active" }))); // tiny active-only set
+    const json = (await res.json()) as { ok: boolean; scope: string; pruned: number; partial: boolean };
+    expect(res.status).toBe(200);
+    expect(json.scope).toBe("active");
+    expect(json.pruned).toBe(0); // nothing pruned
+    expect(json.partial).toBe(false);
+    expect(archivedCount()).toBe(3000); // every archived row is untouched
+    expect(activeCount()).toBe(15); // 5 prior orphans + 10 pulled, all still active (none archived)
+  });
+
+  it("an active pull does NOT consume an armed force-prune flag", async () => {
+    armBookingsForcePrune();
+    seedArchived(3000);
+    const res = await POST(req(pullBody(10, { scope: "active" })));
+    await res.json();
+    expect(isBookingsForcePruneArmed()).toBe(true); // the one-shot survives for the next FULL pull
+  });
+
+  it("an active pull still records freshness (recordPull) so the ledger stays green", async () => {
+    const res = await POST(req(pullBody(10, { scope: "active" })));
+    const json = (await res.json()) as { ok: boolean; saved: number };
+    expect(json.ok).toBe(true);
+    expect(json.saved).toBe(10);
+    const pull = getDb().prepare("SELECT value FROM settings WHERE key = 'pull_state'").get() as { value: string } | undefined;
+    expect(pull).toBeTruthy(); // recordPull wrote bookings freshness
+    const state = JSON.parse(pull!.value) as { sources?: Record<string, { count: number }> };
+    expect(state.sources?.bookings?.count).toBe(10);
+  });
 });

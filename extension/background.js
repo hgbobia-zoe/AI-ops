@@ -1,11 +1,14 @@
 // Zoe Auto-Pull — service worker. As of v1.3.0 this worker OWNS scheduling and tab lifecycle so the
 // operator never has to keep a Goodshuffle tab open:
 //
-//   • chrome.alarms (NOT setInterval — the SW sleeps) fires every `intervalMin`. On each alarm (and on
-//     install/startup) it ensures a signed-in pro.goodshuffle.com tab EXISTS (a single pinned,
-//     background tab it opens once and keeps alive), then nudges the DECLARED content script
-//     (content.js + pull-injected.js) in that tab to run the read-pull. The content script still does
-//     the actual same-origin fetches with the operator's GS cookies — that robust model is unchanged.
+//   • chrome.alarms (NOT setInterval — the SW sleeps) drive a TWO-TIER read-pull: ACTIVE_PULL_ALARM every
+//     ACTIVE_PULL_MIN (the FAST lane: routes + active bookings + notes + outbox drain) and FULL_PULL_ALARM
+//     every FULL_PULL_MIN (the SLOW lane: the full archive-history walk + orphan-prune for Finance). On
+//     each alarm (and on install/startup) it ensures a signed-in pro.goodshuffle.com tab EXISTS (a single
+//     pinned, background tab it opens once and keeps alive), records the requested tier in
+//     storage.pullTier, then nudges the DECLARED content script (content.js + pull-injected.js) in that
+//     tab to run that tier's read-pull. The content script still does the actual same-origin fetches with
+//     the operator's GS cookies — that robust model is unchanged.
 //   • Handshake: logging into Zoe Ops posts {type:"zoe-sync-now"} via externally_connectable; we ensure
 //     the tab + pull immediately, and if GS is signed out we open a login tab (active) so the user can
 //     sign in.
@@ -17,11 +20,11 @@
 //   • create_project is ALSO drained ON DEMAND so a guided-intake submit doesn't wait up to `intervalMin`
 //     for the next read-pull: (1) a dedicated short CREATE_DRAIN_ALARM (every CREATE_DRAIN_MIN) drains ONLY
 //     creates — a cheap outbox GET that opens a tab only when one is pending — decoupling create latency
-//     from the 10-min read cadence; and (2) the Zoe app pokes us with {type:"zoe-create-now"} right after a
+//     from the read-pull cadence; and (2) the Zoe app pokes us with {type:"zoe-create-now"} right after a
 //     submit (externally_connectable) so the common office-machine case fires within ~1s. Both reuse the
 //     SAME drainCreates + create.js claim flow (no parallel drain); the one-at-a-time + watchdog guards hold.
 //   • The GENERAL outbox (photos / notes / delivery-fee / email / tasks / team adds) is drained INSIDE the
-//     read-pull by pull-injected.js's drainOutbox(), so it normally shares the 10-min read cadence. It is
+//     read-pull by pull-injected.js's drainOutbox(), so it normally shares the FAST-lane read cadence. It is
 //     ALSO drained ON DEMAND by the SAME path (no parallel drain function here): (1) a dedicated short
 //     OUTBOX_DRAIN_ALARM (every OUTBOX_DRAIN_MIN) nudges a pull ONLY when the outbox has a pending op this
 //     drainer can action — a cheap outbox GET that no-ops when idle; and (2) the Zoe app pokes us with
@@ -32,7 +35,15 @@
 // (config, lastRun, pendingCreate) lives in chrome.storage.local; alarms, not timers, drive work.
 
 const DEFAULTS = { apiBase: "https://zoe-dispatch.fly.dev", intervalMin: 10, enabled: true, createDrainEnabled: true };
-const PULL_ALARM = "zoe-pull";
+// TWO-TIER read-pull cadence (named here so they're easy to tune). The FAST lane refreshes routes +
+// ACTIVE projects + notes + outbox every ACTIVE_PULL_MIN; the SLOW lane walks the FULL archive history
+// (and runs the orphan-prune) every FULL_PULL_MIN. The full lane is a superset of the active one, so a
+// coincident tick needs no special handling — each alarm just asks for its own tier. The legacy
+// `intervalMin` config no longer sets the cadence (it only feeds content.js's cross-tab dedup window).
+const ACTIVE_PULL_ALARM = "zoe-pull-active";
+const ACTIVE_PULL_MIN = 3; // FAST lane: routes + active bookings + notes + outbox
+const FULL_PULL_ALARM = "zoe-pull-full";
+const FULL_PULL_MIN = 60; // SLOW lane: full archive history + orphan-prune (Finance / intelligence)
 const CREATE_DRAIN_ALARM = "zoe-create-drain"; // drains ONLY creates, on a short fixed period (on-demand-ish)
 const CREATE_DRAIN_MIN = 1; // keep pending-create latency ≤ ~1 min regardless of the read-pull interval
 const OUTBOX_DRAIN_ALARM = "zoe-outbox-drain"; // nudges the general-outbox drain when (and only when) ops are pending
@@ -89,24 +100,32 @@ async function seedDefaults() {
 }
 
 // ── Alarm scheduling (replaces the old content-script setInterval) ────────────────
+// Two independent read-pull alarms: the FAST lane (active tier) every ACTIVE_PULL_MIN and the SLOW lane
+// (full tier) every FULL_PULL_MIN. chrome.alarms enforces a 0.5-min floor for unpacked; both cadences
+// clear that comfortably. Each alarm fires its own tier; the full lane is a superset of the active one,
+// so no coordination is needed when they land on the same minute.
 async function ensureAlarm() {
-  const { intervalMin } = await cfg();
-  // chrome.alarms enforces a 0.5-min floor for unpacked; clamp to >= 1.
-  const period = Math.max(1, intervalMin);
-  const existing = await chrome.alarms.get(PULL_ALARM).catch(() => null);
-  if (!existing || existing.periodInMinutes !== period) {
-    await chrome.alarms.create(PULL_ALARM, { periodInMinutes: period, delayInMinutes: 0.1 });
+  const active = await chrome.alarms.get(ACTIVE_PULL_ALARM).catch(() => null);
+  if (!active || active.periodInMinutes !== ACTIVE_PULL_MIN) {
+    await chrome.alarms.create(ACTIVE_PULL_ALARM, { periodInMinutes: ACTIVE_PULL_MIN, delayInMinutes: 0.1 });
   }
+  const full = await chrome.alarms.get(FULL_PULL_ALARM).catch(() => null);
+  if (!full || full.periodInMinutes !== FULL_PULL_MIN) {
+    // Small initial delay so the first full history sweep seeds the archive shortly after startup.
+    await chrome.alarms.create(FULL_PULL_ALARM, { periodInMinutes: FULL_PULL_MIN, delayInMinutes: 0.5 });
+  }
+  // Retire the old single-tier alarm if it lingers from a prior version.
+  await chrome.alarms.clear("zoe-pull").catch(() => {});
   await ensureCreateDrainAlarm();
   await ensureOutboxDrainAlarm();
 }
 
 // Dedicated short alarm that nudges the GENERAL-outbox drain (pull-injected.js's drainOutbox, via a normal
 // pull), so a queued delivery-fee / note / photo / email / task write is picked up within ~OUTBOX_DRAIN_MIN
-// minutes instead of waiting for the next (default 10-min) read-pull. drainOutboxNow is cheap when idle (one
+// minutes instead of waiting for the next FAST-lane read-pull. drainOutboxNow is cheap when idle (one
 // outbox GET → nothing actionable pending → returns without nudging) and honors `enabled` itself, so this
-// alarm is a no-op when disabled or when the outbox is empty. Kept separate from PULL_ALARM so it never drags
-// the read-pull onto a faster cadence.
+// alarm is a no-op when disabled or when the outbox is empty. Kept separate from the read-pull alarms so it
+// never drags the read-pull onto a faster cadence.
 async function ensureOutboxDrainAlarm() {
   const existing = await chrome.alarms.get(OUTBOX_DRAIN_ALARM).catch(() => null);
   if (!existing || existing.periodInMinutes !== OUTBOX_DRAIN_MIN) {
@@ -115,10 +134,10 @@ async function ensureOutboxDrainAlarm() {
 }
 
 // Dedicated short alarm that drains ONLY pending creates, so a queued guided-intake create is picked up
-// within ~CREATE_DRAIN_MIN minutes instead of waiting for the next (default 10-min) read-pull. drainCreates
+// within ~CREATE_DRAIN_MIN minutes instead of waiting for the next FAST-lane read-pull. drainCreates
 // is cheap when idle (one outbox GET → nothing pending → returns) and honors createDrainEnabled itself, so
-// this alarm is a no-op when the feature is toggled off. Kept separate from PULL_ALARM so it never drags the
-// read-pull onto a faster cadence.
+// this alarm is a no-op when the feature is toggled off. Kept separate from the read-pull alarms so it never
+// drags the read-pull onto a faster cadence.
 async function ensureCreateDrainAlarm() {
   const existing = await chrome.alarms.get(CREATE_DRAIN_ALARM).catch(() => null);
   if (!existing || existing.periodInMinutes !== CREATE_DRAIN_MIN) {
@@ -244,17 +263,24 @@ async function startGustoSync(reason) {
   return { ok: true, tabId: tab.id };
 }
 
-/** Nudge the content script in existing GS tab(s) to run a pull now. The content script watches
- *  storage.pullNow and also accepts a direct message; storage is the reliable cross-tab trigger. The
- *  Instawork content script watches the SAME storage.pullNow, so this one nudge pulls both. */
-async function triggerPull() {
-  await chrome.storage.local.set({ pullNow: Date.now() });
+/** Nudge the content script in existing GS tab(s) to run a pull now, for the given tier ("active" |
+ *  "full"). The content script watches storage.pullNow and reads storage.pullTier to know which lane to
+ *  run; storage is the reliable cross-tab (and cross-SW-sleep) trigger. We set both in ONE write so the
+ *  single onChanged carries the committed tier. The Instawork content script watches the SAME
+ *  storage.pullNow, so this one nudge pulls it too (tier is Goodshuffle-only). */
+async function triggerPull(tier) {
+  const t = tier === "full" ? "full" : "active";
+  await chrome.storage.local.set({ pullTier: t, pullNow: Date.now() });
 }
 
-/** Full cycle used by the alarm, install/startup, the popup, and the handshake: make sure a GS tab
- *  exists, then either let a freshly-opened tab auto-run or nudge an existing one; then (opt-in) drain
- *  creates. */
-async function runPullCycle(reason) {
+/** Full cycle used by the alarms, install/startup, the popup, and the handshake: make sure a GS tab
+ *  exists, then either let a freshly-opened tab auto-run (it reads storage.pullTier) or nudge an existing
+ *  one for `tier`; then (opt-in) drain creates. `tier` is "active" (FAST lane) or "full" (SLOW lane). */
+async function runPullCycle(reason, tier) {
+  const t = tier === "full" ? "full" : "active";
+  // Record the tier up front so a GS tab this cycle freshly OPENS (whose content script auto-runs on
+  // load without a nudge) reads the correct lane from storage.pullTier.
+  await chrome.storage.local.set({ pullTier: t });
   const { enabled } = await cfg();
   if (!enabled) {
     badgeFor("off");
@@ -275,9 +301,10 @@ async function runPullCycle(reason) {
     badgeFor("no_tab");
     return { ok: false, reason: "no_tab" };
   }
-  // A newly created tab's content script auto-runs on load; an existing one needs a nudge. One
-  // storage.pullNow nudges ALL content scripts, so fire it if any tab was already open.
-  if (!justOpened || !iw.justOpened || !ign.justOpened) await triggerPull();
+  // A newly created tab's content script auto-runs on load (reading storage.pullTier, set above); an
+  // existing one needs a nudge. One storage.pullNow nudges ALL content scripts, so fire it (with the
+  // tier) if any tab was already open.
+  if (!justOpened || !iw.justOpened || !ign.justOpened) await triggerPull(t);
   // Best-effort, opt-in create drain (never blocks or breaks the read-pull).
   drainCreates(reason).catch(() => {});
   return { ok: true, tabId: tab.id, justOpened };
@@ -367,9 +394,10 @@ async function drainOutboxNow(reason) {
   if (!pending) return { ok: true, enabled: true, pending: 0, nudged: false };
 
   // Nudge the existing read-pull/drain in the signed-in GS tab. ensureGsTab opens one if needed; the content
-  // script's drainOutbox acks each op, so once applied the next tick finds nothing pending and no-ops.
+  // script's drainOutbox acks each op, so once applied the next tick finds nothing pending and no-ops. Use
+  // the FAST (active) lane — it's the cheapest pull and it carries the outbox drain.
   await ensureGsTab().catch(() => {});
-  await triggerPull();
+  await triggerPull("active");
   return { ok: true, enabled: true, pending, nudged: true };
 }
 
@@ -471,14 +499,17 @@ async function fetchLiveSubtotal(projectId) {
 async function boot() {
   await seedDefaults();
   await ensureAlarm();
-  await runPullCycle("startup");
+  // Seed everything on startup with one full history sweep (which also refreshes the active set).
+  await runPullCycle("startup", "full");
 }
 chrome.runtime.onInstalled.addListener(boot);
 chrome.runtime.onStartup.addListener(boot);
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === PULL_ALARM) {
-    runPullCycle("alarm").catch(() => {});
+  if (alarm.name === ACTIVE_PULL_ALARM) {
+    runPullCycle("active-alarm", "active").catch(() => {});
+  } else if (alarm.name === FULL_PULL_ALARM) {
+    runPullCycle("full-alarm", "full").catch(() => {});
   } else if (alarm.name === CREATE_DRAIN_ALARM) {
     drainCreates("create-alarm").catch(() => {});
   } else if (alarm.name === OUTBOX_DRAIN_ALARM) {
@@ -510,9 +541,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // From the popup → ensure a GS tab exists and pull now.
+  // From the popup → ensure a GS tab exists and pull now. A manual click wants everything, so run the
+  // full lane (a superset that also refreshes the active set).
   if (msg.type === "zoe-pull-now") {
-    runPullCycle("manual").then((r) => sendResponse(r || { ok: true }));
+    runPullCycle("manual", "full").then((r) => sendResponse(r || { ok: true }));
     return true;
   }
 
@@ -617,7 +649,8 @@ chrome.runtime.onMessageExternal.addListener((msg, _sender, sendResponse) => {
 
   if (msg.type === "zoe-sync-now") {
     (async () => {
-      const r = await runPullCycle("handshake");
+      // On login to Zoe Ops the user wants current data now, so run a full sweep (superset of active).
+      const r = await runPullCycle("handshake", "full");
       const ls = await lastRunStatus();
       // Only nudge a login when we have a RECENT, authoritative signed-out reading — never on unknown.
       if (ls.status === "not_logged_in" && ls.ageMs < 60 * 60 * 1000) await openLoginTab();

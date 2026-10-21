@@ -4,7 +4,18 @@
 // dollars. CORS-restricted to the Goodshuffle origin, same as /api/route/import.
 //
 // Body: { projects: [{ bookingId, eventName?, eventDate?(YYYY-MM-DD|null), statusLabel?, signed?,
-//   grandTotalCents?, contractTotalCents?, amountPaidCents?, amountDueCents?, clientName?, clientEmail? }] }
+//   grandTotalCents?, contractTotalCents?, amountPaidCents?, amountDueCents?, clientName?, clientEmail? }],
+//   scope?: "active" | "full", partial?: boolean }
+//
+// TWO-TIER PULL (scope):
+//   • "full" (DEFAULT when scope is absent — so the bookmarklet and any existing caller keep working):
+//     the archive-inclusive walk (~2.7k incl. archived/Lost). Runs the orphan-prune, the human-armed
+//     force-prune, and the sustained-failure probe exactly as before.
+//   • "active": the fast-lane refresh of ONLY the ~88 active, non-archived projects. Upserts + keeps
+//     freshness green, but must NEVER prune — an active-only set carries no archived rows, so every
+//     archived project would look like an orphan and get wrongly archived. The prune / force-prune /
+//     failure-probe are STRUCTURALLY unreachable on this path (early return below). `partial` is a
+//     full-lane concept and is ignored here.
 
 import { NextResponse } from "next/server";
 import { saveBookings, enqueueWarehouseTeamAdds, archiveBookingsNotIn, type BookingRecord } from "@/lib/db/repo";
@@ -55,12 +66,14 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (publishToken && req.headers.get("x-publish-token") !== publishToken) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
   }
-  let body: { projects?: InProject[]; partial?: boolean; totalReported?: number };
+  let body: { projects?: InProject[]; partial?: boolean; totalReported?: number; scope?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400, headers: CORS });
   }
+  // scope defaults to "full" when absent, so the bookmarklet / any existing caller is unchanged.
+  const scope: "active" | "full" = body.scope === "active" ? "active" : "full";
   const projects = Array.isArray(body.projects) ? body.projects : [];
   if (projects.length === 0) return NextResponse.json({ error: "projects[] required" }, { status: 400, headers: CORS });
 
@@ -90,6 +103,22 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
   if (records.length > 0) saveBookings(records);
 
+  // ── FAST LANE (scope:"active") ────────────────────────────────────────────────────────────────
+  // Upsert the active set and keep freshness green between hourly full pulls — then STOP. There is no
+  // orphan concept on an active-only set (it never carries archived rows), so the prune, the one-shot
+  // force-prune, and the sustained-failure probe are all skipped here, structurally. This early return
+  // is the single point that enforces "only the FULL pull prunes": an active pull cannot reach any of
+  // that code below, so it can never archive a row or consume an armed force-prune flag.
+  if (scope === "active") {
+    logImport("bookings", true, { rowsIn: projects.length, rowsWritten: records.length, detail: "active refresh" });
+    if (records.length > 0) recordPull("bookings", records.length);
+    // Warehouse-team adds are idempotent (add-once) and signed active projects appear in this set, so it
+    // is safe + useful on the fast lane; it never prunes or deletes.
+    const wdQueued = records.length > 0 ? enqueueWarehouseTeamAdds() : 0;
+    return NextResponse.json({ ok: true, saved: records.length, scope, partial: false, wdQueued, pruned: 0 }, { headers: CORS });
+  }
+
+  // ── SLOW LANE (scope:"full", or absent) ─────────────────────────────────────────────────────────
   // A partial pull (the bookmarklet hit a pagination error) must NOT be treated as fresh/complete —
   // otherwise Sales/Finance/Customer run on a truncated pipeline that looks whole.
   const partial = Boolean(body.partial) || (typeof body.totalReported === "number" && body.totalReported > records.length);
@@ -149,5 +178,5 @@ export async function POST(req: Request): Promise<NextResponse> {
   // so the warehouse tablet/workstation sees signed work. The office extension drains these ops.
   const wdQueued = records.length > 0 ? enqueueWarehouseTeamAdds() : 0;
 
-  return NextResponse.json({ ok: true, saved: records.length, partial, wdQueued, pruned }, { headers: CORS });
+  return NextResponse.json({ ok: true, saved: records.length, scope, partial, wdQueued, pruned }, { headers: CORS });
 }

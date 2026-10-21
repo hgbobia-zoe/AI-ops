@@ -14,16 +14,20 @@ import { PROVISION_ENDPOINTS } from "@/lib/people/provisioningEndpoints";
  *  `publishToken` (when the KIOSK_PUBLISH_TOKEN secret is set) is sent as x-publish-token so the
  *  now-gated ingest endpoints accept the write — only logged-in users can see /admin/pull, so the
  *  token isn't exposed publicly. */
-export function buildOfficePullScript(apiBase: string, publishToken?: string, autoMs = 0, skipCreate = false): string {
+export function buildOfficePullScript(apiBase: string, publishToken?: string, autoMs = 0, skipCreate = false, fullAutoMs = 0): string {
   const API = JSON.stringify(apiBase.replace(/\/+$/, ""));
   const PUB = JSON.stringify(publishToken ?? "");
   // The replay-provisioning endpoint registry (capture-pending constants). Serialized in so the drainer
   // gates on the SAME source of truth the People adapters do — one capture flips both.
   const PROV = JSON.stringify(PROVISION_ENDPOINTS);
+  // TWO-TIER auto-pull. AUTO (>0) is the FAST lane cadence (routes + active projects + notes + outbox);
+  // FULLAUTO (>0) is the SLOW lane cadence (full archive history + orphan-prune). When FULLAUTO is 0 but
+  // AUTO is on, the slow lane defaults to once an hour so the history/prune still runs unattended.
   const AUTO = Math.max(0, Math.floor(autoMs)); // >0 → self-repeating auto-pull (no more manual clicks)
+  const FULLAUTO = AUTO ? Math.max(0, Math.floor(fullAutoMs)) || 60 * 60 * 1000 : 0;
   const SKIP = skipCreate ? "true" : "false"; // true → leave create_project ops for a native (Playwright) drainer
   return `(function(){
-    var PUB=${PUB}; var AUTO=${AUTO}; var SKIP_CREATE=${SKIP}; var PROVISION_EP=${PROV};
+    var PUB=${PUB}; var AUTO=${AUTO}; var FULLAUTO=${FULLAUTO}; var SKIP_CREATE=${SKIP}; var PROVISION_EP=${PROV};
     function POSTH(){ return PUB ? {"content-type":"application/json","x-publish-token":PUB} : {"content-type":"application/json"}; }
   function banner(msg,color){ try{ var id="__zoePull"; var e=document.getElementById(id); if(!e){e=document.createElement("div");e.id=id;e.style.cssText="position:fixed;z-index:2147483647;top:14px;right:14px;padding:11px 15px;border-radius:8px;font:600 13px system-ui,sans-serif;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:360px";document.body.appendChild(e);} e.style.background=color; e.textContent=msg; }catch(x){} }
   function done(){ setTimeout(function(){var e=document.getElementById("__zoePull");if(e)e.remove();},7000); }
@@ -33,16 +37,23 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
     var H={headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"};
 
     // ---- Bookings feed (projects) → Sales / Finance / Customer ----
-    function pullProjects(){
+    // TWO-TIER: mode="active" pulls ONLY the ~88 active, non-archived projects (searchProjects WITHOUT
+    // allProjects) in a single page — the FAST lane that also carries routes/notes/outbox. mode="full"
+    // walks the archive-inclusive history (allProjects=true, paginated) — the SLOW lane that feeds
+    // Finance/intelligence and is the ONLY lane whose POST (scope:"full") runs the orphan-prune.
+    function pullProjects(mode){
+      var FULL=(mode!=="active"); // default to full for any unexpected value (back-compat / safety)
       var all={}, pErr=false;
       // searchProjects paginates ?page=N (0-indexed). allProjects=true is the archive-inclusive flag
       // the new GS UI uses — it returns the FULL history (won + archived + lost, all years), not just
-      // the ~90 active projects. Walk pages until one returns nothing (end), big pageSize to keep it
-      // to a handful of requests. A FETCH ERROR (not an empty page) marks the pull partial. We do NOT
-      // send totalReported: the count query over-reports vs the paginated set, which would falsely
-      // flag every complete pull as partial.
-      function fetchPage(pg){ return fetch("/app/project/searchProjects?page="+pg+"&pageSize=500&allProjects=true&sortColumn=logistics_start_date&sortDirection=desc&useV2DateHandling=true",H).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(b){ var ps=b&&b.projectSearch; if(!ps)return {count:0}; var res=ps.results||[]; res.forEach(function(p){ if(p&&p.id!=null&&!all[p.id])all[p.id]=p; }); return {count:res.length}; }).catch(function(){ pErr=true; return {count:0}; }); }
-      function loop(pg){ return fetchPage(pg).then(function(r){ if(!pErr && r.count>0 && pg<60) return loop(pg+1); return null; }); }
+      // the ~88 active projects. The FULL lane walks pages until one returns nothing (end), big pageSize
+      // to keep it to a handful of requests; the ACTIVE lane drops allProjects and reads a single page
+      // (~88 active fit well under pageSize=500). A FETCH ERROR (not an empty page) marks the pull
+      // partial (full lane only). We do NOT send totalReported: the count query over-reports vs the
+      // paginated set, which would falsely flag every complete pull as partial.
+      function url(pg){ return "/app/project/searchProjects?page="+pg+"&pageSize=500"+(FULL?"&allProjects=true":"")+"&sortColumn=logistics_start_date&sortDirection=desc&useV2DateHandling=true"; }
+      function fetchPage(pg){ return fetch(url(pg),H).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(b){ var ps=b&&b.projectSearch; if(!ps)return {count:0}; var res=ps.results||[]; res.forEach(function(p){ if(p&&p.id!=null&&!all[p.id])all[p.id]=p; }); return {count:res.length}; }).catch(function(){ pErr=true; return {count:0}; }); }
+      function loop(pg){ return fetchPage(pg).then(function(r){ if(FULL && !pErr && r.count>0 && pg<60) return loop(pg+1); return null; }); }
       return loop(0).then(function(){
         function d2(s){ try{ if(!s) return null; var dt=new Date(s); if(isNaN(dt)) return null; return new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,10); }catch(e){ return null; } }
         var recs=Object.keys(all).map(function(id){ var p=all[id];
@@ -103,7 +114,13 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             return Promise.all([pN,pE]).then(function(rs){ return {updated:(rs[0]&&rs[0].updated)||0, emails:(rs[1]&&rs[1].written)||0}; });
           });
         }
-        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr})}).then(function(r){return r.json();}).then(function(j){ return pullNotes().then(function(nj){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:(nj&&nj.updated)||0 }; }); }).catch(function(){ return { saved:0, partial:true }; });
+        // FULL lane: archive-inclusive POST (scope:"full" — the ONLY scope that prunes) carrying the
+        // partial flag. No notes/emails here (those ride the fast ACTIVE lane). ACTIVE lane:
+        // scope:"active" (never prunes) + the open-lead notes/emails capture.
+        if(FULL){
+          return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr,scope:"full"})}).then(function(r){return r.json();}).then(function(j){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:0 }; }).catch(function(){ return { saved:0, partial:true }; });
+        }
+        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,scope:"active"})}).then(function(r){return r.json();}).then(function(j){ return pullNotes().then(function(nj){ return { saved:(j&&j.saved)||recs.length, partial:false, notes:(nj&&nj.updated)||0 }; }); }).catch(function(){ return { saved:0, partial:false }; });
       });
     }
 
@@ -403,27 +420,46 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
     }
 
     // Finish a cycle: one-shot fades the banner; auto keeps a persistent status with the last-run time.
-    function fin(msg,color){ try{ window.__zoePullDone={at:Date.now(),msg:msg}; }catch(e){} if(AUTO){ var t=new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}); banner(msg+" · auto every "+Math.round(AUTO/60000)+"m (last "+t+")",color); } else { banner(msg,color); done(); } }
-    function runOnce(){
+    function fin(msg,color){ try{ window.__zoePullDone={at:Date.now(),msg:msg}; }catch(e){} if(AUTO){ var t=new Date().toLocaleTimeString([],{hour:"numeric",minute:"2-digit"}); banner(msg+" · fast every "+Math.round(AUTO/60000)+"m · history every "+Math.round(FULLAUTO/60000)+"m (last "+t+")",color); } else { banner(msg,color); done(); } }
+    function signedOut(){ var pth=location.pathname.toLowerCase(); return pth.indexOf("auth")>=0||pth.indexOf("login")>=0||pth.indexOf("signin")>=0; }
+    // FAST lane: routes + ACTIVE projects (scope:"active", never prunes) + open-lead notes + outbox drain.
+    function runActive(){
       try{
-        var pth=location.pathname.toLowerCase();
-        if(pth.indexOf("auth")>=0||pth.indexOf("login")>=0||pth.indexOf("signin")>=0){ banner("Signed out of Goodshuffle — sign in to resume"+(AUTO?" (auto-pull paused).":", then click again."),"#b45309"); return; }
+        if(signedOut()){ banner("Signed out of Goodshuffle — sign in to resume"+(AUTO?" (auto-pull paused).":", then click again."),"#b45309"); return; }
         banner(AUTO?"Auto-pull: syncing…":"Pulling Zoe data…","#334155");
-        Promise.all([pullRoutes(), pullProjects(), drainOutbox()]).then(function(res){
+        Promise.all([pullRoutes(), pullProjects("active"), drainOutbox()]).then(function(res){
           var r=res[0]||{stops:0,failed:0}, bk=res[1]||{saved:0,partial:false}, ph=res[2]||{pushed:0,failed:0};
           var unm=(r.unmatched&&r.unmatched.length)?" · ⚠ unrecognized truck(s): "+r.unmatched.join(", "):"";
           var photoNote=(ph.pushed?" · "+ph.pushed+" photo"+(ph.pushed===1?"":"s")+"→GS":"")+(ph.fees?" · "+ph.fees+" delivery fee"+(ph.fees===1?"":"s")+"→GS":"");
           var photoErr=ph.failed?" · ⚠ "+ph.failed+" GS push(es) failed":"";
           if(r.failed) fin("⚠️ Bookings synced ("+bk.saved+"), but routes failed to save."+unm,"#b91c1c");
-          else if(bk.partial) fin("⚠️ Routes synced ("+r.stops+"), but bookings INCOMPLETE ("+bk.saved+" saved) — will retry."+unm,"#b45309");
-          else if(unm||photoErr) fin("✅ Synced "+r.stops+" stops"+(r.days?" ("+r.days+" day"+(r.days===1?"":"s")+")":"")+" + "+bk.saved+" bookings"+photoNote+unm+photoErr,"#b45309");
-          else fin("✅ Synced "+r.stops+" route stops"+(r.days?" across "+r.days+" day"+(r.days===1?"":"s"):"")+" + "+bk.saved+" bookings"+photoNote+" → Zoe Ops","#15803d");
+          else if(unm||photoErr) fin("✅ Synced "+r.stops+" stops"+(r.days?" ("+r.days+" day"+(r.days===1?"":"s")+")":"")+" + "+bk.saved+" active bookings"+photoNote+unm+photoErr,"#b45309");
+          else fin("✅ Synced "+r.stops+" route stops"+(r.days?" across "+r.days+" day"+(r.days===1?"":"s"):"")+" + "+bk.saved+" active bookings"+photoNote+" → Zoe Ops","#15803d");
         }).catch(function(e){ fin("⚠️ Pull failed: "+String(e).slice(0,90),"#b91c1c"); });
       }catch(e){ banner("⚠️ "+String(e).slice(0,110),"#b91c1c"); }
     }
-    // Auto mode: install a single self-repeating timer (re-arming replaces any prior one), then run now.
-    if(AUTO){ if(window.__zoeAutoTimer){clearInterval(window.__zoeAutoTimer);} window.__zoeAutoTimer=setInterval(runOnce,AUTO); }
-    runOnce();
+    // SLOW lane: full archive history (scope:"full" — the ONLY lane that prunes orphans). Feeds Finance +
+    // intelligence. Quiet banner so it doesn't stomp the fast lane's richer status.
+    function runFull(){
+      try{
+        if(signedOut()) return; // the fast lane already surfaces the signed-out banner
+        return pullProjects("full").then(function(bk){
+          bk=bk||{saved:0,partial:false};
+          if(bk.partial) banner("⚠️ History pull INCOMPLETE ("+bk.saved+" saved) — will retry.","#b45309");
+          else if(!AUTO) banner("✅ History synced ("+bk.saved+" bookings) → Zoe Ops","#15803d");
+        }).catch(function(){});
+      }catch(e){}
+    }
+    // Auto mode: two self-repeating timers (re-arming replaces any prior ones) — fast lane on AUTO, slow
+    // lane on FULLAUTO — then run both once now. Manual click: run the fast lane, then the history walk
+    // once, so a single click still refreshes everything (incl. the prune).
+    if(AUTO){
+      if(window.__zoeAutoTimer){clearInterval(window.__zoeAutoTimer);} window.__zoeAutoTimer=setInterval(runActive,AUTO);
+      if(window.__zoeFullTimer){clearInterval(window.__zoeFullTimer);} window.__zoeFullTimer=setInterval(runFull,FULLAUTO);
+      runActive(); runFull();
+    } else {
+      runActive(); runFull();
+    }
   }catch(e){ banner("⚠️ "+String(e).slice(0,110),"#b91c1c"); }
 })();`;
 }
