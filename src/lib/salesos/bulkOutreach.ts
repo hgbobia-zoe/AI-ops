@@ -11,12 +11,13 @@
 // decideApproval never re-executes an already-decided request).
 
 import { salesLeadCards } from "./board";
+import type { LeadCard, BoardStatus } from "./boardTypes";
 import { getLead } from "./service";
 import { draftLeadOutreach } from "./outreachService";
 import { stripSignOff, humanize } from "./outreach";
 import { STAGE_LABEL } from "./calc";
 import { todayInOpsTz } from "@/lib/dates";
-import { leadTouchSummary } from "./timeline";
+import { leadTouchContext, type LeadTouchpoint } from "./timeline";
 import { createApproval, decideApproval, type ApprovalActionType, type ApprovalCard } from "@/lib/aiorg/approvals";
 import { sendLeadSms } from "./smsSend";
 
@@ -27,6 +28,29 @@ export const BULK_EMAIL_SUBJECT = "Following up on your event";
  *  contacted"), so the bulk pass never immediately chases someone just reached. The per-day idempotency
  *  key is the hard stop; this is the softer default-off nudge. */
 export const RECENTLY_CONTACTED_HOURS = 24;
+
+// The cockpit works EVERY open lead with a quote out — not just the "recent" slice. Goodshuffle has one
+// "Quote Sent" stage; our board auto-splits it into quote_sent (recent), follow_up (dormant >= 4 days) and
+// action_needed (the client replied). All three are open quotes awaiting movement, so all three belong in
+// the bulk pass; `new` (no quote yet) and `signed` do not. (lost/cancelled never reach salesLeadCards.)
+const OPEN_QUOTE_STATUSES = new Set<BoardStatus>(["quote_sent", "follow_up", "action_needed"]);
+
+// A quote is actually "out" when we have a quote-sent date OR the Goodshuffle status label says so — the
+// SAME signal `autoStatus` keys its `sent` test off. This guards the one case where a board status in the
+// set above can exist WITHOUT a quote: action_needed (a brand-new inbound reply before any quote). Those
+// stay in the "New" cohort, not here.
+const QUOTE_OUT_LABEL = /sent|proposal|quote|contract|review/i;
+function hasQuoteOut(c: LeadCard): boolean {
+  return !!c.quoteSentDate || QUOTE_OUT_LABEL.test(c.statusLabel);
+}
+
+/** The at-a-glance sub-status chip label for an open-quote row — the board nuance Goodshuffle flattens. */
+export const SUBSTATUS_LABEL: Record<"quote_sent" | "follow_up" | "action_needed", string> = {
+  quote_sent: "Recent",
+  follow_up: "Needs follow-up",
+  action_needed: "Replied",
+};
+export type OpenQuoteSubStatus = keyof typeof SUBSTATUS_LABEL;
 
 function daysBetweenYmd(fromYmd: string, toYmd: string): number {
   const a = Date.parse(`${fromYmd}T00:00:00Z`);
@@ -64,9 +88,14 @@ export interface BulkOutreachRow {
   eventDate: string | null;
   value: number | null;
   stageLabel: string;
+  subStatus: OpenQuoteSubStatus; // which open-quote bucket this lead is in (board nuance)
+  subStatusLabel: string; //        the chip label: "Recent" / "Needs follow-up" / "Replied"
+  replied: boolean; //              action_needed — the client replied; needs a tailored response, default off
   quoteSentDate: string | null;
   daysSinceQuote: number | null;
   lastTouch: BulkLastTouch | null;
+  touchpoints: LeadTouchpoint[]; //    bounded, chronological per-lead touch strip (oldest → newest)
+  touchpointsEarlier: number; //       real touches older than the bounded strip (for a "+K earlier" chip)
   smsDraft: string | null; // the refreshed next-step text (null when drafting found no sensible step)
   emailSubject: string;
   emailDraft: string | null; // same copy, sign-off stripped (Goodshuffle appends the signature)
@@ -88,9 +117,12 @@ export interface BulkOutreachCohort {
   smsGateOn: boolean; //   SMS_SEND_ENABLED — the live Sales-panel SMS send gate
 }
 
-function rowNote(opts: { draftFailed: boolean; smsAvailable: boolean; emailAvailable: boolean; recentlyContacted: boolean }): string | null {
+function rowNote(opts: { draftFailed: boolean; smsAvailable: boolean; emailAvailable: boolean; recentlyContacted: boolean; replied: boolean }): string | null {
   if (opts.draftFailed) return "No sensible next step from the history — excluded by default.";
   if (!opts.smsAvailable && !opts.emailAvailable) return "No phone or email on file — cannot reach this client.";
+  // Safety first: a client who just replied needs a tailored response, not a generic follow-up. The draft
+  // is context-aware (it reads the reply), but the owner must opt in deliberately — so default off and say why.
+  if (opts.replied) return "Client replied — review the tailored draft carefully; unchecked by default.";
   if (opts.recentlyContacted) return `Contacted within ${RECENTLY_CONTACTED_HOURS}h — unchecked by default.`;
   if (!opts.smsAvailable) return "No phone on file — SMS not available for this row.";
   if (!opts.emailAvailable) return "No email on file — email not available for this row.";
@@ -102,7 +134,9 @@ function rowNote(opts: { draftFailed: boolean; smsAvailable: boolean; emailAvail
  *  the draft opening, exactly as the single lead panel does. */
 export async function buildBulkOutreachCohort(repFirstName?: string | null): Promise<BulkOutreachCohort> {
   const today = todayInOpsTz();
-  const cohort = salesLeadCards().filter((c) => c.status === "quote_sent");
+  // EVERY open lead with a quote out (quote_sent + follow_up + action_needed), not just the recent slice —
+  // the dormant and replied quotes are exactly the ones that most need a nudge. See OPEN_QUOTE_STATUSES.
+  const cohort = salesLeadCards().filter((c) => OPEN_QUOTE_STATUSES.has(c.status as BoardStatus) && hasQuoteOut(c));
 
   const rows: BulkOutreachRow[] = [];
   for (const card of cohort) {
@@ -115,14 +149,18 @@ export async function buildBulkOutreachCohort(repFirstName?: string | null): Pro
     const body = draft?.draft.sms?.trim() || "";
     const draftFailed = body.length === 0;
 
-    // Last touch + recently-contacted both derive from the FULL merged timeline (comms + calls + emails +
-    // the Goodshuffle note log + the quote-send), NOT just the comms_events rows — so a quoted/worked lead
-    // never shows "none logged", and the double-contact guard sees the quote-send / rep touches too.
-    const touch = leadTouchSummary(card.id);
+    // Last touch + recently-contacted + the touch-point strip all derive from the FULL merged timeline
+    // (comms + calls + emails + the Goodshuffle note log + the quote-send), NOT just the comms_events rows —
+    // so a quoted/worked lead never shows "none logged", the double-contact guard sees the quote-send / rep
+    // touches, and the under-row viz shows the real conversation. ONE buildLeadTimeline pass per lead.
+    const touch = leadTouchContext(card.id);
     const recentlyContacted = (() => {
       const h = hoursSince(touch.lastOutboundAt);
       return h != null && h < RECENTLY_CONTACTED_HOURS;
     })();
+
+    const subStatus = card.status as OpenQuoteSubStatus; // guaranteed in-set by the cohort filter above
+    const replied = subStatus === "action_needed"; //        the client replied — safety default-off
 
     const lastTouch: BulkLastTouch | null = touch.lastTouch
       ? {
@@ -134,8 +172,10 @@ export async function buildBulkOutreachCohort(repFirstName?: string | null): Pro
         }
       : null;
 
-    const note = rowNote({ draftFailed, smsAvailable, emailAvailable, recentlyContacted });
-    const includeOk = !draftFailed && !recentlyContacted;
+    const note = rowNote({ draftFailed, smsAvailable, emailAvailable, recentlyContacted, replied });
+    // A replied ("Action Needed") row defaults OFF for safety, exactly like a recently-contacted one — the
+    // owner opts in after reading the tailored draft. Other guardrails (no-phone, recently-contacted) stand.
+    const includeOk = !draftFailed && !recentlyContacted && !replied;
 
     rows.push({
       leadId: card.id,
@@ -144,9 +184,14 @@ export async function buildBulkOutreachCohort(repFirstName?: string | null): Pro
       eventDate: card.eventDate,
       value: card.value,
       stageLabel: lead ? STAGE_LABEL[lead.stage] : card.statusLabel,
+      subStatus,
+      subStatusLabel: SUBSTATUS_LABEL[subStatus],
+      replied,
       quoteSentDate: card.quoteSentDate,
       daysSinceQuote: card.quoteSentDate ? daysBetweenYmd(card.quoteSentDate.slice(0, 10), today) : null,
       lastTouch,
+      touchpoints: touch.touchpoints,
+      touchpointsEarlier: touch.touchpointsEarlier,
       smsDraft: draftFailed ? null : humanize(body),
       emailSubject: BULK_EMAIL_SUBJECT,
       emailDraft: draftFailed ? null : stripSignOff(humanize(body)),

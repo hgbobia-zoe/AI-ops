@@ -158,6 +158,67 @@ describe("buildBulkOutreachCohort — last touch reflects the real timeline (not
   });
 });
 
+// The cockpit works the WHOLE open-quote cohort — Goodshuffle's single "Quote Sent" stage, which our
+// board auto-splits into quote_sent (recent) + follow_up (dormant) + action_needed (replied). All three are
+// open quotes awaiting movement; `new` (no quote) and `signed` are not.
+describe("buildBulkOutreachCohort — broadened open-quote cohort + sub-status", () => {
+  function seed(): void {
+    saveBookings([
+      // quote_sent (recent): quoted 2 days ago, silent → "Recent".
+      { bookingId: "RECENT", eventName: "Recent Co", eventDate: "2099-06-01", statusLabel: "Quote Sent", signed: false, grandTotal: 8000, clientName: "Rae Recent", clientEmail: "r@example.com", clientPhone: "+13015550010", quoteSentDate: ymdDaysAgo(2) },
+      // follow_up: quoted 10 days ago, no contact since → past the follow-up silence window → "Needs follow-up".
+      { bookingId: "DORMANT", eventName: "Dormant Co", eventDate: "2099-07-01", statusLabel: "Quote Sent", signed: false, grandTotal: 9000, clientName: "Dana Dormant", clientEmail: "d@example.com", clientPhone: "+13015550011", quoteSentDate: ymdDaysAgo(10) },
+      // action_needed: quoted 3 days ago AND the client just replied → "Replied".
+      { bookingId: "REPLIED", eventName: "Replied Co", eventDate: "2099-08-01", statusLabel: "Quote Sent", signed: false, grandTotal: 11000, clientName: "Remy Replied", clientEmail: "p@example.com", clientPhone: "+13015550012", quoteSentDate: ymdDaysAgo(3) },
+      // excluded: no quote yet (new) + signed.
+      { bookingId: "NEWLEAD", eventName: "New Co", eventDate: "2099-09-01", statusLabel: "New Project", signed: false, grandTotal: 1000, clientName: "Newt New", clientEmail: "n@example.com", clientPhone: "" },
+      { bookingId: "SIGNED", eventName: "Signed Co", eventDate: "2099-10-01", statusLabel: "Contract Signed", signed: true, grandTotal: 5000, clientName: "Sam Signed", clientEmail: "s@example.com", clientPhone: "" },
+    ]);
+    // The reply that pushes REPLIED into action_needed (inbound, so it does NOT trip the recently-contacted
+    // guard — which keys off OUTBOUND touches only).
+    insertCommsEventIfNew({ providerId: "in-replied-1", leadId: "REPLIED", direction: "inbound", channel: "sms", fromPhone: "+13015550012", body: "Can you do Saturday instead?", occurredAt: new Date().toISOString() });
+  }
+
+  it("includes quote_sent + follow_up + action_needed (a quote is out), excludes new + signed", async () => {
+    seed();
+    const cohort = await buildBulkOutreachCohort("Jessie");
+    const byId = Object.fromEntries(cohort.rows.map((r) => [r.leadId, r]));
+    expect(new Set(cohort.rows.map((r) => r.leadId))).toEqual(new Set(["RECENT", "DORMANT", "REPLIED"]));
+    expect(byId.RECENT.subStatus).toBe("quote_sent");
+    expect(byId.RECENT.subStatusLabel).toBe("Recent");
+    expect(byId.DORMANT.subStatus).toBe("follow_up");
+    expect(byId.DORMANT.subStatusLabel).toBe("Needs follow-up");
+    expect(byId.REPLIED.subStatus).toBe("action_needed");
+    expect(byId.REPLIED.subStatusLabel).toBe("Replied");
+  });
+
+  it("the action_needed ('Replied') row is flagged and defaults UNCHECKED (opt-in), guardrails intact", async () => {
+    seed();
+    const row = (await buildBulkOutreachCohort("Jessie")).rows.find((r) => r.leadId === "REPLIED")!;
+    expect(row.replied).toBe(true);
+    expect(row.recentlyContacted).toBe(false); // an inbound reply must NOT read as "we contacted them"
+    expect(row.defaultSms).toBe(false);
+    expect(row.defaultEmail).toBe(false);
+    expect(row.note).toMatch(/replied/i);
+  });
+
+  it("a non-replied, non-recent open quote (follow_up) defaults ON for every reachable channel", async () => {
+    seed();
+    const row = (await buildBulkOutreachCohort("Jessie")).rows.find((r) => r.leadId === "DORMANT")!;
+    expect(row.replied).toBe(false);
+    expect(row.defaultSms).toBe(true);
+    expect(row.defaultEmail).toBe(true);
+  });
+
+  it("each row carries its bounded touch-point strip; the quote-send is on it", async () => {
+    seed();
+    const row = (await buildBulkOutreachCohort("Jessie")).rows.find((r) => r.leadId === "RECENT")!;
+    expect(row.touchpoints.length).toBeGreaterThanOrEqual(1);
+    expect(row.touchpoints.some((t) => t.isQuote)).toBe(true);
+    expect(row.touchpointsEarlier).toBe(0);
+  });
+});
+
 describe("queueBulkOutreach — email (governed outbox op)", () => {
   it("email with the gate ON enqueues the email_send outbox op, status queued (not 'sent')", async () => {
     process.env.EMAIL_SEND_ENABLED = "true";

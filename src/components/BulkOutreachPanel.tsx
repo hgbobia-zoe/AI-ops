@@ -7,10 +7,11 @@
 // (email_send outbox op / held SMS). Post-fire the panel reflects the REAL per-channel outcome (queued /
 // held / duplicate / failed) returned by the server — never a bare "sent". Nothing sends without the click.
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Mail, MessageSquare, Send, AlertTriangle, Clock } from "lucide-react";
+import { Mail, MessageSquare, Send, AlertTriangle, Clock, MessageSquareReply } from "lucide-react";
 import type { BulkOutreachCohort, BulkOutreachRow, BulkQueueSummary } from "@/lib/salesos/bulkOutreach";
+import { LeadTouchTimeline, LeadTouchLegend } from "@/components/LeadTouchTimeline";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
 
@@ -20,6 +21,19 @@ interface Sel {
 }
 
 type RowOutcome = { email?: { status: string; message: string }; sms?: { status: string; message: string }; skipped?: { channel: string; reason: string }[] };
+
+// The open-quote sub-status chip — surfaces the board nuance Goodshuffle flattens into one "Quote Sent"
+// stage. Tokened tones: Recent is calm, Needs follow-up warns (gold), Replied is emphasized (it defaults
+// unchecked and needs a tailored response). Never color-alone — the label spells it out.
+function SubStatusChip({ subStatus, label }: { subStatus: BulkOutreachRow["subStatus"]; label: string }): React.JSX.Element {
+  const tone =
+    subStatus === "action_needed"
+      ? "bg-foreground text-background font-medium"
+      : subStatus === "follow_up"
+        ? "border border-border text-attention"
+        : "border border-border text-meta";
+  return <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] leading-none ${tone}`}>{label}</span>;
+}
 
 const outcomeTone = (status: string): string => {
   if (status === "queued" || status === "sent") return "text-positive";
@@ -40,6 +54,18 @@ export function BulkOutreachPanel({ cohort, showMoney }: { cohort: BulkOutreachC
   const [summary, setSummary] = useState<BulkQueueSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const subCounts = useMemo(() => {
+    let recent = 0;
+    let followUp = 0;
+    let replied = 0;
+    for (const r of cohort.rows) {
+      if (r.subStatus === "quote_sent") recent++;
+      else if (r.subStatus === "follow_up") followUp++;
+      else if (r.subStatus === "action_needed") replied++;
+    }
+    return { recent, followUp, replied };
+  }, [cohort.rows]);
+
   const counts = useMemo(() => {
     let rowsSel = 0;
     let smsN = 0;
@@ -57,6 +83,8 @@ export function BulkOutreachPanel({ cohort, showMoney }: { cohort: BulkOutreachC
   }, [sel, cohort.rows]);
 
   const setRow = (id: string, patch: Partial<Sel>): void => setSel((p) => ({ ...p, [id]: { ...p[id], ...patch } }));
+  // Columns: Customer, [Quote], Sent, Last touch, Text, Email — the under-row timeline spans them all.
+  const colCount = showMoney ? 6 : 5;
 
   const selectAll = (): void => {
     const next: Record<string, Sel> = {};
@@ -120,9 +148,9 @@ export function BulkOutreachPanel({ cohort, showMoney }: { cohort: BulkOutreachC
   return (
     <main className="min-w-0 flex-1 p-6">
       <header className="mb-4">
-        <h1 className="text-[22px] font-medium tracking-tight">Bulk Review &amp; Fire — Quote Sent</h1>
+        <h1 className="text-[22px] font-medium tracking-tight">Bulk Review &amp; Fire — Open Quotes</h1>
         <p className="text-[12.5px] text-meta">
-          Every lead in the Quote Sent column with a refreshed next-step draft. Select rows and channels, then approve. On approval, emails queue through the governed outbox and texts send through the gated Quo sender; nothing goes out without your click, and every send respects the comms gates below.
+          Every open quote awaiting movement — the whole Goodshuffle Quote Sent stage: {subCounts.recent} recent, {subCounts.followUp} needing follow-up, {subCounts.replied} where the client replied. Each row carries a refreshed next-step draft and its full conversation timeline. Select rows and channels, then approve. On approval, emails queue through the governed outbox and texts send through the gated Quo sender; nothing goes out without your click, and every send respects the comms gates below.
         </p>
       </header>
 
@@ -170,10 +198,14 @@ export function BulkOutreachPanel({ cohort, showMoney }: { cohort: BulkOutreachC
       )}
 
       {cohort.rows.length === 0 ? (
-        <p className="border border-border px-3 py-16 text-center text-[13.5px] text-muted-foreground">No leads in the Quote Sent column.</p>
+        <p className="border border-border px-3 py-16 text-center text-[13.5px] text-muted-foreground">No open quotes awaiting movement right now.</p>
       ) : (
-        <div className="overflow-x-auto border border-border">
-          <table className="w-full border-collapse text-[13px]">
+        <>
+          <div className="mb-2 flex items-center justify-between gap-3 px-1">
+            <LeadTouchLegend />
+          </div>
+          <div className="overflow-x-auto border border-border">
+            <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr className="border-b border-border bg-background text-left text-[11px] uppercase tracking-[0.1em] text-tertiary-text">
                 <th className="px-3 py-2 font-medium">Customer</th>
@@ -186,11 +218,19 @@ export function BulkOutreachPanel({ cohort, showMoney }: { cohort: BulkOutreachC
             </thead>
             <tbody>
               {cohort.rows.map((r) => (
-                <Row key={r.leadId} r={r} showMoney={showMoney} sel={sel[r.leadId]} setRow={setRow} result={results[r.leadId]} />
+                <Fragment key={r.leadId}>
+                  <Row r={r} showMoney={showMoney} sel={sel[r.leadId]} setRow={setRow} result={results[r.leadId]} />
+                  <tr className="border-b border-[var(--row-rule)] bg-panel">
+                    <td colSpan={colCount} className="px-3 pb-3 pt-1">
+                      <LeadTouchTimeline touchpoints={r.touchpoints} earlier={r.touchpointsEarlier} />
+                    </td>
+                  </tr>
+                </Fragment>
               ))}
             </tbody>
-          </table>
-        </div>
+            </table>
+          </div>
+        </>
       )}
     </main>
   );
@@ -210,13 +250,16 @@ function Row({
   result: RowOutcome | undefined;
 }): React.JSX.Element {
   return (
-    <tr className="border-b border-[var(--row-rule)] align-top">
-      <td className="px-3 py-2.5">
-        <div className="font-medium text-foreground">{r.clientName || "Unknown client"}</div>
+    <tr className="align-top">
+      <td className="px-3 pb-1 pt-2.5">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-foreground">{r.clientName || "Unknown client"}</span>
+          <SubStatusChip subStatus={r.subStatus} label={r.subStatusLabel} />
+        </div>
         <div className="truncate text-[12px] text-meta" title={r.eventName}>{r.eventName || `Project ${r.leadId}`}</div>
         {r.note && (
-          <div className="mt-1 flex items-start gap-1 text-[11px] text-attention">
-            {r.recentlyContacted ? <Clock className="mt-0.5 size-3 shrink-0" /> : <AlertTriangle className="mt-0.5 size-3 shrink-0" />}
+          <div className={`mt-1 flex items-start gap-1 text-[11px] ${r.replied ? "text-foreground" : "text-attention"}`}>
+            {r.replied ? <MessageSquareReply className="mt-0.5 size-3 shrink-0" /> : r.recentlyContacted ? <Clock className="mt-0.5 size-3 shrink-0" /> : <AlertTriangle className="mt-0.5 size-3 shrink-0" />}
             {r.note}
           </div>
         )}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLeadTimeline, timelineLastActivity, timelineLastOutbound, leadTouchSummary } from "./timeline";
+import { buildLeadTimeline, timelineLastActivity, timelineLastOutbound, leadTouchSummary, shapeTouchpoints, leadTouchContext } from "./timeline";
 import { saveBookings, saveLeadNotes, insertCommsEventIfNew, insertCallEventIfNew, saveEmailEvents } from "@/lib/db/repo";
 
 // DATABASE_PATH is ":memory:" (vitest.config.ts). Unique ids keep tests isolated in the shared DB.
@@ -102,5 +102,59 @@ describe("leadTouchSummary — cockpit last-touch + recently-contacted signal", 
     const s = leadTouchSummary(id);
     expect(s.lastTouch).toBeNull();
     expect(s.lastOutboundAt).toBeNull();
+  });
+});
+
+describe("shapeTouchpoints — bounded, chronological, facts-only strip", () => {
+  it("returns entries OLDEST → NEWEST, mapping channel/direction/date/preview faithfully", () => {
+    const id = "TP-order-1";
+    saveBookings([{ bookingId: id, eventName: "Dixon", clientName: "Ivy", clientPhone: "301-555-1234", eventDate: "2030-06-20", signed: false }]);
+    saveLeadNotes([{ bookingId: id, quoteSentAt: "2027-03-01T10:00:00.000Z" }]);
+    insertCommsEventIfNew({ providerId: "sms-out-9", leadId: id, direction: "outbound", channel: "sms", body: "Following up", actor: "HG", occurredAt: "2027-03-03T10:00:00.000Z" });
+    insertCommsEventIfNew({ providerId: "sms-in-9", leadId: id, direction: "inbound", channel: "sms", body: "Looks good", occurredAt: "2027-03-04T10:00:00.000Z" });
+
+    const { touchpoints, earlier } = shapeTouchpoints(buildLeadTimeline(id));
+    expect(earlier).toBe(0);
+    // Oldest first: quote-send (3/1) → outbound text (3/3) → inbound text (3/4).
+    expect(touchpoints.map((t) => t.iso)).toEqual([...touchpoints.map((t) => t.iso)].sort());
+    expect(touchpoints[0].isQuote).toBe(true);
+    expect(touchpoints[0].channel).toBe("quote");
+    expect(touchpoints[0].direction).toBe("out");
+    const inbound = touchpoints.find((t) => t.direction === "in")!;
+    expect(inbound.channel).toBe("sms");
+    expect(inbound.preview).toBe("Looks good");
+  });
+
+  it("caps to the most recent `limit` dated touches and reports the rest as `earlier`", () => {
+    const id = "TP-cap-1";
+    saveBookings([{ bookingId: id, eventName: "Busy", clientName: "B", clientPhone: "301-555-7777", eventDate: "2030-06-20", signed: false }]);
+    for (let d = 1; d <= 8; d++) {
+      insertCommsEventIfNew({ providerId: `sms-${d}`, leadId: id, direction: "outbound", channel: "sms", body: `msg ${d}`, occurredAt: `2027-03-0${d}T10:00:00.000Z` });
+    }
+    const { touchpoints, earlier } = shapeTouchpoints(buildLeadTimeline(id), 5);
+    expect(touchpoints).toHaveLength(5);
+    expect(earlier).toBe(3); // 8 dated touches, 5 shown
+    // The LAST (rightmost) is the newest (3/8); the first shown is 3/4.
+    expect(touchpoints[touchpoints.length - 1].iso).toContain("2027-03-08");
+    expect(touchpoints[0].iso).toContain("2027-03-04");
+  });
+
+  it("an empty timeline → empty array (the honest 'no activity yet' state)", () => {
+    const id = "TP-empty-1";
+    saveBookings([{ bookingId: id, eventName: "E", clientName: "E", eventDate: "2030-01-01", signed: false }]);
+    expect(shapeTouchpoints(buildLeadTimeline(id)).touchpoints).toEqual([]);
+    expect(leadTouchContext(id).touchpoints).toEqual([]);
+  });
+
+  it("undated note lines carry their written token and stay at the LEFT (never a fabricated instant)", () => {
+    const id = "TP-undated-1";
+    saveBookings([{ bookingId: id, eventName: "N", clientName: "N", eventDate: "2030-01-01", signed: false }]);
+    saveLeadNotes([{ bookingId: id, quoteSentAt: "2027-03-01T10:00:00.000Z", internalNotes: "HG - 9/7 - left a message" }]);
+    const { touchpoints } = shapeTouchpoints(buildLeadTimeline(id));
+    const note = touchpoints.find((t) => t.channel === "note")!;
+    expect(note.iso).toBeNull();
+    expect(note.dateToken).toBe("9/7");
+    expect(touchpoints[0].channel).toBe("note"); // undated note kept at the left of the strip
+    expect(touchpoints[touchpoints.length - 1].iso).not.toBeNull(); // the dated quote sits to its right
   });
 });
