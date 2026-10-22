@@ -19,6 +19,7 @@ import { chat, llmConfigured } from "@/lib/llm";
 import { openphoneApiKey } from "@/lib/comms/openphone";
 import { ensureLeadThreadSynced } from "@/lib/comms/openphoneSync";
 import { notify } from "@/lib/notify/channels";
+import { buildActionItemCard } from "@/lib/notify/cards";
 import { slackBotConfigured, slackConfigured } from "@/lib/notify/slack";
 import { getJson, setJson } from "@/lib/kv";
 import { todayInOpsTz } from "@/lib/dates";
@@ -470,21 +471,21 @@ export async function scanLeadActionItems(
 
     const openItems = items.filter((i) => !i.resolvedAt);
 
-    // 6) Surface — deduped Slack to the sales channel for the open set.
+    // 6) Surface — deduped Slack to the sales channel for the open set, as a Viktor-style Block Kit card
+    //    (one section per open ask, the customer's verbatim words as a blockquote). Presentation only; the
+    //    facts come straight from the open items (no content added), and no reply is ever sent here.
     const { alert, next } = decideAlert(state.alert, openItems.map((i) => i.id), now);
     let alerted = false;
     if (alert && openItems.length > 0 && slackConfiguredForSales()) {
-      const who = lead.clientName?.trim() || "a customer";
-      const project = lead.eventName?.trim() || bookingId;
-      const lines = openItems.map((i) => `• ${i.summary} ("${i.verbatimQuote}")`).join("\n");
-      const res = await notify("sales", {
-        emoji: "📝",
-        title: `Open ask from ${who}`,
-        fields: [{ label: "Project", value: project }],
-        body: `${lines}\n\nNeeds a response.`,
-        link: { text: "Open in Goodshuffle", url: projectUrl(bookingId) },
-        context: "Action-item detection · surfaced for a human, no reply was sent",
+      const card = buildActionItemCard({
+        customer: lead.clientName?.trim() || "a customer",
+        project: lead.eventName?.trim() || bookingId,
+        projectUrl: projectUrl(bookingId),
+        items: openItems,
+        latestInboundAt: ctx.latestInboundAt,
+        now,
       });
+      const res = await notify("sales", card);
       alerted = res.ok;
     }
 
