@@ -9,7 +9,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Mail, MessageSquare, Send, AlertTriangle, Clock, MessageSquareReply, Moon } from "lucide-react";
+import { Mail, MessageSquare, Send, AlertTriangle, Clock, MessageSquareReply, Moon, RefreshCw } from "lucide-react";
 import type { BulkOutreachCohort, BulkOutreachRow, BulkQueueSummary } from "@/lib/salesos/bulkOutreach";
 import { LeadTouchTimeline, LeadTouchLegend } from "@/components/LeadTouchTimeline";
 
@@ -19,6 +19,18 @@ interface Sel {
   sms: boolean;
   email: boolean;
 }
+
+// The three worklist views over the open-quote cohort.
+//  • all      — every open quote awaiting movement (the full Goodshuffle Quote Sent stage).
+//  • recent   — leads reached out to within the last RECENTLY_CONTACTED_HOURS (r.recentlyContacted); the
+//               "who did I just touch, leave them alone" set, defaulted unchecked.
+//  • eligible — ready for a touch point NOW: not recently contacted, reachable (phone or email), and the
+//               drafter produced a sensible next step. This is the actionable nudge list.
+type OutreachFilter = "all" | "recent" | "eligible";
+
+const isEligibleForTouch = (r: BulkOutreachRow): boolean => !r.recentlyContacted && !r.draftFailed && (r.smsAvailable || r.emailAvailable);
+const matchesFilter = (r: BulkOutreachRow, f: OutreachFilter): boolean =>
+  f === "all" ? true : f === "recent" ? r.recentlyContacted : isEligibleForTouch(r);
 
 type RowOutcome = { email?: { status: string; message: string }; sms?: { status: string; message: string }; skipped?: { channel: string; reason: string }[] };
 
@@ -33,6 +45,21 @@ function SubStatusChip({ subStatus, label }: { subStatus: BulkOutreachRow["subSt
         ? "border border-border text-attention"
         : "border border-border text-meta";
   return <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] leading-none ${tone}`}>{label}</span>;
+}
+
+// One segment of the worklist filter. Active = inverted (foreground) so the current view is unmistakable;
+// identity is never color-alone — the active tab also carries the only filled background.
+function FilterTab({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }): React.JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex items-center gap-1.5 border-r border-border px-3 py-1.5 last:border-r-0 ${active ? "bg-foreground text-background" : "text-tertiary-text hover:bg-[var(--row-hover)]"}`}
+    >
+      <span>{label}</span>
+      <span className={`tabular-nums ${active ? "opacity-80" : "text-meta"}`}>{count}</span>
+    </button>
+  );
 }
 
 const outcomeTone = (status: string): string => {
@@ -63,6 +90,9 @@ export function BulkOutreachPanel({
   const [results, setResults] = useState<Record<string, RowOutcome>>({});
   const [summary, setSummary] = useState<BulkQueueSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<OutreachFilter>("all");
+  const [resyncing, setResyncing] = useState(false);
+  const [resyncNote, setResyncNote] = useState<string | null>(null);
 
   const subCounts = useMemo(() => {
     let recent = 0;
@@ -76,11 +106,26 @@ export function BulkOutreachPanel({
     return { recent, followUp, replied };
   }, [cohort.rows]);
 
+  // Per-view totals for the filter chips (All / Recently reached out to / Eligible for a touch point).
+  const filterCounts = useMemo(() => {
+    let recent = 0;
+    let eligible = 0;
+    for (const r of cohort.rows) {
+      if (r.recentlyContacted) recent++;
+      if (isEligibleForTouch(r)) eligible++;
+    }
+    return { all: cohort.rows.length, recent, eligible };
+  }, [cohort.rows]);
+
+  // The rows the current view shows. Selections are keyed by leadId and persist across view changes, so a
+  // filter is a lens, not a reset — but Select all / Clear all and the Queue button operate on THIS set.
+  const visibleRows = useMemo(() => cohort.rows.filter((r) => matchesFilter(r, filter)), [cohort.rows, filter]);
+
   const counts = useMemo(() => {
     let rowsSel = 0;
     let smsN = 0;
     let emailN = 0;
-    for (const r of cohort.rows) {
+    for (const r of visibleRows) {
       const s = sel[r.leadId];
       if (!s) continue;
       const sms = s.sms && r.smsAvailable;
@@ -90,27 +135,60 @@ export function BulkOutreachPanel({
       if (email) emailN++;
     }
     return { rowsSel, smsN, emailN };
-  }, [sel, cohort.rows]);
+  }, [sel, visibleRows]);
 
   const setRow = (id: string, patch: Partial<Sel>): void => setSel((p) => ({ ...p, [id]: { ...p[id], ...patch } }));
   // Columns: Customer, [Quote], Sent, Last touch, Text, Email — the under-row timeline spans them all.
   const colCount = showMoney ? 6 : 5;
 
+  // Select all / Clear all act on the VISIBLE (filtered) rows only, so the filter is how you scope a bulk
+  // action — e.g. "Eligible for a touch point" then Select all → Queue.
   const selectAll = (): void => {
-    const next: Record<string, Sel> = {};
-    for (const r of cohort.rows) next[r.leadId] = { sms: r.smsAvailable && !r.draftFailed, email: r.emailAvailable && !r.draftFailed };
-    setSel(next);
+    setSel((p) => {
+      const next = { ...p };
+      for (const r of visibleRows) next[r.leadId] = { sms: r.smsAvailable && !r.draftFailed, email: r.emailAvailable && !r.draftFailed };
+      return next;
+    });
   };
   const clearAll = (): void => {
-    const next: Record<string, Sel> = {};
-    for (const r of cohort.rows) next[r.leadId] = { sms: false, email: false };
-    setSel(next);
+    setSel((p) => {
+      const next = { ...p };
+      for (const r of visibleRows) next[r.leadId] = { sms: false, email: false };
+      return next;
+    });
+  };
+
+  // Re-sync on demand: refresh the two-way text threads for the open-lead cohort from the Quo API, then
+  // rebuild the server-rendered cohort (fresh last-touch, timeline, and re-drafted next step). Goodshuffle
+  // bookings themselves still refresh on the office Auto-Pull — this syncs the comms the cockpit reads.
+  const resync = async (): Promise<void> => {
+    setResyncing(true);
+    setResyncNote(null);
+    setError(null);
+    try {
+      const res = await fetch("/api/salesos/outreach-resync", { method: "POST" });
+      const j = (await res.json()) as { ok?: boolean; leads?: number; inserted?: number; error?: string };
+      if (!j.ok) {
+        setResyncNote(j.error === "forbidden" ? "Not permitted." : "Re-sync failed.");
+        return;
+      }
+      const leads = j.leads ?? 0;
+      const inserted = j.inserted ?? 0;
+      setResyncNote(leads === 0 ? "Text sync is not configured — refreshed from the latest pulled data." : `Synced ${leads} lead${leads === 1 ? "" : "s"}, ${inserted} new message${inserted === 1 ? "" : "s"}. Refreshing…`);
+      router.refresh();
+    } catch {
+      setResyncNote("Re-sync failed.");
+    } finally {
+      setResyncing(false);
+    }
   };
 
   const queue = async (): Promise<void> => {
     setWorking(true);
     setError(null);
-    const items = cohort.rows
+    // Only the rows in the current view fire — the counts line, Select all and Queue all agree on this set,
+    // so what you see checked is exactly what sends.
+    const items = visibleRows
       .map((r) => {
         const s = sel[r.leadId];
         if (!s) return null;
@@ -173,12 +251,32 @@ export function BulkOutreachPanel({
         </p>
       )}
 
+      {/* View controls: scope the cockpit to a worklist, and re-sync the comms it reads on demand. */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex overflow-hidden rounded border border-border bg-panel text-[12.5px]">
+          <FilterTab label="All open quotes" count={filterCounts.all} active={filter === "all"} onClick={() => setFilter("all")} />
+          <FilterTab label="Recently reached out to" count={filterCounts.recent} active={filter === "recent"} onClick={() => setFilter("recent")} />
+          <FilterTab label="Eligible for a touch point" count={filterCounts.eligible} active={filter === "eligible"} onClick={() => setFilter("eligible")} />
+        </div>
+        <div className="flex items-center gap-2">
+          {resyncNote && <span className="text-[11px] text-meta">{resyncNote}</span>}
+          <button
+            onClick={resync}
+            disabled={resyncing}
+            title="Refresh two-way texts from Quo for the open-lead cohort and rebuild the drafts, last-touch and timeline. Goodshuffle bookings refresh on the office Auto-Pull."
+            className="flex items-center gap-1.5 border border-border bg-[var(--row)] px-3 py-1.5 text-[12.5px] hover:bg-[var(--row-hover)] disabled:opacity-40"
+          >
+            <RefreshCw className={`size-3.5 ${resyncing ? "animate-spin" : ""}`} /> {resyncing ? "Re-syncing…" : "Re-sync"}
+          </button>
+        </div>
+      </div>
+
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-border bg-panel px-3 py-2.5">
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={selectAll} className="border border-border bg-[var(--row)] px-3 py-1.5 text-[12.5px] hover:bg-[var(--row-hover)]">Select all</button>
           <button onClick={clearAll} className="border border-border bg-[var(--row)] px-3 py-1.5 text-[12.5px] hover:bg-[var(--row-hover)]">Clear all</button>
           <span className="ml-1 text-[12.5px] text-tertiary-text">
-            {counts.rowsSel} selected, {counts.smsN} will send SMS, {counts.emailN} will send email.
+            {counts.rowsSel} selected{filter !== "all" ? " in this view" : ""}, {counts.smsN} will send SMS, {counts.emailN} will send email.
           </span>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-meta">
@@ -216,8 +314,16 @@ export function BulkOutreachPanel({
         </p>
       )}
 
-      {cohort.rows.length === 0 ? (
-        <p className="border border-border px-3 py-16 text-center text-[13.5px] text-muted-foreground">No open quotes awaiting movement right now.</p>
+      {visibleRows.length === 0 ? (
+        <p className="border border-border px-3 py-16 text-center text-[13.5px] text-muted-foreground">
+          {cohort.rows.length === 0
+            ? "No open quotes awaiting movement right now."
+            : filter === "recent"
+              ? "No one has been reached out to recently."
+              : filter === "eligible"
+                ? "No quotes are eligible for a touch point right now — everyone has been contacted recently or has no sensible next step."
+                : "No open quotes awaiting movement right now."}
+        </p>
       ) : (
         <>
           <div className="mb-2 flex items-center justify-between gap-3 px-1">
@@ -236,7 +342,7 @@ export function BulkOutreachPanel({
               </tr>
             </thead>
             <tbody>
-              {cohort.rows.map((r) => (
+              {visibleRows.map((r) => (
                 <Fragment key={r.leadId}>
                   <Row r={r} showMoney={showMoney} sel={sel[r.leadId]} setRow={setRow} result={results[r.leadId]} />
                   <tr className="border-b border-[var(--row-rule)] bg-panel">
