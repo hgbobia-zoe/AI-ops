@@ -10,6 +10,13 @@
 
 import { getDb } from "@/lib/db";
 import { DEFAULT_HEAVY_ITEM_KEYWORDS } from "@/lib/crewRules";
+import {
+  DEFAULT_BUSINESS_HOURS,
+  sanitizeSchedule,
+  isWithinBusinessHours,
+  nextOpenLabel,
+  type BusinessHoursSchedule,
+} from "@/lib/businessHours";
 
 export interface MessageTemplates {
   // Delivery (drop-off) texts.
@@ -80,6 +87,10 @@ export interface AppSettings {
    *  the company homepage. Env MONITOR_URLS override (a JSON array or a comma-separated list). ALWAYS-ON and
    *  never gated by business hours — a site being down is operational/urgent. */
   monitorUrls: string[];
+  /** The weekly BUSINESS HOURS schedule (per-weekday open/close in the ops timezone, see businessHours.ts).
+   *  The AI bots' recommendation + customer-send jobs HOLD outside these hours. Admin-editable in /admin;
+   *  the in-code DEFAULT_BUSINESS_HOURS is the floor when unset, and a bad entry falls back per-weekday. */
+  businessHours: BusinessHoursSchedule;
 }
 
 export interface PrepOpportunitySettings {
@@ -186,6 +197,7 @@ export function defaultSettings(): AppSettings {
     heavyItemKeywords: envJson<string[]>(process.env.HEAVY_ITEM_KEYWORDS, DEFAULT_HEAVY_ITEM_KEYWORDS),
     operatingYearStart: process.env.OPERATING_YEAR_START || null,
     monitorUrls: envUrlList(process.env.MONITOR_URLS, DEFAULT_MONITOR_URLS),
+    businessHours: sanitizeSchedule(envJson<BusinessHoursSchedule>(process.env.BUSINESS_HOURS_JSON, DEFAULT_BUSINESS_HOURS)),
   };
 }
 
@@ -276,6 +288,7 @@ function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSetting
     eventReadinessKeywords: over.eventReadinessKeywords ?? base.eventReadinessKeywords,
     heavyItemKeywords: over.heavyItemKeywords ?? base.heavyItemKeywords,
     monitorUrls: over.monitorUrls ?? base.monitorUrls,
+    businessHours: over.businessHours ? sanitizeSchedule(over.businessHours) : base.businessHours,
   };
 }
 
@@ -295,6 +308,38 @@ export function getSettings(): AppSettings {
     }
   }
   return merge(defaultSettings(), stored);
+}
+
+/** The configured business-hours schedule (admin override merged over the in-code default). Server-only
+ *  (reads the DB); the pure interpreter lives in businessHours.ts. */
+export function getBusinessHours(): BusinessHoursSchedule {
+  try {
+    return getSettings().businessHours;
+  } catch {
+    return DEFAULT_BUSINESS_HOURS;
+  }
+}
+
+export interface BusinessHoursGate {
+  /** Are we inside business hours right now? */
+  open: boolean;
+  /** The honest import-ledger line to return when a recommendation/send is held. */
+  heldDetail: string;
+  /** A short human label for when the business next opens, e.g. "Mon 10:00 AM ET". */
+  nextOpenLabel: string;
+}
+
+/**
+ * The ONE shared gate the AI bot recommendation + customer-send jobs consult (one check, not copies). It
+ * reads the admin-configured schedule and answers "are we open now?" plus an honest held-detail string and
+ * a next-open label. When closed, the caller HOLDS (skips + logs) — never drops — so the next in-hours tick
+ * re-runs the work. Never throws: unreadable settings fall back to the in-code default schedule.
+ */
+export function businessHoursGate(now: Date = new Date()): BusinessHoursGate {
+  const schedule = getBusinessHours();
+  const open = isWithinBusinessHours(now, schedule);
+  const label = nextOpenLabel(now, schedule);
+  return { open, heldDetail: `held: outside business hours (resumes ${label})`, nextOpenLabel: label };
 }
 
 /** Persist a full settings object (already merged by the caller). */

@@ -35,7 +35,7 @@ import { analyzeCall } from "@/lib/coach/analyze";
 import { botAnnounce, appUrl } from "@/lib/notify/aiBots";
 import { recordQuoteInsight } from "./quoteInsights";
 import { logSalesEventBy } from "./audit";
-import { getSettings } from "@/lib/settings";
+import { getSettings, businessHoursGate } from "@/lib/settings";
 
 // ── Master switch + bounds (env, with safe defaults) ─────────────────────────────
 
@@ -162,6 +162,13 @@ export interface SalesAiRunResult {
  *  that line honestly, not the whole job). Returns a short human detail for the import ledger. */
 export async function runSalesAiJob(now: number = Date.now()): Promise<SalesAiRunResult> {
   if (!salesAiEnabled()) return { ok: true, detail: "disabled (SALES_AI_ENABLED off)" };
+
+  // Business-hours gate: the owner's rule is that the bots make no RECOMMENDATIONS (and send nothing
+  // customer-facing) outside business hours. Hold the WHOLE pass — the analyst's Slack nudges, the
+  // Outreach/Lost-Quote approval cards, the Lead-Intelligence nudge, and the Sales-Coach backlog drain —
+  // BEFORE claiming the throttle slot, so it is not dropped: the next in-hours tick re-runs it in full.
+  const gate = businessHoursGate(new Date(now));
+  if (!gate.open) return { ok: true, detail: gate.heldDetail };
 
   const state = getJson<SalesAiState>(STATE_KEY, {});
   if (!decideThrottle(state.lastRunAt, now, SALES_AI_BOUNDS.minIntervalMin() * 60_000)) {

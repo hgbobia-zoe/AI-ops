@@ -23,6 +23,7 @@ import { buildActionItemCard } from "@/lib/notify/cards";
 import { slackBotConfigured, slackConfigured } from "@/lib/notify/slack";
 import { getJson, setJson } from "@/lib/kv";
 import { todayInOpsTz } from "@/lib/dates";
+import { businessHoursGate } from "@/lib/settings";
 import {
   getBookingById,
   getOpenLeads,
@@ -518,6 +519,12 @@ export interface ActionItemsJobResult {
  *  never aborts the run; nothing ever throws into the tick). Returns a short detail for the import ledger. */
 export async function runActionItemsJob(now: number = Date.now()): Promise<ActionItemsJobResult> {
   if (!actionItemsConfigured()) return { ok: true, detail: "not configured (LLM + OpenPhone key required)" };
+
+  // Business-hours gate: surfacing a customer's open ask is a recommendation to a human to respond, so the
+  // owner's rule holds it (and its Slack surface) outside business hours. Held BEFORE the throttle slot is
+  // claimed, so nothing is dropped — the next in-hours tick re-scans and surfaces any still-open asks.
+  const gate = businessHoursGate(new Date(now));
+  if (!gate.open) return { ok: true, detail: gate.heldDetail };
 
   const job = getJson<{ lastRunAt?: string }>(JOB_STATE_KEY, {});
   if (!decideThrottle(job.lastRunAt, now, ACTION_ITEM_BOUNDS.minIntervalMin() * 60_000)) {

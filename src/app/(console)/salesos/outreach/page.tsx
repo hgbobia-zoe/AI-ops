@@ -9,6 +9,7 @@ import { viewerRole, viewerFirstName } from "@/lib/auth/getSession";
 import { canManageSettings, canSeeFinancials } from "@/lib/auth/roles";
 import { buildBulkOutreachCohort } from "@/lib/salesos/bulkOutreach";
 import { BulkOutreachPanel } from "@/components/BulkOutreachPanel";
+import { businessHoursGate } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,9 @@ export default async function SalesBulkOutreachPage(): Promise<React.JSX.Element
   const showMoney = canSeeFinancials(role);
 
   const cohort = await buildBulkOutreachCohort(await viewerFirstName());
+  // Informational only: a human can fire from this cockpit anytime, so the button is never blocked. The
+  // banner just makes the owner aware that the BOTS hold their own recommendations until business hours.
+  const gate = businessHoursGate();
 
-  return <BulkOutreachPanel cohort={cohort} showMoney={showMoney} />;
+  return <BulkOutreachPanel cohort={cohort} showMoney={showMoney} outsideHours={!gate.open} nextOpenLabel={gate.nextOpenLabel} />;
 }

@@ -143,6 +143,34 @@ describe("SALES_AI_ENABLED master switch (default OFF)", () => {
   });
 });
 
+describe("runSalesAiJob — business-hours gate", () => {
+  beforeEach(() => {
+    process.env.SALES_AI_ENABLED = "true";
+  });
+  afterEach(() => {
+    delete process.env.SALES_AI_ENABLED;
+  });
+
+  // Default schedule (Mon-Fri 10-18, Sat 10-13, Sun closed) read from :memory: settings.
+  it("HOLDS (skips, no DB/LLM) outside business hours, with an honest held detail", async () => {
+    // Sunday 12:00 PM ET (17:00 UTC) — closed. The gate short-circuits BEFORE claiming the throttle slot
+    // or reading any leads, so the next in-hours tick re-runs it in full (held, not dropped).
+    const sunday = Date.parse("2026-01-04T17:00:00.000Z");
+    const r = await runSalesAiJob(sunday);
+    expect(r.ok).toBe(true);
+    expect(r.detail).toMatch(/held: outside business hours/i);
+  });
+
+  it("runs (passes the gate) inside business hours", async () => {
+    // Monday 2:00 PM ET (19:00 UTC in EST) — open. The job proceeds past the gate (empty :memory: DB, no
+    // LLM key → benign no-op steps), so the detail is the step rollup, NOT the held line.
+    const monday = Date.parse("2026-01-05T19:00:00.000Z");
+    const r = await runSalesAiJob(monday);
+    expect(r.ok).toBe(true);
+    expect(r.detail).not.toMatch(/held: outside business hours/i);
+  });
+});
+
 describe("quoteInsights — fold + summarize (pure)", () => {
   const ins = (over: Partial<QuoteInsight> = {}): QuoteInsight => ({
     leadId: "P1",
