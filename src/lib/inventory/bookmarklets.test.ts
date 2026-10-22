@@ -199,6 +199,11 @@ describe("buildImporterBookmarklet — embeds the verified two-step payloads", (
     expect(bm).toContain("autoAppliedToProducts");
   });
 
+  it("tags each auto-applied tax object with selected:true + translatedAutoAppliedString (create 400s without selected)", () => {
+    expect(bm).toContain("selected: true");
+    expect(bm).toContain("translatedAutoAppliedString");
+  });
+
   it("is a two-step create (create body → inventoryItem → update body)", () => {
     expect(bm).toContain("buildCreateBody");
     expect(bm).toContain("buildUpdateBody");
