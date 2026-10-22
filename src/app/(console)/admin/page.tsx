@@ -6,7 +6,7 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2, Users, Globe, Clock3 } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2, Users, Globe, Clock3, Boxes, Plus, X } from "lucide-react";
 import type { BusinessHoursSchedule, DayHours } from "@/lib/businessHours";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
@@ -45,6 +45,11 @@ interface Settings {
   heavyItemKeywords: string[];
   monitorUrls: string[];
   businessHours: BusinessHoursSchedule;
+  zoeCategories: ZoeCategory[];
+}
+interface ZoeCategory {
+  name: string;
+  primaryCategoryID: number;
 }
 
 // Each slot has a delivery and a pickup variant; the toggle picks which set is edited.
@@ -435,6 +440,19 @@ export default function AdminPage() {
             <BusinessHoursEditor value={s.businessHours ?? {}} onChange={(v) => setS({ ...s, businessHours: v })} />
           </Section>
 
+          {/* Inventory categories — the Zoe destination categories the Inventory Automation importer files
+              copied items under. Each needs a Goodshuffle numeric category id. */}
+          <Section icon={<Boxes className="size-4" />} title="Inventory categories">
+            <p className="text-sm text-muted-foreground">
+              Inventory Automation copies a partner&apos;s items into these Zoe categories. Each needs the Goodshuffle
+              numeric category id so the importer files items correctly — it will not guess, and a mapping to a
+              category with no id here cannot be imported. The id comes from an existing item already filed under
+              that category in Goodshuffle (there is no public lookup). Add a new category here to use it without a
+              deploy.
+            </p>
+            <ZoeCategoriesEditor value={s.zoeCategories ?? []} onChange={(v) => setS({ ...s, zoeCategories: v })} />
+          </Section>
+
           <div className="flex justify-end">
             <SaveButton saving={saving} savedAt={savedAt} onClick={save} disabled={!s} />
           </div>
@@ -585,6 +603,65 @@ function BusinessHoursEditor({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// Editor for the Zoe destination-category registry: rows of { name, primaryCategoryID } with add/remove. The
+// server coerces + de-dupes on save (dropping rows without a name or a finite id), and the normalized list
+// flows back on the next load.
+function ZoeCategoriesEditor({
+  value,
+  onChange,
+}: {
+  value: ZoeCategory[];
+  onChange: (v: ZoeCategory[]) => void;
+}) {
+  const setRow = (i: number, patch: Partial<ZoeCategory>) =>
+    onChange(value.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
+  const removeRow = (i: number) => onChange(value.filter((_, idx) => idx !== i));
+  const addRow = () => onChange([...value, { name: "", primaryCategoryID: 0 }]);
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-[1fr_8rem_2.5rem] items-center gap-2 text-xs text-muted-foreground">
+        <span>Category name</span>
+        <span>Goodshuffle id</span>
+        <span />
+      </div>
+      {value.map((c, i) => (
+        <div key={i} className="grid grid-cols-[1fr_8rem_2.5rem] items-center gap-2">
+          <input
+            type="text"
+            value={c.name}
+            placeholder="e.g. Sofas"
+            onChange={(e) => setRow(i, { name: e.target.value })}
+            className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <input
+            type="text"
+            inputMode="numeric"
+            value={c.primaryCategoryID ? String(c.primaryCategoryID) : ""}
+            placeholder="657"
+            onChange={(e) => setRow(i, { primaryCategoryID: Number(e.target.value.replace(/\D/g, "")) || 0 })}
+            className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm tabular-nums focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <button
+            type="button"
+            onClick={() => removeRow(i)}
+            aria-label="Remove category"
+            className="inline-flex size-9 items-center justify-center rounded-xl border border-white/10 text-muted-foreground hover:bg-accent"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={addRow}
+        className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm text-muted-foreground hover:bg-accent"
+      >
+        <Plus className="size-4" /> Add category
+      </button>
     </div>
   );
 }

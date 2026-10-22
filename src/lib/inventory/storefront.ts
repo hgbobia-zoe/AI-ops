@@ -28,6 +28,12 @@ export interface NormalizedImage {
   fileName: string; //   original file name, if the storefront gave one
 }
 
+/** One of the storefront groups an item belongs to (used for group discovery + mapping selection). */
+export interface NormalizedGroup {
+  slug: string; //  the group slug (last path segment, e.g. "sofa-rentals") — what the groups filter uses
+  name: string; //  display name, e.g. "Sofas"
+}
+
 /** A storefront item normalized into the clean shape the planner + importer consume. */
 export interface NormalizedItem {
   sourceId: string; //        the partner's item id (provenance only; we never reuse it as Zoe's id)
@@ -35,6 +41,7 @@ export interface NormalizedItem {
   descriptionHtml: string; // description, as the storefront HTML (copied verbatim)
   tags: string[]; //          source tags (case preserved, empties dropped)
   images: NormalizedImage[]; // sorted primary-first, then by viewOrder
+  groups: NormalizedGroup[]; //the storefront groups this item is filed under (slug + name)
 }
 
 export interface StorefrontResult {
@@ -82,6 +89,17 @@ function normalizeImage(raw: unknown): NormalizedImage {
   };
 }
 
+/** Derive a group slug from a storefront group object: prefer the last segment of `path`, else slugify the
+ *  name. Tolerant — a malformed group degrades to "". */
+function groupSlug(o: Record<string, unknown>): string {
+  const path = str(o.path).trim();
+  if (path) {
+    const seg = path.replace(/\/+$/, "").split("/").filter(Boolean).pop();
+    if (seg) return seg.toLowerCase();
+  }
+  return str(o.name).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
 /** Normalize one raw storefront item. Never throws; a bad field degrades to empty. */
 export function normalizeItem(raw: unknown): NormalizedItem {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
@@ -92,12 +110,17 @@ export function normalizeItem(raw: unknown): NormalizedItem {
     .map(normalizeImage)
     .filter((img) => img.raw) //                    drop images with no usable URL
     .sort((a, b) => (a.primary === b.primary ? a.viewOrder - b.viewOrder : a.primary ? -1 : 1));
+  const groups = (Array.isArray(o.groups) ? o.groups : [])
+    .map((g) => (g && typeof g === "object" ? (g as Record<string, unknown>) : {}))
+    .map((g) => ({ slug: groupSlug(g), name: str(g.name).trim() }))
+    .filter((g) => g.slug);
   return {
     sourceId: str(o.id),
     title: str(o.title).trim(),
     descriptionHtml: str(o.description),
     tags,
     images,
+    groups,
   };
 }
 

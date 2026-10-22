@@ -10,6 +10,11 @@ const FIXTURE = {
   tags: ["velvet", " ", "sofa"],
   price: { base: 250 },
   quantity: { available: 3 },
+  groups: [
+    { path: "furniture-rentals/sofa-rentals", name: "Sofas" },
+    { path: "settee-rentals", name: "Settees" },
+    { name: "No Path Group" }, // slug derived from the name
+  ],
   images: [
     { fileName: "front.jpg", viewOrder: 1, primaryImage: false, rawImagePath: "https://cdn/raw/front.jpg", imagePath: "https://cdn/web/front.jpg", thumbImagePath: "https://cdn/thumb/front.jpg" },
     { fileName: "hero.jpg", viewOrder: 0, primaryImage: true, rawImagePath: "https://cdn/raw/hero.jpg", imagePath: "https://cdn/web/hero.jpg", thumbImagePath: "https://cdn/thumb/hero.jpg" },
@@ -49,8 +54,17 @@ describe("normalizeItem", () => {
     expect(n.images[0].raw).toBe("https://cdn/web/only.jpg");
   });
 
+  it("parses groups: slug = last path segment, else slugified name", () => {
+    const n = normalizeItem(FIXTURE);
+    expect(n.groups).toEqual([
+      { slug: "sofa-rentals", name: "Sofas" },
+      { slug: "settee-rentals", name: "Settees" },
+      { slug: "no-path-group", name: "No Path Group" },
+    ]);
+  });
+
   it("never throws on a malformed item — degrades to empty", () => {
-    expect(normalizeItem(null)).toEqual({ sourceId: "", title: "", descriptionHtml: "", tags: [], images: [] });
-    expect(normalizeItem({ title: 42, tags: "nope", images: "nope" })).toEqual({ sourceId: "", title: "42", descriptionHtml: "", tags: [], images: [] });
+    expect(normalizeItem(null)).toEqual({ sourceId: "", title: "", descriptionHtml: "", tags: [], images: [], groups: [] });
+    expect(normalizeItem({ title: 42, tags: "nope", images: "nope", groups: "nope" })).toEqual({ sourceId: "", title: "42", descriptionHtml: "", tags: [], images: [], groups: [] });
   });
 });

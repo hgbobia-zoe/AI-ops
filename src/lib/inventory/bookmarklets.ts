@@ -254,11 +254,15 @@ const IMPORTER_RUNTIME_JS = `
       .then(function(r){ if(!r.ok) throw new Error("POST "+path+" -> HTTP "+r.status); return r.json(); });
   }
 
-  // Live tax types: the exact objects (incl. nested taxRates[]) the account auto-applies to products.
+  // Live tax types: the exact objects (incl. nested taxRates[]) the account auto-applies to products. The
+  // app's OWN create tags each applied tax with selected:true + translatedAutoAppliedString, but
+  // /app/taxType/list omits both — and the create 400s without selected — so we add them back (verified
+  // against a real 200 create).
   function loadTax(){
     return gsFetch("/app/taxType/list",{credentials:"include"}).then(function(r){ return r.json(); }).then(function(tt){
       var all=Array.isArray(tt)?tt:((tt&&tt.taxTypes)||(tt&&tt.data)||[]);
-      var tax=all.filter(function(t){ return t&&t.autoAppliedToProducts; });
+      var tax=all.filter(function(t){ return t&&t.autoAppliedToProducts; })
+        .map(function(t){ return Object.assign({}, t, { selected: true, translatedAutoAppliedString: t.translatedAutoAppliedString || t.autoAppliedString || "" }); });
       log("tax types: "+(tax.map(function(t){return t.name;}).join(", ")||"(none auto-applied)"));
       return tax;
     }).catch(function(e){ log("could not load tax types; proceeding with none",String(e)); return []; });

@@ -7,6 +7,7 @@
 import { NextResponse } from "next/server";
 import { getSettings, saveSettings, type AppSettings } from "@/lib/settings";
 import { sanitizeSchedule } from "@/lib/businessHours";
+import { coerceInventoryPartners, coerceZoeCategories } from "@/lib/inventory/partners";
 
 export const dynamic = "force-dynamic";
 
@@ -88,6 +89,12 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     // Business-hours schedule — sanitized per-weekday (explicit null = closed; a bad entry falls back to the
     // in-code default for that weekday). Only overlay when the client actually sent a schedule object.
     businessHours: b.businessHours && typeof b.businessHours === "object" ? sanitizeSchedule(b.businessHours) : current.businessHours,
+    // Inventory Automation partners + the Zoe-category registry. Coerced (dropping malformed entries); a
+    // missing/non-array field keeps the current value, so an /admin save that omits them never wipes them.
+    inventoryPartners: Array.isArray(b.inventoryPartners)
+      ? coerceInventoryPartners(b.inventoryPartners, current.inventoryPartners)
+      : current.inventoryPartners,
+    zoeCategories: Array.isArray(b.zoeCategories) ? coerceZoeCategories(b.zoeCategories, current.zoeCategories) : current.zoeCategories,
   };
 }
 
