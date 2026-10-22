@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildCaptureBookmarklet, buildImporterBookmarklet, buildSaveItemBody, buildImageEntry, findMissingGroupIds, parseCapture, type GroupIdSet } from "./bookmarklets";
+import {
+  buildImporterBookmarklet,
+  buildCreateBody,
+  buildUpdateBody,
+  buildTags,
+  buildImageEntry,
+  findMissingCategories,
+  UNPRICED_PRICING_MAP,
+  type GroupCategory,
+} from "./bookmarklets";
 import type { PlannedItem } from "./importPlan";
 
-const ids: GroupIdSet = {
-  primaryCategoryID: 42,
-  primaryCategoryName: "Furniture",
-  rootGroupID: 1001,
-  rootGroupName: "Sofas",
-  appliedTaxTypes: [{ name: "maryland", rate: 6 }],
-  sampleTitle: "Sample Sofa",
-};
+const cat: GroupCategory = { primaryCategoryID: 657, primaryCategoryName: "Sofas", baseTag: "Sofa" };
 
 const item: PlannedItem = {
   sourceId: "src1",
@@ -22,57 +24,124 @@ const item: PlannedItem = {
   trackQuantity: false,
 };
 
-describe("buildSaveItemBody — exact captured shapes", () => {
-  const body = buildSaveItemBody(item, ids, "uuid-123", [buildImageEntry("s3/x.jpg", "x.jpg", 0, 800, 600)]);
+const TAX = [{ name: "maryland", autoAppliedToProducts: true, taxRates: [{ rate: 6 }] }];
 
-  it("serializes tags as a COMMA-SEPARATED STRING (not an array)", () => {
-    expect(body.tags).toBe("velvet,Subrental,Staging Design");
-  });
+describe("buildCreateBody — the verified MINIMAL create shape", () => {
+  const body = buildCreateBody(item, cat, TAX, UNPRICED_PRICING_MAP);
 
-  it("emits an UNPRICED pricingMap", () => {
-    expect(body.pricingMap).toMatchObject({ unpriced: true, rateType: "UNPRICED", numberOfRates: 0, flatFeesByGeo: [], baseRate: null, pricedForPurchase: false });
-  });
-
-  it("marks quantity untracked", () => {
+  it("is untracked and OMITS quantityPosted entirely (sending null 400s)", () => {
     expect(body.quantityTracked).toBe(false);
-    expect(body.quantityPosted).toBeNull();
-    expect(body.quantitySetAside).toBeNull();
+    expect("quantityPosted" in body).toBe(false);
+    expect("quantitySetAside" in body).toBe(false);
   });
 
-  it("sets website + marketplace visibility", () => {
-    expect(body.website_wishlist_visible).toBe(true);
-    expect(body.marketplace_visible).toBe(true);
+  it("sends NO id, NO uuid, NO rootGroup (the server derives the root group from the category)", () => {
+    expect("id" in body).toBe(false);
+    expect("uuid" in body).toBe(false);
+    expect("rootGroupID" in body).toBe(false);
+    expect("rootGroupName" in body).toBe(false);
   });
 
-  it("carries the resolved category/group IDs and account tax types", () => {
-    expect(body.primaryCategoryID).toBe(42);
-    expect(body.primaryCategoryName).toBe("Furniture");
-    expect(body.rootGroupID).toBe(1001);
-    expect(body.rootGroupName).toBe("Sofas");
-    expect(body.applied_tax_types).toEqual([{ name: "maryland", rate: 6 }]);
+  it("carries the resolved category and the minimal unpriced pricingMap", () => {
+    expect(body.primaryCategoryID).toBe(657);
+    expect(body.primaryCategoryName).toBe("Sofas");
+    expect(body.pricingMap).toEqual({
+      flatFeesByGeo: [],
+      rateType: "UNPRICED",
+      unpriced: true,
+      flatFee: null,
+      dailyPriceVisibleOnECommerce: true,
+      hourlyPriceVisibleOnECommerce: true,
+      flatFeePriceVisibleOnECommerce: true,
+      purchasePriceVisibleOnECommerce: true,
+    });
   });
 
-  it("creates (id:null + uuid) and uses the Staging description as web copy", () => {
-    expect(body.id).toBeNull();
-    expect(body.uuid).toBe("uuid-123");
+  it("uses the LIVE-fetched tax types verbatim (never hardcoded)", () => {
+    expect(body.applied_tax_types).toBe(TAX);
+    expect(body.applied_tax_types).toEqual([{ name: "maryland", autoAppliedToProducts: true, taxRates: [{ rate: 6 }] }]);
+  });
+
+  it("is a PRODUCT, website + marketplace visible, with empty images on create", () => {
     expect(body.inventoryType).toEqual({ name: "PRODUCT" });
+    expect(body.originalInventoryType).toBe("PRODUCT");
+    expect(body.marketplace_visible).toBe(true);
+    expect(body.website_wishlist_visible).toBe(true);
+    expect(body.useContractDescriptionForWeb).toBe(true);
+    expect(body.images).toEqual([]);
+    expect(body.attributes).toEqual([]);
+  });
+
+  it("tolerates a non-array tax list", () => {
+    expect(buildCreateBody(item, cat, undefined as unknown as unknown[], UNPRICED_PRICING_MAP).applied_tax_types).toEqual([]);
+  });
+});
+
+describe("buildUpdateBody — step two: content merged onto the created item", () => {
+  const created = {
+    id: 9001,
+    uuid: "server-uuid",
+    rootGroupID: 123,
+    rootGroupName: "Furniture",
+    quantityPosted: 5, //       untracked: must be DELETED by the update, not carried through
+    quantitySetAside: 2,
+    title: "Velvet Tufted Sofa",
+  };
+  const images = [buildImageEntry("vendors/1/x.jpg", "x.jpg", 0, 800, 600)];
+  const body = buildUpdateBody(created, item, images, "Sofa,velvet", "Subrent from Staging Design DC.", UNPRICED_PRICING_MAP);
+
+  it("keeps the server-assigned id/uuid/rootGroup from the created item", () => {
+    expect(body.id).toBe(9001);
+    expect(body.uuid).toBe("server-uuid");
+    expect(body.rootGroupID).toBe(123);
+    expect(body.rootGroupName).toBe("Furniture");
+  });
+
+  it("DELETES quantityPosted / quantitySetAside for an untracked item", () => {
+    expect(body.quantityTracked).toBe(false);
+    expect("quantityPosted" in body).toBe(false);
+    expect("quantitySetAside" in body).toBe(false);
+  });
+
+  it("sets the website copy to the source HTML (not the contract description)", () => {
     expect(body.contract_description).toBe("<p>Deep seat.</p>");
     expect(body.web_description).toBe("<p>Deep seat.</p>");
     expect(body.useContractDescriptionForWeb).toBe(false);
   });
 
-  it("passes the prepared images[] straight through", () => {
-    expect(body.images).toEqual([{ id: null, s3Path: "s3/x.jpg", fileName: "x.jpg", viewOrder: 0, caption: null, isAnimatedGIF: false, rawWidth: 800, rawHeight: 600 }]);
+  it("stamps the provenance note, the tags string and the prepared images", () => {
+    expect(body.internal_notes).toBe("Subrent from Staging Design DC.");
+    expect(body.tags).toBe("Sofa,velvet");
+    expect(body.images).toEqual([{ id: null, s3Path: "vendors/1/x.jpg", fileName: "x.jpg", viewOrder: 0, caption: null, isAnimatedGIF: false, rawWidth: 800, rawHeight: 600 }]);
+    expect(body.pricingMap).toBe(UNPRICED_PRICING_MAP);
   });
 
-  it("honors trackQuantity:true when set", () => {
-    const tracked = buildSaveItemBody({ ...item, trackQuantity: true }, ids, "u", []);
-    expect(tracked.quantityTracked).toBe(true);
+  it("does not mutate the created object passed in", () => {
+    expect("quantityPosted" in created).toBe(true); // still there on the original
+  });
+});
+
+describe("buildTags — CSV string with base tag, normalization and drops", () => {
+  it("starts with the base tag and keeps carried tags, as a comma string", () => {
+    expect(buildTags(["velvet", "Subrental"], "Sofa")).toBe("Sofa,velvet,Subrental");
+  });
+
+  it('normalizes "Bar stool" → "Barstool" and de-dupes case-insensitively', () => {
+    expect(buildTags(["Bar stool", "barstool", "GOLD"], "Barstool")).toBe("Barstool,GOLD");
+  });
+
+  it("drops the partner's Staging-internal grouping tags", () => {
+    expect(buildTags(["group sofas", "Event Rental", "eventrental", "Modern"], "Sofa")).toBe("Sofa,Modern");
+  });
+
+  it("is robust to an empty / non-array tag list", () => {
+    expect(buildTags([], "Sofa")).toBe("Sofa");
+    expect(buildTags(undefined as unknown as string[], "Barstool")).toBe("Barstool");
   });
 });
 
 describe("buildImageEntry", () => {
-  it("produces the captured images[] entry shape", () => {
+  it("produces the verified images[] entry shape", () => {
     expect(buildImageEntry("vendors/1/x.jpg", "x.jpg", 2, null, null)).toEqual({
       id: null,
       s3Path: "vendors/1/x.jpg",
@@ -86,82 +155,65 @@ describe("buildImageEntry", () => {
   });
 });
 
-describe("findMissingGroupIds — fail closed", () => {
+describe("findMissingCategories — fail closed", () => {
   const sofa: PlannedItem = { ...item, zoeGroup: "sofa-rentals" };
   const stool: PlannedItem = { ...item, zoeGroup: "stools-rentals" };
+  const stoolCat: GroupCategory = { primaryCategoryID: 661, primaryCategoryName: "Stools", baseTag: "Barstool" };
 
-  it("reports a group with no resolved IDs", () => {
-    expect(findMissingGroupIds([sofa, stool], { "sofa-rentals": ids })).toEqual(["stools-rentals"]);
+  it("reports a group with no resolved category", () => {
+    expect(findMissingCategories([sofa, stool], { "sofa-rentals": cat })).toEqual(["stools-rentals"]);
   });
 
   it("is empty when every group resolves", () => {
-    const stoolIds: GroupIdSet = { ...ids, rootGroupID: 2002, rootGroupName: "Stools" };
-    expect(findMissingGroupIds([sofa, stool], { "sofa-rentals": ids, "stools-rentals": stoolIds })).toEqual([]);
+    expect(findMissingCategories([sofa, stool], { "sofa-rentals": cat, "stools-rentals": stoolCat })).toEqual([]);
   });
 
-  it("treats a non-numeric id as missing", () => {
-    const bad = { ...ids, rootGroupID: "nope" as unknown as number };
-    expect(findMissingGroupIds([sofa], { "sofa-rentals": bad })).toEqual(["sofa-rentals"]);
-  });
-});
-
-describe("parseCapture — read category/group IDs from a real item save", () => {
-  const saveBody = (over: Record<string, unknown>) =>
-    JSON.stringify({ rootGroupID: 1001, rootGroupName: "Sofas", primaryCategoryID: 42, primaryCategoryName: "Furniture", applied_tax_types: [{ name: "maryland" }], title: "Sample Sofa", ...over });
-
-  it("extracts a GroupIdSet from a captured saveRegularItem request", () => {
-    const capture = JSON.stringify([
-      { method: "POST", url: "https://pro.goodshuffle.com/app/inventory/saveRegularItem", contentType: "application/json", bodyText: saveBody({}) },
-      { method: "GET", url: "https://pro.goodshuffle.com/app/image/getPresignedUploadURL?fileName=x.jpg", bodyText: null }, // ignored
-    ]);
-    const res = parseCapture(capture);
-    expect(res.ok).toBe(true);
-    expect(res.sets).toHaveLength(1);
-    expect(res.sets![0]).toMatchObject({ rootGroupID: 1001, rootGroupName: "Sofas", primaryCategoryID: 42, primaryCategoryName: "Furniture", sampleTitle: "Sample Sofa" });
-    expect(res.sets![0].appliedTaxTypes).toEqual([{ name: "maryland" }]);
-  });
-
-  it("dedupes by rootGroupID and keeps distinct groups", () => {
-    const capture = JSON.stringify([
-      { method: "POST", url: "https://pro.goodshuffle.com/app/inventory/saveRegularItem", bodyText: saveBody({}) },
-      { method: "POST", url: "https://pro.goodshuffle.com/app/inventory/saveRegularItem", bodyText: saveBody({ title: "Another Sofa" }) }, // same group → dedup
-      { method: "POST", url: "https://pro.goodshuffle.com/app/inventory/saveRegularItem", bodyText: saveBody({ rootGroupID: 2002, rootGroupName: "Stools", primaryCategoryID: 43 }) },
-    ]);
-    const res = parseCapture(capture);
-    expect(res.sets!.map((s) => s.rootGroupID).sort()).toEqual([1001, 2002]);
-  });
-
-  it("accepts a { requests: [...] } wrapper and a raw pasted item body", () => {
-    expect(parseCapture(JSON.stringify({ requests: [{ url: "/app/inventory/saveRegularItem", method: "POST", bodyText: saveBody({}) }] })).ok).toBe(true);
-    expect(parseCapture(saveBody({})).ok).toBe(true); // raw single item object
-  });
-
-  it("errors on invalid JSON and on a capture with no item save", () => {
-    expect(parseCapture("not json").ok).toBe(false);
-    expect(parseCapture(JSON.stringify([{ url: "https://pro.goodshuffle.com/app/route/getRoute", method: "GET" }])).ok).toBe(false);
-  });
-
-  it("skips a body missing the required numeric IDs", () => {
-    const capture = JSON.stringify([{ method: "POST", url: "/app/inventory/saveRegularItem", bodyText: JSON.stringify({ rootGroupName: "Sofas" }) }]);
-    expect(parseCapture(capture).ok).toBe(false);
+  it("treats a non-numeric category id as missing", () => {
+    const bad = { ...cat, primaryCategoryID: "nope" as unknown as number };
+    expect(findMissingCategories([sofa], { "sofa-rentals": bad })).toEqual(["sofa-rentals"]);
   });
 });
 
-describe("bookmarklet builders", () => {
-  it("builds a static capture bookmarklet", () => {
-    const bm = buildCaptureBookmarklet();
-    expect(bm.startsWith("javascript:")).toBe(true);
-    expect(bm).toContain("zoe_gs_capture_v1");
+describe("buildImporterBookmarklet — embeds the verified two-step payloads", () => {
+  const bm = buildImporterBookmarklet({
+    plan: [item],
+    categories: { "sofa-rentals": cat },
+    zoeToken: "TOK",
+    internalNotes: "Subrent from Staging Design DC.",
   });
 
-  it("builds an importer that embeds the plan, IDs, known endpoints and serialized builders", () => {
-    const bm = buildImporterBookmarklet({ plan: [item], groupIds: { "sofa-rentals": ids }, zoeToken: "TOK" });
+  it("is a self-contained javascript: bookmarklet", () => {
     expect(bm.startsWith("javascript:(function(){")).toBe(true);
     expect(bm.endsWith(");void 0")).toBe(true);
+  });
+
+  it("is syntactically valid JS (serialized builders + runtime compile)", () => {
+    // Strip the "javascript:" scheme and confirm the whole payload parses (catches a bad serialized builder).
+    expect(() => new Function(bm.slice("javascript:".length))).not.toThrow();
+  });
+
+  it("wires the known endpoints and the LIVE tax fetch (never hardcoded)", () => {
     expect(bm).toContain("/app/inventory/saveRegularItem");
     expect(bm).toContain("getPresignedUploadURL");
-    expect(bm).toContain("buildSaveItemBody");
-    expect(bm).toContain("findMissingGroupIds");
-    expect(bm).toContain('"rootGroupID":1001'); // embedded cfg
+    expect(bm).toContain("/app/taxType/list");
+    expect(bm).toContain("autoAppliedToProducts");
+  });
+
+  it("is a two-step create (create body → inventoryItem → update body)", () => {
+    expect(bm).toContain("buildCreateBody");
+    expect(bm).toContain("buildUpdateBody");
+    expect(bm).toContain("inventoryItem");
+  });
+
+  it("requires x-amz-acl on the S3 image PUT (or S3 403s)", () => {
+    expect(bm).toContain("x-amz-acl");
+    expect(bm).toContain("public-read");
+  });
+
+  it("paces requests through the 429 throttle and embeds the resolved category + cfg", () => {
+    expect(bm).toContain("RATE_LIMIT_ABORT");
+    expect(bm).toContain("retry-after");
+    expect(bm).toContain('"primaryCategoryID":657'); // embedded cfg
+    expect(bm).not.toContain("rootGroupID"); // create must not send a root group
   });
 });
