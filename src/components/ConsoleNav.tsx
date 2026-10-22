@@ -21,7 +21,7 @@ import {
   Aperture, Plus, Dna,
   Headset, PhoneCall, FlaskConical,
   Search, FileText, Rocket,
-  BrainCircuit, Tent, Wallet,
+  BrainCircuit, Tent, Wallet, Boxes,
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
@@ -91,6 +91,9 @@ const GROUPS: Group[] = [
       // (src/lib/event/*). Owner/admin only (manage), matching the other back-office operations blades.
       { href: "/events", label: "Events", icon: CalendarCheck, manage: true },
       { href: "/risk", label: "Event Risk", icon: AlertTriangle },
+      // Inventory Automation — bulk-copy a partner's Goodshuffle catalog into Zoe's (sub-rental onboarding
+      // + future bulk cleanup). Owner/admin only (manage), like the other back-office operations blades.
+      { href: "/inventory", label: "Inventory", icon: Boxes, manage: true },
       { href: "/scheduling", label: "Scheduling", icon: CalendarDays },
       { href: "/admin/passes", label: "Shift Passes", icon: KeyRound, manage: true },
       { href: "/finance", label: "Financial", icon: DollarSign, financial: true },
