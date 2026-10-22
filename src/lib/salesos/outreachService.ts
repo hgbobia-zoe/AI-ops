@@ -120,7 +120,7 @@ async function llmDraft(lead: OutreachLead, clientName: string, eventDate: strin
 
 /** Draft the next outreach for a lead: template baseline, LLM-refined against the real comms history.
  *  `repFirstName` (the signed-in rep) personalizes the opening: "Hi {customer}, this is {rep}...". */
-export async function draftLeadOutreach(id: string, repFirstName?: string | null): Promise<OutreachResult | null> {
+export async function draftLeadOutreach(id: string, repFirstName?: string | null, opts?: { skipLlm?: boolean }): Promise<OutreachResult | null> {
   const l = getLead(id);
   if (!l) return null;
 
@@ -139,7 +139,10 @@ export async function draftLeadOutreach(id: string, repFirstName?: string | null
 
   let draft = templateOutreach(oLead, comms);
   let model: string | undefined;
-  if (outreachLlmEnabled() && llmConfigured()) {
+  // skipLlm: return the deterministic template draft only (no model call). The bulk cockpit uses this to
+  // build every row instantly, then upgrades rows to the LLM draft within a bounded time budget — so one
+  // slow/unavailable model never hangs the whole page on a sequential per-lead draft.
+  if (!opts?.skipLlm && outreachLlmEnabled() && llmConfigured()) {
     const ai = await llmDraft(oLead, l.clientName, l.eventDate, l.internalNotes, l.clientNotes, convo);
     if (ai) {
       draft = ai.draft;

@@ -29,6 +29,16 @@ export const BULK_EMAIL_SUBJECT = "Following up on your event";
  *  key is the hard stop; this is the softer default-off nudge. */
 export const RECENTLY_CONTACTED_HOURS = 24;
 
+/** Bounded-concurrency LLM drafting for the cohort. The model call is the only slow part and the cohort can
+ *  be ~50 leads, so we draft a few at a time under a total wall-clock budget; once the budget is spent the
+ *  remaining rows fall back to the instant deterministic template. This is what keeps the cockpit from
+ *  hanging when the model is slow/unavailable. Overridable via env for ops tuning. */
+const BULK_DRAFT_CONCURRENCY = Math.max(1, Number(process.env.BULK_OUTREACH_DRAFT_CONCURRENCY) || 6);
+const BULK_DRAFT_BUDGET_MS = Math.max(1000, Number(process.env.BULK_OUTREACH_DRAFT_BUDGET_MS) || 12000);
+/** Per-lead cap on the LLM draft. The model call has a 45s internal timeout, so without this a single hung
+ *  draft (and the handful in flight) could still stall the page; past this cap we use the template draft. */
+const BULK_DRAFT_PER_LEAD_MS = Math.max(1000, Number(process.env.BULK_OUTREACH_DRAFT_PER_LEAD_MS) || 10000);
+
 // The cockpit works EVERY open lead with a quote out — not just the "recent" slice. Goodshuffle has one
 // "Quote Sent" stage; our board auto-splits it into quote_sent (recent), follow_up (dormant >= 4 days) and
 // action_needed (the client replied). All three are open quotes awaiting movement, so all three belong in
@@ -138,14 +148,28 @@ export async function buildBulkOutreachCohort(repFirstName?: string | null): Pro
   // the dormant and replied quotes are exactly the ones that most need a nudge. See OPEN_QUOTE_STATUSES.
   const cohort = salesLeadCards().filter((c) => OPEN_QUOTE_STATUSES.has(c.status as BoardStatus) && hasQuoteOut(c));
 
-  const rows: BulkOutreachRow[] = [];
-  for (const card of cohort) {
+  // Build one row. `skipLlm` returns the deterministic template draft (no model call) so a row never blocks
+  // on the LLM; the fast per-lead work (lead lookup, merged timeline, availability) always runs.
+  async function buildRow(card: LeadCard, skipLlm: boolean): Promise<BulkOutreachRow> {
     const lead = getLead(card.id);
     const smsAvailable = (lead?.clientPhone ?? "").trim().length > 0;
     const emailAvailable = (lead?.clientEmail ?? "").trim().length > 0;
 
-    // Refreshed next-step draft — the SAME context-aware drafter the single lead panel uses.
-    const draft = await draftLeadOutreach(card.id, repFirstName);
+    // Refreshed next-step draft — the SAME context-aware drafter the single lead panel uses. When the LLM is
+    // wanted, cap it per-lead: if the model doesn't answer within BULK_DRAFT_PER_LEAD_MS, fall back to the
+    // instant template draft so one slow/hung lead can't stall the page (the model call keeps its own 45s
+    // timeout in the background, harmlessly discarded).
+    let draft: Awaited<ReturnType<typeof draftLeadOutreach>>;
+    if (skipLlm) {
+      draft = await draftLeadOutreach(card.id, repFirstName, { skipLlm: true });
+    } else {
+      const TIMED_OUT = Symbol("timeout");
+      const raced = await Promise.race([
+        draftLeadOutreach(card.id, repFirstName),
+        new Promise<typeof TIMED_OUT>((res) => setTimeout(() => res(TIMED_OUT), BULK_DRAFT_PER_LEAD_MS)),
+      ]);
+      draft = raced === TIMED_OUT ? await draftLeadOutreach(card.id, repFirstName, { skipLlm: true }) : raced;
+    }
     const body = draft?.draft.sms?.trim() || "";
     const draftFailed = body.length === 0;
 
@@ -177,7 +201,7 @@ export async function buildBulkOutreachCohort(repFirstName?: string | null): Pro
     // owner opts in after reading the tailored draft. Other guardrails (no-phone, recently-contacted) stand.
     const includeOk = !draftFailed && !recentlyContacted && !replied;
 
-    rows.push({
+    return {
       leadId: card.id,
       clientName: card.clientName,
       eventName: card.eventName,
@@ -202,8 +226,26 @@ export async function buildBulkOutreachCohort(repFirstName?: string | null): Pro
       defaultSms: includeOk && smsAvailable,
       defaultEmail: includeOk && emailAvailable,
       note,
-    });
+    };
   }
+
+  // The LLM draft is the ONLY slow part, and there can be ~50 open quotes. Drafting them sequentially (with a
+  // 45s-per-call model timeout) could take many minutes and hang the whole page whenever the model is slow —
+  // which is exactly what happened. Instead: draft with bounded concurrency under a wall-clock BUDGET; once the
+  // budget is spent, remaining rows build from the instant deterministic template. The page always loads, and
+  // gets real LLM drafts for as many rows as the model can return in time. Order is preserved via the index.
+  const rows: BulkOutreachRow[] = new Array(cohort.length);
+  const startedAt = Date.now();
+  let next = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= cohort.length) return;
+      const overBudget = Date.now() - startedAt >= BULK_DRAFT_BUDGET_MS;
+      rows[i] = await buildRow(cohort[i], overBudget);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(BULK_DRAFT_CONCURRENCY, cohort.length) }, worker));
 
   return {
     today,
