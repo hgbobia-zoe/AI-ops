@@ -43,6 +43,9 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
   };
   const strList = (v: unknown, fb: string[]) =>
     Array.isArray(v) ? Array.from(new Set(v.map((x) => String(x).trim().toLowerCase()).filter(Boolean))) : fb;
+  // Like strList but PRESERVES case — url paths are case-sensitive, so we must not lowercase them.
+  const urlList = (v: unknown, fb: string[]) =>
+    Array.isArray(v) ? Array.from(new Set(v.map((x) => String(x).trim()).filter(Boolean))) : fb;
   const t = (b.templates ?? {}) as Record<string, unknown>;
   return {
     companyName: str(b.companyName, current.companyName),
@@ -78,6 +81,9 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     heavyItemKeywords: strList(b.heavyItemKeywords, current.heavyItemKeywords),
     // Not edited from the /admin settings form — preserve the operating-year override as-is.
     operatingYearStart: current.operatingYearStart ?? null,
+    // Website uptime monitor targets (case-preserving, de-duped). A missing/non-array field keeps the
+    // current list; an explicit empty list clears it (monitor nothing).
+    monitorUrls: urlList(b.monitorUrls, current.monitorUrls),
   };
 }
 

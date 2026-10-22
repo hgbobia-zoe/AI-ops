@@ -76,6 +76,10 @@ export interface AppSettings {
    *  dates.ts:currentOperatingYearStart). A bare year ("2026") or a full date ("2026-01-01"); null/unset
    *  means "compute Jan 1 of the current year dynamically". Financial paths ignore this entirely. */
   operatingYearStart: string | null;
+  /** Public URLs the website uptime monitor checks for an HTTP 200 (see monitor/websiteHealth.ts). Default is
+   *  the company homepage. Env MONITOR_URLS override (a JSON array or a comma-separated list). ALWAYS-ON and
+   *  never gated by business hours — a site being down is operational/urgent. */
+  monitorUrls: string[];
 }
 
 export interface PrepOpportunitySettings {
@@ -181,7 +185,30 @@ export function defaultSettings(): AppSettings {
     eventReadinessKeywords: envJson<string[]>(process.env.EVENT_READINESS_KEYWORDS, DEFAULT_EVENT_READINESS_KEYWORDS),
     heavyItemKeywords: envJson<string[]>(process.env.HEAVY_ITEM_KEYWORDS, DEFAULT_HEAVY_ITEM_KEYWORDS),
     operatingYearStart: process.env.OPERATING_YEAR_START || null,
+    monitorUrls: envUrlList(process.env.MONITOR_URLS, DEFAULT_MONITOR_URLS),
   };
+}
+
+/** Out-of-the-box website-monitor target: the public company homepage. The team edits this in /admin. */
+export const DEFAULT_MONITOR_URLS: string[] = ["https://zoeeventsdmv.com"];
+
+/** Parse a url list from an env var: a JSON array first, else a comma/whitespace-separated list. Trims,
+ *  drops blanks, de-dupes, and PRESERVES case (unlike the lowercasing keyword lists — url paths are
+ *  case-sensitive). Falls back to `fallback` when unset/empty/unparseable. */
+function envUrlList(raw: string | undefined, fallback: string[]): string[] {
+  const clean = (arr: unknown[]): string[] => Array.from(new Set(arr.map((x) => String(x).trim()).filter(Boolean)));
+  if (!raw || !raw.trim()) return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      const list = clean(parsed);
+      return list.length ? list : fallback;
+    }
+  } catch {
+    // not JSON — fall through to comma/whitespace splitting
+  }
+  const list = clean(raw.split(/[,\s]+/));
+  return list.length ? list : fallback;
 }
 
 /** Out-of-the-box premium / exact-time arrival-window line items (the real Zoe Goodshuffle products all
@@ -248,6 +275,7 @@ function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSetting
     premiumWindowKeywords: over.premiumWindowKeywords ?? base.premiumWindowKeywords,
     eventReadinessKeywords: over.eventReadinessKeywords ?? base.eventReadinessKeywords,
     heavyItemKeywords: over.heavyItemKeywords ?? base.heavyItemKeywords,
+    monitorUrls: over.monitorUrls ?? base.monitorUrls,
   };
 }
 
