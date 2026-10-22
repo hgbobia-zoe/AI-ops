@@ -33,6 +33,7 @@ import { syncActiveLeadTextThreads } from "@/lib/comms/openphoneSync";
 import { runActionItemsJob, actionItemsConfigured } from "@/lib/salesos/actionItems";
 import { openphoneApiKey } from "@/lib/comms/openphone";
 import { runEsignCutoffSweep, esignCutoffEnabled } from "@/lib/salesos/esignCutoff";
+import { runWebsiteMonitor } from "@/lib/monitor/websiteHealth";
 import { getRiskQueue } from "@/lib/risk/store";
 import { responderHealthNow, recordJobAlert, formatAge } from "@/lib/ai/responderHealth";
 import { runOutboxHealthTick } from "@/lib/aiorg/outboxHealth";
@@ -358,6 +359,22 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     run: async () => {
       const r = await runActionItemsJob();
       return { ok: r.ok, detail: r.detail };
+    },
+  },
+  {
+    key: "website-uptime",
+    label: "Website uptime monitor",
+    bucket: "server",
+    configured: () => true, // app-owned; always-on operational/safety probe (never gated by business hours)
+    note: "Checks the public company website(s) return HTTP 200 (monitorUrls setting, env MONITOR_URLS; default the homepage). OPERATIONAL/SAFETY, so ALWAYS-ON and never business-hours gated. A plain server-side GET works (public WordPress/Kinsta site, not Cloudflare-blocked like Goodshuffle). Honest when unobservable: a network failure reads as 'unreachable' and a 10s timeout as a timeout, each distinct from a real HTTP error code; only a final 200 (after redirects) counts as up. Alerts the OPS channel, mirroring the other probes: a cold-start first observation does not page, a sustained non-200 pages ONCE and is 2h-deduped, and one recovery note when it returns to 200 (only if a failure was alerted). Bounded + cheap (a handful of urls, one GET each, sequential). Never throws into the tick.",
+    run: async () => {
+      const r = await runWebsiteMonitor();
+      const detail =
+        r.down.length === 0
+          ? `${r.checked} url${r.checked === 1 ? "" : "s"} up`
+          : `${r.checked} checked, ${r.down.length} down (${r.down.join(", ")})`;
+      // ok=false when any url is down so /admin/health surfaces the red state; the tick still never throws.
+      return { ok: r.down.length === 0, detail };
     },
   },
   {

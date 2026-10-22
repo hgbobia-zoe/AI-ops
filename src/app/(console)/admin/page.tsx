@@ -6,7 +6,7 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2, Users } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2, Users, Globe } from "lucide-react";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
 import { SeoCredentialSettings } from "@/components/SeoCredentialSettings";
@@ -42,6 +42,7 @@ interface Settings {
   premiumWindowKeywords: string[];
   eventReadinessKeywords: string[];
   heavyItemKeywords: string[];
+  monitorUrls: string[];
 }
 
 // Each slot has a delivery and a pickup variant; the toggle picks which set is edited.
@@ -403,6 +404,21 @@ export default function AdminPage() {
               hint='Default "folding farm table" catches the Antique Rustic Solid Pine Folding Farm Table (96 inch, big and heavy) without tripping on a plain table. Add other heavy items as needed.'
               value={s.heavyItemKeywords ?? []}
               onChange={(v) => setS({ ...s, heavyItemKeywords: v })}
+            />
+          </Section>
+
+          {/* Website uptime monitor — the public URLs the always-on uptime probe checks for HTTP 200. */}
+          <Section icon={<Globe className="size-4" />} title="Website monitor">
+            <p className="text-sm text-muted-foreground">
+              The runtime checks each of these URLs every 15 minutes and alerts the ops Slack channel if one
+              stops returning HTTP 200. This runs around the clock (a site being down is urgent), not just in
+              business hours. Default is your homepage. Separate URLs with commas.
+            </p>
+            <KeywordList
+              label="Monitored URLs"
+              hint="Full URLs including https://. The homepage is a good default; add key landing pages if you want them watched too."
+              value={s.monitorUrls ?? []}
+              onChange={(v) => setS({ ...s, monitorUrls: v })}
             />
           </Section>
 
