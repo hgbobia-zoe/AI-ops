@@ -232,9 +232,15 @@ const IMPORTER_RUNTIME_JS = `
   // grow it on each 429 (honor Retry-After), and ABORT after too many 429s in a row so we stop poking an
   // active cooldown. Image PUTs go to S3 and skip this (plain fetch).
   function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+  // Headers the Goodshuffle app's OWN create XHR sends — the server validates against the API version header
+  // and 400s any body without it. Merged into every pro.goodshuffle.com request (the S3 image PUT uses plain
+  // fetch and must NOT get these). Verified against a real 200 create.
+  var GS_HEADERS={"Accept-version":"v3.2","X-Requested-With":"XMLHttpRequest","Accept":"application/json, text/plain, */*"};
   var GS_GAP=1500, _lastGs=0, _consec429=0;
   function gsFetch(path,init,tries){
     if(tries===undefined) tries=8;
+    init=init||{};
+    init.headers=Object.assign({}, GS_HEADERS, init.headers||{});
     var wait=GS_GAP-(Date.now()-_lastGs);
     return (wait>0?sleep(wait):Promise.resolve()).then(function(){
       _lastGs=Date.now();

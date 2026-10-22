@@ -204,6 +204,12 @@ describe("buildImporterBookmarklet — embeds the verified two-step payloads", (
     expect(bm).toContain("translatedAutoAppliedString");
   });
 
+  it("sends the API version headers on every Goodshuffle request (server 400s a body without Accept-version)", () => {
+    expect(bm).toContain("Accept-version");
+    expect(bm).toContain("v3.2");
+    expect(bm).toContain("X-Requested-With");
+  });
+
   it("is a two-step create (create body → inventoryItem → update body)", () => {
     expect(bm).toContain("buildCreateBody");
     expect(bm).toContain("buildUpdateBody");
