@@ -7,13 +7,22 @@
 //
 // Tokens + mappings below are VERIFIED against the live storefront data API (data.goodshuffle.com).
 
-/** How a partner's source groups map onto a single Zoe destination group. */
+/**
+ * How a partner's source groups map onto a single Zoe destination group — and the RESOLVED Goodshuffle
+ * category this group's items are created under. The category IDs below were resolved LIVE against Zoe's
+ * own catalog (verified 2026-10-22), so the WRITE step needs NO manual capture: the importer sends only the
+ * category (the server derives the root group — Furniture — from it; a create that also sends rootGroupID
+ * is wrong). `baseTag` is the tag every item of this group always gets (e.g. "Sofa").
+ */
 export interface GroupMapping {
-  key: string; //            stable id for UI selection, e.g. "sofas"
-  label: string; //          human label, e.g. "Sofas"
-  sourceCategory: string; // storefront `categories` filter, e.g. "furniture-rentals"
-  sourceGroups: string[]; // storefront `groups` slugs to pull, e.g. ["sofa-rentals","settee-rentals"]
-  zoeGroup: string; //       the Zoe group slug copied items land in, e.g. "sofa-rentals"
+  key: string; //                stable id for UI selection, e.g. "sofas"
+  label: string; //              human label, e.g. "Sofas"
+  sourceCategory: string; //     storefront `categories` filter, e.g. "furniture-rentals"
+  sourceGroups: string[]; //     storefront `groups` slugs to pull, e.g. ["sofa-rentals","settee-rentals"]
+  zoeGroup: string; //           the Zoe group slug copied items land in, e.g. "sofa-rentals"
+  primaryCategoryID: number; //  resolved Goodshuffle category id (e.g. 657 = Sofas). NO rootGroup is sent.
+  primaryCategoryName: string; //resolved Goodshuffle category name (e.g. "Sofas")
+  baseTag: string; //            the base tag every copied item of this group carries (e.g. "Sofa")
 }
 
 export interface PartnerPreset {
@@ -38,6 +47,9 @@ export const PARTNER_PRESETS: PartnerPreset[] = [
         sourceCategory: "furniture-rentals",
         sourceGroups: ["sofa-rentals", "settee-rentals"],
         zoeGroup: "sofa-rentals",
+        primaryCategoryID: 657,
+        primaryCategoryName: "Sofas",
+        baseTag: "Sofa",
       },
       {
         key: "barstools",
@@ -45,6 +57,9 @@ export const PARTNER_PRESETS: PartnerPreset[] = [
         sourceCategory: "furniture-rentals",
         sourceGroups: ["stools-rentals"],
         zoeGroup: "stools-rentals",
+        primaryCategoryID: 661,
+        primaryCategoryName: "Stools",
+        baseTag: "Barstool",
       },
     ],
   },

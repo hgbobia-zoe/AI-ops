@@ -1,50 +1,44 @@
-// Bookmarklet builders for the Inventory Automation WRITE path.
+// Bookmarklet builder for the Inventory Automation WRITE path.
 //
 // WHY A BOOKMARKLET: Goodshuffle Pro has no public write API and Cloudflare blocks server-side calls, so
 // every write must run from a logged-in pro.goodshuffle.com browser tab (same-origin fetch, credentials
 // included). A direct mutating fetch from automation is blocked by a security classifier; the importer is
 // run BY THE OPERATOR in their own GSPRO tab, so it executes as the user — the intended, unaffected path.
 //
-// The real write endpoints were captured live (see scratchpad gspro-inventory-write-spec.md), so the
-// importer is built DIRECTLY against them — no heuristic parsing of a pasted capture needed:
-//   • Create: POST /app/inventory/saveRegularItem (JSON). id:null + a client uuid = create.
-//   • Image:  GET /app/image/getPresignedUploadURL?fileName=… → {presignedUrl,s3Path,s3Url};
-//             PUT the image Blob to presignedUrl; then add an images[] entry on saveRegularItem.
-// Exact-shape gotchas baked in (buildSaveItemBody): `tags` is a COMMA-SEPARATED STRING; UNPRICED is a
-// full pricingMap with unpriced:true / rateType:"UNPRICED"; untracked is quantityTracked:false +
-// quantityPosted:null; website visibility = website_wishlist_visible + marketplace_visible.
+// GROUND TRUTH: the payloads below were iterated LIVE against Goodshuffle until every call returned 200
+// (reference importer, scratchpad gspro-importer.js). The verified contract, baked in here:
+//   • Create is a MINIMAL body: NO id, NO uuid, NO rootGroup (the server derives the root group — Furniture
+//     — from the category). For an UNTRACKED item it sets quantityTracked:false and OMITS quantityPosted
+//     ENTIRELY (sending quantityPosted:null is what returns HTTP 400).
+//   • Two-step per item: POST /app/inventory/saveRegularItem (create) → the response is
+//     {inventoryItem:{…full item incl. id,uuid,rootGroup}} → upload images → POST saveRegularItem AGAIN with
+//     Object.assign({}, created, {contract_description, web_description, useContractDescriptionForWeb:false,
+//     internal_notes, tags, images}) and then delete quantityPosted / quantitySetAside (untracked).
+//   • pricingMap is the MINIMAL unpriced map captured from a 200 (see UNPRICED_PRICING_MAP).
+//   • applied_tax_types is fetched LIVE at run time from GET /app/taxType/list (filter
+//     autoAppliedToProducts) — it has a nested taxRates[] so it must never be hardcoded.
+//   • Images: GET /app/image/getPresignedUploadURL?fileName=… → {presignedUrl,s3Path,s3Url}; fetch the
+//     source blob; PUT it to presignedUrl with headers {Content-Type:<mime by extension>,
+//     x-amz-acl:"public-read"} (the x-amz-acl header is REQUIRED or S3 returns 403); then an images[] entry.
+//   • Rate limits: pro.goodshuffle.com (Cloudflare) 429s scripted bursts, so every GSPRO request is paced
+//     through a self-tuning throttle (start ~1500ms, grow the gap on each 429, honor Retry-After, abort
+//     cleanly after ~12 consecutive 429s). Image PUTs go to S3 and are not throttled.
+//   • tags is a COMMA-SEPARATED STRING: a base tag per group, "Bar stool"→"Barstool", dropping the
+//     partner's Staging-internal grouping tags (/^(group |event rental)/i).
 //
-// THE ONE PER-TARGET UNKNOWN is the numeric Goodshuffle category/group IDs for Zoe's Sofas and Barstools
-// (primaryCategoryID / rootGroupID …). Those can't be guessed, so the capture step is REPURPOSED: the
-// operator creates ONE item in each target group through the normal UI (with the capture tool running) and
-// pastes the result; parseCapture() reads the exact {primaryCategoryID, primaryCategoryName, rootGroupID,
-// rootGroupName, applied_tax_types} off each real saveRegularItem body, and those IDs are reused for every
-// item of that group. The importer FAILS CLOSED (stops with a clear message) if any target group's IDs are
-// unresolved — it never invents an ID.
+// The resolved per-group categories come from the partner preset (src/lib/inventory/partners.ts), so a
+// known partner needs NO capture step at all — the operator just previews a plan and generates the importer.
 //
 // TODO (fast-follow, OUT of scope): stage item_create / item_image_upload ops on the gs_outbox
 // (src/lib/gsPull.ts drainer) so the office Auto-Pull runs the plan hands-off.
 
 import type { PlannedItem } from "./importPlan";
 
-/** One write request mirrored by the capture tool (the shape it copies to the clipboard). */
-export interface CapturedRequest {
-  at?: string;
-  method?: string;
-  url?: string;
-  contentType?: string | null;
-  bodyText?: string | null;
-  formFields?: string[];
-}
-
-/** The resolved Goodshuffle category + group ID set for one target group (read from a real item save). */
-export interface GroupIdSet {
-  primaryCategoryID: number;
-  primaryCategoryName: string;
-  rootGroupID: number; //       the storefront GROUP — this is what lands the item under /sofas/ etc.
-  rootGroupName: string;
-  appliedTaxTypes: unknown[]; // the account default tax types, carried verbatim from the sample save
-  sampleTitle: string; //       the captured sample item's title (for UI display only)
+/** The resolved Goodshuffle category for one target group. Baked into the preset — no capture needed. */
+export interface GroupCategory {
+  primaryCategoryID: number; //  Goodshuffle category id (server derives the root group from this)
+  primaryCategoryName: string; //Goodshuffle category name
+  baseTag: string; //            base tag every copied item of this group carries ("Sofa" / "Barstool")
 }
 
 /** An entry in a saved item's images[] (after the Blob has been PUT to its presigned S3 URL). */
@@ -61,66 +55,57 @@ export interface ItemImageEntry {
 
 export interface ImporterConfig {
   plan: PlannedItem[];
-  groupIds: Record<string, GroupIdSet>; // keyed by zoeGroup; every group used by the plan must be present
-  zoeToken: string; //                    Zoe's public storefront token, for the run-time idempotency re-check
+  categories: Record<string, GroupCategory>; // keyed by zoeGroup; every group used by the plan must be present
+  zoeToken: string; //                         Zoe's public storefront token, for the run-time idempotency re-check
+  internalNotes: string; //                    internal note stamped on every copied item (provenance)
 }
 
+// The EXACT minimal unpriced pricingMap the app sends on create (captured from a real 200). Exported so the
+// unit tests pin the shape; injected verbatim into the importer so there is one source of truth. It is
+// referenced ONLY from the hand-written runtime string (never from inside a serialized builder), so the
+// bundler can never rename the reference out from under the injected `var`.
+export const UNPRICED_PRICING_MAP = {
+  flatFeesByGeo: [] as unknown[],
+  rateType: "UNPRICED",
+  unpriced: true,
+  flatFee: null,
+  dailyPriceVisibleOnECommerce: true,
+  hourlyPriceVisibleOnECommerce: true,
+  flatFeePriceVisibleOnECommerce: true,
+  purchasePriceVisibleOnECommerce: true,
+};
+
 // ── Pure builders (unit-tested, and serialized verbatim into the importer so there is one source of truth) ──
+//
+// Each is SELF-CONTAINED: it references no module-level identifier and calls no other builder, so
+// Function.toString() yields runnable JS even after the production bundler minifies this module. External
+// data (tax types, the pricing map, the computed tags CSV) is passed IN as arguments by the runtime.
 
 /**
- * Build the exact `saveRegularItem` request body for one planned item. PURE. Bakes in the captured
- * contract: tags as a CSV string, an UNPRICED pricingMap, untracked quantity, and website visibility.
- * Written with plain ES2017 (no spread / optional-chaining) so Function.toString() yields self-contained
- * JS the importer can run as-is.
+ * Build the MINIMAL `saveRegularItem` CREATE body for one planned item. PURE. No id, no uuid, no rootGroup
+ * (the server derives the root group from the category). UNTRACKED: quantityTracked:false and NO
+ * quantityPosted key at all. `taxTypes` is the live, auto-applied tax-type list; `pricingMap` is the
+ * verified unpriced map. `images` is empty on create — photos are attached on the second (update) save.
  */
-export function buildSaveItemBody(
+export function buildCreateBody(
   item: PlannedItem,
-  ids: GroupIdSet,
-  uuid: string,
-  images: ItemImageEntry[],
+  cat: GroupCategory,
+  taxTypes: unknown[],
+  pricingMap: Record<string, unknown>,
 ): Record<string, unknown> {
   return {
+    attributes: [],
+    selected: false,
+    title: item.title,
+    primaryCategoryID: cat.primaryCategoryID,
+    primaryCategoryName: cat.primaryCategoryName,
+    quantityTracked: false, //                 UNTRACKED — and note: NO quantityPosted key (null 400s)
+    marketplace_visible: true, //              list on Goodshuffle.com Marketplace
+    website_wishlist_visible: true, //         surface on zoeeventsdmv.com (Website Integration)
+    useContractDescriptionForWeb: true, //     create blank; the update save sets the real web copy
+    pricingMap: pricingMap,
     inventoryType: { name: "PRODUCT" },
     originalInventoryType: "PRODUCT",
-    uuid: uuid,
-    id: null, //                              null + uuid = create (vs a numeric id = update)
-    title: item.title,
-    primaryCategoryID: ids.primaryCategoryID,
-    primaryCategoryName: ids.primaryCategoryName,
-    rootGroupID: ids.rootGroupID,
-    rootGroupName: ids.rootGroupName,
-    contract_description: item.descriptionHtml || null,
-    web_description: item.descriptionHtml || null, // show the Staging HTML as the website copy…
-    useContractDescriptionForWeb: false, //         …rather than reusing the contract description
-    internal_notes: null,
-    tags: (item.tags || []).join(","), //     COMMA-SEPARATED STRING, not an array
-    marketplace_visible: true, //             list on Goodshuffle.com Marketplace
-    website_wishlist_visible: true, //        surface on zoeeventsdmv.com (Website Integration)
-    quantityTracked: item.trackQuantity === true, // v1: false (untracked / "on request")
-    quantityPosted: null,
-    quantitySetAside: null,
-    pricingMap: {
-      numberOfRates: 0,
-      baseRate: null,
-      pricedDaily: false,
-      dailyPrice: null,
-      threeDayPrice: null,
-      weeklyPrice: null,
-      monthlyPrice: null,
-      pricedForPurchase: false,
-      purchasePrice: null,
-      pricedFlatFee: false,
-      flatFee: null,
-      pricedHourly: false,
-      baseHourlyRate: null,
-      flatFeesByGeo: [],
-      unpriced: true,
-      rateType: "UNPRICED",
-    },
-    applied_tax_types: Array.isArray(ids.appliedTaxTypes) ? ids.appliedTaxTypes : [],
-    images: images,
-    // Pass-through structural fields that default empty / false.
-    attributes: [],
     poolMembers: [],
     packageContents: [],
     associatedServices: [],
@@ -128,14 +113,64 @@ export function buildSaveItemBody(
     alternateItems: [],
     parentItems: [],
     parentPackages: [],
-    poolID: null,
-    qrCode: null,
-    routingEligible: false,
-    isDeliveryRequired: false,
-    thumbImagePath: null,
-    selected: false,
-    dateCreated: null,
+    images: [],
+    applied_tax_types: Array.isArray(taxTypes) ? taxTypes : [],
   };
+}
+
+/**
+ * Build the second-step UPDATE body: the server's created item with the real content merged on. PURE.
+ * Starts from `created` (which carries the real id, uuid and rootGroup the server assigned), sets the
+ * website copy + tags + images, re-asserts untracked/unpriced, and DELETES quantityPosted / quantitySetAside
+ * (for an untracked item those keys must be ABSENT, not null). `tagsCsv` is the pre-computed comma string.
+ */
+export function buildUpdateBody(
+  created: Record<string, unknown>,
+  item: PlannedItem,
+  images: ItemImageEntry[],
+  tagsCsv: string,
+  internalNotes: string,
+  pricingMap: Record<string, unknown>,
+): Record<string, unknown> {
+  const desc = item.descriptionHtml || null;
+  const body = Object.assign({}, created, {
+    contract_description: desc,
+    web_description: desc, //                  show the Staging HTML as the website copy…
+    useContractDescriptionForWeb: false, //    …rather than reusing the contract description
+    internal_notes: internalNotes || null,
+    tags: tagsCsv, //                           COMMA-SEPARATED STRING, not an array
+    images: images,
+    marketplace_visible: true,
+    website_wishlist_visible: true,
+    quantityTracked: false,
+    pricingMap: pricingMap,
+  });
+  delete body.quantityPosted; //               untracked: these keys must be absent, not null
+  delete body.quantitySetAside;
+  return body;
+}
+
+/**
+ * Build the COMMA-SEPARATED tag string for a copied item. PURE and self-contained. Always starts with the
+ * group's base tag; normalizes "Bar stool" → "Barstool"; DROPS the partner's Staging-internal grouping tags
+ * (/^(group |event rental)/i); de-dupes case-insensitively, preserving first-seen casing.
+ */
+export function buildTags(tags: string[], baseTag: string): string {
+  const drop = /^(group\s|event\s*rental)/i;
+  const out: string[] = [baseTag];
+  const seen: Record<string, boolean> = {};
+  seen[String(baseTag).toLowerCase()] = true;
+  const list = Array.isArray(tags) ? tags : [];
+  for (let i = 0; i < list.length; i++) {
+    const v = String(list[i] == null ? "" : list[i]).trim();
+    if (!v || drop.test(v)) continue;
+    const normed = /^bar\s*stool$/i.test(v) ? "Barstool" : v;
+    const k = normed.toLowerCase();
+    if (seen[k]) continue;
+    seen[k] = true;
+    out.push(normed);
+  }
+  return out.join(",");
 }
 
 /** Build one images[] entry for a copied image after its Blob has been PUT to S3. PURE. */
@@ -159,16 +194,15 @@ export function buildImageEntry(
 }
 
 /**
- * Return the distinct zoeGroups used by the plan that have NO valid resolved ID set. PURE. The importer
- * (and the blade) fail closed when this is non-empty — an unresolved group's items are never created with
- * a guessed category/group ID.
+ * Return the distinct zoeGroups used by the plan that have NO valid resolved category. PURE. The importer
+ * (and the blade) fail closed when this is non-empty — an item is never created with a guessed category.
  */
-export function findMissingGroupIds(plan: PlannedItem[], groupIds: Record<string, GroupIdSet>): string[] {
+export function findMissingCategories(plan: PlannedItem[], categories: Record<string, GroupCategory>): string[] {
   const seen: Record<string, boolean> = {};
   const missing: string[] = [];
   for (const item of plan) {
-    const g = groupIds[item.zoeGroup];
-    const ok = !!g && typeof g.rootGroupID === "number" && typeof g.primaryCategoryID === "number";
+    const c = categories[item.zoeGroup];
+    const ok = !!c && typeof c.primaryCategoryID === "number" && typeof c.primaryCategoryName === "string";
     if (!ok && !seen[item.zoeGroup]) {
       seen[item.zoeGroup] = true;
       missing.push(item.zoeGroup);
@@ -177,154 +211,99 @@ export function findMissingGroupIds(plan: PlannedItem[], groupIds: Record<string
   return missing;
 }
 
-const numOrNull = (v: unknown): number | null => {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : null;
-};
-
-/**
- * Read the resolved category/group ID sets out of a capture. Accepts the capture tool's output (an array
- * of CapturedRequest, or { requests: [...] }), or a pasted saveRegularItem body (object or array). For each
- * real `saveRegularItem` body it reads the exact IDs + the account default applied_tax_types. Deduped by
- * rootGroupID. Returns a friendly error, never throws.
- */
-export function parseCapture(text: string): { ok: boolean; sets?: GroupIdSet[]; error?: string } {
-  const trimmed = text.trim();
-  if (!trimmed) return { ok: false, error: "Paste the captured item save(s) first." };
-  let data: unknown;
-  try {
-    data = JSON.parse(trimmed);
-  } catch {
-    return { ok: false, error: "That is not valid JSON. Use the capture tool's Copy button and paste the result here." };
-  }
-
-  // Gather candidate item bodies from whatever shape was pasted.
-  const bodies: Record<string, unknown>[] = [];
-  const pushBody = (obj: unknown): void => {
-    if (obj && typeof obj === "object") bodies.push(obj as Record<string, unknown>);
-  };
-  const fromRequest = (r: CapturedRequest): void => {
-    if (!r || typeof r.url !== "string" || !/saveRegularItem/i.test(r.url)) return;
-    if (typeof r.bodyText !== "string" || !r.bodyText.trim()) return;
-    try {
-      pushBody(JSON.parse(r.bodyText));
-    } catch {
-      /* ignore an unparseable body */
-    }
-  };
-
-  if (Array.isArray(data)) {
-    for (const el of data) {
-      if (el && typeof el === "object" && "rootGroupID" in (el as object)) pushBody(el); // raw item object
-      else fromRequest(el as CapturedRequest); // captured request
-    }
-  } else if (data && typeof data === "object") {
-    const o = data as { requests?: unknown[]; rootGroupID?: unknown };
-    if (Array.isArray(o.requests)) for (const el of o.requests) fromRequest(el as CapturedRequest);
-    else if ("rootGroupID" in o) pushBody(data); // a single pasted item body
-  }
-
-  const byGroup = new Map<number, GroupIdSet>();
-  for (const b of bodies) {
-    const rootGroupID = numOrNull(b.rootGroupID);
-    const primaryCategoryID = numOrNull(b.primaryCategoryID);
-    if (rootGroupID === null || primaryCategoryID === null) continue;
-    if (byGroup.has(rootGroupID)) continue;
-    byGroup.set(rootGroupID, {
-      primaryCategoryID,
-      primaryCategoryName: typeof b.primaryCategoryName === "string" ? b.primaryCategoryName : "",
-      rootGroupID,
-      rootGroupName: typeof b.rootGroupName === "string" ? b.rootGroupName : "",
-      appliedTaxTypes: Array.isArray(b.applied_tax_types) ? b.applied_tax_types : [],
-      sampleTitle: typeof b.title === "string" ? b.title : "",
-    });
-  }
-
-  const sets = Array.from(byGroup.values());
-  if (sets.length === 0) {
-    return {
-      ok: false,
-      error:
-        "No saved inventory item found in the capture. With the capture tool running, create ONE item in each target Goodshuffle group (Sofas / Barstools) through the normal UI, then click Copy captured and paste again.",
-    };
-  }
-  return { ok: true, sets };
-}
-
-// ── The embedded browser runtimes ─────────────────────────────────────────────────────────────────────
-// Authored as plain JS strings (they run in the GSPRO tab, not our app). Messages stay single-line.
-
-const CAPTURE_JS = `(function(){
-  var KEY="zoe_gs_capture_v1", HOST="pro.goodshuffle.com";
-  function load(){ try{ return JSON.parse(localStorage.getItem(KEY)||"[]"); }catch(e){ return []; } }
-  function save(a){ try{ localStorage.setItem(KEY, JSON.stringify(a.slice(-50))); }catch(e){} }
-  function isTarget(u){ try{ return (new URL(u, location.href)).host.indexOf(HOST)!==-1; }catch(e){ return false; } }
-  function describe(body){
-    if(body==null) return {bodyText:null,contentType:null,formFields:[]};
-    if(typeof body==="string") return {bodyText:body,contentType:null,formFields:[]};
-    if(typeof URLSearchParams!=="undefined"&&body instanceof URLSearchParams) return {bodyText:body.toString(),contentType:"application/x-www-form-urlencoded",formFields:[]};
-    if(typeof FormData!=="undefined"&&body instanceof FormData){ var f=[]; try{ body.forEach(function(v,k){ f.push(k); }); }catch(e){} return {bodyText:null,contentType:"multipart/form-data",formFields:f}; }
-    return {bodyText:null,contentType:null,formFields:[]};
-  }
-  function ctFrom(headers, fallback){
-    try{
-      if(headers&&typeof headers.get==="function") return headers.get("content-type")||fallback;
-      if(headers&&typeof headers==="object"){ for(var k in headers){ if(String(k).toLowerCase()==="content-type") return headers[k]; } }
-    }catch(e){}
-    return fallback;
-  }
-  function record(method,url,headers,body){
-    if(!isTarget(url)) return;
-    var m=(method||"GET").toUpperCase();
-    if(m==="GET"||m==="HEAD") return;
-    var d=describe(body);
-    var arr=load();
-    arr.push({at:new Date().toISOString(),method:m,url:(new URL(url,location.href)).href,contentType:ctFrom(headers,d.contentType),bodyText:d.bodyText,formFields:d.formFields});
-    save(arr); paint();
-  }
-  if(!window.__zoeCapHooked){
-    window.__zoeCapHooked=true;
-    var of=window.fetch;
-    window.fetch=function(input,init){
-      try{
-        var url=typeof input==="string"?input:(input&&input.url)||"";
-        var method=(init&&init.method)||(input&&typeof input==="object"&&input.method)||"GET";
-        var headers=(init&&init.headers)||(input&&typeof input==="object"&&input.headers);
-        record(method,url,headers,init&&init.body);
-      }catch(e){}
-      return of.apply(this,arguments);
-    };
-    var ox=XMLHttpRequest.prototype.open, osend=XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open=function(m,u){ this.__zm=m; this.__zu=u; return ox.apply(this,arguments); };
-    XMLHttpRequest.prototype.send=function(b){ try{ record(this.__zm,this.__zu,null,b); }catch(e){} return osend.apply(this,arguments); };
-  }
-  function paint(){
-    var n=load().length, el=document.getElementById("zoeCapPanel");
-    if(!el){ el=document.createElement("div"); el.id="zoeCapPanel"; el.style.cssText="position:fixed;bottom:16px;right:16px;z-index:2147483647;background:#111;color:#fff;font:12px system-ui,sans-serif;padding:10px 12px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);min-width:190px"; document.body.appendChild(el); }
-    el.innerHTML="<div style='font-weight:600;margin-bottom:6px'>Zoe capture: "+n+" write(s)</div>";
-    var copy=document.createElement("button"); copy.textContent="Copy captured"; copy.style.cssText="margin-right:6px;padding:4px 8px;border:0;border-radius:4px;background:#d4af37;color:#111;font-weight:600;cursor:pointer";
-    copy.onclick=function(){ var t=JSON.stringify(load(),null,2); if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(t).then(function(){ copy.textContent="Copied!"; setTimeout(function(){ copy.textContent="Copy captured"; },1200); },function(){ window.prompt("Copy the captured JSON:",t); }); } else { window.prompt("Copy the captured JSON:",t); } };
-    var clr=document.createElement("button"); clr.textContent="Clear"; clr.style.cssText="padding:4px 8px;border:0;border-radius:4px;background:#333;color:#fff;cursor:pointer";
-    clr.onclick=function(){ save([]); paint(); };
-    el.appendChild(copy); el.appendChild(clr);
-  }
-  paint();
-})();void 0`;
-
-// The importer runtime. Runs AFTER the injected CFG + the serialized pure builders
-// (buildSaveItemBody / buildImageEntry / findMissingGroupIds) are in scope. Known endpoints are hardcoded.
+// ── The embedded importer runtime ─────────────────────────────────────────────────────────────────────
+// Authored as a plain JS string (it runs in the GSPRO tab, not our app). It runs AFTER the injected CFG,
+// the injected UNPRICED_PRICING_MAP, and the serialized pure builders are in scope. Every GSPRO endpoint is
+// hardcoded. Identifier names here are hand-written string text (never minified), so they match the vars
+// that buildImporterBookmarklet injects. Messages stay single-line.
 const IMPORTER_RUNTIME_JS = `
-  var plan=(CFG&&CFG.plan)||[], groupIds=(CFG&&CFG.groupIds)||{}, zoeToken=(CFG&&CFG.zoeToken)||"";
+  var plan=(CFG&&CFG.plan)||[], categories=(CFG&&CFG.categories)||{}, zoeToken=(CFG&&CFG.zoeToken)||"", internalNotes=(CFG&&CFG.internalNotes)||"";
   function log(){ try{ console.log.apply(console,["[zoe-import]"].concat([].slice.call(arguments))); }catch(e){} }
   function norm(t){ return String(t||"").trim().toLowerCase().replace(/\\s+/g," "); }
-  function uuid(){ try{ if(window.crypto&&crypto.randomUUID) return crypto.randomUUID(); }catch(e){} return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,function(c){var r=Math.random()*16|0;return (c==="x"?r:(r&0x3|0x8)).toString(16);}); }
 
-  var missing=findMissingGroupIds(plan, groupIds);
-  if(missing.length){ alert("Cannot import. Missing Goodshuffle category/group IDs for group(s): "+missing.join(", ")+". Capture a sample item saved in each of those groups, assign them in the blade, then regenerate the importer."); return; }
+  var missing=findMissingCategories(plan, categories);
+  if(missing.length){ alert("Cannot import. Missing Goodshuffle category for group(s): "+missing.join(", ")+". This should not happen for a known partner preset."); return; }
   if(!plan.length){ alert("The plan is empty - nothing to import."); return; }
-  if(!confirm("Zoe inventory importer. "+plan.length+" item(s) planned. This creates items in your logged-in Goodshuffle account. Continue?")){ log("cancelled"); return; }
+  if(!confirm("Zoe inventory importer. "+plan.length+" item(s) planned. This creates UNPRICED, UNTRACKED, website-visible items in your logged-in Goodshuffle account. Continue?")){ log("cancelled"); return; }
   var dryRun=confirm("Dry run first? OK = simulate only (no writes). Cancel = create for real now.");
   log(dryRun?"DRY RUN (no writes)":"LIVE RUN");
+
+  // Self-tuning throttle for pro.goodshuffle.com (Cloudflare 429s scripted write bursts). Start with a gap,
+  // grow it on each 429 (honor Retry-After), and ABORT after too many 429s in a row so we stop poking an
+  // active cooldown. Image PUTs go to S3 and skip this (plain fetch).
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+  var GS_GAP=1500, _lastGs=0, _consec429=0;
+  function gsFetch(path,init,tries){
+    if(tries===undefined) tries=8;
+    var wait=GS_GAP-(Date.now()-_lastGs);
+    return (wait>0?sleep(wait):Promise.resolve()).then(function(){
+      _lastGs=Date.now();
+      return fetch(path,init).then(function(r){
+        if(r.status===429){
+          if(++_consec429>=12) throw new Error("RATE_LIMIT_ABORT");
+          GS_GAP=Math.min(Math.round(GS_GAP*1.6),20000);
+          var ra=Number(r.headers.get("retry-after"));
+          return sleep(ra>0?ra*1000:GS_GAP).then(function(){ return tries>0?gsFetch(path,init,tries-1):r; });
+        }
+        _consec429=0; return r;
+      });
+    });
+  }
+  function gsPost(path,obj){
+    return gsFetch(path,{method:"POST",credentials:"include",headers:{"content-type":"application/json"},body:JSON.stringify(obj)})
+      .then(function(r){ if(!r.ok) throw new Error("POST "+path+" -> HTTP "+r.status); return r.json(); });
+  }
+
+  // Live tax types: the exact objects (incl. nested taxRates[]) the account auto-applies to products.
+  function loadTax(){
+    return gsFetch("/app/taxType/list",{credentials:"include"}).then(function(r){ return r.json(); }).then(function(tt){
+      var all=Array.isArray(tt)?tt:((tt&&tt.taxTypes)||(tt&&tt.data)||[]);
+      var tax=all.filter(function(t){ return t&&t.autoAppliedToProducts; });
+      log("tax types: "+(tax.map(function(t){return t.name;}).join(", ")||"(none auto-applied)"));
+      return tax;
+    }).catch(function(e){ log("could not load tax types; proceeding with none",String(e)); return []; });
+  }
+
+  function ctForName(n){ var e=String(n||"").split(".").pop().toLowerCase(); return e==="png"?"image/png":e==="webp"?"image/webp":e==="gif"?"image/gif":e==="heic"?"image/heic":"image/jpeg"; }
+  function fileNameFromUrl(u,i){ try{ var p=(new URL(u,location.href)).pathname.split("/").pop(); p=decodeURIComponent(p||""); if(p&&/\\.(jpe?g|png|gif|webp|heic)$/i.test(p)) return p; }catch(e){} return "image-"+(i+1)+".jpg"; }
+  function imageDims(blob){
+    function dom(){ return new Promise(function(res){ try{ var u=URL.createObjectURL(blob); var im=new Image(); im.onload=function(){ res({w:im.naturalWidth,h:im.naturalHeight}); URL.revokeObjectURL(u); }; im.onerror=function(){ res({w:null,h:null}); URL.revokeObjectURL(u); }; im.src=u; }catch(e){ res({w:null,h:null}); } }); }
+    if(typeof createImageBitmap!=="undefined"){ return createImageBitmap(blob).then(function(b){ var d={w:b.width,h:b.height}; if(b.close)b.close(); return d; }).catch(dom); }
+    return dom();
+  }
+  // 3-step image copy: presign (throttled) -> fetch source Blob -> PUT to S3 (x-amz-acl REQUIRED) -> entry.
+  function uploadImage(url,i){
+    var fileName=fileNameFromUrl(url,i);
+    return gsFetch("/app/image/getPresignedUploadURL?fileName="+encodeURIComponent(fileName),{credentials:"include"})
+      .then(function(r){ if(!r.ok) throw new Error("presign "+r.status); return r.json(); })
+      .then(function(pres){
+        return fetch(url).then(function(r){ if(!r.ok) throw new Error("source "+r.status); return r.blob(); })
+          .then(function(blob){ return imageDims(blob).then(function(d){
+            return fetch(pres.presignedUrl,{method:"PUT",body:blob,headers:{"Content-Type":ctForName(fileName),"x-amz-acl":"public-read"}})
+              .then(function(pr){ if(!pr.ok) throw new Error("s3 PUT "+pr.status); return buildImageEntry(pres.s3Path, fileName, i, d.w, d.h); });
+          }); });
+      });
+  }
+
+  // Two-step create: minimal create -> upload photos -> update with content.
+  function createOne(item,tax){
+    var cat=categories[item.zoeGroup];
+    log("CREATE", item.title, "-> "+cat.primaryCategoryName+" (#"+cat.primaryCategoryID+")", "images:"+(item.imageUrls||[]).length);
+    if(dryRun){ log("  [dry run] create body:", JSON.stringify(buildCreateBody(item, cat, tax, UNPRICED_PRICING_MAP))); return Promise.resolve(null); }
+    return gsPost("/app/inventory/saveRegularItem", buildCreateBody(item, cat, tax, UNPRICED_PRICING_MAP)).then(function(res){
+      var created=res&&res.inventoryItem;
+      if(!created) throw new Error("create response had no inventoryItem");
+      var entries=[];
+      var srcImgs=item.imageUrls||[];
+      return srcImgs.reduce(function(chain,url,i){ return chain.then(function(){
+        return uploadImage(url,i).then(function(e){ entries.push(e); log("  image uploaded:", e.fileName); }).catch(function(err){ log("  image FAILED (skipped):", url, String(err)); });
+      }); }, Promise.resolve()).then(function(){
+        var tagsCsv=buildTags(item.tags, cat.baseTag);
+        return gsPost("/app/inventory/saveRegularItem", buildUpdateBody(created, item, entries, tagsCsv, internalNotes, UNPRICED_PRICING_MAP))
+          .then(function(){ log("  created id:", created.id, "["+entries.length+" photos]"); return created.id; });
+      });
+    });
+  }
 
   function existingTitles(){
     return fetch("https://data.goodshuffle.com/vendor/"+encodeURIComponent(zoeToken)+"/inventory?size=500",{cache:"no-store"})
@@ -332,70 +311,43 @@ const IMPORTER_RUNTIME_JS = `
       .then(function(j){ var s={}; ((j&&j.items)||[]).forEach(function(it){ if(it&&it.title) s[norm(it.title)]=1; }); log("re-checked Zoe catalog: "+Object.keys(s).length+" existing titles"); return s; })
       .catch(function(e){ log("could not re-fetch Zoe catalog ("+e+"); using in-run dedup only"); return null; });
   }
-  function fileNameFromUrl(u,i){ try{ var p=(new URL(u,location.href)).pathname.split("/").pop(); p=decodeURIComponent(p||""); if(p&&/\\.(jpe?g|png|gif|webp)$/i.test(p)) return p; }catch(e){} return "image-"+(i+1)+".jpg"; }
-  function imageDims(blob){
-    function dom(){ return new Promise(function(res){ try{ var u=URL.createObjectURL(blob); var im=new Image(); im.onload=function(){ res({w:im.naturalWidth,h:im.naturalHeight}); URL.revokeObjectURL(u); }; im.onerror=function(){ res({w:null,h:null}); URL.revokeObjectURL(u); }; im.src=u; }catch(e){ res({w:null,h:null}); } }); }
-    if(typeof createImageBitmap!=="undefined"){ return createImageBitmap(blob).then(function(b){ var d={w:b.width,h:b.height}; if(b.close)b.close(); return d; }).catch(dom); }
-    return dom();
-  }
-  // 3-step image copy: presign -> fetch source Blob -> PUT to S3 -> build the images[] entry.
-  function uploadImage(url,i){
-    var fileName=fileNameFromUrl(url,i);
-    return fetch("/app/image/getPresignedUploadURL?fileName="+encodeURIComponent(fileName),{credentials:"include"})
-      .then(function(r){ if(!r.ok) throw new Error("presign "+r.status); return r.json(); })
-      .then(function(pres){
-        return fetch(url).then(function(r){ if(!r.ok) throw new Error("source "+r.status); return r.blob(); })
-          .then(function(blob){ return imageDims(blob).then(function(d){
-            return fetch(pres.presignedUrl,{method:"PUT",body:blob,headers:{"content-type":blob.type||"image/jpeg"}})
-              .then(function(pr){ if(!pr.ok) throw new Error("s3 PUT "+pr.status); return buildImageEntry(pres.s3Path, fileName, i, d.w, d.h); });
-          }); });
-      });
-  }
-  function createOne(item){
-    var ids=groupIds[item.zoeGroup];
-    log("CREATE", item.title, "-> "+ids.rootGroupName+" (#"+ids.rootGroupID+")", "images:"+item.imageUrls.length);
-    if(dryRun){ log("  [dry run] body:", JSON.stringify(buildSaveItemBody(item, ids, uuid(), []))); return Promise.resolve(null); }
-    var entries=[];
-    return item.imageUrls.reduce(function(chain,url,i){ return chain.then(function(){
-      return uploadImage(url,i).then(function(e){ entries.push(e); log("  image uploaded:", e.fileName); }).catch(function(err){ log("  image FAILED (skipped):", url, String(err)); });
-    }); }, Promise.resolve()).then(function(){
-      var body=buildSaveItemBody(item, ids, uuid(), entries);
-      return fetch("/app/inventory/saveRegularItem",{method:"POST",credentials:"include",headers:{"content-type":"application/json"},body:JSON.stringify(body)})
-        .then(function(r){ if(!r.ok) throw new Error("save "+r.status); return r.json().catch(function(){ return {}; }); })
-        .then(function(j){ log("  created id:", j&&j.id); return j&&j.id; });
-    });
-  }
-  existingTitles().then(function(have){
-    var created=0, skipped=0, failed=0, seen={};
+
+  Promise.all([loadTax(), existingTitles()]).then(function(r){
+    var tax=r[0], have=r[1];
+    var created=0, skipped=0, failed=0, seen={}, aborted=false;
     return plan.reduce(function(chain,item){ return chain.then(function(){
+      if(aborted) return;
       var n=norm(item.title);
       if((have&&have[n])||seen[n]){ skipped++; log("SKIP (exists):", item.title); return; }
       seen[n]=1;
-      return createOne(item).then(function(){ created++; }).catch(function(err){ failed++; log("CREATE FAILED:", item.title, String(err)); });
+      return createOne(item,tax).then(function(){ created++; }).catch(function(err){
+        if(String((err&&err.message)||err)==="RATE_LIMIT_ABORT"){ aborted=true; log("Stopped: the write endpoint is rate-limited (cooldown active). Created "+created+" so far. Wait ~10-15 min with NO attempts, then re-run - it skips the ones already made."); return; }
+        failed++; log("CREATE FAILED:", item.title, String(err));
+      });
     }); }, Promise.resolve()).then(function(){
-      var msg="Done. "+(dryRun?"[dry run] would create ":"created ")+created+", skipped "+skipped+(failed?(", failed "+failed):"")+".";
+      var msg="Done. "+(dryRun?"[dry run] would create ":"created ")+created+", skipped "+skipped+(failed?(", failed "+failed):"")+(aborted?" (ABORTED on rate limit - wait, then re-run to continue)":"")+".";
       log(msg); alert(msg);
     });
   });`;
 
-/** The capture bookmarklet — a static `javascript:` string. Run once in a logged-in GSPRO tab. */
-export function buildCaptureBookmarklet(): string {
-  return "javascript:" + CAPTURE_JS;
-}
-
 /**
- * The importer bookmarklet — a self-contained `javascript:` string built against the KNOWN endpoints. The
- * confirmed plan + the resolved per-group ID sets are embedded as JSON; the pure builders are serialized in
- * verbatim (one source of truth with the unit tests). It confirm-gates, offers a dry run, re-checks Zoe's
- * live catalog at run time (skips existing titles), and FAILS CLOSED if any target group's IDs are missing.
+ * The importer bookmarklet — a self-contained `javascript:` string built against the KNOWN endpoints and the
+ * VERIFIED payloads. The confirmed plan + the resolved per-group categories are embedded as JSON; the pure
+ * builders and the unpriced pricing map are serialized in verbatim (one source of truth with the unit
+ * tests). It confirm-gates, offers a dry run, fetches the live tax types, paces every GSPRO request through
+ * the 429 throttle, re-checks Zoe's live catalog at run time (skips existing titles), and fails closed if a
+ * group's category is missing.
  */
 export function buildImporterBookmarklet(cfg: ImporterConfig): string {
   return (
     "javascript:(function(){" +
     "var CFG=" + JSON.stringify(cfg) + ";" +
-    "var buildSaveItemBody=" + buildSaveItemBody.toString() + ";" +
+    "var UNPRICED_PRICING_MAP=" + JSON.stringify(UNPRICED_PRICING_MAP) + ";" +
+    "var buildCreateBody=" + buildCreateBody.toString() + ";" +
+    "var buildUpdateBody=" + buildUpdateBody.toString() + ";" +
+    "var buildTags=" + buildTags.toString() + ";" +
     "var buildImageEntry=" + buildImageEntry.toString() + ";" +
-    "var findMissingGroupIds=" + findMissingGroupIds.toString() + ";" +
+    "var findMissingCategories=" + findMissingCategories.toString() + ";" +
     IMPORTER_RUNTIME_JS +
     "})();void 0"
   );
