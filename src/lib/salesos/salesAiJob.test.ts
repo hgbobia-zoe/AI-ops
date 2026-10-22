@@ -152,22 +152,30 @@ describe("runSalesAiJob — business-hours gate", () => {
   });
 
   // Default schedule (Mon-Fri 10-18, Sat 10-13, Sun closed) read from :memory: settings.
-  it("HOLDS (skips, no DB/LLM) outside business hours, with an honest held detail", async () => {
-    // Sunday 12:00 PM ET (17:00 UTC) — closed. The gate short-circuits BEFORE claiming the throttle slot
-    // or reading any leads, so the next in-hours tick re-runs it in full (held, not dropped).
+  it("HOLDS the recommendation steps outside business hours but STILL runs Sales Coach", async () => {
+    // Sunday 12:00 PM ET (17:00 UTC) — closed. The 4 customer-facing recommendation steps are held BEFORE
+    // the throttle is claimed (so they re-run on the next in-hours tick), while Sales Coach runs anyway.
     const sunday = Date.parse("2026-01-04T17:00:00.000Z");
     const r = await runSalesAiJob(sunday);
     expect(r.ok).toBe(true);
-    expect(r.detail).toMatch(/held: outside business hours/i);
+    for (const step of ["quote-analyst", "lost-quote", "outreach", "lead-intelligence"]) {
+      expect(r.detail).toMatch(new RegExp(`${step}: held: outside business hours`, "i"));
+    }
+    // Sales Coach (behind-the-scenes call-recap analysis) is always-on — it ran, and was NOT held.
+    expect(r.detail).toMatch(/sales-coach:/i);
+    expect(r.detail).not.toMatch(/sales-coach: held/i);
   });
 
-  it("runs (passes the gate) inside business hours", async () => {
+  it("runs everything (recommendations + Sales Coach) inside business hours", async () => {
     // Monday 2:00 PM ET (19:00 UTC in EST) — open. The job proceeds past the gate (empty :memory: DB, no
-    // LLM key → benign no-op steps), so the detail is the step rollup, NOT the held line.
+    // LLM key → benign no-op steps), so every step reports and nothing is held.
     const monday = Date.parse("2026-01-05T19:00:00.000Z");
     const r = await runSalesAiJob(monday);
     expect(r.ok).toBe(true);
     expect(r.detail).not.toMatch(/held: outside business hours/i);
+    expect(r.detail).toMatch(/sales-coach:/i);
+    expect(r.detail).toMatch(/quote-analyst:/i); // the recommendation steps ran (not held)
+    expect(r.detail).toMatch(/lead-intelligence:/i);
   });
 });
 

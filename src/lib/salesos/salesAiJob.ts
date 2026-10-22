@@ -163,28 +163,43 @@ export interface SalesAiRunResult {
 export async function runSalesAiJob(now: number = Date.now()): Promise<SalesAiRunResult> {
   if (!salesAiEnabled()) return { ok: true, detail: "disabled (SALES_AI_ENABLED off)" };
 
-  // Business-hours gate: the owner's rule is that the bots make no RECOMMENDATIONS (and send nothing
-  // customer-facing) outside business hours. Hold the WHOLE pass — the analyst's Slack nudges, the
-  // Outreach/Lost-Quote approval cards, the Lead-Intelligence nudge, and the Sales-Coach backlog drain —
-  // BEFORE claiming the throttle slot, so it is not dropped: the next in-hours tick re-runs it in full.
-  const gate = businessHoursGate(new Date(now));
-  if (!gate.open) return { ok: true, detail: gate.heldDetail };
-
   const state = getJson<SalesAiState>(STATE_KEY, {});
-  if (!decideThrottle(state.lastRunAt, now, SALES_AI_BOUNDS.minIntervalMin() * 60_000)) {
-    return { ok: true, detail: `throttled (min interval ${SALES_AI_BOUNDS.minIntervalMin()}m)` };
-  }
-  // Claim the throttle slot immediately so an overlapping tick can't double-run the LLM work.
   state.alerts = state.alerts ?? {};
+  const parts: string[] = [];
+
+  // Sales Coach — behind-the-scenes call-recap analysis. ALWAYS-ON by the owner's decision: it produces no
+  // customer-facing output and no recommendation (it just drains the unanalyzed-call backlog into cached
+  // recaps), so it runs on EVERY tick, regardless of business hours and independent of the recommendation
+  // throttle. Safe to run each tick — listUnanalyzedCoachableCalls skips analyzed/attempted calls and
+  // analyzeCall is idempotent, so a drained backlog is a cheap no-op (no LLM).
+  parts.push(await safeStep("sales-coach", runSalesCoachBacklog));
+
+  // The CUSTOMER-FACING RECOMMENDATION pass — the Quote / Opportunity Analyst Slack nudges, the Outreach +
+  // Lost-Quote approval cards, and the Lead-Intelligence nudge. The owner's rule: no bot recommendations
+  // outside business hours. Checked PER STEP here and BEFORE the throttle is claimed, so a held pass does
+  // not burn the throttle slot — it simply re-runs on the next in-hours tick (held, not dropped). Each step
+  // logs an honest held line.
+  const gate = businessHoursGate(new Date(now));
+  if (!gate.open) {
+    for (const step of ["quote-analyst", "lost-quote", "outreach", "lead-intelligence"]) parts.push(`${step}: ${gate.heldDetail}`);
+    setJson(STATE_KEY, state);
+    return { ok: true, detail: parts.join(" · ") };
+  }
+
+  // In hours: the LLM-heavy recommendation pass self-throttles (cost control) to a few runs/day.
+  if (!decideThrottle(state.lastRunAt, now, SALES_AI_BOUNDS.minIntervalMin() * 60_000)) {
+    parts.push(`recommendations: throttled (min interval ${SALES_AI_BOUNDS.minIntervalMin()}m)`);
+    setJson(STATE_KEY, state);
+    return { ok: true, detail: parts.join(" · ") };
+  }
+  // Claim the throttle slot immediately so an overlapping tick can't double-run the recommendation LLM work.
   state.lastRunAt = new Date(now).toISOString();
   setJson(STATE_KEY, state);
 
-  const parts: string[] = [];
   parts.push(await safeStep("quote-analyst", () => runQuoteAnalyst(state, now)));
   parts.push(await safeStep("lost-quote", runLostQuote));
   parts.push(await safeStep("outreach", runOutreach));
   parts.push(await safeStep("lead-intelligence", () => runLeadIntelligence(state, now)));
-  parts.push(await safeStep("sales-coach", runSalesCoachBacklog));
 
   // Persist any alert-memo updates the steps made.
   setJson(STATE_KEY, state);
