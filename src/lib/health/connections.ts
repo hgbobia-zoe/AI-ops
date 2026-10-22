@@ -7,7 +7,7 @@
 import { getPullState, getLatestImportBySource, type ImportRow } from "@/lib/pull/state";
 import { computeDataHealth, type HealthState } from "./health";
 import { openphoneApiKey } from "@/lib/comms/openphone";
-import { connecteamConfigured } from "@/lib/connecteam";
+import { connecteamConfigured, connecteamHealthCached } from "@/lib/connecteam";
 import { INSTAWORK_STALE_MIN } from "@/lib/instawork/store";
 import { slackConfigured, slackAlertConfigured } from "@/lib/notify/slack";
 import { llmConfigured } from "@/lib/llm";
@@ -186,12 +186,15 @@ export function computeConnections(now: number = Date.now()): Connection[] {
   // ── Connecteam (staffing / labor cost) ──
   const ct = health.find((h) => h.key === "connecteam");
   const ctOn = connecteamConfigured();
+  const ctLimited = ctOn && (connecteamHealthCached()?.rateLimited ?? false);
   out.push({
     key: "connecteam",
     label: "Connecteam",
     category: "Communications",
     status: ctOn ? (ct && ct.state !== "FRESH" && ct.state !== "UNVERIFIED" ? "attention" : "ok") : "off",
-    headline: ctOn ? (ct && ct.state === "RETRIEVAL_FAILED" ? "Unreachable" : "Connected") : "Not connected",
+    // Rate-limited is a distinct, self-healing state (daily quota spent) — call it out so the team doesn't
+    // chase a dead integration; a genuine connection failure still reads "Unreachable".
+    headline: ctOn ? (ctLimited ? "Rate-limited" : ct && ct.state === "RETRIEVAL_FAILED" ? "Unreachable" : "Connected") : "Not connected",
     detail: ctOn ? (ct?.detail ?? "Crew scheduling for staffing + labor cost.") : "Add the Connecteam API key to pull crew scheduling.",
     lastAt: ct?.lastAt ?? null,
     fixHref: ctOn ? null : "/admin",

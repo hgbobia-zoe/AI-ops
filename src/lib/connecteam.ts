@@ -14,8 +14,66 @@ export function connecteamConfigured(): boolean {
   return Boolean(process.env.CONNECTEAM_API_KEY);
 }
 
-/** One GET attempt. `transient` marks a failure worth retrying (network error, timeout, or a 5xx/429
- *  from Connecteam) vs. a definitive one (bad key / 4xx) that a retry can't fix. */
+// ── Rate-limit breaker (THE fix for the 429 storm) ──────────────────────────────────────────────────
+// Connecteam's limits are PER ACCOUNT, not per key: Expert = 100 req/min AND 10,000 req/day (SBP = 5/min,
+// 100/day). When a window is spent the API 429s EVERY call until that window resets — so retrying is worse
+// than useless: it burns the next window and keeps us throttled. The observed outage was exactly this: the
+// DAILY cap drained (x-ratelimit-day-remaining:0) while the minute budget was fine, so every read 429'd for
+// the rest of the UTC day. Because 429s weren't cached and each render/tick re-fired (×2 with the old retry),
+// the app stampeded the API — which is what drained 10k/day in the first place.
+//
+// We now read the x-ratelimit-* headers on EVERY response and, when a window is spent (remaining <= 0) or we
+// get a 429, we STOP calling until the reported reset: quiet degrade to last-good / ok:false. That both lets
+// the quota recover AND kills the stampede that exhausted it. Mirrors the proven GPS-TrackIt 429 backoff
+// (eta/zonar.ts). Stored on globalThis so the backoff survives Next's per-bundle module copies and is shared
+// across every call path (reads + writes). A rate limit is transient + self-healing, so we never page ops.
+const DEFAULT_RL_BACKOFF_MS = Number(process.env.CONNECTEAM_RATELIMIT_BACKOFF_SECONDS || 60) * 1000;
+const _rl = globalThis as unknown as { __connecteamRateLimitedUntil?: number };
+
+/** Epoch-ms until which Connecteam calls are suppressed because a rate-limit window is spent (0 = not limited). */
+export function connecteamRateLimitedUntil(): number {
+  return _rl.__connecteamRateLimitedUntil ?? 0;
+}
+/** True while we're backing off a Connecteam rate limit — callers degrade honestly (ok:false), never "0". */
+export function connecteamRateLimited(now: number = Date.now()): boolean {
+  return now < connecteamRateLimitedUntil();
+}
+/** Clear the breaker. Exported for tests (and harmless in prod — the breaker re-arms on the next 429). */
+export function resetConnecteamRateLimit(): void {
+  _rl.__connecteamRateLimitedUntil = 0;
+}
+
+type HeaderBag = { headers?: { get?: (n: string) => string | null } };
+function headerNum(res: HeaderBag, name: string): number {
+  const v = res.headers?.get?.(name);
+  const n = v == null ? NaN : Number(v); // Connecteam reset values are epoch SECONDS, sometimes with a ".0"
+  return Number.isFinite(n) ? n : NaN;
+}
+
+/** Read Connecteam's x-ratelimit-* headers off a response and arm the breaker when a window is spent
+ *  (remaining <= 0) or `is429`. Prefers the DAY reset when the day quota is the spent one (the exact live
+ *  failure: day-remaining 0, minute-remaining fine), else the minute reset, else Retry-After, else a short
+ *  default. Only ever EXTENDS an existing backoff; a missing header (remaining NaN) never trips it (so unit
+ *  stubs without headers are unaffected). */
+function noteRateLimit(res: HeaderBag | null, is429: boolean, now: number = Date.now()): void {
+  let until = 0;
+  if (res) {
+    const dayRem = headerNum(res, "x-ratelimit-day-remaining");
+    const dayReset = headerNum(res, "x-ratelimit-day-reset");
+    const minRem = headerNum(res, "x-ratelimit-minute-remaining");
+    const minReset = headerNum(res, "x-ratelimit-minute-reset");
+    if (dayRem <= 0 && dayReset > 0) until = Math.max(until, dayReset * 1000);
+    if (minRem <= 0 && minReset > 0) until = Math.max(until, minReset * 1000);
+    const retryAfter = headerNum(res, "retry-after");
+    if (retryAfter > 0) until = Math.max(until, now + retryAfter * 1000);
+  }
+  if (is429 && until <= now) until = now + DEFAULT_RL_BACKOFF_MS; // 429 with no usable header → default backoff
+  if (until > now && until > connecteamRateLimitedUntil()) _rl.__connecteamRateLimitedUntil = until;
+}
+
+/** One GET attempt. `transient` marks a failure worth retrying (network error, timeout, or a 5xx from
+ *  Connecteam) vs. a definitive one (bad key / 4xx / 429) that a retry can't fix. A 429 is NEVER transient:
+ *  retrying a rate limit just burns the next window. */
 async function ctGetOnce(path: string, timeoutMs: number): Promise<{ json: unknown | null; transient: boolean }> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -25,9 +83,14 @@ async function ctGetOnce(path: string, timeoutMs: number): Promise<{ json: unkno
       cache: "no-store",
       signal: ctrl.signal,
     });
+    noteRateLimit(res, res.status === 429); // arm the breaker from the quota headers (even a 200 that drains the last unit)
     if (!res.ok) {
+      if (res.status === 429) {
+        console.warn("[connecteam] GET", path, "HTTP 429 — rate-limited; backing off until", new Date(connecteamRateLimitedUntil()).toISOString());
+        return { json: null, transient: false }; // never retry into a rate limit
+      }
       console.error("[connecteam] GET", path, "HTTP", res.status);
-      return { json: null, transient: res.status >= 500 || res.status === 429 };
+      return { json: null, transient: res.status >= 500 };
     }
     return { json: await res.json(), transient: false };
   } catch (e) {
@@ -42,6 +105,7 @@ async function ctGetOnce(path: string, timeoutMs: number): Promise<{ json: unkno
 // worst case (one retry → ~12.4s, not ~24.4s) when the API hangs — which is what dragged the data blades down.
 async function ctGet(path: string, timeoutMs = 6000): Promise<unknown | null> {
   if (!connecteamConfigured()) return null;
+  if (connecteamRateLimited()) return null; // backing off a spent quota window — don't burn it or stampede
   let r = await ctGetOnce(path, timeoutMs);
   if (r.json === null && r.transient) {
     await new Promise((res) => setTimeout(res, 400));
@@ -61,6 +125,9 @@ export interface ConnecteamHealth {
   ok: boolean;
   checkedAt: string; // ISO of the probe
   detail: string;
+  /** True when the probe failed because we're backing off a rate limit (transient + self-healing at the
+   *  window reset), as distinct from genuinely unreachable. Lets the UI say "Rate-limited", not "down". */
+  rateLimited?: boolean;
 }
 
 const CT_HEALTH_TTL_MS = 90_000; // at most one real probe per 90s, however often either surface renders
@@ -84,10 +151,17 @@ export async function refreshConnecteamHealth(now: number = Date.now()): Promise
   if (_ctHealth && now - Date.parse(_ctHealth.checkedAt) < CT_HEALTH_TTL_MS) return _ctHealth;
   if (_ctInflight) return _ctInflight;
   _ctInflight = (async () => {
-    // One cheap call (no pagination); ctGet already retries a transient miss once.
+    // One cheap call (no pagination); ctGet already retries a transient miss once (but NOT a 429) and
+    // short-circuits to null when we're backing off a rate limit.
     const j = (await ctGet("/scheduler/v1/schedulers")) as SchedResp | null;
     const ok = j != null && Array.isArray(j.data?.schedulers);
-    return { ok, checkedAt: new Date().toISOString(), detail: ok ? "reachable" : "unreachable" } as ConnecteamHealth;
+    const limited = !ok && connecteamRateLimited();
+    return {
+      ok,
+      checkedAt: new Date().toISOString(),
+      detail: ok ? "reachable" : limited ? "rate-limited (quota) — self-heals at reset" : "unreachable",
+      rateLimited: limited,
+    } as ConnecteamHealth;
   })()
     .catch(() => ({ ok: false, checkedAt: new Date().toISOString(), detail: "unreachable" }) as ConnecteamHealth)
     .then((h) => {
@@ -148,6 +222,10 @@ const _crewCache = ttlCache<CrewDayResult>(60_000, (r) => r.ok);
 const _ratesCache = ttlCache<Map<number, PayRate[]>>(5 * 60_000, (m) => m.size > 0);
 const _plannedCache = ttlCache<PlannedHoursResult>(5 * 60_000, (r) => r.ok);
 const _actualCache = ttlCache<ActualHoursResult>(5 * 60_000, (r) => r.ok);
+// Per-user availability is read ONE CALL PER USER (getUnavailabilityForDate loops the candidate pool), so a
+// single scheduling render could fire dozens of Connecteam calls — a prime way to drain the daily quota.
+// Cache each (user, window) for 5m (only a successful `ok` result) so repeat renders / the tick don't re-pay.
+const _unavailCache = ttlCache<UnavailabilityResult>(5 * 60_000, (r) => r.ok);
 
 /** Fetch ALL pages of a Connecteam list endpoint (they cap at a page size, so a single call
  *  silently truncates). Dedup-terminated: stops on a short page OR when a page adds nothing new —
@@ -479,6 +557,9 @@ function unixOf(v: unknown): number | null {
  */
 export async function getUserUnavailability(userId: number, startUnix: number, endUnix: number): Promise<UnavailabilityResult> {
   if (!connecteamConfigured()) return { ok: false, blocks: [] };
+  return _unavailCache(`unavail:${userId}:${startUnix}:${endUnix}`, () => getUserUnavailabilityUncached(userId, startUnix, endUnix));
+}
+async function getUserUnavailabilityUncached(userId: number, startUnix: number, endUnix: number): Promise<UnavailabilityResult> {
   const j = await ctGet(`/scheduler/v1/schedulers/user-unavailability?userId=${userId}&startTime=${startUnix}&endTime=${endUnix}`);
   if (j == null) return { ok: false, blocks: [] };
   const blocks: UnavailabilityBlock[] = [];
@@ -873,9 +954,14 @@ async function ctWriteOnce(
       signal: ctrl.signal,
     });
     const json = await res.json().catch(() => null);
+    noteRateLimit(res, res.status === 429); // writes count against the same per-account quota
     if (!res.ok) {
+      if (res.status === 429) {
+        console.warn("[connecteam]", method, path, "HTTP 429 — rate-limited; backing off");
+        return { json, status: res.status, transient: false }; // never retry into a rate limit
+      }
       console.error("[connecteam]", method, path, "HTTP", res.status);
-      return { json, status: res.status, transient: res.status >= 500 || res.status === 429 };
+      return { json, status: res.status, transient: res.status >= 500 };
     }
     return { json, status: res.status, transient: false };
   } catch (e) {
@@ -886,8 +972,10 @@ async function ctWriteOnce(
   }
 }
 
-/** Write with one retry on a transient failure. */
+/** Write with one retry on a transient failure. Short-circuits with a synthetic 429 while backing off a
+ *  rate limit, so a write honestly reports failure (ok:false) instead of adding to the stampede. */
 async function ctWrite(method: "POST" | "PUT" | "DELETE", path: string, body?: unknown): Promise<{ json: unknown | null; status: number }> {
+  if (connecteamRateLimited()) return { json: null, status: 429 };
   let r = await ctWriteOnce(method, path, body, 12000);
   if (r.json === null && r.transient) {
     await new Promise((res) => setTimeout(res, 400));
