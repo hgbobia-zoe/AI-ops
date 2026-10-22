@@ -98,7 +98,9 @@ export function computeDataHealth(): SourceHealth[] {
         : ctLive
           ? ctLive.ok
             ? "reachable (live check)"
-            : "unreachable (live check)"
+            : ctLive.rateLimited
+              ? "rate-limited (daily quota) — self-heals at reset"
+              : "unreachable (live check)"
           : ctImp && !ctImp.ok
             ? "unreachable at last scan"
             : "verified at last scan",
