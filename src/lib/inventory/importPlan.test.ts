@@ -18,6 +18,7 @@ const src = (over: Partial<PlanSourceItem> = {}): PlanSourceItem => ({
   descriptionHtml: over.descriptionHtml ?? "<p>comfy</p>",
   tags: over.tags ?? ["velvet"],
   images: over.images ?? [img("https://img/a.jpg", true, 0)],
+  groups: over.groups ?? [],
   zoeGroup: over.zoeGroup ?? "sofa-rentals",
 });
 

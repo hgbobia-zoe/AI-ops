@@ -11,6 +11,14 @@
 import { getDb } from "@/lib/db";
 import { DEFAULT_HEAVY_ITEM_KEYWORDS } from "@/lib/crewRules";
 import {
+  DEFAULT_INVENTORY_PARTNERS,
+  DEFAULT_ZOE_CATEGORIES,
+  coerceInventoryPartners,
+  coerceZoeCategories,
+  type InventoryPartner,
+  type ZoeCategory,
+} from "@/lib/inventory/partners";
+import {
   DEFAULT_BUSINESS_HOURS,
   sanitizeSchedule,
   isWithinBusinessHours,
@@ -91,6 +99,15 @@ export interface AppSettings {
    *  The AI bots' recommendation + customer-send jobs HOLD outside these hours. Admin-editable in /admin;
    *  the in-code DEFAULT_BUSINESS_HOURS is the floor when unset, and a bad entry falls back per-weekday. */
   businessHours: BusinessHoursSchedule;
+  /** Configured partner storefronts for the Inventory Automation blade (see inventory/partners.ts). Each
+   *  carries the partner's PUBLIC storefront token + group→category mappings. Edited from the /inventory
+   *  blade's "Add partner" flow and (optionally) /admin. Tokens here are public, not secrets. */
+  inventoryPartners: InventoryPartner[];
+  /** Zoe destination-category registry for Inventory Automation: human name → resolved Goodshuffle
+   *  primaryCategoryID. A partner mapping's targetCategory references a name here; the importer resolves the
+   *  id and fails closed if a name is missing one. Hand-seeded (ids have no clean public lookup), extended in
+   *  /admin. */
+  zoeCategories: ZoeCategory[];
 }
 
 export interface PrepOpportunitySettings {
@@ -198,6 +215,14 @@ export function defaultSettings(): AppSettings {
     operatingYearStart: process.env.OPERATING_YEAR_START || null,
     monitorUrls: envUrlList(process.env.MONITOR_URLS, DEFAULT_MONITOR_URLS),
     businessHours: sanitizeSchedule(envJson<BusinessHoursSchedule>(process.env.BUSINESS_HOURS_JSON, DEFAULT_BUSINESS_HOURS)),
+    inventoryPartners: coerceInventoryPartners(
+      envJson<InventoryPartner[]>(process.env.INVENTORY_PARTNERS_JSON, DEFAULT_INVENTORY_PARTNERS),
+      DEFAULT_INVENTORY_PARTNERS,
+    ),
+    zoeCategories: coerceZoeCategories(
+      envJson<ZoeCategory[]>(process.env.ZOE_CATEGORIES_JSON, DEFAULT_ZOE_CATEGORIES),
+      DEFAULT_ZOE_CATEGORIES,
+    ),
   };
 }
 
@@ -289,6 +314,10 @@ function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSetting
     heavyItemKeywords: over.heavyItemKeywords ?? base.heavyItemKeywords,
     monitorUrls: over.monitorUrls ?? base.monitorUrls,
     businessHours: over.businessHours ? sanitizeSchedule(over.businessHours) : base.businessHours,
+    inventoryPartners: over.inventoryPartners
+      ? coerceInventoryPartners(over.inventoryPartners, base.inventoryPartners)
+      : base.inventoryPartners,
+    zoeCategories: over.zoeCategories ? coerceZoeCategories(over.zoeCategories, base.zoeCategories) : base.zoeCategories,
   };
 }
 

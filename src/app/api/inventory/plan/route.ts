@@ -1,8 +1,8 @@
 // POST /api/inventory/plan — resolve a bulk inventory-copy job into a concrete plan.
 //
 // Owner/admin only (canManageSettings), matching the blade's `manage` nav flag and the proxy gate for
-// /api/inventory. Body = the job config (partnerKey OR raw {token, mappings}, selected groups, addTags,
-// policy). It pulls the partner's source items + Zoe's current catalog server-side (the storefront data
+// /api/inventory. Body = the job config (a saved partnerId OR an ad-hoc {token, mappings}, selected groups,
+// addTags, policy). It pulls the partner's source items + Zoe's current catalog server-side (the storefront data
 // API is public + datacenter-reachable, unlike pro.goodshuffle.com) and returns the plan. READ-ONLY — it
 // never writes to Goodshuffle; writes run from a logged-in GSPRO tab via the generated importer.
 
