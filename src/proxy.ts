@@ -92,6 +92,10 @@ const isSettings = (p: string): boolean =>
 // session-gated console routes — NOT public, NOT token-gated like the ingest endpoints.
 const isSeo = (p: string): boolean => p === "/seo" || p.startsWith("/seo/") || p.startsWith("/api/seo");
 
+// Inventory Automation — bulk-copy a partner's Goodshuffle catalog into Zoe's. It manages inventory
+// writes + partner config, so owner/admin only (canManageSettings), mirroring the `manage` nav flag.
+const isInventory = (p: string): boolean => p === "/inventory" || p.startsWith("/inventory/") || p.startsWith("/api/inventory");
+
 // A Shift Pass (guest) is scoped HARD to the dispatch board + the (already public) driver surface. It
 // is deny-by-default: only these prefixes are reachable, so no money, settings, coaching, sales, or the
 // supervisor board writes under /api/route/* are ever exposed to a contractor's link.
@@ -198,6 +202,7 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
   if (isFinancial(pathname) && !canSeeFinancials(session.role)) return deny(req, "forbidden");
   if (isSettings(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
   if (isSeo(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
+  if (isInventory(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
   if (isCoaching(pathname) && !canSeeCoaching(session.role)) return deny(req, "forbidden");
   if (isPayroll(pathname) && !canManagePayroll(session.role)) return deny(req, "forbidden");
   if (isPeople(pathname) && !canManageUsers(session.role)) return deny(req, "forbidden");
