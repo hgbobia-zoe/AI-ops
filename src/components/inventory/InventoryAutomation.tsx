@@ -5,12 +5,13 @@
 //   1) CONFIGURE — pick the partner preset + which groups, edit the tags, see the fixed policy.
 //   2) PREVIEW   — resolve the plan server-side (/api/inventory/plan): what would be created, what's
 //      skipped as a duplicate, and honest warnings. No writes happen here.
-//   3) WRITE     — the two-step, human-in-the-loop reality (GSPRO has no public write API): capture the
-//      create-item + image-upload requests once from a real manual item creation, then generate an
-//      importer bookmarklet that replays them for every planned item.
+//   3) WRITE     — the write endpoints are KNOWN and baked into the importer; the only per-target unknown
+//      is Zoe's numeric category/group IDs, so the capture step is repurposed to learn those: the operator
+//      creates ONE item in each target Goodshuffle group through the normal UI (capture tool running),
+//      pastes the result, assigns each captured group to a target, and gets an importer bookmarklet.
 //
-// HONEST THROUGHOUT: the importer cannot be generated until a capture is pasted (the endpoints aren't
-// captured yet) — that state is shown plainly. Preview works with no capture.
+// HONEST THROUGHOUT: the importer fails closed if a target group's IDs aren't resolved — it never guesses
+// a category/group ID. Preview works with no capture.
 
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -20,18 +21,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PARTNER_PRESETS, ZOE_VENDOR_TOKEN } from "@/lib/inventory/partners";
-import { buildCaptureBookmarklet, buildImporterBookmarklet, parseCapture } from "@/lib/inventory/bookmarklets";
+import { buildCaptureBookmarklet, buildImporterBookmarklet, parseCapture, type GroupIdSet } from "@/lib/inventory/bookmarklets";
 import type { PlanResponse } from "@/lib/inventory/service";
 
 const DEFAULT_TAGS = ["Subrental", "Staging Design"];
 
-/** Show just the path of a captured URL, tolerating a relative or malformed one (never throws in render). */
-function safePath(url: string): string {
-  try {
-    return new URL(url).pathname;
-  } catch {
-    return url;
-  }
+/** Keyword for auto-matching a captured group to a target zoeGroup slug ("sofa-rentals" → "sofa"). */
+function groupKeyword(zoeGroup: string): string {
+  return zoeGroup.split("-")[0].replace(/s$/, "").toLowerCase();
 }
 
 function CopyBox({ label, value, hint }: { label: string; value: string; hint?: string }): React.JSX.Element {
@@ -76,6 +73,7 @@ export function InventoryAutomation(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
 
   const [captureText, setCaptureText] = useState("");
+  const [overrides, setOverrides] = useState<Record<string, number>>({}); // zoeGroup -> chosen rootGroupID
 
   const toggleGroup = (key: string) =>
     setSelected((prev) => {
@@ -124,13 +122,42 @@ export function InventoryAutomation(): React.JSX.Element {
 
   const captureBookmarklet = useMemo(() => buildCaptureBookmarklet(), []);
   const captured = useMemo(() => (captureText.trim() ? parseCapture(captureText) : null), [captureText]);
+  const sets = useMemo<GroupIdSet[]>(() => (captured?.ok ? captured.sets ?? [] : []), [captured]);
 
   const toCreate = useMemo(() => plan?.plan.toCreate ?? [], [plan]);
-  const canGenerate = toCreate.length > 0 && captured?.ok === true;
+  const neededGroups = useMemo(() => Array.from(new Set(toCreate.map((i) => i.zoeGroup))), [toCreate]);
+  const mappingByGroup = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const map of preset.mappings) m[map.zoeGroup] = map.label;
+    return m;
+  }, [preset.mappings]);
+
+  // The resolved ID set for a target group: the operator's explicit choice, else an auto-match by name.
+  const effectiveSet = useCallback(
+    (zoeGroup: string): GroupIdSet | undefined => {
+      const chosen = overrides[zoeGroup];
+      if (chosen != null) return sets.find((s) => s.rootGroupID === chosen);
+      const kw = groupKeyword(zoeGroup);
+      return sets.find((s) => s.rootGroupName.toLowerCase().includes(kw));
+    },
+    [overrides, sets],
+  );
+
+  const groupIds = useMemo<Record<string, GroupIdSet>>(() => {
+    const out: Record<string, GroupIdSet> = {};
+    for (const g of neededGroups) {
+      const s = effectiveSet(g);
+      if (s) out[g] = s;
+    }
+    return out;
+  }, [neededGroups, effectiveSet]);
+
+  const unresolved = neededGroups.filter((g) => !effectiveSet(g));
+  const canGenerate = toCreate.length > 0 && neededGroups.length > 0 && unresolved.length === 0;
   const importerBookmarklet = useMemo(() => {
-    if (!canGenerate || !captured?.spec) return null;
-    return buildImporterBookmarklet({ plan: toCreate, spec: captured.spec, zoeToken: ZOE_VENDOR_TOKEN });
-  }, [canGenerate, captured, toCreate]);
+    if (!canGenerate) return null;
+    return buildImporterBookmarklet({ plan: toCreate, groupIds, zoeToken: ZOE_VENDOR_TOKEN });
+  }, [canGenerate, toCreate, groupIds]);
 
   const groupLabel = (zoeGroup: string) => plan?.groups.find((g) => g.zoeGroup === zoeGroup)?.label ?? zoeGroup;
 
@@ -206,6 +233,7 @@ export function InventoryAutomation(): React.JSX.Element {
             <span className="text-meta">Policy:</span>
             <span className="rounded border border-border px-2 py-0.5 text-tertiary-text">Unpriced (no price copied)</span>
             <span className="rounded border border-border px-2 py-0.5 text-tertiary-text">Quantity not tracked</span>
+            <span className="rounded border border-border px-2 py-0.5 text-tertiary-text">Listed on website + marketplace</span>
             <span className="text-meta">Copies title, description, tags and photos only.</span>
           </div>
 
@@ -324,40 +352,72 @@ export function InventoryAutomation(): React.JSX.Element {
             <span>
               Goodshuffle has no public write API and Cloudflare blocks server calls, so writes run from your
               logged-in <code className="text-foreground">pro.goodshuffle.com</code> tab. The create-item and
-              image-upload endpoints are not captured yet, so this is a two-step flow: capture them once from a
-              real manual item creation, then generate an importer that replays them for the whole plan.
+              image-upload endpoints are known and built in. The only thing to resolve per target group is
+              Goodshuffle&apos;s numeric category/group IDs, which you capture once below.
             </span>
           </div>
 
-          {/* Step a — capture helper */}
+          {/* Step a — capture the category/group IDs */}
           <div className="mb-4">
-            <h3 className="mb-1.5 text-[12.5px] font-medium text-foreground">a. Capture the endpoints (one time)</h3>
+            <h3 className="mb-1.5 text-[12.5px] font-medium text-foreground">a. Capture the category/group IDs (one time per group)</h3>
             <p className="mb-2 text-[12px] text-meta">
               Copy this bookmarklet, open a logged-in Goodshuffle tab, paste it into the address bar and run it.
-              A small panel appears. Then manually create ONE inventory item and add ONE photo the normal way.
-              Click <strong className="text-tertiary-text">Copy captured</strong> and paste the result below.
+              A small panel appears. Then create ONE item in each target group you&apos;re importing (one Sofa under
+              the Sofas group, one Barstool under the Barstools group) the normal way. Click
+              <strong className="text-tertiary-text"> Copy captured</strong> and paste the result below. This reads the
+              real category/group IDs so the importer puts items in the right website groups.
             </p>
             <CopyBox label="Capture bookmarklet" value={captureBookmarklet} hint="Runs only in your Goodshuffle tab. It records write requests to localStorage and never sends anything anywhere." />
           </div>
 
-          {/* Step b — paste capture */}
+          {/* Step b — paste capture + assign groups */}
           <div className="mb-4">
-            <h3 className="mb-1.5 text-[12.5px] font-medium text-foreground">b. Paste the captured requests</h3>
+            <h3 className="mb-1.5 text-[12.5px] font-medium text-foreground">b. Paste the captured item save(s)</h3>
             <textarea
               value={captureText}
               onChange={(e) => setCaptureText(e.target.value)}
               placeholder='Paste the JSON from "Copy captured" here...'
               className="block h-28 w-full resize-y rounded border border-border bg-transparent px-3 py-2 font-mono text-[11px] text-foreground outline-none placeholder:text-meta focus:border-foreground/30"
             />
-            {captured && (
-              captured.ok ? (
-                <p className="mt-1.5 flex items-center gap-1.5 text-[12px] text-positive">
-                  <Check className="size-3.5" /> Parsed: create via {captured.spec!.createMethod} {safePath(captured.spec!.createUrl)}
-                  {captured.spec!.imageUploadUrl ? `, image upload via ${captured.spec!.imageUploadMethod} ${safePath(captured.spec!.imageUploadUrl)}` : " (no image-upload request found)"}
-                </p>
-              ) : (
-                <p className="mt-1.5 flex items-start gap-1.5 text-[12px] text-attention"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> {captured.error}</p>
-              )
+            {captured && !captured.ok && (
+              <p className="mt-1.5 flex items-start gap-1.5 text-[12px] text-attention"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" /> {captured.error}</p>
+            )}
+            {captured?.ok && (
+              <p className="mt-1.5 flex items-center gap-1.5 text-[12px] text-positive">
+                <Check className="size-3.5" /> Resolved {sets.length} group{sets.length === 1 ? "" : "s"}: {sets.map((s) => `${s.rootGroupName || "(unnamed)"} #${s.rootGroupID}`).join(", ")}
+              </p>
+            )}
+
+            {/* Per-target-group assignment (only meaningful once there's a plan) */}
+            {neededGroups.length > 0 && (
+              <div className="mt-3 rounded border border-border">
+                <div className="border-b border-[var(--row-rule)] px-3 py-1.5 text-[11px] uppercase tracking-[0.08em] text-meta">Assign each target group to a captured Goodshuffle group</div>
+                {neededGroups.map((g) => {
+                  const chosen = effectiveSet(g);
+                  return (
+                    <div key={g} className="flex items-center gap-3 border-t border-[var(--row-rule)] px-3 py-2 text-[12.5px] first:border-t-0">
+                      <span className="w-28 shrink-0 text-foreground">{mappingByGroup[g] ?? g}</span>
+                      <select
+                        value={chosen?.rootGroupID ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setOverrides((prev) => ({ ...prev, [g]: Number(v) }));
+                        }}
+                        disabled={sets.length === 0}
+                        className="min-w-0 flex-1 rounded border border-border bg-transparent px-2 py-1 text-[12px] text-foreground outline-none focus:border-foreground/30 disabled:opacity-50"
+                      >
+                        <option value="">{sets.length === 0 ? "Paste a capture above first" : "Select captured group..."}</option>
+                        {sets.map((s) => (
+                          <option key={s.rootGroupID} value={s.rootGroupID} className="bg-sidebar text-foreground">
+                            {(s.rootGroupName || "(unnamed group)")} &middot; {s.primaryCategoryName || "?"} &middot; #{s.rootGroupID}
+                          </option>
+                        ))}
+                      </select>
+                      {chosen ? <Check className="size-4 shrink-0 text-positive" /> : <span className="shrink-0 text-[11px] text-attention">needs IDs</span>}
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
 
@@ -368,19 +428,21 @@ export function InventoryAutomation(): React.JSX.Element {
               <p className="text-[12px] text-meta">Preview a plan first (step 2) so there is something to import.</p>
             ) : toCreate.length === 0 ? (
               <p className="text-[12px] text-meta">The current plan has nothing to create, so there is no importer to generate.</p>
-            ) : !captured?.ok ? (
-              <p className="text-[12px] text-meta">Paste a valid capture above to unlock the importer. It needs the real create + image endpoints.</p>
+            ) : unresolved.length > 0 ? (
+              <p className="text-[12px] text-meta">
+                Resolve the category/group IDs for {unresolved.map((g) => mappingByGroup[g] ?? g).join(", ")} above to unlock the importer. It fails closed on a missing group ID (never guesses).
+              </p>
             ) : (
               <>
                 <p className="mb-2 text-[12px] text-meta">
                   Run this in your logged-in Goodshuffle tab. It confirms before writing, offers a dry run first,
-                  re-checks Zoe&apos;s live catalog at run time (skips titles that already exist), and logs progress
-                  to the console. It will create {toCreate.length} item(s).
+                  re-checks Zoe&apos;s live catalog at run time (skips titles that already exist), uploads each photo,
+                  and logs progress to the console. It will create {toCreate.length} item(s).
                 </p>
                 <CopyBox
                   label={`Importer bookmarklet (${toCreate.length} items)`}
                   value={importerBookmarklet ?? ""}
-                  hint="Replays the captured create + image-upload requests from your session. Dry-run first; then run for real."
+                  hint="Creates unpriced, untracked, website-visible items via /app/inventory/saveRegularItem. Dry-run first; then run for real."
                 />
               </>
             )}
