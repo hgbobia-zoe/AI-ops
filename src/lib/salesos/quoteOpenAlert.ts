@@ -9,6 +9,7 @@
 import { pendingQuoteOpenAlerts, markQuoteOpenAlerted, type QuoteOpenCandidate } from "@/lib/db/repo";
 import { slackBotConfigured, slackConfigured } from "@/lib/notify/slack";
 import { notify } from "@/lib/notify/channels";
+import { businessHoursGate } from "@/lib/settings";
 
 // We only ping on a FRESH open — the whole value is catching the client while they still have the quote
 // open and us on their mind, not hours later when the moment is cold. The office pull captures opens on a
@@ -39,14 +40,20 @@ function line(c: QuoteOpenCandidate): string {
 }
 
 /** Fire a one-time Slack alert for each newly-opened quote (>1h after send), and record it so we never
- *  re-alert the same open. Best-effort; returns how many alerts were actually sent. */
-export async function runQuoteOpenAlerts(): Promise<number> {
+ *  re-alert the same open. Best-effort; returns how many alerts were actually sent. `now` is injectable for
+ *  tests and drives both the recency window and the business-hours gate. */
+export async function runQuoteOpenAlerts(now: number = Date.now()): Promise<number> {
+  // Business-hours gate: "they just opened their quote, reach out now" is a recommendation, so the owner's
+  // rule holds it outside business hours. Hold BEFORE touching the candidates so nothing is marked/dropped
+  // — a still-fresh open re-qualifies on the next in-hours notes ingest (a stale one is seeded then as
+  // usual). A quote-open alert held until morning would be cold anyway, so this never sends a stale ping.
+  if (!businessHoursGate(new Date(now)).open) return 0;
+
   const candidates = pendingQuoteOpenAlerts();
   if (candidates.length === 0) return 0;
   // Sales transport = the Sales bot into sales-ai, with an ops-webhook fallback (notify("sales")). It can
   // deliver when EITHER the bot token or the ops webhook is set; with neither it degrades to a clean skip.
   const configured = slackBotConfigured() || slackConfigured();
-  const now = Date.now();
   const windowMs = recentWindowMs();
   let sent = 0;
   for (const c of candidates) {

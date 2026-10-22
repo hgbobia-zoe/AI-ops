@@ -6,7 +6,8 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2, Users, Globe } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2, Users, Globe, Clock3 } from "lucide-react";
+import type { BusinessHoursSchedule, DayHours } from "@/lib/businessHours";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
 import { SeoCredentialSettings } from "@/components/SeoCredentialSettings";
@@ -43,6 +44,7 @@ interface Settings {
   eventReadinessKeywords: string[];
   heavyItemKeywords: string[];
   monitorUrls: string[];
+  businessHours: BusinessHoursSchedule;
 }
 
 // Each slot has a delivery and a pickup variant; the toggle picks which set is edited.
@@ -422,6 +424,17 @@ export default function AdminPage() {
             />
           </Section>
 
+          {/* Business hours — the window in which the AI bots are allowed to make recommendations / send. */}
+          <Section icon={<Clock3 className="size-4" />} title="Business hours">
+            <p className="text-sm text-muted-foreground">
+              The AI assistants hold their recommendations and customer-facing messages until business hours. Outside
+              these windows the work is held, not dropped, and runs on the next tick inside hours. Times are in your
+              operating timezone. A day with no hours is closed. Operational and safety alerts (dispatch, route health,
+              data-pull health, frustrated-caller) are always on and ignore this.
+            </p>
+            <BusinessHoursEditor value={s.businessHours ?? {}} onChange={(v) => setS({ ...s, businessHours: v })} />
+          </Section>
+
           <div className="flex justify-end">
             <SaveButton saving={saving} savedAt={savedAt} onClick={save} disabled={!s} />
           </div>
@@ -510,6 +523,69 @@ function TextInput({
       onChange={(e) => onChange(e.target.value)}
       className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     />
+  );
+}
+
+// A weekly business-hours editor: one row per weekday with an Open checkbox and two time inputs. Unchecking
+// Open sets that day closed (null). Times are "HH:MM" wall-clock in the operating timezone; the server
+// re-sanitizes on save (a bad entry falls back to the in-code default for that weekday).
+const WEEKDAY_LABELS: [string, string][] = [
+  ["1", "Monday"],
+  ["2", "Tuesday"],
+  ["3", "Wednesday"],
+  ["4", "Thursday"],
+  ["5", "Friday"],
+  ["6", "Saturday"],
+  ["0", "Sunday"],
+];
+
+function BusinessHoursEditor({
+  value,
+  onChange,
+}: {
+  value: BusinessHoursSchedule;
+  onChange: (v: BusinessHoursSchedule) => void;
+}) {
+  const setDay = (key: string, day: DayHours | null): void => onChange({ ...value, [key]: day });
+  return (
+    <div className="space-y-2">
+      {WEEKDAY_LABELS.map(([key, label]) => {
+        const day = value[key] ?? null;
+        const openChecked = day != null;
+        return (
+          <div key={key} className="flex flex-wrap items-center gap-3">
+            <label className="flex w-40 items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={openChecked}
+                onChange={(e) => setDay(key, e.target.checked ? day ?? { open: "10:00", close: "18:00" } : null)}
+                className="size-4 accent-[var(--accent,currentColor)]"
+              />
+              {label}
+            </label>
+            {openChecked ? (
+              <div className="flex items-center gap-2 text-sm">
+                <input
+                  type="time"
+                  value={day?.open ?? "10:00"}
+                  onChange={(e) => setDay(key, { open: e.target.value || "10:00", close: day?.close ?? "18:00" })}
+                  className="rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+                <span className="text-muted-foreground">to</span>
+                <input
+                  type="time"
+                  value={day?.close ?? "18:00"}
+                  onChange={(e) => setDay(key, { open: day?.open ?? "10:00", close: e.target.value || "18:00" })}
+                  className="rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
+            ) : (
+              <span className="text-sm text-muted-foreground">Closed</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

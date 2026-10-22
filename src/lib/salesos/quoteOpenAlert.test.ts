@@ -95,8 +95,10 @@ describe("pendingQuoteOpenAlerts", () => {
 });
 
 describe("runQuoteOpenAlerts", () => {
-  // Opens must be "recent" relative to now() for the alert to fire, so anchor the fixtures near now().
-  const now = Date.now();
+  // Opens must be "recent" relative to `now` for the alert to fire, and the business-hours gate reads the
+  // same `now` — so anchor the fixtures to a FIXED in-hours instant (Mon 12:00 PM ET = 17:00 UTC in EST),
+  // making the suite deterministic regardless of the wall-clock when CI runs.
+  const now = Date.parse("2026-01-05T17:00:00.000Z");
   const iso = (ms: number): string => new Date(ms).toISOString();
   const ymd = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 
@@ -112,13 +114,13 @@ describe("runQuoteOpenAlerts", () => {
     const sentMs = now - 3 * 3600_000; // 3h ago
     const openedMs = now - 60_000; // ~now (recent)
     seed("RUN-OK", { sentDate: ymd(sentMs), sentAt: iso(sentMs), openedAt: iso(openedMs) });
-    const sent = await runQuoteOpenAlerts();
+    const sent = await runQuoteOpenAlerts(now);
     expect(sent).toBe(1);
     expect(slackPosts.length).toBe(1);
     expect(slackPosts[0].domain).toBe("sales"); // routed to sales-ai, not customer-alerts
     expect(String(slackPosts[0].message)).toContain("Jane Doe just opened their quote (3h after we sent it)");
     // Dedup — a second run with no newer open must not re-post.
-    const again = await runQuoteOpenAlerts();
+    const again = await runQuoteOpenAlerts(now);
     expect(again).toBe(0);
     expect(slackPosts.length).toBe(1);
   });
@@ -128,8 +130,29 @@ describe("runQuoteOpenAlerts", () => {
     const openedMs = now - 60_000;
     // No authoritative send marker → fabricated send, must stay silent.
     seed("RUN-UNSENT", { sentDate: null, sentAt: iso(sentMs), openedAt: iso(openedMs) });
-    const sent = await runQuoteOpenAlerts();
+    const sent = await runQuoteOpenAlerts(now);
     expect(sent).toBe(0);
     expect(slackPosts.length).toBe(0);
+  });
+
+  it("HOLDS outside business hours (no post) and does NOT drop the candidate", async () => {
+    // Sunday 12:00 PM ET (17:00 UTC) — the default schedule is closed on Sunday. The alert must not post,
+    // and the candidate must stay PENDING (held, not marked/dropped) so a later in-hours run can surface it.
+    const sundayNow = Date.parse("2026-01-04T17:00:00.000Z");
+    const sentMs = sundayNow - 3 * 3600_000;
+    const openedMs = sundayNow - 60_000;
+    seed("RUN-HELD", { sentDate: ymd(sentMs), sentAt: iso(sentMs), openedAt: iso(openedMs) });
+    const sent = await runQuoteOpenAlerts(sundayNow);
+    expect(sent).toBe(0);
+    expect(slackPosts.length).toBe(0);
+    expect(has("RUN-HELD")).toBe(true); // still pending — not dropped
+
+    // The SAME candidate fires once we're inside business hours (Mon 12:00 PM ET), proving "held, not dropped".
+    const mondayNow = Date.parse("2026-01-05T17:00:00.000Z");
+    // Re-anchor the open to be recent relative to Monday so the recency window still qualifies it.
+    saveLeadNotes([{ bookingId: "RUN-HELD", quoteOpenedAt: iso(mondayNow - 60_000) }]);
+    const sentMon = await runQuoteOpenAlerts(mondayNow);
+    expect(sentMon).toBe(1);
+    expect(slackPosts.length).toBe(1);
   });
 });

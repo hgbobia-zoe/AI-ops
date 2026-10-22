@@ -9,7 +9,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Mail, MessageSquare, Send, AlertTriangle, Clock, MessageSquareReply } from "lucide-react";
+import { Mail, MessageSquare, Send, AlertTriangle, Clock, MessageSquareReply, Moon } from "lucide-react";
 import type { BulkOutreachCohort, BulkOutreachRow, BulkQueueSummary } from "@/lib/salesos/bulkOutreach";
 import { LeadTouchTimeline, LeadTouchLegend } from "@/components/LeadTouchTimeline";
 
@@ -42,7 +42,17 @@ const outcomeTone = (status: string): string => {
   return "text-attention"; // approved / held (gate off), etc.
 };
 
-export function BulkOutreachPanel({ cohort, showMoney }: { cohort: BulkOutreachCohort; showMoney: boolean }): React.JSX.Element {
+export function BulkOutreachPanel({
+  cohort,
+  showMoney,
+  outsideHours = false,
+  nextOpenLabel = "business hours",
+}: {
+  cohort: BulkOutreachCohort;
+  showMoney: boolean;
+  outsideHours?: boolean;
+  nextOpenLabel?: string;
+}): React.JSX.Element {
   const router = useRouter();
   const [sel, setSel] = useState<Record<string, Sel>>(() => {
     const init: Record<string, Sel> = {};
@@ -153,6 +163,15 @@ export function BulkOutreachPanel({ cohort, showMoney }: { cohort: BulkOutreachC
           Every open quote awaiting movement — the whole Goodshuffle Quote Sent stage: {subCounts.recent} recent, {subCounts.followUp} needing follow-up, {subCounts.replied} where the client replied. Each row carries a refreshed next-step draft and its full conversation timeline. Select rows and channels, then approve. On approval, emails queue through the governed outbox and texts send through the gated Quo sender; nothing goes out without your click, and every send respects the comms gates below.
         </p>
       </header>
+
+      {outsideHours && (
+        <p className="mb-4 flex items-start gap-1.5 border border-border bg-panel px-3 py-2 text-[12px] text-meta">
+          <Moon className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            Outside business hours. Sends you queue now still go out; the bots hold their own recommendations until {nextOpenLabel}.
+          </span>
+        </p>
+      )}
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border border-border bg-panel px-3 py-2.5">
         <div className="flex flex-wrap items-center gap-2">

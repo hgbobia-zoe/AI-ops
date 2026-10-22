@@ -6,6 +6,7 @@
 
 import { NextResponse } from "next/server";
 import { getSettings, saveSettings, type AppSettings } from "@/lib/settings";
+import { sanitizeSchedule } from "@/lib/businessHours";
 
 export const dynamic = "force-dynamic";
 
@@ -84,6 +85,9 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     // Website uptime monitor targets (case-preserving, de-duped). A missing/non-array field keeps the
     // current list; an explicit empty list clears it (monitor nothing).
     monitorUrls: urlList(b.monitorUrls, current.monitorUrls),
+    // Business-hours schedule — sanitized per-weekday (explicit null = closed; a bad entry falls back to the
+    // in-code default for that weekday). Only overlay when the client actually sent a schedule object.
+    businessHours: b.businessHours && typeof b.businessHours === "object" ? sanitizeSchedule(b.businessHours) : current.businessHours,
   };
 }
 

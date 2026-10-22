@@ -143,6 +143,42 @@ describe("SALES_AI_ENABLED master switch (default OFF)", () => {
   });
 });
 
+describe("runSalesAiJob — business-hours gate", () => {
+  beforeEach(() => {
+    process.env.SALES_AI_ENABLED = "true";
+  });
+  afterEach(() => {
+    delete process.env.SALES_AI_ENABLED;
+  });
+
+  // Default schedule (Mon-Fri 10-18, Sat 10-13, Sun closed) read from :memory: settings.
+  it("HOLDS the recommendation steps outside business hours but STILL runs Sales Coach", async () => {
+    // Sunday 12:00 PM ET (17:00 UTC) — closed. The 4 customer-facing recommendation steps are held BEFORE
+    // the throttle is claimed (so they re-run on the next in-hours tick), while Sales Coach runs anyway.
+    const sunday = Date.parse("2026-01-04T17:00:00.000Z");
+    const r = await runSalesAiJob(sunday);
+    expect(r.ok).toBe(true);
+    for (const step of ["quote-analyst", "lost-quote", "outreach", "lead-intelligence"]) {
+      expect(r.detail).toMatch(new RegExp(`${step}: held: outside business hours`, "i"));
+    }
+    // Sales Coach (behind-the-scenes call-recap analysis) is always-on — it ran, and was NOT held.
+    expect(r.detail).toMatch(/sales-coach:/i);
+    expect(r.detail).not.toMatch(/sales-coach: held/i);
+  });
+
+  it("runs everything (recommendations + Sales Coach) inside business hours", async () => {
+    // Monday 2:00 PM ET (19:00 UTC in EST) — open. The job proceeds past the gate (empty :memory: DB, no
+    // LLM key → benign no-op steps), so every step reports and nothing is held.
+    const monday = Date.parse("2026-01-05T19:00:00.000Z");
+    const r = await runSalesAiJob(monday);
+    expect(r.ok).toBe(true);
+    expect(r.detail).not.toMatch(/held: outside business hours/i);
+    expect(r.detail).toMatch(/sales-coach:/i);
+    expect(r.detail).toMatch(/quote-analyst:/i); // the recommendation steps ran (not held)
+    expect(r.detail).toMatch(/lead-intelligence:/i);
+  });
+});
+
 describe("quoteInsights — fold + summarize (pure)", () => {
   const ins = (over: Partial<QuoteInsight> = {}): QuoteInsight => ({
     leadId: "P1",
