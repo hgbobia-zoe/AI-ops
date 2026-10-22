@@ -75,9 +75,15 @@ export interface BotCard {
   title: string;
   /** Leading emoji for the header, e.g. "🗓️". */
   emoji?: string;
+  /** A one-line subtitle rendered as a context block right under the header — the "who / what / when" the
+   *  alert is about (customer, project, how recent). mrkdwn. */
+  subtitle?: string;
   /** A 2-column label/value grid (the facts): who / truck / value / window … */
   fields?: { label: string; value: string }[];
-  /** A paragraph under the fields — the "why", or a drafted-message preview. mrkdwn. */
+  /** One or more mrkdwn section blocks — the scannable body, one block each (e.g. one open ask per block,
+   *  so each stands on its own with its own blockquote). Rendered before `body`. */
+  sections?: string[];
+  /** A paragraph under the sections — the "why", a closing CTA, or a drafted-message preview. mrkdwn. */
   body?: string;
   /** A link button ("View in app"); dropped when url is empty. */
   link?: { text: string; url: string | null };
@@ -100,9 +106,13 @@ export function cardBlocks(card: BotCard): unknown[] {
   const blocks: unknown[] = [];
   const header = `${card.emoji ? `${card.emoji} ` : ""}${card.title}`.slice(0, 150);
   blocks.push({ type: "header", text: { type: "plain_text", text: header, emoji: true } });
+  if (card.subtitle?.trim()) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: card.subtitle.trim() }] });
   blocks.push({ type: "divider" });
   if (card.fields?.length) {
     blocks.push({ type: "section", fields: card.fields.slice(0, 10).map((f) => ({ type: "mrkdwn", text: `*${f.label}:*\n${f.value}` })) });
+  }
+  for (const s of card.sections ?? []) {
+    if (s?.trim()) blocks.push({ type: "section", text: { type: "mrkdwn", text: s.trim() } });
   }
   if (card.body?.trim()) blocks.push({ type: "section", text: { type: "mrkdwn", text: card.body.trim() } });
   const elements: unknown[] = [];
@@ -118,7 +128,9 @@ export function cardBlocks(card: BotCard): unknown[] {
 /** Flatten a card to plain text — the notification/fallback text, and what the ops webhook (no Block Kit) posts. */
 export function cardToText(card: BotCard): string {
   const lines = [`${card.emoji ? `${card.emoji} ` : ""}${card.title}`.trim()];
+  if (card.subtitle?.trim()) lines.push(card.subtitle.trim());
   for (const f of card.fields ?? []) lines.push(`${f.label}: ${f.value}`);
+  for (const s of card.sections ?? []) if (s?.trim()) lines.push(s.trim());
   if (card.body?.trim()) lines.push(card.body.trim());
   if (card.link?.url) lines.push(`${card.link.text}: ${card.link.url}`);
   if (card.context?.trim()) lines.push(card.context.trim());
