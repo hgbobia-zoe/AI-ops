@@ -8,12 +8,15 @@
 import Link from "next/link";
 import { financeForPeriod, projectFinancials } from "@/lib/finance/service";
 import type { ProjectSnapshot } from "@/lib/finance/projectSnapshot";
-import { getPeriod, PERIOD_KEYS, priorWeek, priorCycle, type PeriodKey } from "@/lib/finance/periods";
+import { getPeriod, PERIOD_KEYS, priorWeek, priorCycle, customRange, priorRange, type Period, type PeriodKey } from "@/lib/finance/periods";
 import { opsCycleConfig } from "@/lib/finance/config";
 import { getRouteLaborCosts, getInstaworkLedger, getLaborReconciliation, getProjectLaborLineage, getLaborLedgerSummary } from "@/lib/db/repo";
+import { listFinanceSavedViews } from "@/lib/finance/savedViews";
 import type { Variance } from "@/lib/finance/calc";
 import { FigureStrip, tableCls, theadCls, thCls, type Figure } from "@/components/console-primitives";
 import { BladeAgents } from "@/components/aiorg/BladeAgents";
+import { FinanceDateRange } from "./FinanceDateRange";
+import { FinanceSavedViews } from "./FinanceSavedViews";
 
 export const dynamic = "force-dynamic";
 
@@ -52,26 +55,55 @@ function MethodBadge({ method, confidence }: { method: string | null; confidence
   return <span className={`text-[11px] uppercase tracking-[0.06em] ${tone}`}>{label}{confidence ? ` · ${confidence[0]}` : ""}</span>;
 }
 
-export default async function FinancePage({ searchParams }: { searchParams: Promise<{ period?: string; view?: string; lineage?: string; project?: string }> }): Promise<React.JSX.Element> {
+export default async function FinancePage({ searchParams }: { searchParams: Promise<{ period?: string; view?: string; lineage?: string; project?: string; start?: string; end?: string }> }): Promise<React.JSX.Element> {
   const sp = await searchParams;
   const cycle = opsCycleConfig();
   const key: PeriodKey = (PERIOD_KEYS as string[]).includes(sp?.period ?? "") ? (sp!.period as PeriodKey) : "thisWeek";
   const view: ViewKey = (VIEWS as readonly string[]).includes(sp?.view ?? "") ? (sp!.view as ViewKey) : "overview";
   const selectedProject = sp?.project?.trim() || null;
-  const period = getPeriod(key, undefined, cycle);
+  // Stage 7b: an explicit ?start=&end= range (validated deterministically; a bad range → null → fall back to
+  // the preset, never a throw). When present+valid it drives the whole blade exactly like a preset would.
+  const custom: Period | null = customRange(sp?.start, sp?.end);
+  const customActive = custom != null;
+  const rangeInvalid = Boolean(sp?.start || sp?.end) && !customActive; // asked for a range but it didn't validate
+  const period = custom ?? getPeriod(key, undefined, cycle);
   const s = await financeForPeriod(period);
   const L = s.laborLedger;
-  const href = (p: Partial<{ period: string; view: string; lineage: string; project: string }>): string => {
+  const href = (p: Partial<{ period: string; view: string; lineage: string; project: string; start: string; end: string }>): string => {
     const params = new URLSearchParams();
-    const pk = p.period ?? key;
     const vw = p.view ?? view;
-    if (pk !== "thisWeek") params.set("period", pk);
     if (vw !== "overview") params.set("view", vw);
+    // Date dimension: an explicit preset (p.period) clears any custom range; an explicit range (p.start/end)
+    // clears the preset; otherwise preserve whatever is active now, so switching view keeps the range.
+    if (p.period !== undefined) {
+      if (p.period !== "thisWeek") params.set("period", p.period);
+    } else if (p.start !== undefined || p.end !== undefined) {
+      if (p.start) params.set("start", p.start);
+      if (p.end) params.set("end", p.end);
+    } else if (customActive) {
+      params.set("start", period.start);
+      params.set("end", period.end);
+    } else if (key !== "thisWeek") {
+      params.set("period", key);
+    }
     if (p.lineage) params.set("lineage", p.lineage);
     if (p.project) params.set("project", p.project);
     const q = params.toString();
     return q ? `/finance?${q}` : "/finance";
   };
+  // The non-date params the date-range / saved-views controls carry across (view + project). Saved views
+  // additionally capture the active date dimension (preset or custom range).
+  const carry: Record<string, string> = {};
+  if (view !== "overview") carry.view = view;
+  if (selectedProject) carry.project = selectedProject;
+  const currentState: Record<string, string> = { ...carry };
+  if (customActive) {
+    currentState.start = period.start;
+    currentState.end = period.end;
+  } else if (key !== "thisWeek") {
+    currentState.period = key;
+  }
+  const savedViews = listFinanceSavedViews().map((v) => ({ id: v.id, name: v.name, state: v.state as Record<string, string> }));
   // Per-project profitability snapshot (compute-on-read) — a deepening of /finance, not a new nav.
   const projectSnap = selectedProject ? projectFinancials(selectedProject) : null;
 
@@ -96,17 +128,26 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
 
       <BladeAgents blade="finance" className="mb-5" />
 
-      {/* Period tabs (dimension A week + dimension B operational cycle + month) */}
-      <nav className="mb-3 flex flex-wrap gap-4 border-b border-border pb-2">
-        {PERIOD_KEYS.map((k) => {
-          const active = k === key;
-          return (
-            <Link key={k} href={href({ period: k })} className={`text-[13.5px] transition-colors ${active ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-              {getPeriod(k, undefined, cycle).label}
-            </Link>
-          );
-        })}
-      </nav>
+      {/* Period presets (dimension A week + dimension B operational cycle + month) + custom range + saved views */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border pb-2">
+        <nav className="flex flex-wrap items-center gap-4">
+          {PERIOD_KEYS.map((k) => {
+            const active = !customActive && k === key;
+            return (
+              <Link key={k} href={href({ period: k })} className={`text-[13.5px] transition-colors ${active ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                {getPeriod(k, undefined, cycle).label}
+              </Link>
+            );
+          })}
+        </nav>
+        <div className="flex flex-wrap items-center gap-4">
+          <FinanceDateRange start={customActive ? period.start : null} end={customActive ? period.end : null} active={customActive} carry={carry} />
+          <FinanceSavedViews views={savedViews} currentState={currentState} />
+        </div>
+      </div>
+      {rangeInvalid && (
+        <p className="mb-3 text-[12.5px] text-attention">That date range wasn&apos;t valid (check the order and bounds), so {getPeriod(key, undefined, cycle).label} is shown instead.</p>
+      )}
 
       {/* View tabs */}
       <nav className="mb-5 flex flex-wrap gap-3">
@@ -143,8 +184,9 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   );
 }
 
-function priorLaborCost(period: ReturnType<typeof getPeriod>, cycle: ReturnType<typeof opsCycleConfig>): { label: string; cost: number | null } {
-  const prior = period.isCycle ? priorCycle(period, cycle) : priorWeek(period);
+function priorLaborCost(period: Period, cycle: ReturnType<typeof opsCycleConfig>): { label: string; cost: number | null } {
+  // Custom range → the equal-length preceding window; cycle → prior cycle; else the prior Mon–Sun week.
+  const prior = period.key === "custom" ? priorRange(period) : period.isCycle ? priorCycle(period, cycle) : priorWeek(period);
   return { label: prior.label, cost: getLaborLedgerSummary(prior.start, prior.end).totalCost };
 }
 
