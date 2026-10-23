@@ -17,6 +17,9 @@ import { FigureStrip, tableCls, theadCls, thCls, type Figure } from "@/component
 import { BladeAgents } from "@/components/aiorg/BladeAgents";
 import { FinanceDateRange } from "./FinanceDateRange";
 import { FinanceSavedViews } from "./FinanceSavedViews";
+import { viewerRole } from "@/lib/auth/getSession";
+import { canSeeFinancials } from "@/lib/auth/roles";
+import { ManualCostEntry } from "./ManualCostEntry";
 
 export const dynamic = "force-dynamic";
 
@@ -106,6 +109,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const savedViews = listFinanceSavedViews().map((v) => ({ id: v.id, name: v.name, state: v.state as Record<string, string> }));
   // Per-project profitability snapshot (compute-on-read) — a deepening of /finance, not a new nav.
   const projectSnap = selectedProject ? projectFinancials(selectedProject) : null;
+  const canEditCost = canSeeFinancials(await viewerRole()); // owner/admin may add/edit/delete manual costs
 
   const tempHourShare = L.totalHours != null && L.totalHours > 0 && L.tempHours != null ? L.tempHours / L.totalHours : null;
 
@@ -166,7 +170,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
       )}
 
       {selectedProject ? (
-        <ProjectDetail snap={projectSnap} id={selectedProject} backHref={href({ view: "projects", project: undefined })} />
+        <ProjectDetail snap={projectSnap} id={selectedProject} backHref={href({ view: "projects", project: undefined })} canEdit={canEditCost} />
       ) : (
         <>
           {(view === "overview" || view === "week" || view === "cycle") && <Overview s={s} L={L} tempHourShare={tempHourShare} href={href} />}
@@ -310,7 +314,7 @@ function StatusBadge({ status }: { status: ProjectSnapshot["status"] }): React.J
   return <span className={`text-[11px] font-medium uppercase tracking-[0.08em] ${SNAP_STATUS_TONE[status]}`}>{status}</span>;
 }
 
-function ProjectDetail({ snap, id, backHref }: { snap: ProjectSnapshot | null; id: string; backHref: string }): React.JSX.Element {
+function ProjectDetail({ snap, id, backHref, canEdit }: { snap: ProjectSnapshot | null; id: string; backHref: string; canEdit: boolean }): React.JSX.Element {
   if (!snap) {
     return (
       <section>
@@ -394,6 +398,9 @@ function ProjectDetail({ snap, id, backHref }: { snap: ProjectSnapshot | null; i
           {snap.notes.map((n, i) => <li key={i}>{n}</li>)}
         </ul>
       </div>
+
+      {/* Manual cost entries (Stage 5, G9) — gated add/edit/delete; rolls into the families above. */}
+      <ManualCostEntry projectId={snap.projectId} canEdit={canEdit} />
 
       {/* Existing per-number labor lineage (all attributed leaves, incl. non-customer buckets) */}
       <Lineage eventId={snap.projectId} label={snap.label} />

@@ -98,3 +98,27 @@ export function laborAttributionConfig(): LaborAttributionConfig {
     returnBufferMin: numEnv("FINANCE_RETURN_BUFFER_MIN") ?? 60,
   };
 }
+
+// ── Cost-families config (FI Stage 5) — the knobs for the non-labor derived estimators (costFamilies.ts).
+//    No magic numbers: transport is distance × a cost-per-mile, overtime premium is a fraction of the base
+//    rate. A knob set to 0 cleanly DISABLES its family (the estimator emits nothing → UNAVAILABLE, not 0).
+export interface CostFamiliesConfig {
+  /** Dollars of fuel + vehicle wear per driven mile — the basis for the transport/fuel ESTIMATE (G6) and
+   *  the extra-trip cost (G7). This is a COST per mile, NOT the customer delivery price. Default $0.70/mi
+   *  (a common blended fuel+maintenance figure for a box truck); override via env. 0 disables transport. */
+  transportCostPerMile: number;
+  /** Premium fraction of the base rate for overtime (G8). 0.5 = the +50% of time-and-a-half (the premium
+   *  DELTA only; base hours are already costed by the cascade). Default 0.5; override via env. */
+  overtimePremiumMultiplier: number;
+  /** Master switch for the derived families recompute in the scan tick (geocoding + writes). Default on;
+   *  set FINANCE_COST_FAMILIES=0 to turn the whole Stage-5 derived recompute off. */
+  derivedEnabled: boolean;
+}
+
+export function costFamiliesConfig(): CostFamiliesConfig {
+  return {
+    transportCostPerMile: numEnv("FINANCE_TRANSPORT_COST_PER_MILE") ?? 0.7,
+    overtimePremiumMultiplier: numEnv("FINANCE_OVERTIME_PREMIUM_MULT") ?? 0.5,
+    derivedEnabled: (process.env.FINANCE_COST_FAMILIES ?? "1") !== "0",
+  };
+}
