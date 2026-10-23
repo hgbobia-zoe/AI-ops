@@ -49,14 +49,23 @@ describe("planRouteAutoAssign (pure)", () => {
     expect(plan.prompt.map((p) => p.userId)).toEqual([2]);
   });
 
-  it("NEVER auto-assigns a prep (warehouse) worker, even with exactly one eligible field route → PROMPT", () => {
+  it("AUTO-ASSIGNS a prep (warehouse) worker on a single eligible FIELD route (owner reversal of #81)", () => {
     const plan = planRouteAutoAssign(
       result([person({ userId: 5, role: "prep", fillRole: "field", eligibleRouteIds: ["r1"], suggestedRouteId: "r1" })]),
     );
+    expect(plan.autoAssign).toHaveLength(1);
+    expect(plan.prompt).toHaveLength(0);
+    expect(plan.autoAssign[0]).toMatchObject({ userId: 5, routeId: "r1", fillRole: "field" });
+  });
+
+  it("leaves an AMBIGUOUS prep (fits >1 field route) on the PROMPT — no tiebreak for helpers", () => {
+    const plan = planRouteAutoAssign(
+      result([person({ userId: 8, role: "prep", fillRole: "field", eligibleRouteIds: ["r1", "r2"], suggestedRouteId: "r1" })]),
+    );
     expect(plan.autoAssign).toHaveLength(0);
     expect(plan.prompt).toHaveLength(1);
-    expect(plan.prompt[0]).toMatchObject({ userId: 5, suggestedRouteId: "r1", eligibleRouteIds: ["r1"] });
-    expect(plan.prompt[0].reason).toContain("warehouse/prep");
+    expect(plan.prompt[0]).toMatchObject({ userId: 8, suggestedRouteId: "r1", eligibleRouteIds: ["r1", "r2"] });
+    expect(plan.prompt[0].reason).toContain("ambiguous");
   });
 
   it("NEVER auto-assigns an office/admin ('other') worker to a route (defense in depth) → PROMPT", () => {

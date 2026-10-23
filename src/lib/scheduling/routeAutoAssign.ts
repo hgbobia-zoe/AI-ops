@@ -11,26 +11,34 @@
 //
 // UNAMBIGUOUS = exactly ONE eligible route. The detector already filtered to routes with a real gap in the
 // person's seat AND a compatible window; if only one such route exists, there is nothing to guess. When two
-// or more routes fit (e.g. a field helper who could join either truck, or a driver whose unset window
-// overlaps several), the choice is genuinely a human's — we fall back to the prompt rather than pick wrong.
+// or more routes fit, the plain verdict here leaves it ambiguous — but a DRIVER who fits several routes is
+// then resolved deterministically by seniority routing (driverSeniority.ts), so staggered-time driver gaps
+// still get filled. A FIELD helper who fits several routes has no such tiebreak and stays on the prompt.
+//
+// POLICY NOTE — WAREHOUSE/FIELD CREW ARE NOW AUTO-ROUTED (reverses the earlier #81 exclusion, authorized by
+// the owner 2026-10-23). Previously ONLY a genuine driver could be auto-placed; a "prep" (warehouse) worker
+// mapped to a field-helper seat was always held for the one-click prompt. The owner's call: if someone is
+// scheduled in Connecteam and there is exactly one open route seat they fit, place them — don't nag a human
+// to do the obvious. The honesty invariant is untouched (a schedule is still never credited as coverage; a
+// REAL assignment is made), and the care is preserved by keeping it to the UNAMBIGUOUS case for field: a
+// warehouse worker is auto-placed only when there is a single matching route, never guessed across several.
 
 import type { ScheduledUnroutedResult } from "./scheduledUnrouted";
 import type { RouteCrewRole } from "./preCheck";
 import type { CrewRole } from "@/lib/connecteam";
 
 /**
- * Which Connecteam crew roles the AUTO path may SILENTLY place on a route without a human. Only a genuine
- * internal DRIVER is auto-route-eligible: they fill a driver seat, which is their actual job. A "prep"
- * (warehouse / asset-processor) worker is BACK-OF-WAREHOUSE — the detector maps them to a field-helper seat
- * so a dispatcher CAN one-click them onto a route by hand (manual), but the engine must never auto-route
- * them; field/delivery is not their job. Office/admin ("other") is non-crew and never eligible. Any role we
- * don't positively recognize as driver is treated as NOT auto-eligible — we never guess an unproven worker
- * onto a delivery route (RULES CALCULATE; honest; if field-eligibility isn't established, don't auto-assign).
- * Mirrors the #81 office exclusion: non-field/driver crew are excluded from the automatic path, manual is
- * untouched.
+ * Which Connecteam crew roles the AUTO path may place on a route without a human. A genuine internal DRIVER
+ * fills a driver seat (their actual job) and a "prep" (warehouse / asset-processor) worker fills a
+ * field-helper seat — BOTH are auto-route-eligible as of the owner-authorized reversal of the #81 exclusion
+ * (see the POLICY NOTE above). Office/admin ("other") is non-crew and is still never eligible, and the
+ * detector never surfaces them onto a route anyway (scheduledUnrouted.fillRoleFor → null). Any role we don't
+ * positively recognize as driver or prep is treated as NOT auto-eligible (honest: don't guess an unproven
+ * worker onto a delivery route). The UNAMBIGUOUS guard in planRouteAutoAssign still bounds this — a prep
+ * worker is auto-placed only when exactly one route fits; a multi-route prep stays on the one-click prompt.
  */
 export function isAutoRouteEligible(role: CrewRole): boolean {
-  return role === "driver";
+  return role === "driver" || role === "prep";
 }
 
 /** One person the engine will AUTO-ASSIGN to a specific route (unambiguous match). */
@@ -92,7 +100,7 @@ export function planRouteAutoAssign(result: ScheduledUnroutedResult): RouteAutoA
         suggestedRouteId: p.suggestedRouteId,
         eligibleRouteIds: p.eligibleRouteIds,
         reason: !autoEligible
-          ? `${p.role === "prep" ? "warehouse/prep" : "non-driver"} worker — not auto-routed; a dispatcher assigns route crew manually`
+          ? "non-crew role — not auto-routed; a dispatcher assigns route crew manually"
           : p.eligibleRouteIds.length > 1
             ? `fits ${p.eligibleRouteIds.length} routes — ambiguous, a dispatcher picks`
             : "no single unambiguous route — left for the prompt",

@@ -1,8 +1,8 @@
-// Is a route "specialty / harder"? — the signal the driver seniority router uses to decide which same-time
-// route a SENIOR driver should take (and which EASIER one goes to a newer driver). PURE + deterministic
+// Is a route "specialty / harder"? — the signal the driver seniority router uses to decide which route a
+// SENIOR driver should take (and which EASIER one goes to a newer driver). PURE + deterministic
 // (RULES CALCULATE): a route is specialty when it carries a tent (crewRules, the built-in rule) OR any item
 // matching the team's configurable keyword list (settings.specialtyItemKeywords). `difficulty` is a sortable
-// score so, among several specialty routes starting together, the hardest ranks first.
+// score so, across the driver-gapped routes, the hardest ranks first and goes to the most senior driver.
 
 import { crewForRoute, type LineItem } from "@/lib/crewRules";
 
