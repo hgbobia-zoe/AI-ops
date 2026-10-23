@@ -10,6 +10,7 @@ import {
   canApproveAi,
   canManageAi,
   aiCapabilityLevel,
+  canUseWebsiteStudio,
 } from "./roles";
 
 describe("access matrix", () => {
@@ -66,5 +67,12 @@ describe("access matrix", () => {
     expect(aiCapabilityLevel("admin")).toBe("admin");
     expect(aiCapabilityLevel("member")).toBe("operator");
     expect(aiCapabilityLevel("guest")).toBe("none");
+  });
+
+  it("Website Studio: any staff may submit a change request; guest never", () => {
+    expect(canUseWebsiteStudio("owner")).toBe(true);
+    expect(canUseWebsiteStudio("admin")).toBe(true);
+    expect(canUseWebsiteStudio("member")).toBe(true);
+    expect(canUseWebsiteStudio("guest")).toBe(false);
   });
 });

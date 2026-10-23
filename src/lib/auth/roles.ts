@@ -52,6 +52,16 @@ export function canManagePayroll(role: Role): boolean {
   return role === "owner" || role === "admin";
 }
 
+/** Website Studio — prompt a website code change and get back a PR (nothing goes live without a human merge).
+ *  The marketing team drives it, so this is the one back-office capability a Member may hold too (unlike
+ *  settings/financials). It only ever QUEUES a request; the office runner opens a PR a human reviews. We keep
+ *  it to staff accounts (owner/admin/member) — never a guest/Shift Pass holder. A narrower per-person
+ *  marketing allowlist (or a dedicated marketing role) is a clean Phase-2 extension; this is the simple,
+ *  consistent gate for Phase 1. */
+export function canUseWebsiteStudio(role: Role): boolean {
+  return role === "owner" || role === "admin" || role === "member";
+}
+
 /** Can `actor` create/modify/deactivate a user whose role is `target`?
  *  Owner manages everyone; Admin manages Members only; nobody escalates above themselves. */
 export function canManageRole(actor: Role, target: Role): boolean {

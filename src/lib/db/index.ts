@@ -2055,6 +2055,40 @@ CREATE TABLE IF NOT EXISTS exception_resolutions (
   resolved_at           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_exception_resolutions_status ON exception_resolutions(status, severity);
+
+-- Website Studio (Phase 1) — a queue of plain-English website-change requests from the marketing team.
+-- The app only RECORDS the ask; the office-machine runner (tools/website-studio-runner) drains it, runs the
+-- Claude Agent SDK against the SEPARATE website repo on a branch, renders the change on the LOCAL DevKinsta
+-- site, screenshots it, and posts those back for a human to PREVIEW. Only after a human approves does the
+-- runner push + open a PR — and nothing goes live until a human merges that PR. Mirrors the gs_outbox
+-- pattern (app queues, office machine executes). One job per row. The lifecycle is:
+--   pending   queued by a marketer
+--   running   claimed by the runner (editing the repo + rendering + screenshotting locally)
+--   preview   screenshots ready, awaiting a human approve/discard decision
+--   approved  human approved → the runner pushes the branch + opens a PR
+--   done      PR opened (pr_url set)
+--   discarded human rejected → the runner deletes the branch + restores the local site
+--   failed    the runner hit an error (summary/error captured)
+-- A non-technical remote team can't judge code, so they judge the rendered screenshots — never a blind PR.
+CREATE TABLE IF NOT EXISTS website_jobs (
+  id            TEXT PRIMARY KEY,      -- "WJ-"+uuid
+  prompt        TEXT NOT NULL,         -- the marketer's plain-English change request
+  requester     TEXT,                  -- human actor label who submitted it (attribution + per-user list)
+  status        TEXT NOT NULL,         -- pending | running | preview | approved | done | discarded | failed
+  summary       TEXT,                  -- the agent's summary of what it changed (set at preview)
+  changed_files TEXT,                  -- JSON string[] of repo paths the agent edited (set at preview)
+  page_paths    TEXT,                  -- JSON string[] of site URL paths the agent changed (set at preview)
+  artifacts     TEXT,                  -- JSON [{label,path}] of saved screenshot refs (label e.g. "home-desktop")
+  pr_url        TEXT,                  -- the opened PR URL (set on done)
+  error         TEXT,                  -- short failure reason (set on failed)
+  decided_by    TEXT,                  -- human who approved/discarded (attribution)
+  decided_at    TEXT,                  -- when the approve/discard happened
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  started_at    TEXT                    -- when the runner claimed it (pending → running)
+);
+CREATE INDEX IF NOT EXISTS idx_website_jobs_status ON website_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_website_jobs_requester ON website_jobs(requester, created_at DESC);
 `;
 
 type DB = InstanceType<typeof Database>;

@@ -11,7 +11,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { verifySession, SESSION_COOKIE } from "@/lib/auth/session";
-import { canSeeFinancials, canManageSettings, canSeeCoaching, canManagePayroll, canManageUsers } from "@/lib/auth/roles";
+import { canSeeFinancials, canManageSettings, canSeeCoaching, canManagePayroll, canManageUsers, canUseWebsiteStudio } from "@/lib/auth/roles";
 import { verifyImageSig } from "@/lib/creative/assetUrl";
 
 const PUBLIC: string[] = [
@@ -63,6 +63,7 @@ const PUBLIC: string[] = [
   "/api/radar/ingest", // Opportunity Radar browser-agent POST; RADAR_INGEST_TOKEN + CORS-locked, not a session
   "/api/radar/cron", // Opportunity Radar scheduled source pull; RADAR_INGEST_TOKEN, hit by an external scheduler
   "/api/seo/cron", // SEO Growth scheduled discovery pull; SEO_INGEST_TOKEN, hit by an external scheduler (not a session)
+  "/api/website/runner", // Website Studio office-runner endpoints (next/update); WEBSITE_RUNNER_TOKEN-gated in-handler, fail-CLOSED (503 until set) — the office machine hits these, NOT a session. Only the /runner sub-path is public; /api/website/jobs stays session + role-gated below.
 ];
 
 function isPublicPath(pathname: string): boolean {
@@ -95,6 +96,13 @@ const isSeo = (p: string): boolean => p === "/seo" || p.startsWith("/seo/") || p
 // Inventory Automation — bulk-copy a partner's Goodshuffle catalog into Zoe's. It manages inventory
 // writes + partner config, so owner/admin only (canManageSettings), mirroring the `manage` nav flag.
 const isInventory = (p: string): boolean => p === "/inventory" || p.startsWith("/inventory/") || p.startsWith("/api/inventory");
+
+// Website Studio — the marketing team's prompt→PR queue for the SEPARATE website repo. Any staff
+// (canUseWebsiteStudio: owner/admin/member, never guest) may submit + list jobs. The office-runner endpoints
+// (/api/website/runner/*) are token-gated and already PUBLIC above, so this gate covers only the blade + the
+// submit/list API. It only QUEUES a request; nothing goes live without a human merging the resulting PR.
+const isWebsiteStudio = (p: string): boolean =>
+  p === "/website-studio" || p.startsWith("/website-studio/") || p === "/api/website/jobs" || p.startsWith("/api/website/jobs/");
 
 // A Shift Pass (guest) is scoped HARD to the dispatch board + the (already public) driver surface. It
 // is deny-by-default: only these prefixes are reachable, so no money, settings, coaching, sales, or the
@@ -206,6 +214,7 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
   if (isCoaching(pathname) && !canSeeCoaching(session.role)) return deny(req, "forbidden");
   if (isPayroll(pathname) && !canManagePayroll(session.role)) return deny(req, "forbidden");
   if (isPeople(pathname) && !canManageUsers(session.role)) return deny(req, "forbidden");
+  if (isWebsiteStudio(pathname) && !canUseWebsiteStudio(session.role)) return deny(req, "forbidden");
 
   return NextResponse.next();
 }
