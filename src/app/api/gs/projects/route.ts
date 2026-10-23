@@ -18,10 +18,11 @@
 //     full-lane concept and is ignored here.
 
 import { NextResponse } from "next/server";
-import { saveBookings, enqueueWarehouseTeamAdds, archiveBookingsNotIn, type BookingRecord } from "@/lib/db/repo";
+import { saveBookings, enqueueWarehouseTeamAdds, archiveBookingsNotIn, saveBookingRevenueComponents, type BookingRecord } from "@/lib/db/repo";
 import { recordPull, logImport, recordBookingsImportFailure } from "@/lib/pull/state";
 import { consumeBookingsForcePrune } from "@/lib/ingest/forcePruneBookings";
 import { slackNotify } from "@/lib/notify/slack";
+import { centsToDollars, type RevenueComponentsCents } from "@/lib/finance/revenueModel";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +60,45 @@ interface InProject {
 const dollars = (cents: number | undefined): number | null =>
   typeof cents === "number" && Number.isFinite(cents) ? Math.round(cents) / 100 : null;
 
+// Stage 3 revenue components arrive in CENTS (same as every other GS amount), keyed by bookingId, from the
+// per-tx loadPaymentHistoryAndContractTotals call the office pull already makes during route enrichment.
+// Each is converted to dollars (÷100) and persisted to the sibling booking_revenue_components table. This
+// is additive breakdown — it does NOT touch `bookings` (still the grand_total SoT). A missing field is null.
+interface InRevenueComponents extends Partial<RevenueComponentsCents> {
+  bookingId?: string | number;
+}
+function persistComponents(components: InRevenueComponents[]): number {
+  const rows: Array<{ bookingId: string; components: ReturnType<typeof centsToDollars> }> = [];
+  for (const c of components) {
+    const id = c.bookingId != null ? String(c.bookingId) : "";
+    if (!id) continue;
+    const cents: RevenueComponentsCents = {
+      quotedSubtotal: c.quotedSubtotal ?? null,
+      contractTotal: c.contractTotal ?? null,
+      grandTotal: c.grandTotal ?? null,
+      productSubtotal: c.productSubtotal ?? null,
+      productRentalsSubtotal: c.productRentalsSubtotal ?? null,
+      productSalesSubtotal: c.productSalesSubtotal ?? null,
+      serviceSubtotal: c.serviceSubtotal ?? null,
+      logisticsSubtotal: c.logisticsSubtotal ?? null,
+      detachedItemSubtotal: c.detachedItemSubtotal ?? null,
+      discount: c.discount ?? null,
+      additionalDiscount: c.additionalDiscount ?? null,
+      discountSubtotal: c.discountSubtotal ?? null,
+      taxableSubtotal: c.taxableSubtotal ?? null,
+      taxTotal: c.taxTotal ?? null,
+      effectiveTaxRate: c.effectiveTaxRate ?? null,
+      collected: c.collected ?? null,
+      refunds: c.refunds ?? null,
+      processingFees: c.processingFees ?? null,
+      goodshuffleFees: c.goodshuffleFees ?? null,
+    };
+    rows.push({ bookingId: id, components: centsToDollars(cents) });
+  }
+  if (rows.length > 0) saveBookingRevenueComponents(rows);
+  return rows.length;
+}
+
 const ymd = (s: string | null | undefined): string | null => (s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null);
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -66,7 +106,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (publishToken && req.headers.get("x-publish-token") !== publishToken) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
   }
-  let body: { projects?: InProject[]; partial?: boolean; totalReported?: number; scope?: string };
+  let body: { projects?: InProject[]; components?: InRevenueComponents[]; partial?: boolean; totalReported?: number; scope?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -75,7 +115,20 @@ export async function POST(req: Request): Promise<NextResponse> {
   // scope defaults to "full" when absent, so the bookmarklet / any existing caller is unchanged.
   const scope: "active" | "full" = body.scope === "active" ? "active" : "full";
   const projects = Array.isArray(body.projects) ? body.projects : [];
-  if (projects.length === 0) return NextResponse.json({ error: "projects[] required" }, { status: 400, headers: CORS });
+  const components = Array.isArray(body.components) ? body.components : [];
+  if (projects.length === 0 && components.length === 0) {
+    return NextResponse.json({ error: "projects[] or components[] required" }, { status: 400, headers: CORS });
+  }
+
+  // Revenue-components-only POST (Stage 3): the office pull sends the per-tx breakdown in its own call,
+  // carrying no projects[]. Persist the breakdown and return — none of the bookings upsert / prune /
+  // freshness logic applies (this is additive revenue detail, not a pipeline refresh).
+  if (projects.length === 0) {
+    const savedComponents = persistComponents(components);
+    return NextResponse.json({ ok: true, savedComponents, scope, saved: 0, pruned: 0 }, { headers: CORS });
+  }
+  // Components may also ride alongside a projects pull (harmless) — persist them first.
+  const savedComponents = components.length > 0 ? persistComponents(components) : 0;
 
   const records: BookingRecord[] = [];
   for (const p of projects) {
@@ -115,7 +168,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     // Warehouse-team adds are idempotent (add-once) and signed active projects appear in this set, so it
     // is safe + useful on the fast lane; it never prunes or deletes.
     const wdQueued = records.length > 0 ? enqueueWarehouseTeamAdds() : 0;
-    return NextResponse.json({ ok: true, saved: records.length, scope, partial: false, wdQueued, pruned: 0 }, { headers: CORS });
+    return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial: false, wdQueued, pruned: 0 }, { headers: CORS });
   }
 
   // ── SLOW LANE (scope:"full", or absent) ─────────────────────────────────────────────────────────
@@ -178,5 +231,5 @@ export async function POST(req: Request): Promise<NextResponse> {
   // so the warehouse tablet/workstation sees signed work. The office extension drains these ops.
   const wdQueued = records.length > 0 ? enqueueWarehouseTeamAdds() : 0;
 
-  return NextResponse.json({ ok: true, saved: records.length, scope, partial, wdQueued, pruned }, { headers: CORS });
+  return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial, wdQueued, pruned }, { headers: CORS });
 }

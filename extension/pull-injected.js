@@ -121,7 +121,7 @@ function zoePull(apiBase, tier) {
     if (t.indexOf("ford") >= 0 || t.indexOf("e450") >= 0 || t.indexOf("e-450") >= 0) return "E450";
     if (t.indexOf("isuzu") >= 0 || t.indexOf("npr") >= 0) { if (t.indexOf("2") >= 0) return "NPR-2"; if (t.indexOf("1") >= 0) return "NPR-1"; return null; }
     return null; }
-  function fetchEvent(txID) { const out = { items: undefined, contactId: undefined, grandTotalCents: undefined, paidCents: undefined };
+  function fetchEvent(txID) { const out = { items: undefined, contactId: undefined, grandTotalCents: undefined, paidCents: undefined, rev: undefined };
     const pI = fetch("/app/vendorTransaction/initContractView?transactionID=" + txID, H).then((r) => r.json())
       .then((cv) => { if (cv && cv.contactID != null) out.contactId = String(cv.contactID); const g = (cv && cv.lineItemGroupsToLoad) || []; return Promise.all(g.map((x) => fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID=" + x.id + "&transactionID=" + txID, H).then((r) => r.json()).catch(() => null))); })
       .then((lists) => { const items = [];
@@ -134,7 +134,15 @@ function zoePull(apiBase, tier) {
         function w(o, d) { if (!o || typeof o !== "object" || d > 7) return; if (Object.prototype.toString.call(o) === "[object Array]") { for (let i = 0; i < o.length; i++) w(o[i], d + 1); return; } if (o.itemTitle) { const it = { name: o.itemTitle, quantity: o.quantityBooked }; const im = imageOf(o); if (im) it.image = im; items.push(it); } for (const k in o) w(o[k], d + 1); } (lists || []).forEach((gj) => { w(gj, 0); }); if (items.length) out.items = items; })
       .catch(() => {});
     const pR = fetch("/app/vendorPayment/loadPaymentHistoryAndContractTotals?transactionID=" + txID, H).then((r) => r.json())
-      .then((pt) => { if (pt && typeof pt.grandTotal === "number") out.grandTotalCents = pt.grandTotal; const ph = pt && pt.paymentHistory; if (ph && typeof ph.totalContractApplicablePaid === "number") out.paidCents = ph.totalContractApplicablePaid; })
+      .then((pt) => { if (pt && typeof pt.grandTotal === "number") out.grandTotalCents = pt.grandTotal; const ph = pt && pt.paymentHistory; if (ph && typeof ph.totalContractApplicablePaid === "number") out.paidCents = ph.totalContractApplicablePaid;
+        // Stage 3 revenue reconstruction: carry the full component breakdown (CENTS) off the SAME response.
+        // MIRRORS extractRevenueComponents() in src/lib/finance/revenueModel.ts (inline here — drift caught in review).
+        if (pt) { const N = (v) => (typeof v === "number" && isFinite(v)) ? v : null;
+          let rt = null; const etr = pt.effectiveTaxRate; if (typeof etr === "number" && isFinite(etr)) rt = etr; else if (typeof etr === "string" && etr.trim() !== "") { const pf = Number(etr); if (isFinite(pf)) rt = pf; }
+          const evs = (ph && ph.paymentEvents && ph.paymentEvents.length) ? ph.paymentEvents : []; let gsf = null; for (let gi = 0; gi < evs.length; gi++) { const gv = N(evs[gi] && evs[gi].goodshuffleFeeAmount); if (gv != null) gsf = (gsf == null ? 0 : gsf) + gv; }
+          const opf = N(ph && ph.onlinePaymentsProcessingFeesTotal), ffp = N(ph && ph.offlinePaymentsProcessingFeesTotal); const pfees = (opf == null && ffp == null) ? null : ((opf || 0) + (ffp || 0));
+          out.rev = { bookingId: String(txID), quotedSubtotal: N(pt.contractOriginalSubTotal), contractTotal: N(pt.contractTotal), grandTotal: N(pt.grandTotal), productSubtotal: N(pt.contractProductSubTotal), productRentalsSubtotal: N(pt.contractProductRentalsSubTotal), productSalesSubtotal: N(pt.contractProductSalesSubTotal), serviceSubtotal: N(pt.contractServiceSubTotal), logisticsSubtotal: N(pt.contractLogisticsSubTotal), detachedItemSubtotal: N(pt.contractDetachedItemSubTotal), discount: N(pt.contractDiscount), additionalDiscount: N(pt.contractAdditionalDiscount), discountSubtotal: N(pt.contractDiscountSubTotal), taxableSubtotal: N(pt.contractTaxableSubTotal), taxTotal: N(pt.taxMap && pt.taxMap.total), effectiveTaxRate: rt, collected: N(ph && ph.totalContractApplicablePaid), refunds: N(ph && ph.totalSuccessfulRefunds), processingFees: pfees, goodshuffleFees: gsf }; }
+      })
       .catch(() => {});
     return Promise.all([pI, pR]).then(() => out); }
   function extractStops(route) { const wps = (route.waypoints || []).filter((w) => !w.isOriginWarehouse && !w.isDestinationWarehouse); wps.sort((a, b) => (a.waypointIndex || 0) - (b.waypointIndex || 0));
@@ -142,7 +150,7 @@ function zoePull(apiBase, tier) {
       const s = { custName: name || "", custFirstName: r.firstName || undefined, custLastName: r.lastName || undefined, kind: (w.waypointType === "PICK_UP" ? "pickup" : "delivery"), custPhone: sv.e164PhoneNumber || r.phone || tl.contactPhoneNumber || "", address, plannedWindow: w.scheduledArrivalTime || undefined, eta: w.scheduledArrivalTime || undefined };
       if (doc) { s.dayOfName = doc.name || doc.fullName || undefined; s.dayOfPhone = doc.phoneNumber || doc.phone || undefined; }
       s._txID = w.transactionID || (tx && tx.id) || null; if (s._txID) s.txId = String(s._txID); return s; }); }
-  function attachItems(stops) { return Promise.all(stops.map((s) => { if (!s._txID) { delete s._txID; return Promise.resolve(); } return fetchEvent(s._txID).then((ev) => { if (ev) { if (ev.items && ev.items.length) s.items = ev.items; if (ev.contactId) s.contactId = ev.contactId; if (ev.grandTotalCents != null) s.grandTotalCents = ev.grandTotalCents; if (ev.paidCents != null) s.paidCents = ev.paidCents; } delete s._txID; }); })).then(() => stops); }
+  function attachItems(stops) { return Promise.all(stops.map((s) => { if (!s._txID) { delete s._txID; return Promise.resolve(); } return fetchEvent(s._txID).then((ev) => { if (ev) { if (ev.items && ev.items.length) s.items = ev.items; if (ev.contactId) s.contactId = ev.contactId; if (ev.grandTotalCents != null) s.grandTotalCents = ev.grandTotalCents; if (ev.paidCents != null) s.paidCents = ev.paidCents; if (ev.rev) s.revComponents = ev.rev; } delete s._txID; }); })).then(() => stops); }
   // Multi-week route pull: the next ~3 weeks, imported per (truck, DATE) so the dispatch calendar +
   // risk engine stay populated ahead. Near-term routes (<= ENRICH days) get full per-event enrichment
   // (line items → tent/crew rules); farther-out routes import bare stops to keep the pull fast.
@@ -152,7 +160,7 @@ function zoePull(apiBase, tier) {
     const todayYmd = d2(start.toISOString());
     const body = { from: start.toISOString(), to: end.toISOString(), warehouseCanonicalIDs: null, crew: null, vehicles: null, statuses: null };
     return fetch("/app/routing/listRoutes", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), credentials: "include" }).then((r) => r.json()).then((routes) => {
-      const groups = {}; let chain = Promise.resolve(); const unmatched = {};
+      const groups = {}; let chain = Promise.resolve(); const unmatched = {}; const revAcc = {};
       (routes || []).forEach((rt) => { chain = chain.then(() => { const title = (rt.vehicle && rt.vehicle.title) || ""; const tid = truckIdFor(title) || truckFromName(rt.name); if (!tid) { if (title || rt.name) unmatched[title || rt.name] = 1; return; }
         return fetch("/app/routing/getRoute?routeID=" + rt.id + "&includeAttributes=true", { headers: { accept: "application/json" }, credentials: "include" }).then((r) => r.json()).then((full) => {
           const stops = extractStops(full);
@@ -160,12 +168,17 @@ function zoePull(apiBase, tier) {
           if (!rdate) return;
           const daysOut = Math.round((Date.parse(rdate + "T00:00:00Z") - Date.parse(todayYmd + "T00:00:00Z")) / 86400000);
           const p = daysOut >= 0 && daysOut <= ENRICH ? attachItems(stops) : Promise.resolve(stops);
-          return p.then((st) => { const key = tid + "|" + rdate + "|" + rt.id; if (!groups[key]) groups[key] = { truckId: tid, date: rdate, stops: [], gsRouteId: String(rt.id) }; groups[key].stops = groups[key].stops.concat(st); });
+          return p.then((st) => { const key = tid + "|" + rdate + "|" + rt.id; if (!groups[key]) groups[key] = { truckId: tid, date: rdate, stops: [], gsRouteId: String(rt.id) }; groups[key].stops = groups[key].stops.concat(st);
+            // Stage 3: collect each enriched stop's revenue component breakdown (CENTS), deduped by tx.
+            st.forEach((x) => { if (x && x.revComponents && x.revComponents.bookingId) revAcc[x.revComponents.bookingId] = x.revComponents; }); });
         }); }); });
       return chain.then(() => {
         const keys = Object.keys(groups); let totalStops = 0, failed = 0; const days = keys.length; const unm = Object.keys(unmatched);
         const result = () => ({ stops: totalStops, days, failed, unmatched: unm });
-        return Promise.all(keys.map((k) => { const g = groups[k]; totalStops += g.stops.length; return fetch(API + "/api/route/import", { method: "POST", headers: POSTH, body: JSON.stringify({ truckId: g.truckId, date: g.date, stops: g.stops, gsRouteId: g.gsRouteId }) }).then((r) => { if (!r.ok) failed++; }).catch(() => { failed++; }); })).then(() => {
+        // Stage 3: push the enriched revenue component breakdown to the bookings SoT ingest (components-only
+        // POST — no projects[], so it never touches the bookings upsert/prune). Best-effort; never fails the pull.
+        const postComponents = () => { const vals = Object.keys(revAcc).map((k) => revAcc[k]); if (!vals.length) return Promise.resolve(); return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ components: vals }) }).then(() => {}).catch(() => {}); };
+        return Promise.all(keys.map((k) => { const g = groups[k]; totalStops += g.stops.length; return fetch(API + "/api/route/import", { method: "POST", headers: POSTH, body: JSON.stringify({ truckId: g.truckId, date: g.date, stops: g.stops, gsRouteId: g.gsRouteId }) }).then((r) => { if (!r.ok) failed++; }).catch(() => { failed++; }); })).then(postComponents).then(() => {
           // Sanitize: after a FULL clean sweep, drop any of OUR routes GS no longer has. Never on a partial pull.
           if (failed !== 0 || keys.length === 0) return result();
           const keepRouteIds = keys.map((k) => { const g = groups[k]; return "R-" + g.date + "-" + g.truckId + "-" + g.gsRouteId; });
