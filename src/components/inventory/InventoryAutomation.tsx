@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { buildImporterBookmarklet } from "@/lib/inventory/bookmarklets";
+import { buildImporterBookmarklet, buildBackfillBookmarklet } from "@/lib/inventory/bookmarklets";
 import type { InventoryPartner, PartnerMapping, ZoeCategory } from "@/lib/inventory/partners";
 import type { PlanResponse } from "@/lib/inventory/service";
 
@@ -180,6 +180,15 @@ export function InventoryAutomation(): React.JSX.Element {
     if (!plan || !canGenerate) return null;
     return buildImporterBookmarklet({ plan: toCreate, categories: plan.categories, zoeToken: plan.zoeToken, internalNotes: plan.internalNotes });
   }, [plan, canGenerate, toCreate]);
+
+  // Backfill: all source items that carry at least one photo (the bookmarklet matches each to Zoe's live
+  // catalog and only attaches photos to ones that exist there and have none). No category resolution needed —
+  // the item's category + root group come from Goodshuffle's own search result at run time.
+  const backfillItems = useMemo(() => (plan?.backfillItems ?? []).filter((b) => b.imageUrls.length > 0), [plan]);
+  const backfillBookmarklet = useMemo(() => {
+    if (!plan || backfillItems.length === 0) return null;
+    return buildBackfillBookmarklet({ items: backfillItems, internalNotes: plan.internalNotes });
+  }, [plan, backfillItems]);
 
   return (
     <main className="max-w-[1100px] p-6">
@@ -450,9 +459,30 @@ export function InventoryAutomation(): React.JSX.Element {
                 <CopyBox
                   label={`Importer bookmarklet (${toCreate.length} items)`}
                   value={importerBookmarklet ?? ""}
-                  hint="Creates unpriced, untracked, website-visible items via a two-step /app/inventory/saveRegularItem. Dry-run first; then run for real."
+                  hint="Creates unpriced, untracked, website-visible items via a two-step /app/inventory/saveRegularItem. Each photo is sent in BOTH images[] and temporaryImages[] (the attach trigger). Dry-run first; then run for real."
                 />
               </>
+            )}
+
+            {/* Photo backfill — attach photos to items ALREADY in Zoe that have none */}
+            {plan && backfillItems.length > 0 && (
+              <div className="mt-5 border-t border-[var(--row-rule)] pt-4">
+                <div className="mb-2 flex items-center gap-2 text-[12.5px] font-medium text-foreground">
+                  <ImageIcon className="size-3.5 text-meta" /> Backfill photos
+                </div>
+                <p className="mb-2 text-[12px] text-meta">
+                  Separate, optional pass for items that are <strong className="text-tertiary-text">already in Zoe&apos;s inventory</strong> but have
+                  no photo (e.g. created before the photo-attach fix). It never creates items: for each of the{" "}
+                  {backfillItems.length} source item(s) with photos, it looks the item up in your Goodshuffle inventory by
+                  title, and if it exists with no photo, uploads and attaches the partner&apos;s photos. Idempotent &mdash; it
+                  skips anything that already has a photo, so it is safe to re-run.
+                </p>
+                <CopyBox
+                  label={`Backfill-photos bookmarklet (${backfillItems.length} candidates)`}
+                  value={backfillBookmarklet ?? ""}
+                  hint="POST /app/inventory/searchInventoryItems → match by title → skip if it already has a photo → upload + saveRegularItem with images[] + temporaryImages[]. Dry-run first; then run for real."
+                />
+              </div>
             )}
           </div>
         </section>

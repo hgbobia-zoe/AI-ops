@@ -1,15 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
   buildImporterBookmarklet,
+  buildBackfillBookmarklet,
   buildCreateBody,
   buildUpdateBody,
   buildTags,
   buildImageEntry,
+  buildSearchBody,
+  buildBackfillBody,
+  pickZoeMatch,
+  needsPhotos,
+  gsSearchDate,
   findMissingCategories,
   UNPRICED_PRICING_MAP,
   type GroupCategory,
+  type BackfillItem,
 } from "./bookmarklets";
 import type { PlannedItem } from "./importPlan";
+
+// The Cloudflare image derivations (cdn-cgi/image) the verified entries carry, from a presign s3Url.
+const S3URL = "https://s3.amazonaws.com/gs/tmp/x.jpg";
+const CF_FULL = `https://pro.goodshuffle.com/cdn-cgi/image/width=760,height=428,quality=85,fit=pad,background=white,format=auto/${S3URL}`;
+const CF_THUMB = `https://pro.goodshuffle.com/cdn-cgi/image/width=280,height=158,quality=85,fit=pad,background=white,format=auto/${S3URL}`;
 
 const cat: GroupCategory = { primaryCategoryID: 657, primaryCategoryName: "Sofas", baseTag: "Sofa" };
 
@@ -87,8 +99,8 @@ describe("buildUpdateBody — step two: content merged onto the created item", (
     quantitySetAside: 2,
     title: "Velvet Tufted Sofa",
   };
-  const images = [buildImageEntry("vendors/1/x.jpg", "x.jpg", 0, 800, 600)];
-  const body = buildUpdateBody(created, item, images, "Sofa,velvet", "Subrent from Staging Design DC.", UNPRICED_PRICING_MAP);
+  const entries = [buildImageEntry("vendors/1/x.jpg", S3URL, "x.jpg", 0, 800, 600)];
+  const body = buildUpdateBody(created, item, entries, "Sofa,velvet", "Subrent from Staging Design DC.", UNPRICED_PRICING_MAP);
 
   it("keeps the server-assigned id/uuid/rootGroup from the created item", () => {
     expect(body.id).toBe(9001);
@@ -112,8 +124,48 @@ describe("buildUpdateBody — step two: content merged onto the created item", (
   it("stamps the provenance note, the tags string and the prepared images", () => {
     expect(body.internal_notes).toBe("Subrent from Staging Design DC.");
     expect(body.tags).toBe("Sofa,velvet");
-    expect(body.images).toEqual([{ id: null, s3Path: "vendors/1/x.jpg", fileName: "x.jpg", viewOrder: 0, caption: null, isAnimatedGIF: false, rawWidth: 800, rawHeight: 600 }]);
+    expect(body.images).toEqual([
+      {
+        id: null,
+        cloudflareUrl: CF_FULL,
+        cloudflareThumbUrl: CF_THUMB,
+        s3Path: "vendors/1/x.jpg",
+        originalS3Path: S3URL,
+        caption: "",
+        viewOrder: 0,
+        fileName: "x.jpg",
+        isAnimatedGIF: false,
+        rawWidth: 800,
+        rawHeight: 600,
+      },
+    ]);
     expect(body.pricingMap).toBe(UNPRICED_PRICING_MAP);
+  });
+
+  it("ALSO sends every photo in temporaryImages[] — the attach trigger (fileName dropped, croppedNoPaddingPath added)", () => {
+    expect(body.temporaryImages).toEqual([
+      {
+        id: null,
+        originalS3Path: S3URL,
+        s3Path: "vendors/1/x.jpg",
+        cloudflareUrl: CF_FULL,
+        cloudflareThumbUrl: CF_THUMB,
+        croppedNoPaddingPath: S3URL,
+        caption: "",
+        isAnimatedGIF: false,
+        viewOrder: 0,
+        rawWidth: 800,
+        rawHeight: 600,
+      },
+    ]);
+    // the temporaryImages entry omits fileName (present only on the images[] entry)
+    expect("fileName" in (body.temporaryImages as Record<string, unknown>[])[0]).toBe(false);
+  });
+
+  it("sends an empty temporaryImages array when there are no photos", () => {
+    const empty = buildUpdateBody(created, item, [], "Sofa", "note", UNPRICED_PRICING_MAP);
+    expect(empty.images).toEqual([]);
+    expect(empty.temporaryImages).toEqual([]);
   });
 
   it("does not mutate the created object passed in", () => {
@@ -140,18 +192,48 @@ describe("buildTags — CSV string with base tag, normalization and drops", () =
   });
 });
 
-describe("buildImageEntry", () => {
-  it("produces the verified images[] entry shape", () => {
-    expect(buildImageEntry("vendors/1/x.jpg", "x.jpg", 2, null, null)).toEqual({
+describe("buildImageEntry — the verified images[] + temporaryImages[] pair", () => {
+  const pair = buildImageEntry("vendors/1/x.jpg", S3URL, "x.jpg", 2, 1024, 768);
+
+  it("produces the images[] entry with the Cloudflare derivations and originalS3Path", () => {
+    expect(pair.image).toEqual({
       id: null,
+      cloudflareUrl: CF_FULL,
+      cloudflareThumbUrl: CF_THUMB,
       s3Path: "vendors/1/x.jpg",
-      fileName: "x.jpg",
+      originalS3Path: S3URL,
+      caption: "",
       viewOrder: 2,
-      caption: null,
+      fileName: "x.jpg",
       isAnimatedGIF: false,
-      rawWidth: null,
-      rawHeight: null,
+      rawWidth: 1024,
+      rawHeight: 768,
     });
+  });
+
+  it("produces the temporaryImages[] entry: images entry minus fileName, plus croppedNoPaddingPath", () => {
+    expect(pair.temporaryImage).toEqual({
+      id: null,
+      originalS3Path: S3URL,
+      s3Path: "vendors/1/x.jpg",
+      cloudflareUrl: CF_FULL,
+      cloudflareThumbUrl: CF_THUMB,
+      croppedNoPaddingPath: S3URL,
+      caption: "",
+      isAnimatedGIF: false,
+      viewOrder: 2,
+      rawWidth: 1024,
+      rawHeight: 768,
+    });
+    expect("fileName" in pair.temporaryImage).toBe(false);
+    expect(pair.temporaryImage.croppedNoPaddingPath).toBe(S3URL);
+  });
+
+  it("derives originalS3Path == croppedNoPaddingPath == s3Url, and the cloudflare URLs from s3Url", () => {
+    expect(pair.image.originalS3Path).toBe(S3URL);
+    expect(pair.temporaryImage.croppedNoPaddingPath).toBe(S3URL);
+    expect(pair.image.cloudflareUrl).toBe(`https://pro.goodshuffle.com/cdn-cgi/image/width=760,height=428,quality=85,fit=pad,background=white,format=auto/${S3URL}`);
+    expect(pair.image.cloudflareThumbUrl).toBe(`https://pro.goodshuffle.com/cdn-cgi/image/width=280,height=158,quality=85,fit=pad,background=white,format=auto/${S3URL}`);
   });
 });
 
@@ -215,10 +297,174 @@ describe("buildImporterBookmarklet — embeds the verified two-step payloads", (
     expect(bm).toContain("public-read");
   });
 
+  it("carries the photo attach trigger: images[] + temporaryImages[] with the Cloudflare derivations", () => {
+    expect(bm).toContain("temporaryImages"); //       the array the update body sends
+    expect(bm).toContain("temporaryImage"); //        the serialized buildImageEntry pair key
+    expect(bm).toContain("croppedNoPaddingPath"); //  only on the temporaryImages entry
+    expect(bm).toContain("/cdn-cgi/image/"); //        cloudflareUrl base (concatenated with the size string)
+    expect(bm).toContain("width=760,height=428"); //   cloudflareUrl derivation from s3Url
+    expect(bm).toContain("width=280,height=158"); //   cloudflareThumbUrl derivation
+    expect(bm).toContain("pres.s3Url"); //             the entry builder consumes the presign s3Url
+  });
+
   it("paces requests through the 429 throttle and embeds the resolved category + cfg", () => {
     expect(bm).toContain("RATE_LIMIT_ABORT");
     expect(bm).toContain("retry-after");
     expect(bm).toContain('"primaryCategoryID":657'); // embedded cfg
     expect(bm).not.toContain("rootGroupID"); // create must not send a root group
+  });
+});
+
+describe("gsSearchDate — Goodshuffle availability date format", () => {
+  it('formats a date as "Mon D YYYY"', () => {
+    expect(gsSearchDate(new Date(2026, 0, 1))).toBe("Jan 1 2026");
+    expect(gsSearchDate(new Date(2026, 11, 25))).toBe("Dec 25 2026");
+  });
+});
+
+describe("buildSearchBody — the verified searchInventoryItems POST shape (GET 400s)", () => {
+  const body = buildSearchBody("Velvet Tufted Sofa", "Jan 1 2026", "Jan 31 2026");
+
+  it("is a QUERY over PRODUCTs with no category/tag/tax filters and the title as searchText", () => {
+    expect(body).toEqual({
+      countOnly: false,
+      searchMode: "QUERY",
+      inventoryTypes: ["PRODUCT"],
+      categoryIDs: [],
+      tags: [],
+      taxTypes: [],
+      searchText: "Velvet Tufted Sofa",
+      availabilityFromDate: "Jan 1 2026",
+      availabilityToDate: "Jan 31 2026",
+    });
+  });
+});
+
+describe("pickZoeMatch — exact normalized-title match", () => {
+  const results = [
+    { id: 1, title: "Barstool" },
+    { id: 2, title: "  Velvet   Tufted  Sofa " }, // whitespace / case differences must still match
+  ];
+
+  it("matches on normalized title (trim + lowercase + collapse whitespace)", () => {
+    expect(pickZoeMatch(results, "velvet tufted sofa")?.id).toBe(2);
+  });
+
+  it("returns null when nothing matches, and tolerates a non-array", () => {
+    expect(pickZoeMatch(results, "Chaise")).toBeNull();
+    expect(pickZoeMatch(undefined, "x")).toBeNull();
+  });
+});
+
+describe("needsPhotos — the idempotency gate (skip items that already have a photo)", () => {
+  it("is true only when a matched item has no thumbImagePath", () => {
+    expect(needsPhotos({ id: 1, thumbImagePath: null })).toBe(true);
+    expect(needsPhotos({ id: 1 })).toBe(true);
+    expect(needsPhotos({ id: 1, thumbImagePath: "" })).toBe(true);
+  });
+
+  it("is false when the item already has a photo, or there is no match", () => {
+    expect(needsPhotos({ id: 1, thumbImagePath: "vendors/1/thumb.jpg" })).toBe(false);
+    expect(needsPhotos(null)).toBe(false);
+    expect(needsPhotos(undefined)).toBe(false);
+  });
+});
+
+describe("buildBackfillBody — rebuild the matched Zoe item + attach photos (both arrays)", () => {
+  const zoe = {
+    id: 9001,
+    uuid: "server-uuid",
+    title: "Velvet Tufted Sofa",
+    primaryCategoryID: 657,
+    primaryCategoryName: "Sofas",
+    rootGroupID: 123,
+    rootGroupName: "Furniture",
+    thumbImagePath: null,
+  };
+  const bItem: BackfillItem = {
+    title: "Velvet Tufted Sofa",
+    descriptionHtml: "<p>Deep seat.</p>",
+    tags: ["velvet", "Subrental"],
+    imageUrls: ["https://cdn/a.jpg"],
+    baseTag: "Sofa",
+  };
+  const entries = [buildImageEntry("vendors/1/x.jpg", S3URL, "x.jpg", 0, 800, 600)];
+  const body = buildBackfillBody(zoe, bItem, entries, "Sofa,velvet,Subrental", "Subrent from Staging Design DC.", UNPRICED_PRICING_MAP, TAX);
+
+  it("preserves the server-assigned id/uuid/category/rootGroup from the SEARCH result", () => {
+    expect(body.id).toBe(9001);
+    expect(body.uuid).toBe("server-uuid");
+    expect(body.primaryCategoryID).toBe(657);
+    expect(body.primaryCategoryName).toBe("Sofas");
+    expect(body.rootGroupID).toBe(123);
+    expect(body.rootGroupName).toBe("Furniture");
+  });
+
+  it("is untracked + unpriced and OMITS quantityPosted entirely", () => {
+    expect(body.quantityTracked).toBe(false);
+    expect(body.pricingMap).toBe(UNPRICED_PRICING_MAP);
+    expect("quantityPosted" in body).toBe(false);
+    expect("quantitySetAside" in body).toBe(false);
+  });
+
+  it("sets the website copy, tags, provenance note and the live tax types", () => {
+    expect(body.contract_description).toBe("<p>Deep seat.</p>");
+    expect(body.web_description).toBe("<p>Deep seat.</p>");
+    expect(body.useContractDescriptionForWeb).toBe(false);
+    expect(body.tags).toBe("Sofa,velvet,Subrental");
+    expect(body.internal_notes).toBe("Subrent from Staging Design DC.");
+    expect(body.applied_tax_types).toBe(TAX);
+  });
+
+  it("sends the photo in BOTH images[] and temporaryImages[] (the attach trigger)", () => {
+    expect((body.images as unknown[]).length).toBe(1);
+    expect((body.temporaryImages as unknown[]).length).toBe(1);
+    expect((body.images as Record<string, unknown>[])[0].fileName).toBe("x.jpg");
+    expect((body.temporaryImages as Record<string, unknown>[])[0].croppedNoPaddingPath).toBe(S3URL);
+  });
+});
+
+describe("buildBackfillBookmarklet — the photo-repair bookmarklet", () => {
+  const backfillItem: BackfillItem = {
+    title: "Velvet Tufted Sofa",
+    descriptionHtml: "<p>Deep seat.</p>",
+    tags: ["velvet", "Subrental"],
+    imageUrls: ["https://cdn/a.jpg"],
+    baseTag: "Sofa",
+  };
+  const bm = buildBackfillBookmarklet({ items: [backfillItem], internalNotes: "Subrent from Staging Design DC." });
+
+  it("is a self-contained, syntactically valid javascript: bookmarklet", () => {
+    expect(bm.startsWith("javascript:(function(){")).toBe(true);
+    expect(bm.endsWith(");void 0")).toBe(true);
+    expect(() => new Function(bm.slice("javascript:".length))).not.toThrow();
+  });
+
+  it("searches via POST searchInventoryItems and is idempotent (skips items that already have a photo)", () => {
+    expect(bm).toContain("/app/inventory/searchInventoryItems");
+    expect(bm).toContain("buildSearchBody");
+    expect(bm).toContain("pickZoeMatch");
+    expect(bm).toContain("needsPhotos");
+    expect(bm).toContain("thumbImagePath"); // the idempotency gate, from serialized needsPhotos
+  });
+
+  it("attaches photos via saveRegularItem with the images[] + temporaryImages[] trigger + live tax", () => {
+    expect(bm).toContain("/app/inventory/saveRegularItem");
+    expect(bm).toContain("buildBackfillBody");
+    expect(bm).toContain("temporaryImages");
+    expect(bm).toContain("croppedNoPaddingPath");
+    expect(bm).toContain("/app/taxType/list");
+    expect(bm).toContain("x-amz-acl");
+  });
+
+  it("paces requests through the 429 throttle and embeds the source items", () => {
+    expect(bm).toContain("RATE_LIMIT_ABORT");
+    expect(bm).toContain("retry-after");
+    expect(bm).toContain('"baseTag":"Sofa"'); // embedded cfg item
+  });
+
+  it("never creates items (no two-step create builders)", () => {
+    expect(bm).not.toContain("buildCreateBody");
+    expect(bm).not.toContain("findMissingCategories");
   });
 });
