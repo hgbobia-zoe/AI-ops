@@ -1954,6 +1954,78 @@ export function getProjectLaborLineage(eventId: string): LaborLeaf[] {
   }));
 }
 
+// ── Project profitability snapshot inputs (compute-on-read) — thin SQL rollups, no business logic.
+//    The pure rollup lives in src/lib/finance/projectSnapshot.ts. These just read the ledger + revenue.
+
+const METHOD_RANK_FAM: Record<string, number> = { ACTUAL_STOP: 5, DERIVED_STOP: 4, PLANNED: 3, ESTIMATED: 2, UNALLOCATED: 1 };
+
+/** Cost-family rollup for ONE project, grouped by `cost_entries.type` (DIRECT only). Sums KNOWN
+ *  (ACTUAL+ESTIMATED) leaf amounts per family and reports the honest floor status. For `labor` it
+ *  applies the SAME customer-bucket filter as getEventDirectCosts (travel/warehouse/unallocated are
+ *  route/company cost, not project-direct) so the labor figure reconciles across the Projects view,
+ *  the lineage panel and this snapshot. Non-labor families are schema-ready but unwritten today →
+ *  they simply don't appear, and the pure layer renders them UNAVAILABLE (never 0). */
+export function getProjectCostFamilies(eventId: string): import("@/lib/finance/projectSnapshot").CostFamilyInput[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT type, bucket, amount, amount_status, method, confidence FROM cost_entries
+       WHERE class='DIRECT' AND event_id = ?`,
+    )
+    .all(eventId) as { type: string; bucket: string | null; amount: number | null; amount_status: string; method: string | null; confidence: string | null }[];
+  interface Agg {
+    actual: number;
+    estimated: number;
+    anyActual: boolean;
+    anyEstimated: boolean;
+    anyUnavail: boolean;
+    method: string | null;
+    confidence: string | null;
+    leafCount: number;
+  }
+  const agg = new Map<string, Agg>();
+  for (const r of rows) {
+    // Labor: only customer-bucket labor is project-direct (matches getEventDirectCosts).
+    if (r.type === "labor" && !(r.bucket === "customer" || r.bucket == null)) continue;
+    const a: Agg = agg.get(r.type) ?? { actual: 0, estimated: 0, anyActual: false, anyEstimated: false, anyUnavail: false, method: null, confidence: null, leafCount: 0 };
+    a.leafCount++;
+    if (r.amount != null && r.amount_status === "ACTUAL") {
+      a.actual += r.amount;
+      a.anyActual = true;
+    } else if (r.amount != null && r.amount_status === "ESTIMATED") {
+      a.estimated += r.amount;
+      a.anyEstimated = true;
+    } else if (r.amount_status === "UNAVAILABLE") {
+      a.anyUnavail = true;
+    }
+    if (r.method && (a.method == null || (METHOD_RANK_FAM[r.method] ?? 0) < (METHOD_RANK_FAM[a.method] ?? 0))) {
+      // Keep the WORST (most honest) method across the family's leaves — never overclaim.
+      a.method = r.method;
+      a.confidence = r.confidence;
+    }
+    agg.set(r.type, a);
+  }
+  const out: import("@/lib/finance/projectSnapshot").CostFamilyInput[] = [];
+  for (const [type, a] of agg) {
+    const known = a.anyActual || a.anyEstimated;
+    out.push({
+      type: type as import("@/lib/finance/projectSnapshot").CostFamily,
+      amount: known ? round2(a.actual + a.estimated) : null,
+      status: a.anyEstimated ? "ESTIMATED" : a.anyActual ? "ACTUAL" : "UNAVAILABLE",
+      method: a.method,
+      confidence: a.confidence,
+      leafCount: a.leafCount,
+    });
+  }
+  return out;
+}
+
+/** The bookings row's last-write timestamp (ISO), for a project's revenue freshness. Null if unknown
+ *  or the project isn't in the bookings table yet. Used only to decide staleness (office-pull cadence). */
+export function getBookingUpdatedAt(id: string): string | null {
+  const r = getDb().prepare("SELECT updated_at FROM bookings WHERE booking_id = ?").get(id) as { updated_at: string | null } | undefined;
+  return r?.updated_at ?? null;
+}
+
 // ── Inventory demand (booked line items) ─────────────────────────────────────
 
 export interface ItemStop {

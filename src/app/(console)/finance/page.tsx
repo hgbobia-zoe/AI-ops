@@ -6,7 +6,8 @@
 // level, the reconciliation view, and per-number data lineage.
 
 import Link from "next/link";
-import { financeForPeriod } from "@/lib/finance/service";
+import { financeForPeriod, projectFinancials } from "@/lib/finance/service";
+import type { ProjectSnapshot } from "@/lib/finance/projectSnapshot";
 import { getPeriod, PERIOD_KEYS, priorWeek, priorCycle, type PeriodKey } from "@/lib/finance/periods";
 import { opsCycleConfig } from "@/lib/finance/config";
 import { getRouteLaborCosts, getInstaworkLedger, getLaborReconciliation, getProjectLaborLineage, getLaborLedgerSummary } from "@/lib/db/repo";
@@ -51,24 +52,28 @@ function MethodBadge({ method, confidence }: { method: string | null; confidence
   return <span className={`text-[11px] uppercase tracking-[0.06em] ${tone}`}>{label}{confidence ? ` · ${confidence[0]}` : ""}</span>;
 }
 
-export default async function FinancePage({ searchParams }: { searchParams: Promise<{ period?: string; view?: string; lineage?: string }> }): Promise<React.JSX.Element> {
+export default async function FinancePage({ searchParams }: { searchParams: Promise<{ period?: string; view?: string; lineage?: string; project?: string }> }): Promise<React.JSX.Element> {
   const sp = await searchParams;
   const cycle = opsCycleConfig();
   const key: PeriodKey = (PERIOD_KEYS as string[]).includes(sp?.period ?? "") ? (sp!.period as PeriodKey) : "thisWeek";
   const view: ViewKey = (VIEWS as readonly string[]).includes(sp?.view ?? "") ? (sp!.view as ViewKey) : "overview";
+  const selectedProject = sp?.project?.trim() || null;
   const period = getPeriod(key, undefined, cycle);
   const s = await financeForPeriod(period);
   const L = s.laborLedger;
-  const href = (p: Partial<{ period: string; view: string; lineage: string }>): string => {
+  const href = (p: Partial<{ period: string; view: string; lineage: string; project: string }>): string => {
     const params = new URLSearchParams();
     const pk = p.period ?? key;
     const vw = p.view ?? view;
     if (pk !== "thisWeek") params.set("period", pk);
     if (vw !== "overview") params.set("view", vw);
     if (p.lineage) params.set("lineage", p.lineage);
+    if (p.project) params.set("project", p.project);
     const q = params.toString();
     return q ? `/finance?${q}` : "/finance";
   };
+  // Per-project profitability snapshot (compute-on-read) — a deepening of /finance, not a new nav.
+  const projectSnap = selectedProject ? projectFinancials(selectedProject) : null;
 
   const tempHourShare = L.totalHours != null && L.totalHours > 0 && L.tempHours != null ? L.tempHours / L.totalHours : null;
 
@@ -119,15 +124,21 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         <p className="mb-5 text-[12.5px] text-attention">Connecteam labor data is unavailable, so planned labor figures are marked unavailable — not zero. Actual hours are unknown, not zero.</p>
       )}
 
-      {(view === "overview" || view === "week" || view === "cycle") && <Overview s={s} L={L} tempHourShare={tempHourShare} href={href} />}
-      {view === "routes" && <Routes rows={getRouteLaborCosts(period.start, period.end)} href={href} />}
-      {view === "projects" && <ProjectsTable events={s.events} href={href} />}
-      {view === "labor" && <LaborView L={L} s={s} tempHourShare={tempHourShare} />}
-      {view === "instawork" && <InstaworkView rows={getInstaworkLedger(period.start, period.end)} L={L} />}
-      {view === "variance" && <VarianceView s={s} L={L} priorCost={priorLaborCost(period, cycle)} />}
-      {view === "reconciliation" && <Reconciliation rows={getLaborReconciliation(period.start, period.end)} />}
+      {selectedProject ? (
+        <ProjectDetail snap={projectSnap} id={selectedProject} backHref={href({ view: "projects", project: undefined })} />
+      ) : (
+        <>
+          {(view === "overview" || view === "week" || view === "cycle") && <Overview s={s} L={L} tempHourShare={tempHourShare} href={href} />}
+          {view === "routes" && <Routes rows={getRouteLaborCosts(period.start, period.end)} href={href} />}
+          {view === "projects" && <ProjectsTable events={s.events} href={href} />}
+          {view === "labor" && <LaborView L={L} s={s} tempHourShare={tempHourShare} />}
+          {view === "instawork" && <InstaworkView rows={getInstaworkLedger(period.start, period.end)} L={L} />}
+          {view === "variance" && <VarianceView s={s} L={L} priorCost={priorLaborCost(period, cycle)} />}
+          {view === "reconciliation" && <Reconciliation rows={getLaborReconciliation(period.start, period.end)} />}
 
-      {sp?.lineage && <Lineage eventId={sp.lineage} label={s.events.find((e) => e.eventId === sp.lineage)?.label ?? sp.lineage} />}
+          {sp?.lineage && <Lineage eventId={sp.lineage} label={s.events.find((e) => e.eventId === sp.lineage)?.label ?? sp.lineage} />}
+        </>
+      )}
     </main>
   );
 }
@@ -138,7 +149,7 @@ function priorLaborCost(period: ReturnType<typeof getPeriod>, cycle: ReturnType<
 }
 
 // ── Overview (3 blocks + labor-ledger block + events) ──────────────────────────────────────────────
-function Overview({ s, L, tempHourShare, href }: { s: Awaited<ReturnType<typeof financeForPeriod>>; L: Awaited<ReturnType<typeof financeForPeriod>>["laborLedger"]; tempHourShare: number | null; href: (p: Partial<{ view: string; lineage: string }>) => string }): React.JSX.Element {
+function Overview({ s, L, tempHourShare, href }: { s: Awaited<ReturnType<typeof financeForPeriod>>; L: Awaited<ReturnType<typeof financeForPeriod>>["laborLedger"]; tempHourShare: number | null; href: (p: Partial<{ view: string; lineage: string; project: string }>) => string }): React.JSX.Element {
   return (
     <>
       <section className="mb-6 grid gap-px overflow-hidden border border-border bg-border md:grid-cols-3">
@@ -199,7 +210,7 @@ function LedgerBlocks({ L, tempHourShare }: { L: Awaited<ReturnType<typeof finan
 }
 
 // ── Projects table (per-event economics, with method badge + lineage link) ─────────────────────────
-function ProjectsTable({ events, href }: { events: Awaited<ReturnType<typeof financeForPeriod>>["events"]; href: (p: Partial<{ view: string; lineage: string }>) => string }): React.JSX.Element {
+function ProjectsTable({ events, href }: { events: Awaited<ReturnType<typeof financeForPeriod>>["events"]; href: (p: Partial<{ view: string; lineage: string; project: string }>) => string }): React.JSX.Element {
   if (events.length === 0) return <p className="text-[13.5px] text-muted-foreground">No projects with financial data in this period yet.</p>;
   return (
     <>
@@ -219,7 +230,7 @@ function ProjectsTable({ events, href }: { events: Awaited<ReturnType<typeof fin
           <tbody>
             {events.map((e) => (
               <tr key={e.eventId} className="border-t border-[var(--row-rule)] hover:bg-[var(--row-hover)]">
-                <td className="px-2.5 py-2.5"><Link href={href({ view: "projects", lineage: e.eventId })} className="hover:underline">{e.label || `Project ${e.eventId}`}</Link></td>
+                <td className="px-2.5 py-2.5"><Link href={href({ view: "projects", project: e.eventId })} className="hover:underline">{e.label || `Project ${e.eventId}`}</Link></td>
                 <td className="px-2.5 py-2.5 text-meta">{e.date}</td>
                 <td className="px-2.5 py-2.5 text-right tabular-nums">{e.revenue == null ? <Unavail /> : money(e.revenue)}</td>
                 <td className="px-2.5 py-2.5 text-right tabular-nums">{e.labor != null ? money(e.labor) : <span className="text-meta">{e.laborStatus === "UNAVAILABLE" ? "unavailable" : "—"}</span>}</td>
@@ -231,8 +242,120 @@ function ProjectsTable({ events, href }: { events: Awaited<ReturnType<typeof fin
           </tbody>
         </table>
       </div>
-      <p className="mt-3 text-[12px] text-meta">Project labor is attributed from the labor ledger down worker → route → stop → project. Today it is planned-grain (method PLANNED/Derived), labeled — never a fake ACTUAL. A project carries labor for BOTH its delivery and pickup visits (real labor, not double-counted). Click a project for its data lineage.</p>
+      <p className="mt-3 text-[12px] text-meta">Project labor is attributed from the labor ledger down worker → route → stop → project. Today it is planned-grain (method PLANNED/Derived), labeled — never a fake ACTUAL. A project carries labor for BOTH its delivery and pickup visits (real labor, not double-counted). Click a project for its full profitability snapshot and data lineage.</p>
     </>
+  );
+}
+
+// ── Per-project profitability snapshot (compute-on-read) ───────────────────────────────────────────
+const SNAP_STATUS_TONE: Record<ProjectSnapshot["status"], string> = {
+  RECONCILED: "text-positive",
+  ESTIMATED: "text-foreground",
+  PROVISIONAL: "text-attention",
+};
+const COST_FAMILY_LABEL: Record<string, string> = {
+  labor: "Labor",
+  vehicle: "Vehicle",
+  fuel: "Fuel",
+  subcontractor: "Subcontractor",
+  sub_rental: "Sub-rental",
+  consumables: "Consumables",
+  event_expense: "Event expense",
+  other: "Other",
+};
+
+function StatusBadge({ status }: { status: ProjectSnapshot["status"] }): React.JSX.Element {
+  return <span className={`text-[11px] font-medium uppercase tracking-[0.08em] ${SNAP_STATUS_TONE[status]}`}>{status}</span>;
+}
+
+function ProjectDetail({ snap, id, backHref }: { snap: ProjectSnapshot | null; id: string; backHref: string }): React.JSX.Element {
+  if (!snap) {
+    return (
+      <section>
+        <p className="mb-3 text-[12.5px]"><Link href={backHref} className="text-muted-foreground underline hover:text-foreground">← Back to projects</Link></p>
+        <p className="text-[13.5px] text-muted-foreground">Project <span className="font-mono">{id}</span> isn&apos;t in the bookings pull yet, so no profitability snapshot can be computed. It is not zero — it is unavailable until the next Goodshuffle pull.</p>
+      </section>
+    );
+  }
+  const r = snap.revenue;
+  return (
+    <section>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="mb-1 text-[12.5px]"><Link href={backHref} className="text-muted-foreground underline hover:text-foreground">← Back to projects</Link></p>
+          <h2 className="text-[17px] font-medium tracking-tight">{snap.label}</h2>
+          <p className="text-[12px] text-meta">Project <span className="font-mono">{snap.projectId}</span>{snap.eventDate ? ` · ${snap.eventDate}` : ""} · <StatusBadge status={snap.status} /></p>
+        </div>
+      </div>
+
+      {/* Headline economics */}
+      <section className="mb-6 grid gap-px overflow-hidden border border-border bg-border md:grid-cols-3">
+        <Block title="Revenue" tag={r.contractedStatus.toLowerCase()} headline={r.contracted == null ? <Unavail /> : money(r.contracted)}>
+          <BRow label="Subtotal (pre-discount)">{r.subtotal == null ? <Unavail /> : money(r.subtotal)}</BRow>
+          <BRow label="Collected">{r.collected == null ? <Unavail /> : money(r.collected)}</BRow>
+          <BRow label="Due">{r.due == null ? <Unavail /> : money(r.due)}</BRow>
+          <BRow label="Signed">{r.signed ? "Yes" : <span className="text-attention">Quote (unsigned)</span>}</BRow>
+        </Block>
+        <Block title="Direct cost" tag={snap.directCostStatus.toLowerCase()} headline={snap.directCost == null ? <Unavail /> : money(snap.directCost)}>
+          {snap.costFamilies.filter((f) => f.tracked).map((f) => (
+            <BRow key={f.type} label={COST_FAMILY_LABEL[f.type] ?? f.type}>{money(f.amount)}{f.status === "ESTIMATED" ? <span className="ml-1 text-[10px] uppercase text-meta">est</span> : null}</BRow>
+          ))}
+          {snap.costFamilies.every((f) => !f.tracked) && <BRow label="Tracked families"><span className="text-meta">None yet</span></BRow>}
+        </Block>
+        <Block title="Contribution" tag={snap.contributionStatus.toLowerCase()} headline={snap.contribution == null ? <Unavail /> : <span className={snap.contribution >= 0 ? "text-positive" : "text-critical"}>{money(snap.contribution)}</span>}>
+          <BRow label="Margin">{snap.marginPct == null ? <Unavail /> : pct(snap.marginPct)}</BRow>
+          <BRow label="Basis">{snap.contribution == null ? <span className="text-meta">needs revenue + cost</span> : <span className="text-meta">revenue − direct cost</span>}</BRow>
+        </Block>
+      </section>
+
+      {/* Cost-family rollup — tracked AND not-yet-tracked (never shown as 0) */}
+      <h3 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Cost families</h3>
+      <div className="overflow-x-auto border border-border">
+        <table className={tableCls}>
+          <thead className={theadCls}>
+            <tr>
+              <th className={thCls}>Family</th>
+              <th className={`${thCls} text-right`}>Amount</th>
+              <th className={thCls}>Status</th>
+              <th className={thCls}>Method</th>
+              <th className={`${thCls} text-right`}>Leaves</th>
+            </tr>
+          </thead>
+          <tbody>
+            {snap.costFamilies.map((f) => (
+              <tr key={f.type} className="border-t border-[var(--row-rule)]">
+                <td className="px-2.5 py-2.5">{COST_FAMILY_LABEL[f.type] ?? f.type}</td>
+                <td className="px-2.5 py-2.5 text-right tabular-nums">{f.amount == null ? <span className="text-meta">unavailable</span> : money(f.amount)}</td>
+                <td className="px-2.5 py-2.5">{f.tracked ? <span className="text-[11px] uppercase tracking-[0.06em] text-meta">{f.status.toLowerCase()}</span> : <span className="text-[11px] uppercase tracking-[0.06em] text-meta">not tracked</span>}</td>
+                <td className="px-2.5 py-2.5"><MethodBadge method={f.method} confidence={f.confidence} /></td>
+                <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{f.leafCount || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Reconciliation — the family parts sum back to the direct-cost total */}
+      <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-1 border border-border bg-panel px-4 py-3 text-[12.5px]">
+        <span className="text-meta">Reconciliation</span>
+        <span>Family sum <span className="tabular-nums">{money(snap.reconciliation.familySum)}</span></span>
+        <span>Direct cost <span className="tabular-nums">{money(snap.reconciliation.directCostTotal)}</span></span>
+        <span>Residual <span className="tabular-nums">{snap.reconciliation.residual == null ? "—" : money(snap.reconciliation.residual)}</span></span>
+        <span className={snap.reconciliation.balanced ? "text-positive" : "text-critical"}>{snap.reconciliation.balanced ? "Balanced" : "UNBALANCED"}</span>
+      </div>
+
+      {/* Honest gaps */}
+      <div className="mt-4">
+        <h3 className="mb-1 text-[12px] font-medium uppercase tracking-[0.1em] text-tertiary-text">How to read this</h3>
+        <p className="mb-2 text-[12.5px] text-meta">{snap.statusReason}{snap.revenueAsOf ? ` · revenue as of ${snap.revenueAsOf.slice(0, 16).replace("T", " ")}` : ""}</p>
+        <ul className="list-disc space-y-1 pl-5 text-[12px] text-meta">
+          {snap.notes.map((n, i) => <li key={i}>{n}</li>)}
+        </ul>
+      </div>
+
+      {/* Existing per-number labor lineage (all attributed leaves, incl. non-customer buckets) */}
+      <Lineage eventId={snap.projectId} label={snap.label} />
+    </section>
   );
 }
 
