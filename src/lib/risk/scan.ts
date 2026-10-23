@@ -441,6 +441,16 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   // Clean-rewrite the derived labor ledger for every scanned day (clears stale/legacy leaves too).
   saveDerivedLabor(dates, costEntries);
 
+  // FI Stage 5: recompute the NON-labor derived cost families (transport/fuel, extra-trip, overtime
+  // premium) on the same cadence, idempotently. Distinct types + source_ref prefixes from labor, so it
+  // can never double-count the cascade. Isolated — a failure here must never break the core scan.
+  try {
+    const { recomputeCostFamilies } = await import("@/lib/finance/costFamiliesRun");
+    await recomputeCostFamilies(dates);
+  } catch (e) {
+    console.error("[finance] cost-families recompute failed (isolated):", e);
+  }
+
   // Operational Opportunity: tomorrow's prep window. Run with the REAL clock (intraday), not the noon
   // anchor. It self-gates on there being tomorrow routes, and its findings (dated tomorrow, which is in
   // `dates` when tomorrow has routes) fold into the SAME reconcile below → dedup + lifecycle + /risk for
