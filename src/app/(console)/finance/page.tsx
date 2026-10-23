@@ -10,7 +10,10 @@ import { financeForPeriod, projectFinancials } from "@/lib/finance/service";
 import type { ProjectSnapshot } from "@/lib/finance/projectSnapshot";
 import { getPeriod, PERIOD_KEYS, priorWeek, priorCycle, customRange, priorRange, type Period, type PeriodKey } from "@/lib/finance/periods";
 import { opsCycleConfig } from "@/lib/finance/config";
-import { getRouteLaborCosts, getInstaworkLedger, getLaborReconciliation, getProjectLaborLineage, getLaborLedgerSummary } from "@/lib/db/repo";
+import { getRouteLaborCosts, getInstaworkLedger, getLaborReconciliation, getProjectLaborLineage, getLaborLedgerSummary, getVisitReconciliation } from "@/lib/db/repo";
+import { reconcileVisit, type VisitWindow } from "@/lib/finance/visitReconcile";
+import { visitReconcileConfig } from "@/lib/finance/config";
+import { formatClockTime } from "@/lib/dates";
 import { listFinanceSavedViews } from "@/lib/finance/savedViews";
 import type { Variance } from "@/lib/finance/calc";
 import { FigureStrip, tableCls, theadCls, thCls, type Figure } from "@/components/console-primitives";
@@ -27,7 +30,7 @@ const money = (n: number | null | undefined): string => (n == null ? "—" : (n 
 const hrs = (n: number | null): string => (n == null ? "—" : `${n} h`);
 const pct = (n: number | null): string => (n == null ? "—" : `${Math.round(n * 100)}%`);
 
-const VIEWS = ["overview", "week", "cycle", "routes", "projects", "labor", "instawork", "variance", "reconciliation"] as const;
+const VIEWS = ["overview", "week", "cycle", "routes", "projects", "labor", "instawork", "variance", "reconciliation", "visits"] as const;
 type ViewKey = (typeof VIEWS)[number];
 const VIEW_LABEL: Record<ViewKey, string> = {
   overview: "Overview",
@@ -39,6 +42,7 @@ const VIEW_LABEL: Record<ViewKey, string> = {
   instawork: "Instawork",
   variance: "Variance",
   reconciliation: "Reconciliation",
+  visits: "Visits (GPS vs dispatch)",
 };
 
 function VarianceTag({ v, kind }: { v: Variance; kind: "money" | "hours" }): React.JSX.Element {
@@ -180,6 +184,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
           {view === "instawork" && <InstaworkView rows={getInstaworkLedger(period.start, period.end)} L={L} />}
           {view === "variance" && <VarianceView s={s} L={L} priorCost={priorLaborCost(period, cycle)} />}
           {view === "reconciliation" && <Reconciliation rows={getLaborReconciliation(period.start, period.end)} />}
+          {view === "visits" && <VisitReconciliationView rows={getVisitReconciliation(period.start, period.end)} />}
 
           {sp?.lineage && <Lineage eventId={sp.lineage} label={s.events.find((e) => e.eventId === sp.lineage)?.label ?? sp.lineage} />}
         </>
@@ -600,6 +605,93 @@ function Reconciliation({ rows }: { rows: ReturnType<typeof getLaborReconciliati
         </table>
       </div>
       <p className="mt-3 text-[12px] text-meta">Each row sums customer + travel + warehouse + unallocated = that worker/day&apos;s shift labor transaction — the dollar is conserved end-to-end, never double-counted. A non-zero unallocated is a surfaced signal (over-staffed, idle, or a data gap), not an error.</p>
+    </section>
+  );
+}
+
+// ── Visit reconciliation (GPS vs dispatch) view (FI Stage 4) ───────────────────────────────────────
+const VISIT_LABEL_TONE: Record<string, string> = {
+  GPS_DISPATCH: "text-positive",
+  GPS_CONFIRMED: "text-positive",
+  DISPATCH_FLAGGED: "text-critical",
+  DISPATCH_ONLY: "text-attention",
+  NONE: "text-meta",
+};
+const VISIT_LABEL_TEXT: Record<string, string> = {
+  GPS_DISPATCH: "GPS + dispatch",
+  GPS_CONFIRMED: "GPS only",
+  DISPATCH_FLAGGED: "Flagged",
+  DISPATCH_ONLY: "Dispatch only",
+  NONE: "No evidence",
+};
+const win = (enter: string | null, exit: string | null): string => {
+  const a = enter ? formatClockTime(enter) : "—";
+  const b = exit ? formatClockTime(exit) : "open";
+  return enter || exit ? `${a} → ${b}` : "—";
+};
+
+function VisitReconciliationView({ rows }: { rows: ReturnType<typeof getVisitReconciliation> }): React.JSX.Element {
+  const cfg = visitReconcileConfig();
+  const reconciled = rows.map((r) => {
+    const gps: VisitWindow | null = r.gpsEnter || r.gpsExit
+      ? { stopId: r.stopId, routeId: r.routeId, txId: r.txId ?? undefined, source: "gps", enterTs: r.gpsEnter, exitTs: r.gpsExit, confidence: (r.gpsConfidence as VisitWindow["confidence"]) ?? "MEDIUM" }
+      : null;
+    const dispatch: VisitWindow | null = r.dispatchEnter || r.dispatchExit
+      ? { stopId: r.stopId, routeId: r.routeId, txId: r.txId ?? undefined, source: "dispatch", enterTs: r.dispatchEnter, exitTs: r.dispatchExit, confidence: "LOW" }
+      : null;
+    return { r, v: reconcileVisit(gps, dispatch, cfg.visitDiscrepancyMinutes, { stopId: r.stopId, routeId: r.routeId, txId: r.txId ?? undefined }) };
+  });
+  const gpsCount = reconciled.filter((x) => x.v.gps != null).length;
+  const flagged = reconciled.filter((x) => x.v.flagged).length;
+
+  return (
+    <section>
+      <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">On-site visits — GPS vs dispatch</h2>
+      <div className="mb-3 rounded border border-border bg-panel px-4 py-3 text-[12.5px] text-meta">
+        Two independent on-site evidence sources. <span className="text-foreground">GPS</span> = the truck was physically inside the stop&apos;s geofence (polled fixes). <span className="text-foreground">Dispatch</span> = the crew&apos;s arrived/completed taps (server-receive times, so offline-queue skew is possible). GPS presence is <span className="text-foreground">forward-only</span> and only exists from when polling began; historical and un-polled visits are <span className="text-foreground">dispatch-only</span> and labeled PROVISIONAL. A dispatch time alone never counts as a confirmed on-site clock.
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-[13.5px] text-muted-foreground">No visit evidence recorded in this period yet. Dispatch windows appear once stops are marked arrived/completed; GPS windows appear once position polling is configured and running.</p>
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap gap-x-6 gap-y-1 text-[12.5px]">
+            <span className="text-meta">Stops with evidence <span className="tabular-nums text-foreground">{rows.length}</span></span>
+            <span className="text-meta">GPS-confirmed <span className="tabular-nums text-foreground">{gpsCount}</span></span>
+            <span className="text-meta">Flagged for review <span className={`tabular-nums ${flagged ? "text-critical" : "text-foreground"}`}>{flagged}</span></span>
+          </div>
+          <div className="overflow-x-auto border border-border">
+            <table className={tableCls}>
+              <thead className={theadCls}>
+                <tr>
+                  <th className={thCls}>Stop</th>
+                  <th className={thCls}>Date</th>
+                  <th className={thCls}>GPS window</th>
+                  <th className={thCls}>Dispatch window</th>
+                  <th className={thCls}>Authoritative</th>
+                  <th className={`${thCls} text-right`}>Δ (min)</th>
+                  <th className={thCls}>Label</th>
+                  <th className={thCls}>Conf.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reconciled.map(({ r, v }) => (
+                  <tr key={r.stopId} className="border-t border-[var(--row-rule)] hover:bg-[var(--row-hover)]">
+                    <td className="px-2.5 py-2.5">{r.custName || r.stopId}{r.kind ? <span className="ml-1 text-[10px] uppercase text-meta">{r.kind}</span> : null}</td>
+                    <td className="px-2.5 py-2.5 text-meta">{r.day}</td>
+                    <td className="px-2.5 py-2.5 tabular-nums">{v.gps ? win(v.gps.enterTs, v.gps.exitTs) : <span className="text-meta">—</span>}</td>
+                    <td className="px-2.5 py-2.5 tabular-nums">{v.dispatch ? win(v.dispatch.enterTs, v.dispatch.exitTs) : <span className="text-meta">—</span>}</td>
+                    <td className="px-2.5 py-2.5 tabular-nums">{v.authoritative ? `${win(v.authoritative.enterTs, v.authoritative.exitTs)}` : <span className="text-meta">—</span>}{v.authoritative ? <span className="ml-1 text-[10px] uppercase text-meta">{v.authoritative.source}</span> : null}</td>
+                    <td className="px-2.5 py-2.5 text-right tabular-nums">{v.discrepancyMinutes == null ? "—" : Math.round(v.discrepancyMinutes)}</td>
+                    <td className="px-2.5 py-2.5"><span className={`text-[11px] uppercase tracking-[0.06em] ${VISIT_LABEL_TONE[v.label] ?? "text-meta"}`}>{VISIT_LABEL_TEXT[v.label] ?? v.label}</span></td>
+                    <td className="px-2.5 py-2.5 text-meta">{v.confidence}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-[12px] text-meta">When GPS and dispatch agree within {cfg.visitDiscrepancyMinutes} min, the authoritative window is GPS enter → dispatch complete. Beyond that they are flagged and the dispatch window is kept as the labeled default (the crew action is the billing anchor). Only a genuine GPS dwell lifts a project&apos;s labor to the ACTUAL_STOP method — dispatch alone never does, so it stays Derived/Planned, honestly labeled.</p>
+        </>
+      )}
     </section>
   );
 }

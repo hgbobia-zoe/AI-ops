@@ -4317,3 +4317,172 @@ export function getWorkerLaborShares(workerRef: string, start: string, end: stri
   return rows.map((r) => ({ eventId: r.event_id, laborCost: round2(r.cost), rate: r.rate }));
 }
 
+// ── FI Stage 4: GPS visit + dispatch reconciliation (persistence) ───────────────────────────────────
+
+/** Store ONE polled GPS fix for a vehicle (forward-only). Idempotent by (vehicle_id, ts): a re-stored
+ *  identical fix is a no-op, so the poll tick can run as often as the runtime fires without duplicating. */
+export function saveGpsPosition(fix: { vehicleId: string; lat: number; lng: number; ts: string; source: string }): void {
+  getDb()
+    .prepare(
+      `INSERT INTO gps_positions (id, vehicle_id, lat, lng, ts, source, created_at)
+       VALUES (?,?,?,?,?,?,?)
+       ON CONFLICT(vehicle_id, ts) DO NOTHING`,
+    )
+    .run(`GP-${randomUUID()}`, fix.vehicleId, fix.lat, fix.lng, fix.ts, fix.source, new Date().toISOString());
+}
+
+/** The most-recent stored fix time (ISO) for a vehicle, or null — so the poll tick can honour the
+ *  configured per-vehicle cadence (gpsPollSeconds) and stay well under the provider's daily quota. */
+export function getLastGpsPositionTs(vehicleId: string): string | null {
+  const row = getDb()
+    .prepare("SELECT ts FROM gps_positions WHERE vehicle_id = ? ORDER BY ts DESC LIMIT 1")
+    .get(vehicleId) as { ts: string } | undefined;
+  return row?.ts ?? null;
+}
+
+/** All stored fixes for a vehicle within [startTs, endTs] (ISO, inclusive), oldest first — the geofence
+ *  input for one day's visits. */
+export function getGpsPositionsBetween(vehicleId: string, startTs: string, endTs: string): Array<{ ts: string; lat: number; lng: number }> {
+  return getDb()
+    .prepare("SELECT ts, lat, lng FROM gps_positions WHERE vehicle_id = ? AND ts >= ? AND ts <= ? ORDER BY ts ASC")
+    .all(vehicleId, startTs, endTs) as Array<{ ts: string; lat: number; lng: number }>;
+}
+
+export interface VisitStopRow {
+  stopId: string;
+  routeId: string;
+  truckId: string;
+  txId: string | null;
+  day: string;
+  kind: "delivery" | "pickup" | null;
+  address: string;
+  arrivedAt: string | null;
+  completedAt: string | null;
+}
+
+/** Every stop on the given days (ALL route statuses), with the fields the visit deriver needs. */
+export function getVisitStops(days: string[]): VisitStopRow[] {
+  if (days.length === 0) return [];
+  const ph = days.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(
+      `SELECT s.stop_id, s.route_id, r.truck_id, s.tx_id, r.date, s.kind, s.address, s.arrived_at, s.completed_at
+         FROM stops s JOIN routes r ON s.route_id = r.route_id
+        WHERE r.date IN (${ph})
+        ORDER BY r.date, r.truck_id, s.sequence`,
+    )
+    .all(...days) as Array<{ stop_id: string; route_id: string; truck_id: string; tx_id: string | null; date: string; kind: string | null; address: string | null; arrived_at: string | null; completed_at: string | null }>;
+  return rows.map((r) => ({
+    stopId: r.stop_id,
+    routeId: r.route_id,
+    truckId: r.truck_id,
+    txId: r.tx_id,
+    day: r.date,
+    kind: r.kind === "pickup" ? "pickup" : r.kind === "delivery" ? "delivery" : null,
+    address: r.address ?? "",
+    arrivedAt: r.arrived_at,
+    completedAt: r.completed_at,
+  }));
+}
+
+export interface VisitEventInput {
+  txId?: string;
+  routeId: string;
+  stopId: string;
+  source: "gps" | "dispatch";
+  enterTs: string | null;
+  exitTs: string | null;
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+  note?: string;
+}
+
+/** Upsert visit-event rows for a set of stop ids, idempotent by (stop_id, source). NON-DESTRUCTIVE across
+ *  sources: a 'gps' write never touches a 'dispatch' row and vice-versa. We first clear the rows of the
+ *  SOURCES present in `items` for those stops (so a visit that no longer derives is removed), then insert.
+ *  `stopIds`/`sources` scope the clear so a partial recompute can't wipe unrelated rows. */
+export function saveVisitEvents(stopIds: string[], sources: Array<"gps" | "dispatch">, items: VisitEventInput[]): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const up = db.prepare(
+    `INSERT INTO visit_events (id, tx_id, route_id, stop_id, source, enter_ts, exit_ts, confidence, note, computed_at)
+     VALUES (@id,@txId,@routeId,@stopId,@source,@enterTs,@exitTs,@confidence,@note,@now)
+     ON CONFLICT(stop_id, source) DO UPDATE SET tx_id=@txId, route_id=@routeId, enter_ts=@enterTs, exit_ts=@exitTs,
+       confidence=@confidence, note=@note, computed_at=@now`,
+  );
+  const tx = db.transaction(() => {
+    if (stopIds.length > 0 && sources.length > 0) {
+      const sp = stopIds.map(() => "?").join(",");
+      const vp = sources.map(() => "?").join(",");
+      db.prepare(`DELETE FROM visit_events WHERE stop_id IN (${sp}) AND source IN (${vp})`).run(...stopIds, ...sources);
+    }
+    for (const i of items) {
+      up.run({ id: `VE-${randomUUID()}`, txId: i.txId ?? null, routeId: i.routeId, stopId: i.stopId, source: i.source, enterTs: i.enterTs, exitTs: i.exitTs, confidence: i.confidence, note: i.note ?? null, now });
+    }
+  });
+  tx();
+}
+
+/** The genuine GPS on-stop spans (enter<exit) for a set of routes, keyed by stop_id — the ONLY input the
+ *  labor cascade reads to populate ACTUAL_STOP. Dispatch rows are deliberately excluded here. */
+export function getGpsVisitSpans(routeIds: string[]): Map<string, { enterTs: string; exitTs: string }> {
+  const out = new Map<string, { enterTs: string; exitTs: string }>();
+  if (routeIds.length === 0) return out;
+  const ph = routeIds.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(
+      `SELECT stop_id, enter_ts, exit_ts FROM visit_events
+        WHERE source='gps' AND route_id IN (${ph}) AND enter_ts IS NOT NULL AND exit_ts IS NOT NULL`,
+    )
+    .all(...routeIds) as Array<{ stop_id: string; enter_ts: string; exit_ts: string }>;
+  for (const r of rows) {
+    if (Date.parse(r.exit_ts) > Date.parse(r.enter_ts)) out.set(r.stop_id, { enterTs: r.enter_ts, exitTs: r.exit_ts });
+  }
+  return out;
+}
+
+export interface VisitReconRow {
+  stopId: string;
+  routeId: string;
+  txId: string | null;
+  day: string;
+  custName: string;
+  kind: "delivery" | "pickup" | null;
+  gpsEnter: string | null;
+  gpsExit: string | null;
+  gpsConfidence: string | null;
+  dispatchEnter: string | null;
+  dispatchExit: string | null;
+}
+
+/** Per-stop GPS vs dispatch visit windows across [start,end] for the /finance visit-reconciliation view.
+ *  Only stops that have at least one visit_events row are returned (nothing invented for a stop with no
+ *  evidence). The reconcile rule is applied in the pure module at render time. */
+export function getVisitReconciliation(start: string, end: string): VisitReconRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT s.stop_id, s.route_id, s.tx_id, r.date, s.cust_name, s.kind,
+              g.enter_ts AS g_enter, g.exit_ts AS g_exit, g.confidence AS g_conf,
+              d.enter_ts AS d_enter, d.exit_ts AS d_exit
+         FROM stops s
+         JOIN routes r ON s.route_id = r.route_id
+         LEFT JOIN visit_events g ON g.stop_id = s.stop_id AND g.source='gps'
+         LEFT JOIN visit_events d ON d.stop_id = s.stop_id AND d.source='dispatch'
+        WHERE r.date >= ? AND r.date <= ? AND (g.stop_id IS NOT NULL OR d.stop_id IS NOT NULL)
+        ORDER BY r.date DESC, s.route_id, s.sequence`,
+    )
+    .all(start, end) as Array<{ stop_id: string; route_id: string; tx_id: string | null; date: string; cust_name: string | null; kind: string | null; g_enter: string | null; g_exit: string | null; g_conf: string | null; d_enter: string | null; d_exit: string | null }>;
+  return rows.map((r) => ({
+    stopId: r.stop_id,
+    routeId: r.route_id,
+    txId: r.tx_id,
+    day: r.date,
+    custName: r.cust_name ?? "",
+    kind: r.kind === "pickup" ? "pickup" : r.kind === "delivery" ? "delivery" : null,
+    gpsEnter: r.g_enter,
+    gpsExit: r.g_exit,
+    gpsConfidence: r.g_conf,
+    dispatchEnter: r.d_enter,
+    dispatchExit: r.d_exit,
+  }));
+}
+

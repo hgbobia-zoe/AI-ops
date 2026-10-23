@@ -122,3 +122,33 @@ export function costFamiliesConfig(): CostFamiliesConfig {
     derivedEnabled: (process.env.FINANCE_COST_FAMILIES ?? "1") !== "0",
   };
 }
+
+// ── Visit-reconciliation config (FI Stage 4) — GPS visit + dispatch two-evidence layer (audit §5.2).
+//    No magic numbers: the geofence radius, poll cadence and discrepancy tolerance are all one place,
+//    env-overridable (later movable to /admin like the ops-cycle knob). These knobs NEVER touch the
+//    money-allocation math — they only decide WHEN we poll, WHERE a fix counts as "on site", and WHEN
+//    two clocks are treated as agreeing.
+export interface VisitReconcileConfig {
+  /** Radius (metres) around a stop's geocoded address within which a GPS fix counts as "on site".
+   *  Default 150 m (a venue parking lot / loading area); override via env. */
+  geofenceRadiusM: number;
+  /** Minimum seconds between stored GPS fixes PER VEHICLE — the poll cadence. Keeps us well under the
+   *  provider's daily quota (eta/zonar.ts) however often the runtime tick fires. Default 300 s (5 min). */
+  gpsPollSeconds: number;
+  /** Tolerance (minutes) within which the GPS on-site enter and the dispatch arrived time are treated
+   *  as AGREEING. Beyond it the visit is flagged for review (dispatch kept as the labeled default).
+   *  Default 15 min. */
+  visitDiscrepancyMinutes: number;
+  /** Master switch for the Stage-4 visit layer (polling + geofence recompute). Default on; set
+   *  FINANCE_VISIT_RECONCILE=0 to disable the whole layer (the ACTUAL_STOP feed then never fires). */
+  enabled: boolean;
+}
+
+export function visitReconcileConfig(): VisitReconcileConfig {
+  return {
+    geofenceRadiusM: numEnv("FINANCE_GEOFENCE_RADIUS_M") ?? 150,
+    gpsPollSeconds: numEnv("FINANCE_GPS_POLL_SECONDS") ?? 300,
+    visitDiscrepancyMinutes: numEnv("FINANCE_VISIT_DISCREPANCY_MIN") ?? 15,
+    enabled: (process.env.FINANCE_VISIT_RECONCILE ?? "1") !== "0",
+  };
+}

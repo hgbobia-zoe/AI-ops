@@ -2102,6 +2102,46 @@ CREATE TABLE IF NOT EXISTS finance_saved_views (
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );
+
+-- ── FI Stage 4: GPS visit + dispatch reconciliation ─────────────────────────────────────────────────
+-- Forward-only polled GPS fixes for ACTIVE trucks only. The telematics provider is live-position-only
+-- and daily-quota'd (eta/zonar.ts), so on-site presence is reconstructable ONLY from the moment polling
+-- begins — it is NEVER backfilled, and a missing fix stays missing (UNAVAILABLE, never a fabricated
+-- position). One row per stored poll; UNIQUE(vehicle_id, ts) dedupes a re-stored identical fix so the
+-- poll tick is idempotent. (See visitReconcileRun.ts for the clearly-marked historical-backfill seam.)
+CREATE TABLE IF NOT EXISTS gps_positions (
+  id          TEXT PRIMARY KEY,
+  vehicle_id  TEXT NOT NULL,
+  lat         REAL NOT NULL,
+  lng         REAL NOT NULL,
+  ts          TEXT NOT NULL,          -- fix time (provider ts when present, else poll time), ISO
+  source      TEXT NOT NULL,          -- gps provider id (e.g. 'gpstrackit')
+  created_at  TEXT NOT NULL,
+  UNIQUE(vehicle_id, ts)
+);
+CREATE INDEX IF NOT EXISTS idx_gps_positions_vehicle ON gps_positions(vehicle_id, ts);
+
+-- Derived on-site visit INTERVALS per stop, from TWO INDEPENDENT evidence sources: geofenced GPS
+-- presence ('gps') and dispatch-reported arrived/completed ('dispatch'). BOTH rows are stored — one
+-- NEVER overwrites the other; the two-source reconcile rule (visitReconcile.ts §5.2) only CHOOSES an
+-- authoritative window for display + the ACTUAL_STOP labor feed. Dispatch times are SERVER-RECEIVE
+-- times (offline-queue skew), so a dispatch-only visit is honestly LOW confidence / PROVISIONAL.
+-- Idempotent by the (stop_id, source) natural key.
+CREATE TABLE IF NOT EXISTS visit_events (
+  id          TEXT PRIMARY KEY,
+  tx_id       TEXT,                   -- Goodshuffle project id (stops.tx_id); null for an untagged stop
+  route_id    TEXT NOT NULL,
+  stop_id     TEXT NOT NULL,
+  source      TEXT NOT NULL,          -- 'gps' | 'dispatch'
+  enter_ts    TEXT,                   -- ISO on-site enter (null = unknown)
+  exit_ts     TEXT,                   -- ISO on-site exit (null = unknown / still open)
+  confidence  TEXT NOT NULL,          -- HIGH | MEDIUM | LOW
+  note        TEXT,
+  computed_at TEXT NOT NULL,
+  UNIQUE(stop_id, source)
+);
+CREATE INDEX IF NOT EXISTS idx_visit_events_route ON visit_events(route_id);
+CREATE INDEX IF NOT EXISTS idx_visit_events_tx ON visit_events(tx_id);
 `;
 
 type DB = InstanceType<typeof Database>;

@@ -4,7 +4,7 @@
 // ONLY meaningful changes (new HIGH/CRITICAL, escalations, resolutions, regressions).
 
 import { getActiveVehicles } from "@/lib/vehicles";
-import { getRoutesForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity, saveDerivedLabor } from "@/lib/db/repo";
+import { getRoutesForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity, saveDerivedLabor, getGpsVisitSpans } from "@/lib/db/repo";
 import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/history/store";
 import { getCrewForDateSafe, getUnavailabilityForDate, connecteamConfigured, getPayRates, rateForUserOn, type CrewShift, type CrewRole } from "@/lib/connecteam";
 import { getSettings } from "@/lib/settings";
@@ -187,7 +187,7 @@ async function resolvePrepOpportunities(today: string, tomorrow: string, nowReal
 /** Build the finance AttribRoute (window/raw/buffer hours from routeWindow) + the Instawork match window.
  *  `eng` drives the window (plannedWindow/eta); `rawStops` carry the grain the attributor needs
  *  (txId/kind/arrived→completed/item-count). */
-function toAttribRoute(eng: EngineRoute, rawStops: Stop[]): { attrib: AttribRoute; match: RouteWindowMatch } {
+function toAttribRoute(eng: EngineRoute, rawStops: Stop[], gpsSpans?: Map<string, { enterTs: string; exitTs: string }>): { attrib: AttribRoute; match: RouteWindowMatch } {
   const w = routeWindow(eng, DEFAULT_RISK_CONFIG);
   const windowHours = w ? round2((w.endUnix - w.startUnix) / 3600) : null;
   const rawHours = w ? round2((w.rawEnd - w.rawStart) / 3600) : null;
@@ -198,14 +198,22 @@ function toAttribRoute(eng: EngineRoute, rawStops: Stop[]): { attrib: AttribRout
     windowHours,
     rawHours,
     bufferHours,
-    stops: rawStops.map((s) => ({
-      txId: s.txId,
-      sequence: s.sequence,
-      kind: s.kind,
-      arrivedAt: s.arrivedAt,
-      completedAt: s.completedAt,
-      itemCount: s.items?.length ?? 0,
-    })),
+    stops: rawStops.map((s) => {
+      // L1 ACTUAL_STOP feed (FI Stage 4): attach a GENUINE GPS-derived on-site span when one exists for
+      // this stop. Only gps-source visit_events spans (enter<exit) reach here — dispatch times never do —
+      // so a dispatch-only stop keeps arrivedAt/completedAt alone and stays DERIVED/PLANNED exactly as today.
+      const span = gpsSpans?.get(s.stopId);
+      return {
+        txId: s.txId,
+        sequence: s.sequence,
+        kind: s.kind,
+        arrivedAt: s.arrivedAt,
+        completedAt: s.completedAt,
+        itemCount: s.items?.length ?? 0,
+        actualEnterAt: span?.enterTs,
+        actualExitAt: span?.exitTs,
+      };
+    }),
   };
   // A route staffs a driver and (potentially) field crew; both Driver and General Labor gigs can match.
   const roles: ShiftRole[] = ["driver", "field"];
@@ -281,6 +289,19 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   const driverByRoute = new Map<string, string | undefined>(); // for history snapshots
   const unverifiedStaffingDates = new Set<string>(); // dates Connecteam couldn't confirm — freeze, don't resolve
   const capacityResults: CapacityResult[] = [];
+
+  // FI Stage 4: recompute the two on-site visit sources (dispatch + geofenced GPS) over a window that
+  // includes recent PAST days (completed projects get their dispatch window) plus the scanned horizon.
+  // Isolated — a failure here must never break the core scan. The gps-source spans this writes are what
+  // the labor cascade reads below to populate ACTUAL_STOP (forward-only; empty until GPS polling begins).
+  try {
+    const { recomputeVisitReconciliation } = await import("@/lib/finance/visitReconcileRun");
+    const visitDays = getRouteDates().filter((d) => d >= shiftYmd(today, -14) && d <= last);
+    await recomputeVisitReconciliation(visitDays);
+  } catch (e) {
+    console.error("[finance] visit reconciliation recompute failed (isolated):", e);
+  }
+
   for (const date of dates) {
     const rawRoutes = trucks.flatMap((t) => getRoutesForDate(t.truckId, date));
     if (rawRoutes.length === 0) continue;
@@ -367,9 +388,12 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
     // warehouse/travel → stop/project split), every leaf honestly labeled bucket/method/confidence.
     const attribRoutes: AttribRoute[] = [];
     const matches = new Map<string, RouteWindowMatch>();
+    // Genuine GPS on-stop spans for this day's routes (empty until GPS polling has run) — the ONLY input
+    // that can lift a route to ACTUAL_STOP. A dispatch-only route gets an empty map → unchanged behaviour.
+    const gpsSpans = getGpsVisitSpans(rawRoutes.map((r) => r.routeId));
     for (const eng of routes) {
       const raw = rawRoutes.find((rr) => rr.routeId === eng.routeId);
-      const { attrib, match } = toAttribRoute(eng, raw?.stops ?? []);
+      const { attrib, match } = toAttribRoute(eng, raw?.stops ?? [], gpsSpans);
       attribRoutes.push(attrib);
       matches.set(eng.routeId, match);
     }
