@@ -24,8 +24,12 @@ can't do this work, so a machine you control does.
 
 ### Guardrails (important — this edits real website code driven by non-engineers)
 
-- The agent is confined to the website repo directory and is instructed **not** to run git/gh/push/deploy or
-  anything outside the repo. The **runner** owns all git + PR operations.
+- The agent is **file-ops only** (Read/Write/Edit/Glob/Grep) — it has **no shell / no Bash**. Because it runs
+  without human tool-call approval on prompts from non-engineers (which may include text injected via files
+  it reads), a shell would be arbitrary command execution on the office machine (whose env holds
+  `ANTHROPIC_API_KEY` + `WEBSITE_RUNNER_TOKEN`). The **runner** owns all git, build/preview, and PR operations;
+  the agent only edits website source under the repo dir. If a theme build step is ever needed for preview,
+  the runner runs it as a fixed command in its deploy step — never the agent.
 - The runner **never merges a PR, never pushes to the default branch, and never deploys.** It is PR-only; a
   human reviews and merges. Nothing goes live from here.
 - One job at a time. A single job failing is caught, marked `failed` in the app, and the loop continues.
@@ -98,3 +102,5 @@ Keep it running whenever marketing might submit requests. If it isn't running, j
 - Serve a real **shareable / interactive staging URL** instead of screenshots. Screenshots are the Phase-1
   preview; a live preview tunnel is Phase 2.
 - In-app code-diff view, multi-turn follow-up on a job, and auto-deploy are also out of scope for Phase 1.
+- **Security:** run the agent in a sandbox/container or as a lower-privilege user so even file writes can't
+  escape the repo (the file tools run under `bypassPermissions`, so they can still write by absolute path).

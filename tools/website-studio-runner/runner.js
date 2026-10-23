@@ -14,9 +14,11 @@
 //        discarded → delete the local branch, restore the local site to a clean default branch → (already `discarded`)
 //
 // GUARDRAILS (this edits real website code driven by non-engineers):
-//   • The agent's working directory is confined to WEBSITE_REPO_PATH (cwd). It may read/edit files and run
-//     repo-local build/lint, but is instructed NOT to run git/gh/push/deploy or anything outside the repo —
-//     the RUNNER owns all git + PR operations.
+//   • The agent is FILE-OPS ONLY — Read/Write/Edit/Glob/Grep, deliberately NO Bash/shell. Under
+//     bypassPermissions nobody approves tool calls and prompts come from non-engineers (possibly with text
+//     injected via files the agent reads), so a shell would be arbitrary command execution on this machine
+//     (whose env holds ANTHROPIC_API_KEY + WEBSITE_RUNNER_TOKEN). The RUNNER owns git, the build/preview
+//     deploy, and PRs — the agent just edits website source under cwd=WEBSITE_REPO_PATH.
 //   • The runner NEVER merges a PR, NEVER pushes to the default branch, and NEVER deploys. PR-only.
 //   • One job at a time. One job failing never crashes the loop — it is marked `failed` and the loop continues.
 //   • Secrets (ANTHROPIC_API_KEY, WEBSITE_RUNNER_TOKEN) are read from the environment, never hardcoded.
@@ -114,9 +116,9 @@ async function runAgent(prompt) {
   const system = [
     "You are editing the source of a WordPress/DevKinsta website in the current working directory.",
     "Make ONLY the change the user describes. Keep edits minimal and focused.",
-    "You MAY read and edit files and run repo-local build/lint commands.",
-    "You MUST NOT run git, gh, push, deploy, or any command that reaches outside this repository — a separate",
-    "runner handles commits, branching, and the pull request. Do not commit.",
+    "You can read, search, and edit files ONLY. You have NO shell — you cannot run commands of any kind.",
+    "A separate runner handles everything else: branching, commits, the local build/preview deploy, and the",
+    "pull request. Do not attempt to run git, gh, npm, build, deploy, or any command, and do not commit.",
     "When you are done, end your final message with a line listing the site URL path(s) your change affects,",
     "exactly in this form (use site-root-relative paths, space-separated):",
     "CHANGED_PATHS: / /about",
@@ -132,8 +134,13 @@ async function runAgent(prompt) {
       systemPrompt: system,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
-      // Give it the editing + local-inspection toolset; no network/web tools.
-      allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+      // SECURITY: file-ops ONLY — deliberately NO Bash. Under bypassPermissions there is no human approving
+      // tool calls, and prompts come from non-engineers (and may include injected text in files the agent
+      // reads), so a shell here would be arbitrary command execution on the office machine — whose env holds
+      // ANTHROPIC_API_KEY + WEBSITE_RUNNER_TOKEN. The agent only needs to edit website source; the RUNNER
+      // owns git, the local build/preview deploy, and PRs. If a theme build step (npm/gulp) is ever needed
+      // for the preview, run it as a FIXED command in deployToDevKinsta — never by giving the agent Bash.
+      allowedTools: ["Read", "Write", "Edit", "Glob", "Grep"],
       // Do NOT load the website repo's own CLAUDE.md/settings — keep the run hermetic (settingSources
       // defaults to none when omitted).
     },
@@ -162,6 +169,9 @@ async function runAgent(prompt) {
 // website redesign's docker-cp deploy). Falls back to docker cp of the changed files. Never touches the
 // live site. `changedFiles` is the list to copy for the docker-cp fallback.
 function deployToDevKinsta(changedFiles) {
+  // TODO(phase-2): if the theme ever needs a build step before preview (e.g. `npm run build` / gulp), run it
+  // HERE as a fixed, hardcoded command — never by giving the agent Bash. Keep it a known command this runner
+  // controls, not something a marketing prompt can influence.
   const syncPs1 = join(REPO, "sync.ps1");
   if (existsSync(syncPs1)) {
     log("deploying to DevKinsta via sync.ps1");
