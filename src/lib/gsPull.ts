@@ -215,7 +215,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
       if(t.indexOf("ford")>=0||t.indexOf("e450")>=0||t.indexOf("e-450")>=0) return "E450";
       if(t.indexOf("isuzu")>=0||t.indexOf("npr")>=0){ if(t.indexOf("2")>=0) return "NPR-2"; if(t.indexOf("1")>=0) return "NPR-1"; return null; }
       return null; }
-    function fetchEvent(txID){ var out={items:undefined,contactId:undefined,grandTotalCents:undefined,paidCents:undefined};
+    function fetchEvent(txID){ var out={items:undefined,contactId:undefined,grandTotalCents:undefined,paidCents:undefined,rev:undefined};
       var pI=fetch("/app/vendorTransaction/initContractView?transactionID="+txID,H).then(function(r){return r.json();})
         .then(function(cv){ if(cv&&cv.contactID!=null)out.contactId=String(cv.contactID); var g=(cv&&cv.lineItemGroupsToLoad)||[]; return Promise.all(g.map(function(x){ return fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID="+x.id+"&transactionID="+txID,H).then(function(r){return r.json();}).catch(function(){return null;}); })); })
         .then(function(lists){ var items=[];
@@ -229,7 +229,16 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
           (lists||[]).forEach(function(gj){w(gj,0);}); if(items.length)out.items=items; })
         .catch(function(){});
       var pR=fetch("/app/vendorPayment/loadPaymentHistoryAndContractTotals?transactionID="+txID,H).then(function(r){return r.json();})
-        .then(function(pt){ if(pt&&typeof pt.grandTotal==="number")out.grandTotalCents=pt.grandTotal; var ph=pt&&pt.paymentHistory; if(ph&&typeof ph.totalContractApplicablePaid==="number")out.paidCents=ph.totalContractApplicablePaid; })
+        .then(function(pt){ if(pt&&typeof pt.grandTotal==="number")out.grandTotalCents=pt.grandTotal; var ph=pt&&pt.paymentHistory; if(ph&&typeof ph.totalContractApplicablePaid==="number")out.paidCents=ph.totalContractApplicablePaid;
+          // Stage 3 revenue reconstruction: carry the full component breakdown (CENTS) off the SAME response.
+          // MIRRORS extractRevenueComponents() in src/lib/finance/revenueModel.ts (serialized/inline here — a
+          // drift is caught in review). Defensive: a missing/non-number field stays null, never fabricated.
+          if(pt){ var N=function(v){ return (typeof v==="number"&&isFinite(v))?v:null; };
+            var rt=null; var etr=pt.effectiveTaxRate; if(typeof etr==="number"&&isFinite(etr))rt=etr; else if(typeof etr==="string"&&etr.trim()!==""){ var pf=Number(etr); if(isFinite(pf))rt=pf; }
+            var evs=(ph&&ph.paymentEvents&&ph.paymentEvents.length)?ph.paymentEvents:[]; var gsf=null; for(var gi=0;gi<evs.length;gi++){ var gv=N(evs[gi]&&evs[gi].goodshuffleFeeAmount); if(gv!=null)gsf=(gsf==null?0:gsf)+gv; }
+            var opf=N(ph&&ph.onlinePaymentsProcessingFeesTotal), ffp=N(ph&&ph.offlinePaymentsProcessingFeesTotal); var pfees=(opf==null&&ffp==null)?null:((opf||0)+(ffp||0));
+            out.rev={ bookingId:String(txID), quotedSubtotal:N(pt.contractOriginalSubTotal), contractTotal:N(pt.contractTotal), grandTotal:N(pt.grandTotal), productSubtotal:N(pt.contractProductSubTotal), productRentalsSubtotal:N(pt.contractProductRentalsSubTotal), productSalesSubtotal:N(pt.contractProductSalesSubTotal), serviceSubtotal:N(pt.contractServiceSubTotal), logisticsSubtotal:N(pt.contractLogisticsSubTotal), detachedItemSubtotal:N(pt.contractDetachedItemSubTotal), discount:N(pt.contractDiscount), additionalDiscount:N(pt.contractAdditionalDiscount), discountSubtotal:N(pt.contractDiscountSubTotal), taxableSubtotal:N(pt.contractTaxableSubTotal), taxTotal:N(pt.taxMap&&pt.taxMap.total), effectiveTaxRate:rt, collected:N(ph&&ph.totalContractApplicablePaid), refunds:N(ph&&ph.totalSuccessfulRefunds), processingFees:pfees, goodshuffleFees:gsf }; }
+        })
         .catch(function(){});
       return Promise.all([pI,pR]).then(function(){return out;}); }
     function extractStops(route){ var wps=(route.waypoints||[]).filter(function(w){return !w.isOriginWarehouse&&!w.isDestinationWarehouse;}); wps.sort(function(a,b){return (a.waypointIndex||0)-(b.waypointIndex||0);});
@@ -237,7 +246,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var s={custName:name||"",custFirstName:r.firstName||undefined,custLastName:r.lastName||undefined,kind:(w.waypointType==="PICK_UP"?"pickup":"delivery"),custPhone:sv.e164PhoneNumber||r.phone||tl.contactPhoneNumber||"",address:address,plannedWindow:w.scheduledArrivalTime||undefined,eta:w.scheduledArrivalTime||undefined};
         if(doc){s.dayOfName=doc.name||doc.fullName||undefined;s.dayOfPhone=doc.phoneNumber||doc.phone||undefined;}
         s._txID=w.transactionID||(tx&&tx.id)||null; if(s._txID)s.txId=String(s._txID); return s; }); }
-    function attachItems(stops){ return Promise.all(stops.map(function(s){ if(!s._txID){delete s._txID;return Promise.resolve();} return fetchEvent(s._txID).then(function(ev){ if(ev){ if(ev.items&&ev.items.length)s.items=ev.items; if(ev.contactId)s.contactId=ev.contactId; if(ev.grandTotalCents!=null)s.grandTotalCents=ev.grandTotalCents; if(ev.paidCents!=null)s.paidCents=ev.paidCents; } delete s._txID; }); })).then(function(){return stops;}); }
+    function attachItems(stops){ return Promise.all(stops.map(function(s){ if(!s._txID){delete s._txID;return Promise.resolve();} return fetchEvent(s._txID).then(function(ev){ if(ev){ if(ev.items&&ev.items.length)s.items=ev.items; if(ev.contactId)s.contactId=ev.contactId; if(ev.grandTotalCents!=null)s.grandTotalCents=ev.grandTotalCents; if(ev.paidCents!=null)s.paidCents=ev.paidCents; if(ev.rev)s.revComponents=ev.rev; } delete s._txID; }); })).then(function(){return stops;}); }
     // Multi-week route pull: fetch the next ~3 weeks of routes and import each per (truck, DATE), so
     // the dispatch calendar + risk engine stay populated ahead of time. Near-term routes (<= ENRICH
     // days out) get full per-event enrichment (line items → tent/crew rules); farther-out routes import
@@ -248,7 +257,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
       var now=new Date(); var start=new Date(now.getFullYear(),now.getMonth(),now.getDate(),0,0,0); var end=new Date(start.getTime()+(HORIZON+1)*24*3600*1000); var todayYmd=rymd(start.toISOString());
       var body={from:start.toISOString(),to:end.toISOString(),warehouseCanonicalIDs:null,crew:null,vehicles:null,statuses:null};
       return fetch("/app/routing/listRoutes",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body),credentials:"include"}).then(function(r){return r.json();}).then(function(routes){
-        var groups={},chain=Promise.resolve(),unmatched={};
+        var groups={},chain=Promise.resolve(),unmatched={},revAcc={};
         (routes||[]).forEach(function(rt){ chain=chain.then(function(){ var title=(rt.vehicle&&rt.vehicle.title)||""; var tid=truckIdFor(title)||truckFromName(rt.name); if(!tid){ if(title||rt.name)unmatched[title||rt.name]=1; return; }
           return fetch("/app/routing/getRoute?routeID="+rt.id+"&includeAttributes=true",{headers:{accept:"application/json"},credentials:"include"}).then(function(r){return r.json();}).then(function(full){
             var stops=extractStops(full);
@@ -256,12 +265,18 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
             if(!rdate) return;
             var daysOut=Math.round((Date.parse(rdate+"T00:00:00Z")-Date.parse(todayYmd+"T00:00:00Z"))/86400000);
             var p=(daysOut>=0&&daysOut<=ENRICH)?attachItems(stops):Promise.resolve(stops);
-            return p.then(function(st){ var key=tid+"|"+rdate+"|"+rt.id; if(!groups[key])groups[key]={truckId:tid,date:rdate,stops:[],gsRouteId:String(rt.id)}; groups[key].stops=groups[key].stops.concat(st); });
+            return p.then(function(st){ var key=tid+"|"+rdate+"|"+rt.id; if(!groups[key])groups[key]={truckId:tid,date:rdate,stops:[],gsRouteId:String(rt.id)}; groups[key].stops=groups[key].stops.concat(st);
+              // Stage 3: collect each enriched stop's revenue component breakdown (CENTS), deduped by tx.
+              st.forEach(function(x){ if(x&&x.revComponents&&x.revComponents.bookingId)revAcc[x.revComponents.bookingId]=x.revComponents; }); });
           }); }); });
         return chain.then(function(){
           var keys=Object.keys(groups); var totalStops=0,failed=0,days=keys.length; var unm=Object.keys(unmatched);
           function result(){ return {stops:totalStops,days:days,failed:failed,unmatched:unm}; }
-          return Promise.all(keys.map(function(k){ var g=groups[k]; totalStops+=g.stops.length; return fetch(API+"/api/route/import",{method:"POST",headers:POSTH(),body:JSON.stringify({truckId:g.truckId,date:g.date,stops:g.stops,gsRouteId:g.gsRouteId})}).then(function(r){ if(!r.ok)failed++; }).catch(function(){failed++;}); })).then(function(){
+          // Stage 3: push the enriched revenue component breakdown to the bookings SoT ingest (its own
+          // components-only POST — no projects[], so it never touches the bookings upsert/prune). Best-effort:
+          // a failure here must NEVER fail the route pull. Keyed by booking_id so the office snapshot lights up.
+          function postComponents(){ var vals=Object.keys(revAcc).map(function(k){ return revAcc[k]; }); if(!vals.length) return Promise.resolve(); return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({components:vals})}).then(function(){}).catch(function(){}); }
+          return Promise.all(keys.map(function(k){ var g=groups[k]; totalStops+=g.stops.length; return fetch(API+"/api/route/import",{method:"POST",headers:POSTH(),body:JSON.stringify({truckId:g.truckId,date:g.date,stops:g.stops,gsRouteId:g.gsRouteId})}).then(function(r){ if(!r.ok)failed++; }).catch(function(){failed++;}); })).then(postComponents).then(function(){
             // Sanitize: after a FULL clean sweep, drop any of OUR routes GS no longer has (moved/cancelled).
             // Only when nothing failed (partial pull must never prune). Keep = routes GS returned this sweep.
             if(failed!==0 || keys.length===0) return result();

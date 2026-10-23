@@ -3,10 +3,11 @@
 // executive scorecard. RULES CALCULATE — every figure is deterministic or explicitly UNAVAILABLE.
 
 import { getPlannedHours, getActualHours, getPayRates, rateForUserOn } from "@/lib/connecteam";
-import { getBookingsRevenueInRange, getBookingsInRange, getEventDirectCosts, getLaborLedgerSummary, getBookingById, getProjectCostFamilies, getBookingUpdatedAt, type LaborLedgerSummary } from "@/lib/db/repo";
+import { getBookingsRevenueInRange, getBookingsInRange, getEventDirectCosts, getLaborLedgerSummary, getBookingById, getProjectCostFamilies, getBookingUpdatedAt, getBookingRevenueComponents, type LaborLedgerSummary } from "@/lib/db/repo";
 import { saveLaborSnapshot, getLaborTrajectory, type LaborSnapshotRow } from "./laborHistory";
 import { financeConfig } from "./config";
 import { projectSnapshot, type ProjectSnapshot } from "./projectSnapshot";
+import { buildRevenueModel } from "./revenueModel";
 import { computeVariance, laborPctOfRevenue, contribution, contributionMargin, type Variance, type MoneyStatus } from "./calc";
 import type { Period } from "./periods";
 
@@ -171,11 +172,15 @@ export function projectFinancials(txId: string, now: Date = new Date()): Project
   const staleHours = financeConfig().revenueStaleHours;
   const updatedMs = updatedAt != null ? Date.parse(updatedAt) : NaN;
   const stale = Number.isFinite(updatedMs) ? (now.getTime() - updatedMs) / 3_600_000 > staleHours : false;
+  // Stage 3: the per-tx revenue component breakdown (dollars) if the pull has captured it; build the honest
+  // model from it. Null when not yet pulled → the snapshot falls back to grand-total-only (no regression).
+  const storedComponents = getBookingRevenueComponents(txId);
+  const components = storedComponents ? buildRevenueModel(storedComponents, b.signed) : null;
   return projectSnapshot({
     projectId: b.bookingId,
     label: b.eventName || `Project ${b.bookingId}`,
     eventDate: b.eventDate,
-    revenue: { grandTotal: b.grandTotal, contractTotal: b.contractTotal, amountPaid: b.amountPaid, amountDue: b.amountDue, signed: b.signed },
+    revenue: { grandTotal: b.grandTotal, contractTotal: b.contractTotal, amountPaid: b.amountPaid, amountDue: b.amountDue, signed: b.signed, components },
     costFamilies: getProjectCostFamilies(txId),
     revenueAsOf: updatedAt,
     stale,

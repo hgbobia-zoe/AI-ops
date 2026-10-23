@@ -8,6 +8,7 @@
 import Link from "next/link";
 import { financeForPeriod, projectFinancials } from "@/lib/finance/service";
 import type { ProjectSnapshot } from "@/lib/finance/projectSnapshot";
+import type { RevenueComponents } from "@/lib/finance/revenueModel";
 import { getPeriod, PERIOD_KEYS, priorWeek, priorCycle, customRange, priorRange, type Period, type PeriodKey } from "@/lib/finance/periods";
 import { opsCycleConfig } from "@/lib/finance/config";
 import { getRouteLaborCosts, getInstaworkLedger, getLaborReconciliation, getProjectLaborLineage, getLaborLedgerSummary, getVisitReconciliation, getReconciliationRuns, getRecentReconciliationRuns, type ReconciliationRunRow } from "@/lib/db/repo";
@@ -441,6 +442,15 @@ function ProjectDetail({ snap, id, runs, backHref, canEdit }: { snap: ProjectSna
         </Block>
       </section>
 
+      {/* Revenue components (Stage 3) — quoted→contracted→collected, discounts, tax, fees, refunds. Shown
+          only when the per-tx Goodshuffle breakdown has been pulled; otherwise the grand-total headline above
+          stands on its own (no regression). Untracked figures are unavailable, never shown as 0. */}
+      {r.componentsTracked && r.components ? (
+        <RevenueComponentsPanel c={r.components} />
+      ) : (
+        <p className="mb-6 text-[12px] text-meta">Revenue component breakdown (quoted vs contracted, discounts, tax, fees, refunds) is not available for this project yet — it populates after the office re-installs the Goodshuffle pull. Only the grand total is shown above.</p>
+      )}
+
       {/* Cost-family rollup — tracked AND not-yet-tracked (never shown as 0) */}
       <h3 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Cost families</h3>
       <div className="overflow-x-auto border border-border">
@@ -871,6 +881,51 @@ function Lineage({ eventId, label }: { eventId: string; label: string }): React.
           </table>
         </div>
       )}
+    </section>
+  );
+}
+
+// One labeled component row — null value renders "—" (unavailable), never a fabricated 0.
+function RevRow({ label, value, sub, tone }: { label: string; value: number | null; sub?: string; tone?: string }): React.JSX.Element {
+  return (
+    <div className="flex items-baseline justify-between gap-3 border-t border-[var(--row-rule)] px-3 py-2 first:border-t-0">
+      <span className="text-[12.5px] text-tertiary-text">{label}{sub ? <span className="ml-1 text-[11px] text-meta">{sub}</span> : null}</span>
+      <span className={`tabular-nums text-[13px] ${tone ?? ""}`}>{value == null ? <span className="text-meta">—</span> : money(value)}</span>
+    </div>
+  );
+}
+
+// Stage 3 revenue-component breakdown. Reads straight off the deterministic model — every figure is a real
+// dollar value or "—" (unavailable), never a fabricated 0. Invoiced is labeled as not-a-Goodshuffle-state.
+function RevenueComponentsPanel({ c }: { c: RevenueComponents }): React.JSX.Element {
+  const ratePct = c.effectiveTaxRate == null ? null : `${(c.effectiveTaxRate * 100).toFixed(2)}%`;
+  return (
+    <section className="mb-6">
+      <h3 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Revenue components</h3>
+      <div className="grid gap-px overflow-hidden border border-border bg-border md:grid-cols-2">
+        <div className="bg-panel">
+          <RevRow label="Quoted subtotal" value={c.quotedSubtotal} sub="pre-discount" />
+          <RevRow label="Product" value={c.productSubtotal} />
+          <RevRow label="Service" value={c.serviceSubtotal} />
+          <RevRow label="Delivery (logistics)" value={c.logisticsSubtotal} />
+          <RevRow label="Discounts" value={c.discountsTotal} tone={c.discountsTotal ? "text-attention" : undefined} />
+          <RevRow label="Taxable subtotal" value={c.taxableSubtotal} />
+          <RevRow label="Tax" value={c.taxTotal} sub={ratePct ?? undefined} />
+          <RevRow label="Contracted total" value={c.grandTotal} tone="text-foreground font-medium" />
+        </div>
+        <div className="bg-panel">
+          <RevRow label="Collected" value={c.collected} />
+          <RevRow label="Refunds" value={c.refunds} tone={c.refunds ? "text-attention" : undefined} />
+          <RevRow label="Net collected" value={c.netCollected} tone="text-foreground font-medium" sub="collected − refunds" />
+          <RevRow label="Processing fees" value={c.processingFees} />
+          <RevRow label="Goodshuffle fees" value={c.goodshuffleFees} />
+          <RevRow label="Fees total" value={c.feesTotal} sub="cost to Zoe" />
+          <div className="flex items-baseline justify-between gap-3 border-t border-[var(--row-rule)] px-3 py-2">
+            <span className="text-[12.5px] text-tertiary-text">Invoiced</span>
+            <span className="text-[11px] uppercase tracking-[0.06em] text-meta">not a Goodshuffle state</span>
+          </div>
+        </div>
+      </div>
     </section>
   );
 }

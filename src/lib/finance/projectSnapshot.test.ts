@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { projectSnapshot, COST_FAMILIES, type ProjectSnapshotInput, type CostFamilyInput } from "./projectSnapshot";
+import { buildRevenueModel } from "./revenueModel";
 
 function input(over: Partial<ProjectSnapshotInput> = {}): ProjectSnapshotInput {
   return {
@@ -140,9 +141,33 @@ describe("projectSnapshot — revenue labeling (honest, not invented)", () => {
     expect(quote.revenue.collectedStatus).toBe("UNAVAILABLE");
   });
 
-  it("fees/discounts/refunds are flagged as not separated upstream (never invented)", () => {
+  it("fees/discounts/refunds are flagged as not separated upstream (never invented) on the FALLBACK path", () => {
     const snap = projectSnapshot(input());
     expect(snap.revenue.componentsTracked).toBe(false);
+    expect(snap.revenue.components).toBeNull();
     expect(snap.notes.some((n) => /fees, discounts and refunds/i.test(n))).toBe(true);
+  });
+
+  it("when the component breakdown is present, it is exposed and the fallback caveat is dropped (Stage 3)", () => {
+    const components = buildRevenueModel(
+      {
+        quotedSubtotal: 5000, contractTotal: 5088, grandTotal: 5088, productSubtotal: 4000, productRentalsSubtotal: 3000,
+        productSalesSubtotal: 1000, serviceSubtotal: 500, logisticsSubtotal: 500, detachedItemSubtotal: 0, discount: 150,
+        additionalDiscount: 50, discountSubtotal: 200, taxableSubtotal: 4800, taxTotal: 288, effectiveTaxRate: 0.06,
+        collected: 2544, refunds: 100, processingFees: 70, goodshuffleFees: 30,
+      },
+      true,
+    );
+    const snap = projectSnapshot(input({ revenue: { grandTotal: 5088, contractTotal: 5088, amountPaid: 2544, amountDue: 2544, signed: true, components } }));
+    expect(snap.revenue.componentsTracked).toBe(true);
+    expect(snap.revenue.components).not.toBeNull();
+    expect(snap.revenue.components!.discountsTotal).toBe(200);
+    expect(snap.revenue.components!.netCollected).toBe(2444);
+    expect(snap.revenue.components!.invoiced).toBeNull();
+    // Contribution math is unchanged (grand_total remains the basis), so no regression.
+    expect(snap.revenue.contracted).toBe(5088);
+    // The honest component notes replace the grand-total-only caveat.
+    expect(snap.notes.some((n) => /invoiced is not a distinct goodshuffle state/i.test(n))).toBe(true);
+    expect(snap.notes.some((n) => /revenue is the goodshuffle grand total as pulled/i.test(n))).toBe(false);
   });
 });

@@ -2034,6 +2034,73 @@ export function getBookingUpdatedAt(id: string): string | null {
   return r?.updated_at ?? null;
 }
 
+// ── Revenue components (Stage 3) — the per-project revenue breakdown that `bookings` can't carry ─────
+// Stored in the sibling `booking_revenue_components` table keyed by booking_id (= tx). Amounts are
+// DOLLARS (converted from GS cents at ingest); effective_tax_rate is a RATE, not money. `bookings` stays
+// the single revenue SoT for grand_total — this is additive breakdown, read on demand by the snapshot.
+
+/** The component DOLLARS persisted per project — structurally the revenueModel's dollar shape. */
+export type BookingRevenueComponents = import("@/lib/finance/revenueModel").RevenueComponentsDollars;
+
+const REV_COMPONENT_COLS: Array<[keyof BookingRevenueComponents, string]> = [
+  ["quotedSubtotal", "quoted_subtotal"],
+  ["contractTotal", "contract_total"],
+  ["grandTotal", "grand_total"],
+  ["productSubtotal", "product_subtotal"],
+  ["productRentalsSubtotal", "product_rentals_subtotal"],
+  ["productSalesSubtotal", "product_sales_subtotal"],
+  ["serviceSubtotal", "service_subtotal"],
+  ["logisticsSubtotal", "logistics_subtotal"],
+  ["detachedItemSubtotal", "detached_item_subtotal"],
+  ["discount", "discount"],
+  ["additionalDiscount", "additional_discount"],
+  ["discountSubtotal", "discount_subtotal"],
+  ["taxableSubtotal", "taxable_subtotal"],
+  ["taxTotal", "tax_total"],
+  ["effectiveTaxRate", "effective_tax_rate"],
+  ["collected", "collected"],
+  ["refunds", "refunds"],
+  ["processingFees", "processing_fees"],
+  ["goodshuffleFees", "goodshuffle_fees"],
+];
+
+/** Upsert each project's revenue components (DOLLARS). The per-tx payment fetch is best-effort, so a
+ *  re-pull can arrive with a field null even though we previously knew it — COALESCE each column so a
+ *  transient partial response NEVER downgrades a known figure (mirrors saveEventRevenue's discipline).
+ *  Fully recomputable: a complete pull overwrites every field it carries. */
+export function saveBookingRevenueComponents(items: Array<{ bookingId: string; components: BookingRevenueComponents }>): void {
+  if (items.length === 0) return;
+  const db = getDb();
+  const now = new Date().toISOString();
+  const cols = REV_COMPONENT_COLS.map(([, c]) => c);
+  const insertCols = ["booking_id", ...cols, "updated_at"].join(", ");
+  const insertVals = ["@bookingId", ...REV_COMPONENT_COLS.map(([k]) => `@${String(k)}`), "@now"].join(", ");
+  const setClause = REV_COMPONENT_COLS.map(([k, c]) => `${c}=COALESCE(@${String(k)}, ${c})`).join(", ");
+  const up = db.prepare(
+    `INSERT INTO booking_revenue_components (${insertCols}) VALUES (${insertVals})
+     ON CONFLICT(booking_id) DO UPDATE SET ${setClause}, updated_at=@now`,
+  );
+  const tx = db.transaction(() => {
+    for (const i of items) {
+      const row: Record<string, unknown> = { bookingId: i.bookingId, now };
+      for (const [k] of REV_COMPONENT_COLS) row[String(k)] = i.components[k] ?? null;
+      up.run(row);
+    }
+  });
+  tx();
+}
+
+/** The stored revenue components for a project, or null when none have been pulled yet. Dollars. */
+export function getBookingRevenueComponents(bookingId: string): BookingRevenueComponents | null {
+  const r = getDb().prepare("SELECT * FROM booking_revenue_components WHERE booking_id = ?").get(bookingId) as
+    | Record<string, number | null>
+    | undefined;
+  if (!r) return null;
+  const out = {} as Record<keyof BookingRevenueComponents, number | null>;
+  for (const [k, c] of REV_COMPONENT_COLS) out[k] = r[c] == null ? null : Number(r[c]);
+  return out as BookingRevenueComponents;
+}
+
 // ── Inventory demand (booked line items) ─────────────────────────────────────
 
 export interface ItemStop {

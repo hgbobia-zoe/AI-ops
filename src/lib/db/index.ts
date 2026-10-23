@@ -2175,6 +2175,42 @@ CREATE TABLE IF NOT EXISTS reconciliation_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_reconciliation_runs_project ON reconciliation_runs(project_id, seq);
 CREATE INDEX IF NOT EXISTS idx_reconciliation_runs_captured ON reconciliation_runs(captured_at DESC);
+
+-- Revenue reconstruction (Stage 3). The per-project revenue COMPONENT breakdown — quoted vs contracted,
+-- subtotal families (product/service/logistics), discounts, tax, platform/processing fees, collected,
+-- refunds — that the bookings table structurally cannot carry (it holds only grand_total/amount_paid/
+-- amount_due from searchProjects). These come ONLY from the per-tx loadPaymentHistoryAndContractTotals
+-- call the office pull already makes during route enrichment; a SIBLING table keyed by booking_id (= tx)
+-- keeps bookings the single revenue SoT (grand_total) untouched — no existing bookings reader changes — while
+-- this adds the breakdown with no other home. Amounts are DOLLARS (÷100 at ingest, as everywhere else);
+-- effective_tax_rate is a RATE (e.g. 0.06), NOT money. A field GS does not send stays NULL (never 0).
+-- Recomputable: each pull upserts the full set (COALESCE-guarded so a transient partial response never
+-- downgrades a known figure). The derived totals (net collected, fees total, discounts total) are
+-- computed on read by revenueModel.ts — not stored. event_financials remains in place but SUBORDINATE
+-- (it diverged; nothing new depends on it — see repo.ts getBookingRevenueByIds).
+CREATE TABLE IF NOT EXISTS booking_revenue_components (
+  booking_id              TEXT PRIMARY KEY,   -- Goodshuffle project id (= bookings.booking_id = stops.tx_id)
+  quoted_subtotal         REAL,               -- contractOriginalSubTotal (pre-discount quoted basis)
+  contract_total          REAL,               -- contractTotal
+  grand_total             REAL,               -- grandTotal (contracted revenue basis; mirrors bookings SoT)
+  product_subtotal        REAL,
+  product_rentals_subtotal REAL,
+  product_sales_subtotal  REAL,
+  service_subtotal        REAL,
+  logistics_subtotal      REAL,               -- delivery
+  detached_item_subtotal  REAL,
+  discount                REAL,
+  additional_discount     REAL,
+  discount_subtotal       REAL,
+  taxable_subtotal        REAL,
+  tax_total               REAL,               -- taxMap.total
+  effective_tax_rate      REAL,               -- a RATE (e.g. 0.06), NOT a money amount
+  collected               REAL,               -- totalContractApplicablePaid
+  refunds                 REAL,               -- totalSuccessfulRefunds
+  processing_fees         REAL,               -- online + offline processing fees
+  goodshuffle_fees        REAL,               -- Σ paymentEvents[].goodshuffleFeeAmount
+  updated_at              TEXT NOT NULL
+);
 `;
 
 type DB = InstanceType<typeof Database>;

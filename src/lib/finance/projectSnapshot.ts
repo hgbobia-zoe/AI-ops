@@ -12,6 +12,7 @@
 // double-counting. The rollup reconciles: the cost-family parts sum back to the direct-cost total.
 
 import { contribution, contributionMargin, sumKnown, type MoneyStatus } from "./calc";
+import { type RevenueComponents } from "./revenueModel";
 
 /** The cost-family taxonomy the `cost_entries` ledger supports (index.ts:515). Today only `labor` is
  *  ever written (by the worker→route→stop→project cascade); every other family is schema-ready but
@@ -39,8 +40,9 @@ export type CostStatus = "ACTUAL" | "ESTIMATED" | "UNAVAILABLE";
  *  is ACTUAL, revenue is fully collected, and the data is fresh. See `deriveStatus` for the exact rule. */
 export type ProjectSnapshotStatus = "PROVISIONAL" | "ESTIMATED" | "RECONCILED";
 
-/** Raw revenue from the `bookings` SoT (dollars). Fees/discounts/refunds are NOT separated upstream
- *  (Stage 3) — we do not invent them; the snapshot flags `componentsTracked: false`. */
+/** Raw revenue from the `bookings` SoT (dollars). The Stage-3 component breakdown (quoted/discounts/tax/
+ *  fees/refunds) rides in the optional `components` field when the per-tx Goodshuffle pull has provided it;
+ *  when absent the snapshot falls back to the grand-total behavior and flags `componentsTracked: false`. */
 export interface RevenueInput {
   /** grand_total — the contracted/grand total; the revenue basis for contribution. */
   grandTotal: number | null;
@@ -52,6 +54,9 @@ export interface RevenueInput {
   amountDue: number | null;
   /** Signed contract vs an unsigned quote. */
   signed: boolean;
+  /** Stage 3: the full revenue-component model (dollars + honesty labels) when pulled; null until the
+   *  office re-installs the pull. Never fabricated — absence falls back to grand-total-only, no regression. */
+  components?: RevenueComponents | null;
 }
 
 /** One rolled-up cost family for a project (summed over its `cost_entries` DIRECT leaves). Produced by
@@ -101,8 +106,12 @@ export interface ProjectRevenue {
   signed: boolean;
   /** True once revenue is fully collected (amount_due ≈ 0, or paid ≥ contracted). */
   fullyCollected: boolean;
-  /** Fees, discounts and refunds are NOT separated in the data today (Stage 3). Honest, not zeroed. */
-  componentsTracked: false;
+  /** True when the Stage-3 component breakdown has been pulled for this project; false = grand-total-only
+   *  fallback (fees/discounts/refunds not yet separated — honest, never zeroed). */
+  componentsTracked: boolean;
+  /** The full revenue-component model (quoted/discounts/tax/fees/collected/refunds/net, each labeled, with
+   *  invoiced honestly absent) when pulled; null on the fallback path. */
+  components: RevenueComponents | null;
 }
 
 export interface CostFamilyLine {
@@ -237,7 +246,11 @@ export function projectSnapshot(input: ProjectSnapshotInput): ProjectSnapshot {
   if (contracted != null && !fullyCollected) notes.push("Revenue is contracted but not fully collected — contribution is not yet realized cash.");
   if (stale) notes.push("Revenue data may be stale (Goodshuffle is pulled about once a day) — figures are provisional until the next pull.");
   if (directCost == null) notes.push("No direct cost is attributed to this project yet — contribution is unavailable, not zero.");
-  notes.push("Fees, discounts and refunds are not separated in the data today — revenue is the Goodshuffle grand total as pulled.");
+  // Stage 3: when the component breakdown is present, surface its honesty labels (invoiced absence, refunds,
+  // fees); otherwise keep the grand-total-only caveat so the fallback path reads honestly (no regression).
+  const components = input.revenue.components ?? null;
+  if (components) for (const n of components.notes) notes.push(n);
+  else notes.push("Fees, discounts and refunds are not separated in the data today — revenue is the Goodshuffle grand total as pulled.");
 
   return {
     projectId,
@@ -253,7 +266,8 @@ export function projectSnapshot(input: ProjectSnapshotInput): ProjectSnapshot {
       dueStatus,
       signed: revenue.signed,
       fullyCollected,
-      componentsTracked: false,
+      componentsTracked: components != null,
+      components,
     },
     costFamilies,
     directCost,
