@@ -3,9 +3,10 @@
 // executive scorecard. RULES CALCULATE — every figure is deterministic or explicitly UNAVAILABLE.
 
 import { getPlannedHours, getActualHours, getPayRates, rateForUserOn } from "@/lib/connecteam";
-import { getBookingsRevenueInRange, getBookingsInRange, getEventDirectCosts, getLaborLedgerSummary, type LaborLedgerSummary } from "@/lib/db/repo";
+import { getBookingsRevenueInRange, getBookingsInRange, getEventDirectCosts, getLaborLedgerSummary, getBookingById, getProjectCostFamilies, getBookingUpdatedAt, type LaborLedgerSummary } from "@/lib/db/repo";
 import { saveLaborSnapshot, getLaborTrajectory, type LaborSnapshotRow } from "./laborHistory";
 import { financeConfig } from "./config";
+import { projectSnapshot, type ProjectSnapshot } from "./projectSnapshot";
 import { computeVariance, laborPctOfRevenue, contribution, contributionMargin, type Variance, type MoneyStatus } from "./calc";
 import type { Period } from "./periods";
 
@@ -154,6 +155,31 @@ export async function financeForPeriod(period: Period): Promise<FinanceSummary> 
     laborTrajectory,
     laborLedger: getLaborLedgerSummary(start, end),
   };
+}
+
+/**
+ * Per-project profitability snapshot (compute-on-read). Reads the bookings revenue row (SoT) + the
+ * cost-family rollup of the ledger for one project and runs the PURE `projectSnapshot`. No persistence —
+ * always recomputable from cost_entries + bookings (the first Profitability-capability build, extending
+ * the existing FI engine per the Stage-1 audit). Returns null when the project isn't in bookings yet.
+ * `now` is injectable for testing; staleness is the only clock-dependent input.
+ */
+export function projectFinancials(txId: string, now: Date = new Date()): ProjectSnapshot | null {
+  const b = getBookingById(txId);
+  if (!b) return null;
+  const updatedAt = getBookingUpdatedAt(txId);
+  const staleHours = financeConfig().revenueStaleHours;
+  const updatedMs = updatedAt != null ? Date.parse(updatedAt) : NaN;
+  const stale = Number.isFinite(updatedMs) ? (now.getTime() - updatedMs) / 3_600_000 > staleHours : false;
+  return projectSnapshot({
+    projectId: b.bookingId,
+    label: b.eventName || `Project ${b.bookingId}`,
+    eventDate: b.eventDate,
+    revenue: { grandTotal: b.grandTotal, contractTotal: b.contractTotal, amountPaid: b.amountPaid, amountDue: b.amountDue, signed: b.signed },
+    costFamilies: getProjectCostFamilies(txId),
+    revenueAsOf: updatedAt,
+    stale,
+  });
 }
 
 function eventsEconomics(start: string, end: string): EventEconomics[] {

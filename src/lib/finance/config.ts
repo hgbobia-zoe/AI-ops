@@ -21,6 +21,9 @@ export interface FinanceConfig {
   revenueVarianceAlertPct: number;
   /** Alert when labor cost is this fraction above plan (default 10%). */
   laborVarianceAlertPct: number;
+  /** Revenue older than this many hours is "stale" (Goodshuffle is pulled ~once/day). Drives the
+   *  PROVISIONAL state on the per-project profitability snapshot. Default 36h; override via env. */
+  revenueStaleHours: number;
 }
 
 export function financeConfig(): FinanceConfig {
@@ -29,6 +32,7 @@ export function financeConfig(): FinanceConfig {
     targetContributionMarginPct: numEnv("FINANCE_TARGET_MARGIN_PCT"), // null until Zoe sets a real one
     revenueVarianceAlertPct: numEnv("FINANCE_REVENUE_ALERT_PCT") ?? 0.1,
     laborVarianceAlertPct: numEnv("FINANCE_LABOR_ALERT_PCT") ?? 0.1,
+    revenueStaleHours: numEnv("FINANCE_REVENUE_STALE_HOURS") ?? 36,
   };
 }
 
