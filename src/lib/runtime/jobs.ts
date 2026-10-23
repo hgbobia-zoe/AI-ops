@@ -27,6 +27,9 @@ import { selfAuditAutoOpen } from "@/lib/ai/improvement/config";
 import { runPreCheckAlerts } from "@/lib/scheduling/preCheckNotify";
 import { runWorkerPacketsTick } from "@/lib/scheduling/workerPackets";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
+import { runGpsVisitPoll } from "@/lib/finance/gpsPoll";
+import { visitReconcileConfig } from "@/lib/finance/config";
+import { zonarConfigured } from "@/lib/eta/zonar";
 import { runScan } from "@/lib/risk/scan";
 import { runSalesAiJob, salesAiEnabled } from "@/lib/salesos/salesAiJob";
 import { syncActiveLeadTextThreads } from "@/lib/comms/openphoneSync";
@@ -221,6 +224,20 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     note: "Mints Ignition customer-tracking links for upcoming stops ahead of departure (while the office Ignition session is fresh), and alerts if that session has lapsed. The extension drains the queued mints — no extension change.",
     run: async () => {
       const r = await runEtaPreMintTick();
+      return { ok: r.ok, detail: r.detail };
+    },
+  },
+  {
+    key: "gps-visit",
+    label: "GPS visit polling (on-site presence)",
+    bucket: "server",
+    // Gated on a configured GPS provider AND the Stage-4 visit layer being on. 'not configured' (no GPS
+    // key) is the honest launch state — the forward-only presence history simply doesn't start until a
+    // key is set, and all projects fall back to the dispatch-only visit source until then.
+    configured: () => zonarConfigured() && visitReconcileConfig().enabled,
+    note: "Polls the CURRENT position of ACTIVE trucks (a non-done route today) into gps_positions, forward-only. Quota-safe: at most one fix per vehicle per gpsPollSeconds, reusing the provider's daily-quota + 429-backoff guard (a 429/unreachable is skipped, never a fabricated fix). This is the ONLY source of on-site presence history — nothing is backfilled. The geofence → visit_events(source=gps) derivation + the two-source reconcile run on the risk-scan cadence (right after labor attribution).",
+    run: async () => {
+      const r = await runGpsVisitPoll();
       return { ok: r.ok, detail: r.detail };
     },
   },

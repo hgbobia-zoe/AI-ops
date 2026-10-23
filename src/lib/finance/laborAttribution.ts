@@ -44,6 +44,12 @@ export interface AttribStop {
   arrivedAt?: string; // ISO — dispatch state machine; present → L2 DERIVED signal
   completedAt?: string; // ISO
   itemCount?: number; // line-item count for optional load-weighting
+  // L1 ACTUAL_STOP (FI Stage 4): a GENUINE GPS-derived on-site span (enter→exit). Set ONLY from a real
+  // geofenced GPS visit window (visitReconcile.ts/actualStopSpan), NEVER from dispatch times. When EVERY
+  // customer stop of a route carries one, the split lifts to ACTUAL_STOP. Absent on any stop → the
+  // cascade behaves byte-for-byte as before (DERIVED_STOP / PLANNED). This is the ONLY new input here.
+  actualEnterAt?: string; // ISO
+  actualExitAt?: string; // ISO
 }
 
 export interface AttribRoute {
@@ -119,6 +125,16 @@ function stopDerivedSeconds(s: AttribStop): number | null {
   return (c - a) / 1000;
 }
 
+/** Each stop's GENUINE GPS on-site span in seconds (actualEnter→actualExit), or null when either is
+ *  missing/invalid. Distinct from stopDerivedSeconds (dispatch): this is the L1 ACTUAL signal. */
+function stopActualSeconds(s: AttribStop): number | null {
+  if (!s.actualEnterAt || !s.actualExitAt) return null;
+  const a = Date.parse(s.actualEnterAt);
+  const c = Date.parse(s.actualExitAt);
+  if (Number.isNaN(a) || Number.isNaN(c) || c <= a) return null;
+  return (c - a) / 1000;
+}
+
 interface ProjectWeight {
   txId: string;
   weight: number;
@@ -131,6 +147,18 @@ interface ProjectWeight {
 function customerSplit(route: AttribRoute, cfg: LaborAttributionConfig): { method: AttribMethod; confidence: AttribConfidence; weights: ProjectWeight[] } {
   const txStops = route.stops.filter((s) => s.txId);
   if (txStops.length === 0) return { method: "UNALLOCATED", confidence: "LOW", weights: [] };
+
+  // L1 ACTUAL_STOP (FI Stage 4) — purely ADDITIVE: fires ONLY when EVERY customer stop carries a genuine
+  // GPS-derived on-site span. When none do (the launch-day majority + all historical days), allActual is
+  // false and control falls straight through to the UNCHANGED L2/L3 path below — identical weights, same
+  // partition math. The weights are the GPS dwell seconds, same shape as the DERIVED durations.
+  const actual = txStops.map(stopActualSeconds);
+  const allActual = actual.every((d) => d != null && d > 0);
+  if (allActual) {
+    const byActual = new Map<string, number>();
+    txStops.forEach((s, i) => byActual.set(s.txId!, (byActual.get(s.txId!) ?? 0) + (actual[i] as number)));
+    return { method: "ACTUAL_STOP", confidence: "HIGH", weights: [...byActual].map(([txId, weight]) => ({ txId, weight })) };
+  }
 
   const derived = txStops.map(stopDerivedSeconds);
   const allDerived = derived.every((d) => d != null && d > 0);
