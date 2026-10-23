@@ -1,11 +1,15 @@
 // Route auto-sync — the effectful half of the Connecteam <-> Dispatch ROUTE bridge. It does two things each
 // cycle, both idempotently and both under the CONNECTEAM_AUTOSYNC_DISABLED kill switch:
 //
-//   1. Connecteam -> route AUTO-ASSIGN. Takes the scheduledUnrouted detector's output, keeps only the
-//      UNAMBIGUOUS matches (planRouteAutoAssign), and performs a REAL app assignment through the SAME path
-//      the dispatcher's one-click uses (create/attach the route+role shift, add the assignee, dual-write the
-//      per-worker row). Ambiguous people are left for the existing prompt. The staffing gate stays honest —
-//      a Connecteam schedule is never credited as coverage; only the real assignment clears the gap.
+//   1. Connecteam -> route AUTO-ASSIGN. Takes the scheduledUnrouted detector's output and performs a REAL app
+//      assignment through the SAME path the dispatcher's one-click uses (create/attach the route+role shift,
+//      add the assignee, dual-write the per-worker row) for: (a) UNAMBIGUOUS matches — exactly one open route
+//      fits — for BOTH drivers and warehouse/field-prep helpers (planRouteAutoAssign; the field/prep case is
+//      the owner-authorized reversal of the old #81 driver-only exclusion, 2026-10-23); and (b) AMBIGUOUS
+//      drivers, resolved deterministically across all driver-gapped routes by seniority routing
+//      (resolveDriverSeniority). Ambiguous field helpers have no seniority tiebreak and stay on the prompt.
+//      The staffing gate stays honest — a Connecteam schedule is never credited as coverage; only the real
+//      assignment clears the gap — and a seat-capacity guard keeps a route from being filled past its need.
 //
 //   2. App route -> Connecteam AUTO-CREATE (SILENT). Enforces the invariant "nobody on a Dispatch route
 //      without being in Connecteam": a route app shift whose assignees are NOT in Connecteam that day gets a
@@ -45,9 +49,9 @@ import { slackNotify } from "@/lib/notify/slack";
 import { recordSchedulingAlarm } from "./autoAssignAlarm";
 import { createShift, getShiftById, getShiftsForDate, updateShift } from "./store";
 import { syncInternalAssignments } from "./assignments";
-import { routeAssignWindow, requiredCrewForRoute, assignedCrewForRoute, computeRouteGap } from "./preCheck";
+import { routeAssignWindow, requiredCrewForRoute, assignedCrewForRoute, computeRouteGap, type RouteCrewRole } from "./preCheck";
 import { scheduledUnroutedForDate } from "./scheduledUnrouted";
-import { planRouteAutoAssign, type RouteAutoAssignPlan } from "./routeAutoAssign";
+import { planRouteAutoAssign, type RouteAutoAssignPlan, type AutoAssignDecision } from "./routeAutoAssign";
 import { resolveDriverSeniority, type SeniorityRouteMeta } from "./driverSeniority";
 import { routeSpecialty } from "./routeSpecialty";
 import { trackWindow, routeOwnWindow } from "./routeRatchet";
@@ -613,19 +617,53 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
     /* Connecteam roster unreachable — names/seniority stay null, filled on a later tick. */
   }
 
-  // SENIORITY ROUTING: resolve the ambiguous DRIVERS (fit >= 2 same-time routes) by putting senior drivers on
-  // specialty routes and newer drivers on easier ones. These become real auto-assigns alongside the
-  // unambiguous ones; whatever the rule can't place stays in the one-click prompt (promptOnly).
-  const seniorityPlan = resolveDriverSeniority(
-    aaPlan.prompt
-      .filter((p) => p.fillRole === "driver")
-      .map((p) => ({ userId: p.userId, name: p.name, eligibleRouteIds: p.eligibleRouteIds, seniorityDate: seniorityOf(p.userId) })),
-    buildSeniorityRouteMeta(date, routesById),
-  );
+  // SENIORITY ROUTING: resolve the ambiguous DRIVERS (fit >= 2 routes) across ALL driver-gapped routes —
+  // forced moves first (coverage), then senior drivers on the specialty routes and newer drivers on the
+  // easier ones. These become real auto-assigns alongside the unambiguous ones; whatever the rule can't place
+  // stays in the one-click prompt (promptOnly). Ambiguous FIELD/prep helpers have no seniority tiebreak, so
+  // they are left on the prompt (only an UNAMBIGUOUS field match is auto-placed, via planRouteAutoAssign).
+  const driverPrompts = aaPlan.prompt
+    .filter((p) => p.fillRole === "driver")
+    .map((p) => ({ userId: p.userId, name: p.name, eligibleRouteIds: p.eligibleRouteIds, seniorityDate: seniorityOf(p.userId) }));
+  // The unambiguous pass already CLAIMED driver seats that aren't applied to the DB yet; subtract those claims
+  // from each route's driver gap so the seniority pass can't re-fill the same seat (the apply-time capacity
+  // guard backstops this, but planning honestly here keeps promptOnly / narration accurate).
+  const driverClaims = new Map<string, number>();
+  for (const a of aaPlan.autoAssign) if (a.fillRole === "driver") driverClaims.set(a.routeId, (driverClaims.get(a.routeId) ?? 0) + 1);
+  const seniorityMeta = buildSeniorityRouteMeta(date, routesById).map((m) => ({
+    ...m,
+    driverGap: Math.max(0, m.driverGap - (driverClaims.get(m.routeId) ?? 0)),
+  }));
+  const seniorityPlan = resolveDriverSeniority(driverPrompts, seniorityMeta);
   const resolvedSet = new Set(seniorityPlan.resolvedUserIds);
   out.promptOnly = aaPlan.prompt.filter((p) => !resolvedSet.has(p.userId)).length;
 
-  const combined: RouteAutoAssignPlan = { ...aaPlan, autoAssign: [...aaPlan.autoAssign, ...seniorityPlan.autoAssign] };
+  // SEAT-CAPACITY CAP (planning layer): bound the combined plan to each route's remaining gap per role, so
+  // the broadened field/prep placement — and any overlap between the unambiguous pass and the seniority pass,
+  // or two unambiguous people who each fit only the same single-seat route — can never fill a route past its
+  // required crew. Budget per (route, role) = required − already-assigned (live, pre-apply). Unambiguous
+  // decisions are kept ahead of the seniority ones; a decision with no seat left is dropped (not an error —
+  // the person simply isn't auto-placed this cycle, and the detector re-surfaces them if a gap remains).
+  const seatBudget = new Map<string, number>();
+  const seatKey = (routeId: string, role: RouteCrewRole): string => `${routeId}:${role}`;
+  const seatsLeft = (routeId: string, role: RouteCrewRole): number => {
+    const key = seatKey(routeId, role);
+    if (!seatBudget.has(key)) {
+      const route = routesById.get(routeId);
+      const live = route
+        ? Math.max(0, requiredCrewForRoute(route)[role] - assignedCrewForRoute(route, getShiftsForDate(date).filter((s) => s.routeId === routeId))[role])
+        : 0;
+      seatBudget.set(key, live);
+    }
+    return seatBudget.get(key)!;
+  };
+  const cappedAutoAssign: AutoAssignDecision[] = [];
+  for (const d of [...aaPlan.autoAssign, ...seniorityPlan.autoAssign]) {
+    if (seatsLeft(d.routeId, d.fillRole) <= 0) continue; // seat already budgeted full — drop, never double-book
+    seatBudget.set(seatKey(d.routeId, d.fillRole), seatsLeft(d.routeId, d.fillRole) - 1);
+    cappedAutoAssign.push(d);
+  }
+  const combined: RouteAutoAssignPlan = { ...aaPlan, autoAssign: cappedAutoAssign };
   const aaRes = applyRouteAutoAssign(combined, { date, routesById, nameOf, actor });
   out.autoAssigned = aaRes.assigned;
   out.seniorityAssigned = seniorityPlan.autoAssign.length;
