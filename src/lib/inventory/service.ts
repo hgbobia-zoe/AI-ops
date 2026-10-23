@@ -10,8 +10,8 @@
 // closed — an item is never created under a guessed category.
 
 import { fetchStorefrontInventory, type NormalizedItem } from "./storefront";
-import { buildImportPlan, type ImportPlan, type ImportPolicy, type PlanSourceItem } from "./importPlan";
-import type { GroupCategory } from "./bookmarklets";
+import { buildImportPlan, mergeTags, type ImportPlan, type ImportPolicy, type PlanSourceItem } from "./importPlan";
+import type { BackfillItem, GroupCategory } from "./bookmarklets";
 import {
   getInventoryPartner,
   zoeCategoryIndex,
@@ -62,6 +62,11 @@ export interface PlanResponse {
   internalNotes: string;
   /** Zoe's public storefront token, for the importer's run-time idempotency re-check. */
   zoeToken: string;
+  /**
+   * ALL source items for the selected groups (NOT deduped against Zoe) — the input for the photo-backfill
+   * bookmarklet, which matches each against Zoe's live catalog at run time and only touches photoless ones.
+   */
+  backfillItems: BackfillItem[];
 }
 
 function cleanTags(v: unknown): string[] {
@@ -122,6 +127,7 @@ const emptyResponse = (error: string): PlanResponse => ({
   unresolvedCategories: [],
   internalNotes: "",
   zoeToken: ZOE_VENDOR_TOKEN,
+  backfillItems: [],
 });
 
 /**
@@ -160,11 +166,23 @@ export async function planInventoryImport(req: PlanJobRequest): Promise<PlanResp
   const categories: Record<string, GroupCategory> = {};
   const unresolvedSet = new Set<string>();
   const sourceItems: PlanSourceItem[] = [];
+  const backfillItems: BackfillItem[] = [];
 
   for (const m of mappings) {
     const slugs = new Set(m.sourceGroups.map((g) => g.toLowerCase()));
     const items = src.items.filter((it) => itemInGroups(it, slugs));
-    for (const it of items) sourceItems.push({ ...it, zoeGroup: m.targetCategory });
+    for (const it of items) {
+      sourceItems.push({ ...it, zoeGroup: m.targetCategory });
+      // Backfill operates over ALL source items (not deduped): the bookmarklet matches each to Zoe's live
+      // catalog at run time and only attaches photos to ones that exist there and have none.
+      backfillItems.push({
+        title: it.title,
+        descriptionHtml: it.descriptionHtml,
+        tags: mergeTags(it.tags, policy.addTags),
+        imageUrls: it.images.map((img) => img.raw).filter(Boolean),
+        baseTag: m.baseTag,
+      });
+    }
 
     const alreadyInZoe = items.filter((it) => zoeTitles.has(it.title.trim().toLowerCase().replace(/\s+/g, " "))).length;
 
@@ -209,6 +227,7 @@ export async function planInventoryImport(req: PlanJobRequest): Promise<PlanResp
     unresolvedCategories,
     internalNotes: resolved.internalNote || `Subrent from ${resolved.label}.`,
     zoeToken: ZOE_VENDOR_TOKEN,
+    backfillItems,
   };
 }
 
