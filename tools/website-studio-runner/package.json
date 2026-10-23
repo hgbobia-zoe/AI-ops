@@ -1,0 +1,14 @@
+{
+  "name": "website-studio-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Office-machine runner for AI-OPS Website Studio: claims queued website-change jobs, edits the website repo with the Claude Agent SDK on a branch, renders + screenshots the change on the local DevKinsta site for human preview, then (on approval) opens a PR. PR-only: never merges, never pushes to the default branch, never deploys.",
+  "scripts": {
+    "start": "node runner.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.309",
+    "playwright": "1.64.1"
+  }
+}

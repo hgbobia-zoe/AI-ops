@@ -20,7 +20,7 @@ import {
   HeartHandshake, Columns3, LifeBuoy, ClipboardCheck, ClipboardList,
   Aperture, Plus, Dna,
   Headset, PhoneCall, FlaskConical,
-  Search, FileText, Rocket,
+  Search, FileText, Rocket, Globe,
   BrainCircuit, Tent, Wallet, Boxes,
   type LucideIcon,
 } from "lucide-react";
@@ -125,6 +125,9 @@ const GROUPS: Group[] = [
       { href: "/marketing/campaigns", label: "Campaigns", icon: Megaphone },
       { href: "/marketing/content", label: "Content", icon: CalendarDays },
       { href: "/marketing/reviews", label: "Reviews", icon: Star },
+      // Website Studio — prompt a website change in plain English, preview the rendered result, approve → PR.
+      // Any staff (canUseWebsiteStudio) so marketing can use it; the office runner does the actual edit.
+      { href: "/website-studio", label: "Website Studio", icon: Globe },
       // Creative Engine — AI-directed creative production (AI creates, rules constrain, AI evaluates,
       // humans approve). It produces the marketing/web imagery, so it lives under Marketing.
       { href: "/creative", label: "Creative Engine", icon: Aperture, exact: true },
