@@ -11,7 +11,8 @@ import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 export type PeriodKey = "today" | "thisWeek" | "nextWeek" | "thisMonth" | "lastMonth" | "thisCycle" | "lastCycle";
 
 export interface Period {
-  key: PeriodKey;
+  /** A preset key, or "custom" for an explicit user-chosen date range (Stage 7b). */
+  key: PeriodKey | "custom";
   label: string;
   start: string; // YYYY-MM-DD inclusive
   end: string; // YYYY-MM-DD inclusive
@@ -91,4 +92,59 @@ export function priorWeek(period: Period): Period {
 export function priorCycle(period: Period, cycle: OpsCycleConfig = DEFAULT_OPS_CYCLE): Period {
   const len = Math.max(1, Math.round(cycle.lengthDays));
   return { key: "lastCycle", label: "Prior Cycle", start: shiftYmd(period.start, -len), end: shiftYmd(period.end, -len), isWeek: false, isCycle: true };
+}
+
+// ── Custom date range (Stage 7b) — an explicit ?start=&end= range that slots into the SAME Period shape ──
+// financeForPeriod consumes. Deterministic + validated: a bad range NEVER throws; it returns null and the
+// caller falls back to the default preset. isWeek/isCycle are false, so a custom range gets no weekly
+// revenue target and no trajectory snapshot (honest: those are week/cycle concepts, not an arbitrary span).
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Lower bound: no real financial data predates this, and it blocks absurd/accidental inputs. */
+export const MIN_CUSTOM_YMD = "2000-01-01";
+/** Upper bound on how far out `end` may sit (5 years), so future-dated events are reachable but typos are not. */
+export const MAX_CUSTOM_FUTURE_DAYS = 365 * 5;
+/** Guardrail on total span (~5 years inclusive) — a sane ceiling, not a business rule. */
+export const MAX_CUSTOM_RANGE_DAYS = 1830;
+
+/** True when `s` is a real calendar day in YYYY-MM-DD form (rejects 2026-02-30, 2026-13-01, etc.). */
+function isRealYmd(s: string): boolean {
+  if (!YMD_RE.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+/** Inclusive day span between two valid YYYY-MM-DD days (a→a = 1). */
+function spanDaysInclusive(start: string, end: string): number {
+  const [ay, am, ad] = start.split("-").map(Number);
+  const [by, bm, bd] = end.split("-").map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000) + 1;
+}
+
+/**
+ * Build a Period from an explicit start/end range (ops-TZ `YYYY-MM-DD`). Pure + deterministic.
+ * Returns null — never throws — when the range is missing a bound, malformed, inverted (start > end),
+ * or out of sane bounds, so the page falls back to its default preset.
+ */
+export function customRange(
+  startRaw: string | null | undefined,
+  endRaw: string | null | undefined,
+  today: string = todayInOpsTz(),
+): Period | null {
+  if (!startRaw || !endRaw) return null;
+  const start = startRaw.trim();
+  const end = endRaw.trim();
+  if (!isRealYmd(start) || !isRealYmd(end)) return null;
+  if (start > end) return null; // inverted
+  if (start < MIN_CUSTOM_YMD) return null; // below the floor
+  if (end > shiftYmd(today, MAX_CUSTOM_FUTURE_DAYS)) return null; // too far in the future
+  if (spanDaysInclusive(start, end) > MAX_CUSTOM_RANGE_DAYS) return null; // span too wide
+  return { key: "custom", label: "Custom range", start, end, isWeek: false };
+}
+
+/** The equal-length window immediately preceding `period` (the honest "prior" baseline for a custom range,
+ *  where neither priorWeek nor priorCycle applies). */
+export function priorRange(period: Period): Period {
+  const len = spanDaysInclusive(period.start, period.end);
+  return { key: period.key, label: "Prior range", start: shiftYmd(period.start, -len), end: shiftYmd(period.end, -len), isWeek: false };
 }

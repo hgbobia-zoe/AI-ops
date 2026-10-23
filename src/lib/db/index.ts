@@ -2089,6 +2089,19 @@ CREATE TABLE IF NOT EXISTS website_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_website_jobs_status ON website_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_website_jobs_requester ON website_jobs(requester, created_at DESC);
+
+-- Financial Intelligence Stage 7b — saved dashboard views. TEAM-LEVEL (shared across owner/admin, not
+-- per-user): a named snapshot of the /finance URL STATE only (active view + period/custom range + any
+-- project filter), never analytics. Idempotent by name (case-insensitive UNIQUE) so re-saving a name
+-- updates it in place. See src/lib/finance/savedViews.ts.
+CREATE TABLE IF NOT EXISTS finance_saved_views (
+  id          TEXT PRIMARY KEY,                     -- "FSV-"+uuid
+  name        TEXT NOT NULL COLLATE NOCASE UNIQUE,  -- team-unique, case-insensitive (idempotent by name)
+  state       TEXT NOT NULL,                        -- JSON SavedViewState (dashboard URL state only)
+  created_by  TEXT,                                 -- human actor label who first saved it (attribution)
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
 `;
 
 type DB = InstanceType<typeof Database>;
