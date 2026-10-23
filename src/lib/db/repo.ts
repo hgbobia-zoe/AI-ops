@@ -4113,3 +4113,207 @@ export function webLeadAckForIntake(intakeId: string): { content: string; subjec
   }
   return null;
 }
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+// FI Stage 5 — cost families beyond labor. Writers + readers for the non-labor cost_entries families
+// (manual, transport/fuel, overtime premium, extra-trip). Appended as a block to minimize merge conflicts
+// with the labor-era readers above. The PURE estimators live in src/lib/finance/costFamilies.ts.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+type CostFamilyItem = import("@/lib/finance/allocation").CostEntryInput;
+
+/** Clean-rewrite the DAY-SCOPED derived families (transport/fuel + extra-trip) for a set of days: delete
+ *  the derived rows this writer owns for those days, then insert the freshly computed ones. Idempotent —
+ *  re-running cannot change totals. Scoped HARD to source='derived' AND the fuel:/extra-trip: source_ref
+ *  prefixes, so it never touches labor rows (saveDerivedLabor's domain) or manual rows. */
+export function saveDerivedTransportCosts(days: string[], items: CostFamilyItem[]): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const del = db.prepare(
+    `DELETE FROM cost_entries WHERE source='derived' AND day = ?
+       AND (source_ref LIKE 'fuel:%' OR source_ref LIKE 'extra-trip:%')`,
+  );
+  const up = db.prepare(
+    `INSERT INTO cost_entries (id, type, class, event_id, route_id, day, amount, amount_status, hours, rate, source, source_ref, note, worker_kind, worker_ref, shift_id, bucket, method, confidence, captured_at)
+     VALUES (@id,@type,@klass,@eventId,@routeId,@day,@amount,@amountStatus,@hours,@rate,@source,@sourceRef,@note,@workerKind,@workerRef,@shiftId,@bucket,@method,@confidence,@now)
+     ON CONFLICT(source_ref) DO UPDATE SET amount=@amount, amount_status=@amountStatus, hours=@hours, rate=@rate, note=@note,
+       event_id=@eventId, route_id=@routeId, bucket=@bucket, method=@method, confidence=@confidence, captured_at=@now`,
+  );
+  const tx = db.transaction(() => {
+    for (const d of new Set(days)) del.run(d);
+    for (const i of items) up.run(costEntryParams(i, now));
+  });
+  tx();
+}
+
+/** Clean-rewrite the overtime-premium rows for a set of (workerRef, periodStart) scopes, then insert the
+ *  freshly computed ones. OT is period-grain (not day-keyed), so idempotency is per worker+period: a
+ *  project that drops out of the worker's labor shares between runs has its stale OT leaf removed. Scoped
+ *  to source='derived' AND the ot-premium:<workerRef>:<periodStart>: prefix. */
+export function saveDerivedOvertimeCosts(scopes: { workerRef: string; periodStart: string }[], items: CostFamilyItem[]): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const del = db.prepare(`DELETE FROM cost_entries WHERE source='derived' AND source_ref LIKE ?`);
+  const up = db.prepare(
+    `INSERT INTO cost_entries (id, type, class, event_id, route_id, day, amount, amount_status, hours, rate, source, source_ref, note, worker_kind, worker_ref, shift_id, bucket, method, confidence, captured_at)
+     VALUES (@id,@type,@klass,@eventId,@routeId,@day,@amount,@amountStatus,@hours,@rate,@source,@sourceRef,@note,@workerKind,@workerRef,@shiftId,@bucket,@method,@confidence,@now)
+     ON CONFLICT(source_ref) DO UPDATE SET amount=@amount, amount_status=@amountStatus, hours=@hours, rate=@rate, note=@note,
+       event_id=@eventId, worker_kind=@workerKind, worker_ref=@workerRef, bucket=@bucket, method=@method, confidence=@confidence, captured_at=@now`,
+  );
+  const tx = db.transaction(() => {
+    for (const s of scopes) del.run(`ot-premium:${s.workerRef}:${s.periodStart}:%`);
+    for (const i of items) up.run(costEntryParams(i, now));
+  });
+  tx();
+}
+
+export interface ManualCostRow {
+  id: string;
+  sourceRef: string;
+  eventId: string;
+  type: string;
+  klass: string;
+  amount: number | null;
+  note: string | null;
+  capturedAt: string;
+}
+
+/** List a project's MANUAL cost entries (source='manual'), newest first — for the entry UI. */
+export function listManualCostEntries(eventId: string): ManualCostRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT id, source_ref, event_id, type, class, amount, note, captured_at FROM cost_entries
+       WHERE source='manual' AND event_id = ? ORDER BY captured_at DESC`,
+    )
+    .all(eventId) as Array<{ id: string; source_ref: string; event_id: string; type: string; class: string; amount: number | null; note: string | null; captured_at: string }>;
+  return rows.map((r) => ({ id: r.id, sourceRef: r.source_ref, eventId: r.event_id, type: r.type, klass: r.class, amount: r.amount, note: r.note, capturedAt: r.captured_at }));
+}
+
+/** Idempotent upsert of ONE manual cost entry (the pure `manualCostEntry` builds the row). A given
+ *  source_ref always maps to the same row, so an edit updates in place. Returns the stored row. */
+export function upsertManualCostEntry(item: CostFamilyItem): ManualCostRow {
+  const db = getDb();
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO cost_entries (id, type, class, event_id, route_id, day, amount, amount_status, hours, rate, source, source_ref, note, worker_kind, worker_ref, shift_id, bucket, method, confidence, captured_at)
+     VALUES (@id,@type,@klass,@eventId,@routeId,@day,@amount,@amountStatus,@hours,@rate,@source,@sourceRef,@note,@workerKind,@workerRef,@shiftId,@bucket,@method,@confidence,@now)
+     ON CONFLICT(source_ref) DO UPDATE SET type=@type, class=@klass, amount=@amount, amount_status=@amountStatus, note=@note, method=@method, confidence=@confidence, captured_at=@now`,
+  ).run(costEntryParams(item, now));
+  const r = db.prepare(`SELECT id, source_ref, event_id, type, class, amount, note, captured_at FROM cost_entries WHERE source_ref = ?`).get(item.sourceRef) as
+    | { id: string; source_ref: string; event_id: string; type: string; class: string; amount: number | null; note: string | null; captured_at: string }
+    | undefined;
+  return { id: r!.id, sourceRef: r!.source_ref, eventId: r!.event_id, type: r!.type, klass: r!.class, amount: r!.amount, note: r!.note, capturedAt: r!.captured_at };
+}
+
+/** Delete ONE manual cost entry by its source_ref (scoped to source='manual' so nothing else can be
+ *  removed through this path). Returns true when a row was actually deleted. */
+export function deleteManualCostEntry(sourceRef: string): boolean {
+  const info = getDb().prepare(`DELETE FROM cost_entries WHERE source='manual' AND source_ref = ?`).run(sourceRef);
+  return info.changes > 0;
+}
+
+export interface CostFamilyStop {
+  txId: string;
+  routeId: string;
+  truckId: string;
+  day: string;
+  kind: "delivery" | "pickup";
+  address: string;
+  sequence: number;
+}
+
+/** Stops (ALL route statuses, unlike getStopsOnDate which skips 'done') for a set of days, with the
+ *  fields the transport + extra-trip estimators need. Only stops with a tx_id and an address are returned
+ *  (a project with no address can't be geocoded → no transport estimate). */
+export function getCostFamilyStops(days: string[]): CostFamilyStop[] {
+  if (days.length === 0) return [];
+  const ph = days.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(
+      `SELECT s.tx_id, s.route_id, r.truck_id, r.date, s.kind, s.address, s.sequence
+         FROM stops s JOIN routes r ON s.route_id = r.route_id
+        WHERE r.date IN (${ph}) AND s.tx_id IS NOT NULL AND TRIM(COALESCE(s.address,'')) != ''
+        ORDER BY r.date, r.truck_id, s.sequence`,
+    )
+    .all(...days) as Array<{ tx_id: string; route_id: string; truck_id: string; date: string; kind: string | null; address: string; sequence: number }>;
+  return rows.map((r) => ({
+    txId: r.tx_id,
+    routeId: r.route_id,
+    truckId: r.truck_id,
+    day: r.date,
+    kind: r.kind === "pickup" ? "pickup" : "delivery",
+    address: r.address,
+    sequence: r.sequence,
+  }));
+}
+
+/** Earliest date of each (project, kind) across ALL stop history — the baseline for extra-trip detection.
+ *  Returns Map keyed `${txId}|${kind}` → earliest YYYY-MM-DD. */
+export function getProjectFirstTripDates(txIds: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  if (txIds.length === 0) return out;
+  const uniq = [...new Set(txIds)];
+  const ph = uniq.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(
+      `SELECT s.tx_id, s.kind, MIN(r.date) AS first_date
+         FROM stops s JOIN routes r ON s.route_id = r.route_id
+        WHERE s.tx_id IN (${ph})
+        GROUP BY s.tx_id, s.kind`,
+    )
+    .all(...uniq) as Array<{ tx_id: string; kind: string | null; first_date: string }>;
+  for (const r of rows) {
+    const kind = r.kind === "pickup" ? "pickup" : "delivery";
+    out.set(`${r.tx_id}|${kind}`, r.first_date);
+  }
+  return out;
+}
+
+export interface OvertimeLedgerRow {
+  workerRef: string; // cost_entries.worker_ref, e.g. "ct:1234"
+  periodStart: string;
+  periodEnd: string;
+  overtimeHours: number;
+}
+
+/** Overtime hours per INTERNAL worker for periods overlapping [start,end], joined from hr_time_entries
+ *  (hours_type='OVERTIME') to the Connecteam userId via hr_workers → the cost_entries worker_ref space
+ *  ("ct:<id>"). Only rows that resolve to a Connecteam id are returned (an unmapped worker can't be tied
+ *  to attributed labor → no OT premium, honestly). Empty when the payroll module has no OT data. */
+export function getOvertimeByWorker(start: string, end: string): OvertimeLedgerRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT w.connecteam_user_id AS uid, t.period_start, t.period_end, SUM(t.hours) AS ot
+         FROM hr_time_entries t JOIN hr_workers w ON t.worker_id = w.id
+        WHERE t.hours_type = 'OVERTIME' AND w.connecteam_user_id IS NOT NULL
+          AND t.period_start <= ? AND t.period_end >= ?
+        GROUP BY w.connecteam_user_id, t.period_start, t.period_end
+        HAVING ot > 0`,
+    )
+    .all(end, start) as Array<{ uid: number; period_start: string; period_end: string; ot: number }>;
+  return rows.map((r) => ({ workerRef: `ct:${r.uid}`, periodStart: r.period_start, periodEnd: r.period_end, overtimeHours: r.ot }));
+}
+
+export interface WorkerLaborShare {
+  eventId: string;
+  laborCost: number;
+  rate: number | null;
+}
+
+/** For ONE worker (by cost_entries.worker_ref), their attributed customer-bucket labor per project with a
+ *  known $ amount, within [start,end] — the weighting basis + rate source for the overtime premium split.
+ *  Reads the labor leaves the cascade already wrote (never re-derives). */
+export function getWorkerLaborShares(workerRef: string, start: string, end: string): WorkerLaborShare[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT event_id, SUM(amount) AS cost, MAX(rate) AS rate FROM cost_entries
+        WHERE type='labor' AND source IN ('connecteam','instawork','derived') AND worker_ref = ?
+          AND (bucket='customer' OR bucket IS NULL) AND event_id IS NOT NULL
+          AND amount IS NOT NULL AND amount_status IN ('ACTUAL','ESTIMATED')
+          AND day >= ? AND day <= ?
+        GROUP BY event_id HAVING cost > 0`,
+    )
+    .all(workerRef, start, end) as Array<{ event_id: string; cost: number; rate: number | null }>;
+  return rows.map((r) => ({ eventId: r.event_id, laborCost: round2(r.cost), rate: r.rate }));
+}
+
