@@ -43,6 +43,17 @@ export interface ProposeResult {
 const money = (n: number | null | undefined): string => (n == null ? "an unknown amount" : "$" + Math.round(n).toLocaleString("en-US"));
 const channelWord = (t: ApprovalActionType): string => (t === "send_email" ? "email" : "text");
 
+/** A Slack-mrkdwn preview of the ACTUAL message to be sent, so the approver sees exactly what they're
+ *  approving (the card previously showed only the "why", not the drafted copy). Email also shows the subject.
+ *  The body is rendered as a blockquote; long drafts are truncated to keep the card readable. */
+function draftPreview(actionType: ApprovalActionType, body: string, subject: string): string {
+  const MAX = 900;
+  const text = body.length > MAX ? body.slice(0, MAX).trimEnd() + "…" : body;
+  const quoted = text.split("\n").map((l) => `> ${l}`).join("\n");
+  const head = actionType === "send_email" ? `> *Subject:* ${subject}\n` : "";
+  return `*Drafted ${channelWord(actionType)}:*\n${head}${quoted}`;
+}
+
 /** Pick the reachable, wired-first channel from the contact facts (email is fully outbox-wired; SMS is
  *  held). Null when there is no way to reach the client. */
 function pickChannel(hasEmail: boolean, hasPhone: boolean): ApprovalActionType | null {
@@ -121,7 +132,7 @@ export async function proposeOutreachApprovals(): Promise<ProposeResult> {
           { label: "Channel", value: channelWord(actionType) },
           { label: "Event", value: lead.eventDate ?? "undated" },
         ],
-        body: `*Why:* ${lead.action.reason}`,
+        body: `${draftPreview(actionType, body, "Following up on your event")}\n\n*Why:* ${lead.action.reason}`,
         buttons: [
           { text: "Approve & send", actionId: APPROVE_ACTION, value: appr.id, style: "primary" },
           { text: "Dismiss", actionId: REJECT_ACTION, value: appr.id, style: "danger" },
@@ -199,7 +210,7 @@ export async function proposeLostQuoteApprovals(): Promise<ProposeResult> {
           { label: "Channel", value: channelWord(actionType) },
           { label: "Event", value: q.eventDate ?? "undated" },
         ],
-        body: q.lossReason ? `*Loss reason:* ${q.lossReason}` : "Loss reason untagged.",
+        body: `${draftPreview(actionType, body, "Checking back in about your event")}\n\n${q.lossReason ? `*Loss reason:* ${q.lossReason}` : "Loss reason untagged."}`,
         buttons: [
           { text: "Approve & send", actionId: APPROVE_ACTION, value: appr.id, style: "primary" },
           { text: "Dismiss", actionId: REJECT_ACTION, value: appr.id, style: "danger" },
