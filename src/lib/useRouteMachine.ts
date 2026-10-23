@@ -91,6 +91,81 @@ function firstActiveIndex(stops: Stop[]): number {
   return stops.findIndex((s) => s.state !== "Completed");
 }
 
+/** A stop the driver actually worked (arrived at / completed / returned / flagged) — i.e. real progress
+ *  on this route, as opposed to a route the office closed before the driver ever touched it. */
+function wasWorked(s: Stop): boolean {
+  return (
+    s.state === "Completed" ||
+    s.state === "Returned" ||
+    s.state === "Arrived" ||
+    s.state === "Exception"
+  );
+}
+
+/** What `refresh()` should do with the route the server returned. Pure so the phase decision — the thing
+ *  the "no active route on arrival" bug lived in — is unit-testable without React/DB/network.
+ *
+ *  - `noop`: leave everything exactly as-is (a background poll on an already-loaded route).
+ *  - `adopt`: take this server route as the working copy (sets loadedRef); with `phase` for the screen.
+ *  - `holdNext`: hold this as the truck's NEXT route on the closeout screen (don't yank the driver in).
+ *  - `phase` alone: just move to this phase without adopting a route.
+ *  - `{}` (none set): no state change, only clear the error. */
+export interface RefreshDecision {
+  noop?: boolean;
+  adopt?: Route;
+  holdNext?: Route;
+  phase?: RoutePhase;
+}
+
+export function decideRefresh(
+  r: Route | null,
+  ctx: { loaded: boolean; force: boolean; phase: RoutePhase; routeId: string | null },
+): RefreshDecision {
+  // Background polling must not clobber the driver's in-progress state. Only a FORCED resync (the Refresh
+  // button, advancing to the next stop, or the first load before anything is adopted) re-adopts.
+  if (ctx.loaded && !ctx.force) return { noop: true };
+
+  if (!r) {
+    // No route for this truck today. Only fall to the Start screen before anything is loaded — never
+    // yank a driver who's already working (or just finished) a route onto "Start Route".
+    return ctx.loaded ? {} : { phase: "needsStart" };
+  }
+
+  if (r.status === "scraping") return { phase: "scraping" };
+  if (r.status === "failed") return ctx.loaded ? {} : { phase: "failed" };
+
+  if (r.status === "ready" || r.status === "active") {
+    // The driver finished the current route (closeout → it's now `done` server-side) and a DIFFERENT route
+    // is the truck's active one — its next dispatch of the day. Don't yank the closeout screen into the new
+    // route's stops; hold it and surface an explicit "Start next route".
+    const inCloseout = ctx.phase === "headingBack" || ctx.phase === "returned";
+    if (inCloseout && ctx.routeId && r.routeId !== ctx.routeId) {
+      return { holdNext: r };
+    }
+    // "headingBack"/"returned" are CLIENT-ONLY phases (the server route stays ready/active with every stop
+    // Completed after the last stop). A forced re-pull must NOT stomp them — that drops the driver out of
+    // headingBack into "stops" with no active stop and no buttons (the "Arrived at Warehouse" button
+    // vanishes, the route can't be closed). Preserve them as long as every stop is still Completed; a
+    // genuinely new active stop on the SAME route falls through to "stops".
+    const allDone = r.stops.length > 0 && r.stops.every((s) => s.state === "Completed");
+    const keep = (ctx.phase === "headingBack" || ctx.phase === "returned") && allDone;
+    return { adopt: r, phase: keep ? ctx.phase : r.stops.length ? "stops" : "empty" };
+  }
+
+  // r.status === "done"
+  if (ctx.loaded) {
+    // In-session: the driver just closed out (phase is already "returned"/"headingBack") — leave their
+    // screen alone. Adopting here with a phase would stomp the recap.
+    return {};
+  }
+  // Fresh mount (a WebView reload or Android activity resume AFTER the warehouse closeout, which closed the
+  // route server-side). The route is finished, not missing: if the driver actually worked it, restore the
+  // route-complete recap instead of the bare "no active route / Start Route" screen — THE reported bug.
+  // Only a done route the driver never touched (office force-closed before it started) invites a fresh pull.
+  const worked = r.stops.some(wasWorked);
+  return worked ? { adopt: r, phase: "returned" } : { phase: "needsStart" };
+}
+
 export function useRouteMachine(truckId: string): RouteMachine {
   const [route, setRoute] = useState<Route | null>(null);
   const [phase, setPhase] = useState<RoutePhase>("loading");
@@ -131,57 +206,31 @@ export function useRouteMachine(truckId: string): RouteMachine {
   const refresh = useCallback(async (force = false) => {
     try {
       const r = await fetchRoute(truckId);
-      // Background polling must not clobber the driver's in-progress state. Only a
-      // FORCED resync (the Refresh button, or advancing to the next stop) re-adopts
-      // the server route — which dispatch may have updated overnight or mid-day.
-      // The server preserves completed/active stops on re-import, so adopting it is
-      // safe: it reflects finished deliveries plus any updated upcoming stops.
-      if (loadedRef.current && !force) {
+      // The phase/adopt decision is a pure function (decideRefresh) so it's unit-testable — see the
+      // comments there for why each status maps the way it does. The server preserves completed/active
+      // stops on re-import, so adopting a route is safe. KEY: on a FRESH mount (a WebView reload / Android
+      // resume after the warehouse closeout) a `done`-today route the driver worked restores the
+      // route-complete recap, NOT the bare "Start Route" screen.
+      const decision = decideRefresh(r, {
+        loaded: loadedRef.current,
+        force,
+        phase: phaseRef.current,
+        routeId: routeRef.current?.routeId ?? null,
+      });
+      if (decision.noop) {
         setError(null);
         return;
       }
-      if (!r) {
-        if (!loadedRef.current) setPhase("needsStart");
-      } else if (r.status === "scraping") {
-        setPhase("scraping");
-      } else if (r.status === "failed") {
-        if (!loadedRef.current) setPhase("failed");
-      } else if (r.status === "ready" || r.status === "active") {
-        // The driver finished the current route (closeout → it's now `done` server-side) and a
-        // DIFFERENT route is the truck's active one — its next dispatch of the day. Don't yank the
-        // closeout screen into the new route's stops; hold it and surface an explicit "Start next
-        // route" (startNextRoute adopts it). This is the only place `r` is a different route id while
-        // the driver is still on the closeout screen.
-        const inCloseout = phaseRef.current === "headingBack" || phaseRef.current === "returned";
-        if (inCloseout && routeRef.current && r.routeId !== routeRef.current.routeId) {
-          setNextRoute(r);
-          setError(null);
-          return;
-        }
-        setRoute(r);
-        loadedRef.current = true;
-        // "headingBack"/"returned" are CLIENT-ONLY phases (the server route has no
-        // such state — after the last stop the route stays ready/active with every
-        // stop Completed). A forced re-pull (the 5-min auto-repull, or the Refresh
-        // button) must NOT stomp them: doing so drops the driver out of headingBack
-        // into "stops" with no active stop and no buttons, so the "Arrived at
-        // Warehouse" button vanishes mid-drive-back and the route can't be closed.
-        // Preserve headingBack/returned as long as every stop is still Completed
-        // (nothing new to drive to); if a genuinely new active stop appears on the SAME
-        // route (a mid-day add to this route) — fall through to "stops".
-        const allDone = r.stops.length > 0 && r.stops.every((s) => s.state === "Completed");
-        setPhase((cur) =>
-          (cur === "headingBack" || cur === "returned") && allDone
-            ? cur
-            : r.stops.length
-              ? "stops"
-              : "empty",
-        );
-      } else if (r.status === "done") {
-        // Office force-closed this route (e.g. the tablet died mid-shift). Invite a
-        // fresh pull of today's route instead of hanging on "Loading…".
-        if (!loadedRef.current) setPhase("needsStart");
+      if (decision.holdNext) {
+        setNextRoute(decision.holdNext);
+        setError(null);
+        return;
       }
+      if (decision.adopt) {
+        setRoute(decision.adopt);
+        loadedRef.current = true;
+      }
+      if (decision.phase) setPhase(decision.phase);
       setError(null);
     } catch {
       setError("Could not load route.");
