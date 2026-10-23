@@ -152,3 +152,20 @@ export function visitReconcileConfig(): VisitReconcileConfig {
     enabled: (process.env.FINANCE_VISIT_RECONCILE ?? "1") !== "0",
   };
 }
+
+// ── Reconciliation-run config (FI Stage 7a) — the durable snapshot→revision→final lifecycle that records
+//    how a project's profitability settled as late data arrived. The run itself invents nothing (it stores
+//    the already-computed snapshot + the current−prior variance); the only knob is the master switch for the
+//    recompute in the scan tick. Append-only + sig-deduped, so leaving it on is cheap (a run is written only
+//    when the figures actually moved).
+export interface ReconciliationRunsConfig {
+  /** Master switch for producing reconciliation runs on the scan tick. Default on; set
+   *  FINANCE_RECONCILIATION_RUNS=0 to disable the whole Stage-7a lifecycle recompute. */
+  enabled: boolean;
+}
+
+export function reconciliationRunsConfig(): ReconciliationRunsConfig {
+  return {
+    enabled: (process.env.FINANCE_RECONCILIATION_RUNS ?? "1") !== "0",
+  };
+}

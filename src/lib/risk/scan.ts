@@ -475,6 +475,18 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
     console.error("[finance] cost-families recompute failed (isolated):", e);
   }
 
+  // FI Stage 7a: record a durable reconciliation RUN per project whose ledger just moved — the
+  // snapshot→revision→final lifecycle + variance-vs-prior, so late timesheets/refunds/manual costs become
+  // visible as revisions over time. Runs AFTER the labor + cost-family recomputes so the snapshot it
+  // captures reflects this scan's ledger. Append-only + sig-deduped (idempotent). Isolated — a failure
+  // here must never break the core scan.
+  try {
+    const { recomputeReconciliationRuns } = await import("@/lib/finance/reconciliationRunRecompute");
+    recomputeReconciliationRuns(dates);
+  } catch (e) {
+    console.error("[finance] reconciliation-run recompute failed (isolated):", e);
+  }
+
   // Operational Opportunity: tomorrow's prep window. Run with the REAL clock (intraday), not the noon
   // anchor. It self-gates on there being tomorrow routes, and its findings (dated tomorrow, which is in
   // `dates` when tomorrow has routes) fold into the SAME reconcile below → dedup + lifecycle + /risk for

@@ -2142,6 +2142,39 @@ CREATE TABLE IF NOT EXISTS visit_events (
 );
 CREATE INDEX IF NOT EXISTS idx_visit_events_route ON visit_events(route_id);
 CREATE INDEX IF NOT EXISTS idx_visit_events_tx ON visit_events(tx_id);
+
+-- ── FI Stage 7a: reconciliation-run lifecycle ────────────────────────────────────────────────────────
+-- Durable point-in-time SNAPSHOTS of a project's full financial state (revenue + every cost family +
+-- contribution/margin + overall status), captured on the finance/scan cadence — but APPEND-ONLY and
+-- sig-deduped exactly like event_snapshots/labor_snapshots: a run is written ONLY when the material
+-- figures actually moved since the project's last run, so the history records how profitability SETTLED
+-- as late data arrived (a late timesheet, a refund, a manual cost, a derived estimate landing). seq is
+-- the 1-based run number per project (monotonic); phase is the snapshot->revision->final lifecycle
+-- (final only when the snapshot is RECONCILED -- never fabricated while anything is still estimated).
+-- snapshot_json is the exact serializable ProjectSnapshot (so a run is fully recomputable/comparable);
+-- variance_json is the computed variance-vs-prior (null on the first run). RULES CALCULATE -- a variance
+-- is current-minus-prior, never a guess. Idempotent by UNIQUE(project_id, seq).
+CREATE TABLE IF NOT EXISTS reconciliation_runs (
+  id            TEXT PRIMARY KEY,        -- "RR-"+uuid
+  project_id    TEXT NOT NULL,           -- Goodshuffle project/booking id (= tx_id)
+  seq           INTEGER NOT NULL,        -- 1-based run sequence per project
+  phase         TEXT NOT NULL,           -- snapshot | revision | final
+  status        TEXT NOT NULL,           -- PROVISIONAL | ESTIMATED | RECONCILED (the snapshot's overall status)
+  revenue       REAL,                    -- contracted/grand total (dollars) at run time; null = unavailable
+  collected     REAL,                    -- collected to date (dollars)
+  direct_cost   REAL,                    -- Σ known direct-cost families (dollars); null = no cost evidence
+  contribution  REAL,                    -- revenue − direct cost (dollars); null when either side unknown
+  margin_pct    REAL,                    -- contribution / revenue (0-1)
+  balanced      INTEGER NOT NULL,        -- 1/0 reconciliation tie (family sum === direct-cost total)
+  residual      REAL,                    -- tie residual (dollars; expect ~0)
+  snapshot_json TEXT NOT NULL,           -- the full serializable ProjectSnapshot at run time
+  variance_json TEXT,                    -- the variance-vs-prior (RunVariance JSON); null on the first run
+  sig           TEXT NOT NULL,           -- material-figures signature; a repeat sig is NOT re-run
+  captured_at   TEXT NOT NULL,
+  UNIQUE(project_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_reconciliation_runs_project ON reconciliation_runs(project_id, seq);
+CREATE INDEX IF NOT EXISTS idx_reconciliation_runs_captured ON reconciliation_runs(captured_at DESC);
 `;
 
 type DB = InstanceType<typeof Database>;
