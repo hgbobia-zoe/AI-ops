@@ -71,6 +71,10 @@ export interface CostFamilyInput {
   confidence?: string | null;
   /** How many ledger leaves fed this family (lineage/debug; 0 for untracked). */
   leafCount?: number;
+  /** Dominant ledger source across the family's leaves (connecteam | instawork | derived | manual | …);
+   *  'manual' wins when any leaf is a hand-entered cost. Carried through for reconciliation-run reason
+   *  tagging (a manual adjustment vs a derived estimate) — never affects any figure. Null when untracked. */
+  source?: string | null;
 }
 
 export interface ProjectSnapshotInput {
@@ -120,6 +124,9 @@ export interface CostFamilyLine {
   /** False = schema-ready but nothing writes this family yet (reported UNAVAILABLE, not 0). */
   tracked: boolean;
   leafCount: number;
+  /** Dominant ledger source ('manual' | 'derived' | 'connecteam' | 'instawork' | …) or null when untracked.
+   *  Used only to label WHY a reconciliation-run line moved (manual adjustment vs derived estimate). */
+  source: string | null;
 }
 
 /** Proof the cost-family parts sum back to the direct-cost total (mirrors the labor engine's
@@ -192,6 +199,7 @@ export function projectSnapshot(input: ProjectSnapshotInput): ProjectSnapshot {
       confidence: f?.confidence ?? null,
       tracked: known,
       leafCount: f?.leafCount ?? 0,
+      source: known ? f?.source ?? null : null,
     };
   });
 

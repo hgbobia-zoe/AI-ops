@@ -11,7 +11,8 @@ import type { ProjectSnapshot } from "@/lib/finance/projectSnapshot";
 import type { RevenueComponents } from "@/lib/finance/revenueModel";
 import { getPeriod, PERIOD_KEYS, priorWeek, priorCycle, customRange, priorRange, type Period, type PeriodKey } from "@/lib/finance/periods";
 import { opsCycleConfig } from "@/lib/finance/config";
-import { getRouteLaborCosts, getInstaworkLedger, getLaborReconciliation, getProjectLaborLineage, getLaborLedgerSummary, getVisitReconciliation } from "@/lib/db/repo";
+import { getRouteLaborCosts, getInstaworkLedger, getLaborReconciliation, getProjectLaborLineage, getLaborLedgerSummary, getVisitReconciliation, getReconciliationRuns, getRecentReconciliationRuns, type ReconciliationRunRow } from "@/lib/db/repo";
+import type { RunPhase, VarianceReason } from "@/lib/finance/reconciliationRun";
 import { reconcileVisit, type VisitWindow } from "@/lib/finance/visitReconcile";
 import { visitReconcileConfig } from "@/lib/finance/config";
 import { formatClockTime } from "@/lib/dates";
@@ -114,6 +115,8 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const savedViews = listFinanceSavedViews().map((v) => ({ id: v.id, name: v.name, state: v.state as Record<string, string> }));
   // Per-project profitability snapshot (compute-on-read) — a deepening of /finance, not a new nav.
   const projectSnap = selectedProject ? projectFinancials(selectedProject) : null;
+  // Stage 7a: the project's durable reconciliation-run history (snapshot→revision→final + variance-vs-prior).
+  const projectRuns = selectedProject ? getReconciliationRuns(selectedProject) : [];
   const canEditCost = canSeeFinancials(await viewerRole()); // owner/admin may add/edit/delete manual costs
 
   const tempHourShare = L.totalHours != null && L.totalHours > 0 && L.tempHours != null ? L.tempHours / L.totalHours : null;
@@ -175,7 +178,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
       )}
 
       {selectedProject ? (
-        <ProjectDetail snap={projectSnap} id={selectedProject} backHref={href({ view: "projects", project: undefined })} canEdit={canEditCost} />
+        <ProjectDetail snap={projectSnap} id={selectedProject} runs={projectRuns} backHref={href({ view: "projects", project: undefined })} canEdit={canEditCost} />
       ) : (
         <>
           {(view === "overview" || view === "week" || view === "cycle") && <Overview s={s} L={L} tempHourShare={tempHourShare} href={href} />}
@@ -184,7 +187,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
           {view === "labor" && <LaborView L={L} s={s} tempHourShare={tempHourShare} />}
           {view === "instawork" && <InstaworkView rows={getInstaworkLedger(period.start, period.end)} L={L} />}
           {view === "variance" && <VarianceView s={s} L={L} priorCost={priorLaborCost(period, cycle)} />}
-          {view === "reconciliation" && <Reconciliation rows={getLaborReconciliation(period.start, period.end)} />}
+          {view === "reconciliation" && <Reconciliation rows={getLaborReconciliation(period.start, period.end)} runs={getRecentReconciliationRuns(period.start, period.end)} href={href} />}
           {view === "visits" && <VisitReconciliationView rows={getVisitReconciliation(period.start, period.end)} />}
 
           {sp?.lineage && <Lineage eventId={sp.lineage} label={s.events.find((e) => e.eventId === sp.lineage)?.label ?? sp.lineage} />}
@@ -320,7 +323,86 @@ function StatusBadge({ status }: { status: ProjectSnapshot["status"] }): React.J
   return <span className={`text-[11px] font-medium uppercase tracking-[0.08em] ${SNAP_STATUS_TONE[status]}`}>{status}</span>;
 }
 
-function ProjectDetail({ snap, id, backHref, canEdit }: { snap: ProjectSnapshot | null; id: string; backHref: string; canEdit: boolean }): React.JSX.Element {
+// ── Reconciliation-run lifecycle (Stage 7a) labels ──────────────────────────────────────────────────
+const PHASE_TONE: Record<RunPhase, string> = {
+  snapshot: "text-muted-foreground",
+  revision: "text-attention",
+  final: "text-positive",
+};
+const PHASE_LABEL: Record<RunPhase, string> = { snapshot: "Snapshot", revision: "Revision", final: "Final" };
+// A reason tag is a DERIVED FACT (which input moved), never an inferred motive.
+const REASON_LABEL: Record<VarianceReason, string> = {
+  late_timesheet: "Late timesheet",
+  labor_actualized: "Labor actualized",
+  refund: "Refund / credit",
+  payment_received: "Payment received",
+  revenue_adjustment: "Revenue adjustment",
+  manual_adjustment: "Manual adjustment",
+  new_estimate: "New estimate",
+  cost_removed: "Cost removed",
+};
+
+function PhaseBadge({ phase }: { phase: RunPhase }): React.JSX.Element {
+  return <span className={`text-[11px] font-medium uppercase tracking-[0.08em] ${PHASE_TONE[phase]}`}>{PHASE_LABEL[phase]}</span>;
+}
+
+function signedMoney(n: number): string {
+  return (n > 0 ? "+" : n < 0 ? "-" : "") + "$" + Math.abs(Math.round(n)).toLocaleString("en-US");
+}
+
+/** Per-project revision history — the snapshot→revision→final runs with the variance-vs-prior per line. */
+function RevisionHistory({ runs }: { runs: ReconciliationRunRow[] }): React.JSX.Element {
+  if (runs.length === 0) {
+    return (
+      <div className="mt-6">
+        <h3 className="mb-1 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Reconciliation history</h3>
+        <p className="text-[12.5px] text-meta">No reconciliation runs recorded yet. A run is captured on the finance scan once this project has ledger activity, and again whenever its numbers move (a late timesheet, a refund, a manual cost). Until then this is empty, not zero.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-6">
+      <h3 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Reconciliation history</h3>
+      <p className="mb-3 text-[12px] text-meta">How this project&apos;s profitability settled over time. Each run is a point-in-time snapshot; a revision lists exactly what moved since the prior run and why. &quot;Final&quot; appears only when the project is fully reconciled (all cost actual, revenue collected) — never while anything is still estimated.</p>
+      <ol className="space-y-3">
+        {runs.map((run) => (
+          <li key={run.id} className="border border-border bg-panel px-4 py-3">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px]">
+              <span className="font-medium">Run {run.seq}</span>
+              <PhaseBadge phase={run.phase} />
+              <StatusBadge status={run.status} />
+              <span className="text-meta">{run.capturedAt.slice(0, 16).replace("T", " ")}</span>
+              <span className="ml-auto flex flex-wrap items-center gap-x-4 tabular-nums">
+                <span className="text-meta">Rev <span className="text-foreground">{money(run.revenue)}</span></span>
+                <span className="text-meta">Cost <span className="text-foreground">{money(run.directCost)}</span></span>
+                <span className="text-meta">Contrib <span className={run.contribution == null ? "text-foreground" : run.contribution >= 0 ? "text-positive" : "text-critical"}>{money(run.contribution)}</span></span>
+                {!run.balanced && <span className="text-critical">UNBALANCED</span>}
+              </span>
+            </div>
+            {run.variance && run.variance.lines.length > 0 ? (
+              <ul className="mt-2 space-y-1 border-t border-[var(--row-rule)] pt-2 text-[12px]">
+                {run.variance.lines.map((ln) => (
+                  <li key={ln.line} className="flex flex-wrap items-center gap-x-3">
+                    <span className="min-w-[150px] text-meta">{ln.label}</span>
+                    <span className="tabular-nums text-tertiary-text">{money(ln.prior)} → {money(ln.current)}</span>
+                    <span className={`tabular-nums ${ln.delta > 0 ? "text-positive" : ln.delta < 0 ? "text-critical" : "text-meta"}`}>{signedMoney(ln.delta)}</span>
+                    <span className="text-[11px] uppercase tracking-[0.06em] text-attention">{REASON_LABEL[ln.reason]}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : run.variance ? (
+              <p className="mt-2 border-t border-[var(--row-rule)] pt-2 text-[11.5px] text-meta">Status/lifecycle change only — no line figures moved since the prior run.</p>
+            ) : (
+              <p className="mt-2 border-t border-[var(--row-rule)] pt-2 text-[11.5px] text-meta">First run — the baseline for later variance.</p>
+            )}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function ProjectDetail({ snap, id, runs, backHref, canEdit }: { snap: ProjectSnapshot | null; id: string; runs: ReconciliationRunRow[]; backHref: string; canEdit: boolean }): React.JSX.Element {
   if (!snap) {
     return (
       <section>
@@ -416,6 +498,9 @@ function ProjectDetail({ snap, id, backHref, canEdit }: { snap: ProjectSnapshot 
 
       {/* Manual cost entries (Stage 5, G9) — gated add/edit/delete; rolls into the families above. */}
       <ManualCostEntry projectId={snap.projectId} canEdit={canEdit} />
+
+      {/* Reconciliation-run history (Stage 7a) — how this project's profitability settled over time. */}
+      <RevisionHistory runs={runs} />
 
       {/* Existing per-number labor lineage (all attributed leaves, incl. non-customer buckets) */}
       <Lineage eventId={snap.projectId} label={snap.label} />
@@ -579,10 +664,59 @@ function VarianceView({ s, L, priorCost }: { s: Awaited<ReturnType<typeof financ
 }
 
 // ── Reconciliation view ─────────────────────────────────────────────────────────────────────────
-function Reconciliation({ rows }: { rows: ReturnType<typeof getLaborReconciliation> }): React.JSX.Element {
-  if (rows.length === 0) return <p className="text-[13.5px] text-muted-foreground">No labor leaves to reconcile in this period.</p>;
+function Reconciliation({ rows, runs, href }: { rows: ReturnType<typeof getLaborReconciliation>; runs: ReconciliationRunRow[]; href: (p: Partial<{ view: string; project: string }>) => string }): React.JSX.Element {
+  if (rows.length === 0 && runs.length === 0) return <p className="text-[13.5px] text-muted-foreground">No labor leaves to reconcile in this period.</p>;
   return (
-    <section>
+    <section className="space-y-8">
+      {/* Stage 7a: per-project reconciliation RUNS — the snapshot→revision→final lifecycle for the period. */}
+      <div>
+        <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Reconciliation runs — how profitability settled</h2>
+        {runs.length === 0 ? (
+          <p className="text-[12.5px] text-meta">No reconciliation runs landed in this period yet. Runs are captured on the finance scan as each project&apos;s ledger moves; they record late timesheets, refunds and manual costs as revisions over time.</p>
+        ) : (
+          <>
+            <div className="overflow-x-auto border border-border">
+              <table className={tableCls}>
+                <thead className={theadCls}>
+                  <tr>
+                    <th className={thCls}>Project</th>
+                    <th className={thCls}>Phase</th>
+                    <th className={thCls}>Status</th>
+                    <th className={`${thCls} text-right`}>Run</th>
+                    <th className={`${thCls} text-right`}>Revenue</th>
+                    <th className={`${thCls} text-right`}>Direct cost</th>
+                    <th className={`${thCls} text-right`}>Contribution</th>
+                    <th className={thCls}>Last change</th>
+                    <th className={thCls}>Captured</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runs.map((run) => {
+                    const topLine = run.variance?.lines[0] ?? null;
+                    return (
+                      <tr key={run.id} className="border-t border-[var(--row-rule)] hover:bg-[var(--row-hover)]">
+                        <td className="px-2.5 py-2.5"><Link href={href({ view: "projects", project: run.projectId })} className="underline decoration-dotted underline-offset-2">{run.snapshot.label}</Link></td>
+                        <td className="px-2.5 py-2.5"><PhaseBadge phase={run.phase} /></td>
+                        <td className="px-2.5 py-2.5"><StatusBadge status={run.status} /></td>
+                        <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{run.seq}</td>
+                        <td className="px-2.5 py-2.5 text-right tabular-nums">{money(run.revenue)}</td>
+                        <td className="px-2.5 py-2.5 text-right tabular-nums">{money(run.directCost)}</td>
+                        <td className="px-2.5 py-2.5 text-right tabular-nums">{run.contribution == null ? <span className="text-meta">—</span> : <span className={run.contribution >= 0 ? "text-positive" : "text-critical"}>{money(run.contribution)}</span>}</td>
+                        <td className="px-2.5 py-2.5 text-[11.5px]">{topLine ? <span><span className="text-attention uppercase tracking-[0.06em]">{REASON_LABEL[topLine.reason]}</span> <span className="tabular-nums text-meta">{signedMoney(topLine.delta)}</span></span> : <span className="text-meta">baseline</span>}</td>
+                        <td className="px-2.5 py-2.5 text-meta">{run.capturedAt.slice(0, 16).replace("T", " ")}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[12px] text-meta">One row per project = its latest run in this window. Open a project for its full revision history + the per-line variance. A run ties internally: its cost families sum to the direct-cost total (an unbalanced run is flagged), and it carries the overall settlement status.</p>
+          </>
+        )}
+      </div>
+
+      {rows.length > 0 && (
+      <div>
       <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Reconciliation — per worker / day</h2>
       <div className="overflow-x-auto border border-border">
         <table className={tableCls}>
@@ -615,6 +749,8 @@ function Reconciliation({ rows }: { rows: ReturnType<typeof getLaborReconciliati
         </table>
       </div>
       <p className="mt-3 text-[12px] text-meta">Each row sums customer + travel + warehouse + unallocated = that worker/day&apos;s shift labor transaction — the dollar is conserved end-to-end, never double-counted. A non-zero unallocated is a surfaced signal (over-staffed, idle, or a data gap), not an error.</p>
+      </div>
+      )}
     </section>
   );
 }

@@ -18,6 +18,8 @@ import {
   type EtaLinkMintRequest,
 } from "@/lib/eta/etaLinkMint";
 import { decideAckTransition, reconcileApprovalForOp, type OutboxAckStatus } from "@/lib/aiorg/outboxLifecycle";
+import type { ProjectSnapshot } from "@/lib/finance/projectSnapshot";
+import type { RunPhase, RunVariance } from "@/lib/finance/reconciliationRun";
 
 interface StopRow {
   stop_id: string;
@@ -1968,10 +1970,10 @@ const METHOD_RANK_FAM: Record<string, number> = { ACTUAL_STOP: 5, DERIVED_STOP: 
 export function getProjectCostFamilies(eventId: string): import("@/lib/finance/projectSnapshot").CostFamilyInput[] {
   const rows = getDb()
     .prepare(
-      `SELECT type, bucket, amount, amount_status, method, confidence FROM cost_entries
+      `SELECT type, bucket, amount, amount_status, method, confidence, source FROM cost_entries
        WHERE class='DIRECT' AND event_id = ?`,
     )
-    .all(eventId) as { type: string; bucket: string | null; amount: number | null; amount_status: string; method: string | null; confidence: string | null }[];
+    .all(eventId) as { type: string; bucket: string | null; amount: number | null; amount_status: string; method: string | null; confidence: string | null; source: string | null }[];
   interface Agg {
     actual: number;
     estimated: number;
@@ -1981,13 +1983,18 @@ export function getProjectCostFamilies(eventId: string): import("@/lib/finance/p
     method: string | null;
     confidence: string | null;
     leafCount: number;
+    source: string | null;
   }
   const agg = new Map<string, Agg>();
   for (const r of rows) {
     // Labor: only customer-bucket labor is project-direct (matches getEventDirectCosts).
     if (r.type === "labor" && !(r.bucket === "customer" || r.bucket == null)) continue;
-    const a: Agg = agg.get(r.type) ?? { actual: 0, estimated: 0, anyActual: false, anyEstimated: false, anyUnavail: false, method: null, confidence: null, leafCount: 0 };
+    const a: Agg = agg.get(r.type) ?? { actual: 0, estimated: 0, anyActual: false, anyEstimated: false, anyUnavail: false, method: null, confidence: null, leafCount: 0, source: null };
     a.leafCount++;
+    // Dominant source: a hand-entered ('manual') leaf wins so a reconciliation-run line is honestly tagged
+    // a manual adjustment; otherwise the first non-null source seen. Never affects any figure.
+    if (r.source === "manual") a.source = "manual";
+    else if (a.source == null && r.source) a.source = r.source;
     if (r.amount != null && r.amount_status === "ACTUAL") {
       a.actual += r.amount;
       a.anyActual = true;
@@ -2014,6 +2021,7 @@ export function getProjectCostFamilies(eventId: string): import("@/lib/finance/p
       method: a.method,
       confidence: a.confidence,
       leafCount: a.leafCount,
+      source: a.source,
     });
   }
   return out;
@@ -4551,5 +4559,143 @@ export function getVisitReconciliation(start: string, end: string): VisitReconRo
     dispatchEnter: r.d_enter,
     dispatchExit: r.d_exit,
   }));
+}
+
+// ── FI Stage 7a: reconciliation-run lifecycle ────────────────────────────────────────────────────────
+// Append-only, sig-deduped runs of a project's financial snapshot. The repo only stores/reads; the
+// phase + variance math is the PURE reconciliationRun.ts. Mirrors the event_snapshots discipline.
+
+/** One stored reconciliation run (parsed). `snapshot`/`variance` are the deserialized JSON payloads. */
+export interface ReconciliationRunRow {
+  id: string;
+  projectId: string;
+  seq: number;
+  phase: RunPhase;
+  status: ProjectSnapshot["status"];
+  revenue: number | null;
+  collected: number | null;
+  directCost: number | null;
+  contribution: number | null;
+  marginPct: number | null;
+  balanced: boolean;
+  residual: number | null;
+  snapshot: ProjectSnapshot;
+  variance: RunVariance | null;
+  capturedAt: string;
+}
+
+function toReconRunRow(r: Record<string, unknown>): ReconciliationRunRow {
+  return {
+    id: String(r.id),
+    projectId: String(r.project_id),
+    seq: Number(r.seq),
+    phase: String(r.phase) as RunPhase,
+    status: String(r.status) as ProjectSnapshot["status"],
+    revenue: r.revenue == null ? null : Number(r.revenue),
+    collected: r.collected == null ? null : Number(r.collected),
+    directCost: r.direct_cost == null ? null : Number(r.direct_cost),
+    contribution: r.contribution == null ? null : Number(r.contribution),
+    marginPct: r.margin_pct == null ? null : Number(r.margin_pct),
+    balanced: Number(r.balanced) === 1,
+    residual: r.residual == null ? null : Number(r.residual),
+    snapshot: JSON.parse(String(r.snapshot_json)) as ProjectSnapshot,
+    variance: r.variance_json ? (JSON.parse(String(r.variance_json)) as RunVariance) : null,
+    capturedAt: String(r.captured_at),
+  };
+}
+
+/** The project's latest (highest-seq) reconciliation run, or null when it has none yet. */
+export function getLatestReconciliationRun(projectId: string): ReconciliationRunRow | null {
+  const r = getDb()
+    .prepare("SELECT * FROM reconciliation_runs WHERE project_id = ? ORDER BY seq DESC LIMIT 1")
+    .get(projectId) as Record<string, unknown> | undefined;
+  return r ? toReconRunRow(r) : null;
+}
+
+/** A project's run history, newest first (for the revision-history panel). Capped. */
+export function getReconciliationRuns(projectId: string, limit = 50): ReconciliationRunRow[] {
+  return (
+    getDb()
+      .prepare("SELECT * FROM reconciliation_runs WHERE project_id = ? ORDER BY seq DESC LIMIT ?")
+      .all(projectId, Math.max(1, Math.min(500, Math.floor(limit) || 50))) as Record<string, unknown>[]
+  ).map(toReconRunRow);
+}
+
+/** The most-recent run per project captured within [start,end] (for the /finance reconciliation view's
+ *  run-history table). One row per project = its latest run that landed in the window. Newest first. */
+export function getRecentReconciliationRuns(start: string, end: string, limit = 200): ReconciliationRunRow[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM reconciliation_runs r
+          WHERE r.captured_at >= ? AND r.captured_at <= ?
+            AND r.seq = (SELECT MAX(r2.seq) FROM reconciliation_runs r2
+                          WHERE r2.project_id = r.project_id AND r2.captured_at >= ? AND r2.captured_at <= ?)
+          ORDER BY r.captured_at DESC
+          LIMIT ?`,
+      )
+      .all(start, end, start, end, Math.max(1, Math.min(1000, Math.floor(limit) || 200))) as Record<string, unknown>[]
+  ).map(toReconRunRow);
+}
+
+export interface AppendReconciliationRunInput {
+  projectId: string;
+  seq: number;
+  phase: RunPhase;
+  status: ProjectSnapshot["status"];
+  revenue: number | null;
+  collected: number | null;
+  directCost: number | null;
+  contribution: number | null;
+  marginPct: number | null;
+  balanced: boolean;
+  residual: number | null;
+  snapshot: ProjectSnapshot;
+  variance: RunVariance | null;
+  sig: string;
+}
+
+/** Append one run. Idempotent on (project_id, seq): a re-run that reuses the same seq is IGNORED (the row
+ *  already exists), so a double-fire never duplicates or mutates a recorded run. Returns true if written. */
+export function appendReconciliationRun(x: AppendReconciliationRunInput, now: Date = new Date()): boolean {
+  const info = getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO reconciliation_runs
+        (id, project_id, seq, phase, status, revenue, collected, direct_cost, contribution, margin_pct,
+         balanced, residual, snapshot_json, variance_json, sig, captured_at)
+       VALUES (@id,@projectId,@seq,@phase,@status,@revenue,@collected,@directCost,@contribution,@marginPct,
+         @balanced,@residual,@snapshotJson,@varianceJson,@sig,@now)`,
+    )
+    .run({
+      id: `RR-${randomUUID()}`,
+      projectId: x.projectId,
+      seq: x.seq,
+      phase: x.phase,
+      status: x.status,
+      revenue: x.revenue,
+      collected: x.collected,
+      directCost: x.directCost,
+      contribution: x.contribution,
+      marginPct: x.marginPct,
+      balanced: x.balanced ? 1 : 0,
+      residual: x.residual,
+      snapshotJson: JSON.stringify(x.snapshot),
+      varianceJson: x.variance ? JSON.stringify(x.variance) : null,
+      sig: x.sig,
+      now: now.toISOString(),
+    });
+  return info.changes > 0;
+}
+
+/** Distinct project ids that have DIRECT cost-ledger activity on the given days — the projects whose
+ *  financial state the scan just recomputed, hence the set to produce reconciliation runs for. */
+export function getProjectIdsWithCostActivity(days: string[]): string[] {
+  const ds = [...new Set(days)].filter(Boolean);
+  if (ds.length === 0) return [];
+  const ph = ds.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(`SELECT DISTINCT event_id FROM cost_entries WHERE class='DIRECT' AND event_id IS NOT NULL AND day IN (${ph})`)
+    .all(...ds) as Array<{ event_id: string }>;
+  return rows.map((r) => String(r.event_id));
 }
 
