@@ -15,6 +15,8 @@ export async function GET(req: Request): Promise<NextResponse> {
   if (auth === "forbidden") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const job = claimNextPending();
-  // job === null simply means the queue is empty — a normal, successful poll.
+  // job === null simply means the queue is empty — a normal, successful poll. The serialized job carries the
+  // edit context (contextUrl + environment) captured from the embedded browser, so the runner's agent knows
+  // WHICH page/URL to edit and in which environment.
   return NextResponse.json({ ok: true, job });
 }

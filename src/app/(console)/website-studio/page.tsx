@@ -6,11 +6,15 @@
 import { WebsiteStudio } from "@/components/website/WebsiteStudio";
 import { currentActor } from "@/lib/auth/getSession";
 import { listJobs } from "@/lib/website/jobs";
+import { websiteEnvUrls } from "@/lib/website/config";
 
 export const dynamic = "force-dynamic";
 
 export default async function WebsiteStudioPage(): Promise<React.JSX.Element> {
   const actor = await currentActor();
   const initialJobs = listJobs({ requester: actor.label });
-  return <WebsiteStudio initialJobs={initialJobs} />;
+  // The two environments the embedded browser can load (env-overridable, see lib/website/config). Resolved on
+  // the server and handed to the client blade so there's no hardcoded origin in the component.
+  const envUrls = websiteEnvUrls();
+  return <WebsiteStudio initialJobs={initialJobs} envUrls={envUrls} />;
 }

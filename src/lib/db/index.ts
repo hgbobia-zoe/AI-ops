@@ -2085,7 +2085,12 @@ CREATE TABLE IF NOT EXISTS website_jobs (
   decided_at    TEXT,                  -- when the approve/discard happened
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL,
-  started_at    TEXT                    -- when the runner claimed it (pending → running)
+  started_at    TEXT,                   -- when the runner claimed it (pending → running)
+  -- Browse-and-edit upgrade (feat/website-studio-browser): the EDIT CONTEXT captured from the embedded
+  -- browser. context_url is the exact page the marketer was viewing when they submitted (the edit target);
+  -- environment is which site that URL is on, so the runner knows whether to edit against prod or local.
+  context_url   TEXT,                   -- the page URL the request targets (edit context); null = none captured
+  environment   TEXT                    -- 'production' | 'local' (defaults to 'production' when unset)
 );
 CREATE INDEX IF NOT EXISTS idx_website_jobs_status ON website_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_website_jobs_requester ON website_jobs(requester, created_at DESC);
@@ -2333,6 +2338,11 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "gs_outbox", column: "max_attempts", type: "INTEGER" },   // per-op retry budget (null => DEFAULT_MAX_ATTEMPTS)
   { table: "gs_outbox", column: "next_attempt_at", type: "TEXT" },   // ISO; a retryable failure is held until this time (backoff). null = eligible now
   { table: "gs_outbox", column: "dead_lettered_at", type: "TEXT" },  // ISO; set when bounded retries are exhausted (status => 'dead')
+  // Website Studio browse-and-edit upgrade (feat/website-studio-browser): the edit context captured from the
+  // embedded browser. Additive + nullable so jobs queued before the upgrade keep working (null context_url =>
+  // no page captured; null environment => treated as 'production').
+  { table: "website_jobs", column: "context_url", type: "TEXT" },    // the page URL the request targets (edit context)
+  { table: "website_jobs", column: "environment", type: "TEXT" },    // 'production' | 'local'
 ];
 
 function migrate(db: DB): void {
