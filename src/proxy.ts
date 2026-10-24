@@ -11,7 +11,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { verifySession, SESSION_COOKIE } from "@/lib/auth/session";
-import { canSeeFinancials, canManageSettings, canSeeCoaching, canManagePayroll, canManageUsers, canUseWebsiteStudio } from "@/lib/auth/roles";
+import { canSeeFinancials, canManageSettings, canSeeCoaching, canManagePayroll, canManageUsers, canUseWebsiteStudio, canSeeMarketing, MARKETING_PAGE_PREFIXES } from "@/lib/auth/roles";
 import { verifyImageSig } from "@/lib/creative/assetUrl";
 
 const PUBLIC: string[] = [
@@ -122,6 +122,23 @@ const GUEST_ALLOW: string[] = [
   "/api/route/stop/complete", // "drive": mark a stop done. NOT remove/reopen/close/driver (supervisor).
 ];
 const guestAllowed = (p: string): boolean => GUEST_ALLOW.some((a) => p === a || p.startsWith(a + "/"));
+
+// A Marketing (scoped) staff user is confined HARD — deny-by-default — to exactly two product surfaces:
+// the Marketing blade and Website Studio, plus the APIs those pages call. Nothing else a Member can see
+// (money, settings, dispatch, scheduling, risk, payroll, people, AI, coaching, events…) is reachable: an
+// unlisted path is blocked HERE at the hard boundary, not merely hidden in the nav. Shared shell CSS/JS is
+// served from /_next/static (excluded by the matcher) and auth/logout is PUBLIC above, so neither needs a
+// slot here. Website Studio only QUEUES a PR request — nothing goes live without a human merging the PR.
+const MARKETING_ALLOW: string[] = [
+  ...MARKETING_PAGE_PREFIXES, // page surface, from roles.ts: "/marketing" (+ sub-views) and "/website-studio"
+  "/api/marketing", // marketing blade data (campaigns/content/reviews/prospects/links)
+  "/api/website/jobs", // Website Studio submit/list/decision (also canUseWebsiteStudio-gated below)
+];
+const marketingAllowed = (p: string): boolean => MARKETING_ALLOW.some((a) => p === a || p.startsWith(a + "/"));
+// Marketing blade — reachable by back-office staff (owner/admin/member) AND the scoped marketing role; a
+// guest never (handled by the earlier guest branch). Explicit gate so a future role without canSeeMarketing
+// is denied by default; deny-by-default for the marketing role itself is enforced in its own branch above.
+const isMarketing = (p: string): boolean => p === "/marketing" || p.startsWith("/marketing/") || p.startsWith("/api/marketing");
 // Post-call coaching — sensitive transcripts + recaps, owner/admin only.
 const isCoaching = (p: string): boolean => p === "/coaching" || p.startsWith("/coaching/") || p.startsWith("/api/coaching");
 // HR / Payroll — worker pay, hours, Gusto sync. Sensitive money + PII, owner/admin only (canManagePayroll).
@@ -207,6 +224,15 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
     return NextResponse.redirect(new URL("/dispatch", req.nextUrl)); // never bounce a guest to "/" (loops)
   }
 
+  // Marketing (scoped staff) is deny-by-default, scoped hard to the Marketing blade + Website Studio + their
+  // APIs — before any of the staff role gates below. Anything not on the allow-list is blocked here: an API
+  // gets a 403; a page bounces to /marketing (never to "/", which would loop through this same deny).
+  if (session.role === "marketing") {
+    if (marketingAllowed(pathname)) return NextResponse.next();
+    if (pathname.startsWith("/api/")) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    return NextResponse.redirect(new URL("/marketing", req.nextUrl));
+  }
+
   if (isFinancial(pathname) && !canSeeFinancials(session.role)) return deny(req, "forbidden");
   if (isSettings(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
   if (isSeo(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
@@ -215,6 +241,7 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
   if (isPayroll(pathname) && !canManagePayroll(session.role)) return deny(req, "forbidden");
   if (isPeople(pathname) && !canManageUsers(session.role)) return deny(req, "forbidden");
   if (isWebsiteStudio(pathname) && !canUseWebsiteStudio(session.role)) return deny(req, "forbidden");
+  if (isMarketing(pathname) && !canSeeMarketing(session.role)) return deny(req, "forbidden");
 
   return NextResponse.next();
 }

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { proxy, isHeadlessTokenPath, bridgeTokenOk } from "./proxy";
+import { signSession } from "@/lib/auth/session";
+import type { Role } from "@/lib/auth/roles";
 
 beforeEach(() => {
   process.env.APP_SESSION_TOKEN = "sess-secret"; // auth ON (the gate is active)
@@ -83,5 +85,45 @@ describe("proxy — headless bridge token", () => {
     // /api/ai/approvals is not a headless-token path — a token-only request still needs a cookie.
     const res = await proxy(reqFor("/api/ai/approvals", "bridge-secret"));
     expect(res.status).toBe(401);
+  });
+});
+
+/** Build a request carrying a VALID signed session cookie for `role`, so the role gates run. */
+async function reqAs(role: Role, path: string): Promise<NextRequest> {
+  const cookie = await signSession({ uid: `U-${role}`, role }, process.env.APP_SESSION_TOKEN!);
+  const headers = new Headers();
+  headers.set("cookie", `zoe_session=${cookie}`);
+  return new NextRequest(new URL(`http://localhost${path}`), { headers });
+}
+
+describe("proxy — marketing role is scoped (deny-by-default)", () => {
+  it("ALLOWS the Marketing blade + Website Studio + their APIs", async () => {
+    for (const p of ["/marketing", "/marketing/campaigns", "/marketing/reviews", "/website-studio", "/api/marketing/campaigns", "/api/website/jobs"]) {
+      const res = await proxy(await reqAs("marketing", p));
+      expect(res.status, `expected 200 for ${p}`).toBe(200); // NextResponse.next()
+    }
+  });
+
+  it("BLOCKS sensitive APIs with a 403 (money / payroll / people / AI sessions / dispatch)", async () => {
+    for (const p of ["/api/finance/summary", "/api/payroll/overview", "/api/people/x", "/api/ai/sessions", "/api/scheduling/plan", "/api/settings/x"]) {
+      const res = await proxy(await reqAs("marketing", p));
+      expect(res.status, `expected 403 for ${p}`).toBe(403);
+    }
+  });
+
+  it("BOUNCES every other console PAGE to /marketing (never loops through '/')", async () => {
+    for (const p of ["/finance", "/admin", "/dispatch", "/payroll", "/scheduling", "/dashboard", "/ai-command", "/creative"]) {
+      const res = await proxy(await reqAs("marketing", p));
+      expect(res.status, `expected redirect for ${p}`).toBe(307);
+      expect(new URL(res.headers.get("location")!).pathname).toBe("/marketing");
+    }
+  });
+
+  it("a MEMBER (for contrast) still reaches dispatch but not finance", async () => {
+    expect((await proxy(await reqAs("member", "/dispatch"))).status).toBe(200);
+    // Member is blocked from finance (redirect to "/"), confirming the sensitive gates are intact.
+    const fin = await proxy(await reqAs("member", "/finance"));
+    expect(fin.status).toBe(307);
+    expect(new URL(fin.headers.get("location")!).pathname).toBe("/");
   });
 });

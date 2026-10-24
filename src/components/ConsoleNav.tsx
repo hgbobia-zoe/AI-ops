@@ -24,7 +24,7 @@ import {
   BrainCircuit, Tent, Wallet, Boxes,
   type LucideIcon,
 } from "lucide-react";
-import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, ROLE_LABEL, type Role } from "@/lib/auth/roles";
+import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, marketingCanReachPage, ROLE_LABEL, type Role } from "@/lib/auth/roles";
 
 interface Blade {
   href: string;
@@ -211,7 +211,14 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
   const bladeActive = (b: Blade) => (b.exact ? pathname === b.href : isActive(b.href));
-  const canSee = (b: Blade) => (!b.financial || canSeeFinancials(role)) && (!b.coaching || canSeeCoaching(role)) && (!b.manage || canManageSettings(role));
+  // The scoped marketing role sees ONLY its allowed blades (Marketing + Website Studio) — same allow-list
+  // the proxy enforces as the hard boundary; this keeps the nav from advertising routes it would be denied.
+  const isMarketingRole = role === "marketing";
+  const canSee = (b: Blade) =>
+    (!isMarketingRole || marketingCanReachPage(b.href)) &&
+    (!b.financial || canSeeFinancials(role)) &&
+    (!b.coaching || canSeeCoaching(role)) &&
+    (!b.manage || canManageSettings(role));
 
   // Admin is another expandable parent, built from what the role can manage.
   const adminBlades: Blade[] = [];
@@ -275,31 +282,36 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
 
       {/* Command Center — the hub / 10k-ft view, pinned at the top above the sections */}
       <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1">
-        <Link
-          href={HUB.href}
-          onClick={close}
-          aria-current={isActive(HUB.href) ? "page" : undefined}
-          className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
-            isActive(HUB.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
-          }`}
-        >
-          <HubIcon className={`size-[17px] shrink-0 ${isActive(HUB.href) ? "text-foreground" : "text-meta"}`} />
-          {HUB.label}
-        </Link>
+        {/* The 10k-ft hubs are hidden for the scoped marketing role (confined to Marketing + Website Studio). */}
+        {!isMarketingRole && (
+          <Link
+            href={HUB.href}
+            onClick={close}
+            aria-current={isActive(HUB.href) ? "page" : undefined}
+            className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
+              isActive(HUB.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
+            }`}
+          >
+            <HubIcon className={`size-[17px] shrink-0 ${isActive(HUB.href) ? "text-foreground" : "text-meta"}`} />
+            {HUB.label}
+          </Link>
+        )}
 
         {/* AI Command Center — second pinned top-level item (mission control over all AI activity) */}
-        <Link
-          href={AI_HUB.href}
-          onClick={close}
-          aria-current={isActive(AI_HUB.href) ? "page" : undefined}
-          className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
-            isActive(AI_HUB.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
-          }`}
-        >
-          <AiHubIcon className={`size-[17px] shrink-0 ${isActive(AI_HUB.href) ? "text-foreground" : "text-meta"}`} />
-          <span className="flex-1">{AI_HUB.label}</span>
-          <span className="rounded border border-attention/40 px-1 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.08em] text-attention">New</span>
-        </Link>
+        {!isMarketingRole && (
+          <Link
+            href={AI_HUB.href}
+            onClick={close}
+            aria-current={isActive(AI_HUB.href) ? "page" : undefined}
+            className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
+              isActive(AI_HUB.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
+            }`}
+          >
+            <AiHubIcon className={`size-[17px] shrink-0 ${isActive(AI_HUB.href) ? "text-foreground" : "text-meta"}`} />
+            <span className="flex-1">{AI_HUB.label}</span>
+            <span className="rounded border border-attention/40 px-1 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.08em] text-attention">New</span>
+          </Link>
+        )}
 
         {/* Expandable section parents → sub-blades */}
         {parents.map((g) => {
@@ -345,19 +357,22 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
       </nav>
 
       {/* Primary action — start a new customer project (the guided intake). Sits at the bottom, just
-          above the viewer, mirroring Goodshuffle's "Create New Project" placement. */}
-      <div className="border-t border-border px-2 py-2 lg:px-3">
-        <Link
-          href="/intake"
-          onClick={close}
-          aria-current={isActive("/intake") ? "page" : undefined}
-          className={`flex items-center justify-center gap-2 whitespace-nowrap rounded border px-3 py-2 text-[13.5px] font-medium transition-colors ${
-            isActive("/intake") ? "border-foreground bg-foreground/[0.07] text-foreground" : "border-border text-foreground hover:bg-[var(--row-hover)]"
-          }`}
-        >
-          <span aria-hidden className="text-[15px] leading-none text-tertiary-text">+</span> New Project
-        </Link>
-      </div>
+          above the viewer, mirroring Goodshuffle's "Create New Project" placement. Hidden for the scoped
+          marketing role, which has no access to intake/projects (proxy-denied). */}
+      {!isMarketingRole && (
+        <div className="border-t border-border px-2 py-2 lg:px-3">
+          <Link
+            href="/intake"
+            onClick={close}
+            aria-current={isActive("/intake") ? "page" : undefined}
+            className={`flex items-center justify-center gap-2 whitespace-nowrap rounded border px-3 py-2 text-[13.5px] font-medium transition-colors ${
+              isActive("/intake") ? "border-foreground bg-foreground/[0.07] text-foreground" : "border-border text-foreground hover:bg-[var(--row-hover)]"
+            }`}
+          >
+            <span aria-hidden className="text-[15px] leading-none text-tertiary-text">+</span> New Project
+          </Link>
+        </div>
+      )}
 
       {/* Viewer */}
       <div className="flex items-center gap-2.5 border-t border-border px-[18px] py-3">
