@@ -18,6 +18,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+import { coerceEnvironment, type WebsiteEnvironment } from "@/lib/website/config";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type WebsiteJobStatus =
@@ -61,6 +62,11 @@ export interface WebsiteJob {
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
+  // Browse-and-edit upgrade: the EDIT CONTEXT captured from the embedded browser — the exact page URL the
+  // marketer was viewing when they submitted, and which environment (prod/local) that page is on. These ride
+  // along to the runner so the agent knows WHICH page to edit and in WHICH environment.
+  contextUrl: string | null;
+  environment: WebsiteEnvironment;
 }
 
 // ── Row shape + mapper ──────────────────────────────────────────────────────────
@@ -80,6 +86,8 @@ interface JobRow {
   created_at: string;
   updated_at: string;
   started_at: string | null;
+  context_url: string | null;
+  environment: string | null;
 }
 
 function parseStringArray(json: string | null): string[] {
@@ -123,6 +131,9 @@ function toJob(r: JobRow): WebsiteJob {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     startedAt: r.started_at,
+    contextUrl: r.context_url,
+    // A legacy row (queued before this upgrade) has null environment — treat it as production.
+    environment: coerceEnvironment(r.environment),
   };
 }
 
@@ -133,18 +144,27 @@ function rowById(id: string): JobRow | undefined {
 // ── Writes ──────────────────────────────────────────────────────────────────────
 
 /** Queue a new website-change request. Returns the created job, or null if the prompt is empty or the write
- *  fails (never throws). New jobs start `pending`. */
-export function createJob(input: { prompt: string; requester?: string | null }): WebsiteJob | null {
+ *  fails (never throws). New jobs start `pending`. `contextUrl` is the page the marketer was viewing in the
+ *  embedded browser (the edit target) and `environment` is which site that page is on ('production' default,
+ *  validated via coerceEnvironment). */
+export function createJob(input: {
+  prompt: string;
+  requester?: string | null;
+  contextUrl?: string | null;
+  environment?: unknown;
+}): WebsiteJob | null {
   const prompt = (input.prompt ?? "").trim();
   if (!prompt) return null;
   try {
     const db = getDb();
     const id = `WJ-${randomUUID()}`;
     const now = new Date().toISOString();
+    const contextUrl = (input.contextUrl ?? "").trim() || null;
+    const environment = coerceEnvironment(input.environment);
     db.prepare(
-      `INSERT INTO website_jobs (id, prompt, requester, status, created_at, updated_at)
-       VALUES (@id, @prompt, @requester, 'pending', @now, @now)`,
-    ).run({ id, prompt, requester: input.requester?.trim() || null, now });
+      `INSERT INTO website_jobs (id, prompt, requester, status, context_url, environment, created_at, updated_at)
+       VALUES (@id, @prompt, @requester, 'pending', @contextUrl, @environment, @now, @now)`,
+    ).run({ id, prompt, requester: input.requester?.trim() || null, contextUrl, environment, now });
     const row = rowById(id);
     return row ? toJob(row) : null;
   } catch {

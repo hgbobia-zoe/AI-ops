@@ -12,7 +12,8 @@ can't do this work, so a machine you control does.
 
 1. Claim the next queued job from the app.
 2. In the website repo: fetch + hard-reset the default branch, then cut `website-studio/<jobId>`.
-3. Run the Claude Agent SDK with the marketer's prompt to edit the repo (confined to the repo dir).
+3. Run the Claude Agent SDK with the marketer's prompt **plus the edit context** to edit the repo (confined
+   to the repo dir). See **Edit context** below.
 4. Commit the change **on the branch** (never on the default branch).
 5. Deploy the branch's working tree to the **local DevKinsta** WordPress site (local preview only).
 6. Screenshot the changed page(s) at **desktop (1280w)** and **mobile (390w)** with Playwright, upload them +
@@ -21,6 +22,21 @@ can't do this work, so a machine you control does.
    - **Approved** → push the branch + `gh pr create` (base = the website repo's default branch) → mark `done`
      with the PR URL.
    - **Discarded** → delete the local branch, restore the local site to a clean default branch.
+
+### Edit context (browse-and-edit)
+
+The app's Website Studio is a **browse-and-edit** tool: the marketer browses the site in an embedded browser,
+lands on a page, and submits a change. The job therefore carries the **page they were viewing** (`contextUrl`)
+and the **environment** they were in (`production` or `local`). The runner derives the site path from
+`contextUrl` and tells the agent *which* page to edit, so it no longer has to guess the target from the prose.
+
+This URL→repo-page mapping is **best-effort**: the runner hands the agent the path and the agent (which can
+read the repo) maps it to the matching WordPress template/page/content. If it can't map a URL confidently, it
+says so explicitly in the job summary rather than guessing silently. The two environment origins the browser
+and (optionally) the runner use are configured **on the app** via `WEBSITE_PROD_URL` (default
+`https://zoeeventsdmv.com`) and `WEBSITE_LOCAL_URL` (default `http://zoeeventsdmv.local`, falls back to
+`WEBSITE_PREVIEW_URL`). The runner still renders + screenshots **locally** (via `WEBSITE_PREVIEW_URL`)
+regardless of environment — the environment only tells the agent which page the request targeted.
 
 ### Guardrails (important — this edits real website code driven by non-engineers)
 

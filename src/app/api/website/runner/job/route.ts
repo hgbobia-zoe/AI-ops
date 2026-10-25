@@ -17,5 +17,6 @@ export async function GET(req: Request): Promise<NextResponse> {
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
   const job = getJob(id);
   if (!job) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  // The serialized job carries the edit context (contextUrl + environment) alongside its status.
   return NextResponse.json({ ok: true, job });
 }

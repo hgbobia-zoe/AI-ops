@@ -110,12 +110,50 @@ async function markFailed(jobId, reason) {
   try { await postUpdate({ id: jobId, status: "failed", error: String(reason).slice(0, 500) }); } catch { /* best effort */ }
 }
 
+// ── Edit context (from the embedded browser) ─────────────────────────────────
+// A job now carries contextUrl (the exact page the marketer was viewing when they submitted — the edit
+// TARGET) and environment ('production' | 'local'). We derive the site-root-relative PATH from contextUrl and
+// hand it to the agent so it edits the RIGHT page, rather than guessing from the prose. This URL→repo-page
+// mapping is best-effort: we give the agent the path and tell it to map it to the matching template/content
+// and to be explicit in its summary if it cannot — the agent (which can read the repo) does the actual match.
+function pathFromContextUrl(contextUrl) {
+  if (!contextUrl || typeof contextUrl !== "string") return null;
+  try {
+    const p = new URL(contextUrl).pathname || "/";
+    return p; // e.g. "/", "/about", "/rentals/tents"
+  } catch {
+    // Not a full URL — accept a bare path too ("/about"); anything else is unmappable.
+    const t = contextUrl.trim();
+    return t.startsWith("/") ? t : null;
+  }
+}
+
 // ── The Claude Agent SDK edit step ───────────────────────────────────────────
-// Returns { summary, changedPaths } or throws. The agent edits files under cwd=REPO only.
-async function runAgent(prompt) {
+// Returns { summary, changedPaths } or throws. The agent edits files under cwd=REPO only. `context` carries
+// the browser-captured edit target: { contextUrl, environment, pathHint } (pathHint may be null if the URL
+// couldn't be mapped to a path).
+async function runAgent(prompt, context = {}) {
+  const { contextUrl, environment, pathHint } = context;
+  // Tell the agent WHICH page to edit. If we have a path, it's the target; if not, be honest about it.
+  const contextLines = pathHint
+    ? [
+        `The marketer was viewing this page when they made the request, and THIS is the page to change:`,
+        `  URL: ${contextUrl}`,
+        `  Site path: ${pathHint}   (environment: ${environment || "production"})`,
+        `Find the repo file(s) that render THIS path (the WordPress template, page, or content for it) and edit`,
+        `those. If you cannot confidently map this path to a source file, say so EXPLICITLY in your summary and`,
+        `edit the closest match rather than guessing silently.`,
+      ]
+    : [
+        contextUrl
+          ? `The marketer's page URL was "${contextUrl}" but it could not be mapped to a site path — infer the target page from the request text, and note in your summary that the page context was unclear.`
+          : `No page URL was captured with this request — infer the target page from the request text, and note that in your summary.`,
+      ];
+
   const system = [
     "You are editing the source of a WordPress/DevKinsta website in the current working directory.",
     "Make ONLY the change the user describes. Keep edits minimal and focused.",
+    ...contextLines,
     "You can read, search, and edit files ONLY. You have NO shell — you cannot run commands of any kind.",
     "A separate runner handles everything else: branching, commits, the local build/preview deploy, and the",
     "pull request. Do not attempt to run git, gh, npm, build, deploy, or any command, and do not commit.",
@@ -153,8 +191,9 @@ async function runAgent(prompt) {
     }
   }
 
-  // Parse the CHANGED_PATHS line out of the final text; the rest is the human-readable summary.
-  let changedPaths = ["/"];
+  // Parse the CHANGED_PATHS line out of the final text; the rest is the human-readable summary. If the agent
+  // emitted none, fall back to the browser-captured path (the page the marketer was on) when we have it.
+  let changedPaths = pathHint ? [pathHint] : ["/"];
   const m = /CHANGED_PATHS:\s*(.+)\s*$/m.exec(finalText);
   if (m) {
     const paths = m[1].split(/\s+/).map((p) => p.trim()).filter(Boolean).map((p) => (p.startsWith("/") ? p : `/${p}`));
@@ -263,14 +302,17 @@ async function waitForDecision(jobId) {
 async function processJob(job) {
   const branch = `website-studio/${job.id}`;
   const base = defaultBranch();
-  log(`job ${job.id}: "${job.prompt.slice(0, 80)}" — base=${base}, branch=${branch}`);
+  // Edit context captured from the embedded browser: which page + environment the request targets.
+  const pathHint = pathFromContextUrl(job.contextUrl);
+  const environment = job.environment || "production";
+  log(`job ${job.id}: "${job.prompt.slice(0, 80)}" — base=${base}, branch=${branch}, target=${pathHint || "(none)"} env=${environment}`);
 
   // 2. fresh branch off the remote default
   git(["fetch", "origin", base]);
   git(["checkout", "-B", branch, `origin/${base}`]);
 
-  // 3. agent edit
-  const { summary, changedPaths } = await runAgent(job.prompt);
+  // 3. agent edit — pass the browser-captured target so it edits the right page
+  const { summary, changedPaths } = await runAgent(job.prompt, { contextUrl: job.contextUrl, environment, pathHint });
 
   // 4. commit on the branch (guardrail: never the default branch)
   git(["add", "-A"]);

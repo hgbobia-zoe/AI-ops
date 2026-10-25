@@ -40,9 +40,37 @@ describe("website_jobs state machine", () => {
     expect(job!.artifacts).toEqual([]);
     expect(job!.prUrl).toBeNull();
     expect(job!.startedAt).toBeNull();
+    // Edit context defaults: no page captured, environment falls back to production.
+    expect(job!.contextUrl).toBeNull();
+    expect(job!.environment).toBe("production");
 
     expect(createJob({ prompt: "   " })).toBeNull();
     expect(createJob({ prompt: "" })).toBeNull();
+  });
+
+  it("createJob round-trips the edit context (contextUrl + environment)", () => {
+    const job = createJob({
+      prompt: "change this headline",
+      requester: "Marcy",
+      contextUrl: "https://zoeeventsdmv.com/about",
+      environment: "local",
+    });
+    expect(job!.contextUrl).toBe("https://zoeeventsdmv.com/about");
+    expect(job!.environment).toBe("local");
+
+    // The persisted row survives a reload via getJob (not just the just-created object).
+    const reloaded = getJob(job!.id)!;
+    expect(reloaded.contextUrl).toBe("https://zoeeventsdmv.com/about");
+    expect(reloaded.environment).toBe("local");
+  });
+
+  it("createJob validates environment (invalid → production) and trims a blank contextUrl to null", () => {
+    const bad = createJob({ prompt: "x", contextUrl: "   ", environment: "staging-oops" });
+    expect(bad!.environment).toBe("production"); // coerced
+    expect(bad!.contextUrl).toBeNull(); // blank trimmed away
+
+    const missing = createJob({ prompt: "y" });
+    expect(missing!.environment).toBe("production"); // default when unset
   });
 
   it("claimNextPending flips exactly one pending job to running (FIFO) and assigns it only once", () => {
