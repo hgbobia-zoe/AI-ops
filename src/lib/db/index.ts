@@ -566,7 +566,7 @@ CREATE TABLE IF NOT EXISTS users (
   id            TEXT PRIMARY KEY,
   username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
   name          TEXT,
-  role          TEXT NOT NULL,        -- owner | admin | member
+  role          TEXT NOT NULL,        -- owner | admin | member | marketing (validated by isRole() in app code)
   password_hash TEXT NOT NULL,        -- scrypt$<saltHex>$<hashHex>
   active        INTEGER NOT NULL DEFAULT 1,
   created_at    TEXT NOT NULL,
@@ -578,7 +578,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- a password). Single-use + time-limited. No email is stored — delivery is a copyable link.
 CREATE TABLE IF NOT EXISTS invites (
   token            TEXT PRIMARY KEY,   -- the secret in the link (random, URL-safe)
-  role             TEXT NOT NULL,      -- role the accepted account gets (admin | member)
+  role             TEXT NOT NULL,      -- role the accepted account gets (admin | member | marketing)
   name             TEXT,               -- optional pre-filled display name
   invited_by       TEXT,              -- user id of the creator (attribution)
   invited_by_name  TEXT,

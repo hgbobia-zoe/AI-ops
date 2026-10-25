@@ -8,10 +8,14 @@
 //  - Guest:  a Shift Pass holder (temporary/contractor). NOT a human account — minted only by the
 //    /pass/<token> gateway, never assignable in Team management. Scoped hard in the proxy to the
 //    dispatch board + driver surface; no money, no settings, no supervisor board writes.
-export type Role = "owner" | "admin" | "member" | "guest";
+//  - Marketing: a SCOPED, human-assignable staff role for the demand-gen team. Deny-by-default: it may
+//    reach ONLY the Marketing blade (/marketing) + Website Studio (/website-studio) and their APIs — NOT
+//    money, settings, dispatch, scheduling, risk, payroll, user management, AI approvals/ops, coaching,
+//    events, etc. (every other Member capability is FALSE for it below). The proxy is the hard boundary.
+export type Role = "owner" | "admin" | "member" | "marketing" | "guest";
 
 // The human, assignable roles (Team management + role pickers iterate this — guest is NOT here).
-export const ROLES: Role[] = ["owner", "admin", "member"];
+export const ROLES: Role[] = ["owner", "admin", "member", "marketing"];
 // Every role a signed session may legitimately carry (guest included — the pass gateway mints it).
 const ALL_ROLES: Role[] = [...ROLES, "guest"];
 
@@ -24,7 +28,7 @@ export function isGuest(role: Role): boolean {
   return role === "guest";
 }
 
-export const ROLE_LABEL: Record<Role, string> = { owner: "Owner", admin: "Admin", member: "Member", guest: "Shift Pass" };
+export const ROLE_LABEL: Record<Role, string> = { owner: "Owner", admin: "Admin", member: "Member", marketing: "Marketing", guest: "Shift Pass" };
 
 /** Can this role see revenue / cost / any dollar figure (Financial blade + $ across all blades)? */
 export function canSeeFinancials(role: Role): boolean {
@@ -52,28 +56,45 @@ export function canManagePayroll(role: Role): boolean {
   return role === "owner" || role === "admin";
 }
 
+/** Marketing blade (/marketing) — demand-gen command center: campaigns, content, reviews, outreach. Open
+ *  to the back-office staff that runs it (owner/admin/member) AND the scoped marketing role. NOT a guest.
+ *  This is the Marketing-role's primary allowed surface; its hard scoping lives in the proxy (deny-by-default).*/
+export function canSeeMarketing(role: Role): boolean {
+  return role === "owner" || role === "admin" || role === "member" || role === "marketing";
+}
+
+/** Console PAGE path prefixes the scoped marketing role may reach: the Marketing blade and Website Studio.
+ *  Single source of truth shared by the proxy (deny-by-default: anything else is blocked) and the nav (shows
+ *  only matching blades). API allow-listing lives in the proxy's MARKETING_ALLOW, which builds on these. */
+export const MARKETING_PAGE_PREFIXES = ["/marketing", "/website-studio"] as const;
+/** True when `pathname` is on the marketing role's allowed PAGE surface (exact or a sub-path). Pure. */
+export function marketingCanReachPage(pathname: string): boolean {
+  return MARKETING_PAGE_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"));
+}
+
 /** Website Studio — prompt a website code change and get back a PR (nothing goes live without a human merge).
  *  The marketing team drives it, so this is the one back-office capability a Member may hold too (unlike
  *  settings/financials). It only ever QUEUES a request; the office runner opens a PR a human reviews. We keep
- *  it to staff accounts (owner/admin/member) — never a guest/Shift Pass holder. A narrower per-person
- *  marketing allowlist (or a dedicated marketing role) is a clean Phase-2 extension; this is the simple,
- *  consistent gate for Phase 1. */
+ *  it to staff accounts (owner/admin/member) + the scoped marketing role — never a guest/Shift Pass holder.
+ *  The marketing role is confined to THIS + the Marketing blade by the proxy (deny-by-default). */
 export function canUseWebsiteStudio(role: Role): boolean {
-  return role === "owner" || role === "admin" || role === "member";
+  return role === "owner" || role === "admin" || role === "member" || role === "marketing";
 }
 
 /** Can `actor` create/modify/deactivate a user whose role is `target`?
- *  Owner manages everyone; Admin manages Members only; nobody escalates above themselves. */
+ *  Owner manages everyone; Admin manages Members + the scoped Marketing role (both below Admin); nobody
+ *  escalates above themselves. Guest is never a managed/assignable account (minted by the pass gateway). */
 export function canManageRole(actor: Role, target: Role): boolean {
+  if (target === "guest") return false; // Shift Pass holders aren't managed in Team
   if (actor === "owner") return true;
-  if (actor === "admin") return target === "member";
+  if (actor === "admin") return target === "member" || target === "marketing";
   return false;
 }
 
 /** Which roles `actor` is allowed to assign (for the role dropdown). */
 export function assignableRoles(actor: Role): Role[] {
-  if (actor === "owner") return ["owner", "admin", "member"];
-  if (actor === "admin") return ["member"];
+  if (actor === "owner") return ["owner", "admin", "member", "marketing"];
+  if (actor === "admin") return ["member", "marketing"];
   return [];
 }
 
