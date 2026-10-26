@@ -6,7 +6,7 @@ const payResponse = (amount: string, unit: string) => ({
   data: { member: { company: { memberCompensationEmployeeCard: { jobs: [{ currentCompensation: { details: { paymentAmount: { amount, currencyCode: "USD" }, paymentUnit: unit } } }] } } } },
 });
 
-// Representative MembersTable response (the real captured shape: data.company.members.nodes[]).
+// LEGACY MembersTable response (the older data.company.members.nodes[] shape) — still accepted as a fallback.
 const membersResponse = {
   data: {
     company: {
@@ -41,6 +41,27 @@ describe("parseGustoMembers", () => {
     expect(m).toHaveLength(2);
     expect(m[0]).toMatchObject({ id: "m1", personType: "employee", firstName: "James", lastName: "Cobbs", country: "United States of America", jobTitle: "Driver" });
     expect(m[1]).toMatchObject({ id: "m2", personType: "contractor", country: "Philippines" });
+  });
+  it("parses the CURRENT Gusto shape: members.edges[].node, department.title, latestEmployment.countryCode (captured 2026-10-26)", () => {
+    const edgesResponse = {
+      data: {
+        company: {
+          id: "co_1",
+          members: {
+            edges: [
+              { cursor: "c1", node: { id: "m1", personType: "Employee", legalFirstName: "James", lastName: "Cobbs", preferredFullName: "James Cobbs", businessName: null, department: { id: "d1", title: "Operations", uuid: "u1" }, jobTitle: "Driver", currentEmploymentTypeEntityUuid: "e1", latestEmployment: { id: "le1", countryCode: "US", workerType: "Employee" }, __typename: "Node" } },
+              { cursor: "c2", node: { id: "m2", personType: "Contractor", legalFirstName: "Princess", lastName: "Malajito", preferredFullName: "Princess Malajito", businessName: "PM Co", department: null, jobTitle: "Digital Sales Marketer", currentEmploymentTypeEntityUuid: "e2", latestEmployment: { id: "le2", countryCode: "PH", workerType: "Contractor" }, __typename: "Node" } },
+              { cursor: "c3", node: { legalFirstName: "NoId" } }, // missing id → skipped
+            ],
+            __typename: "Conn",
+          },
+        },
+      },
+    };
+    const m = parseGustoMembers(edgesResponse);
+    expect(m).toHaveLength(2);
+    expect(m[0]).toMatchObject({ id: "m1", personType: "employee", firstName: "James", lastName: "Cobbs", department: "Operations", country: "US", jobTitle: "Driver" });
+    expect(m[1]).toMatchObject({ id: "m2", personType: "contractor", country: "PH", department: null });
   });
   it("returns [] for a malformed response (never throws)", () => {
     expect(parseGustoMembers(null)).toEqual([]);

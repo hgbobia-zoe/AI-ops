@@ -41,7 +41,12 @@
 
   function memberIds() {
     try {
-      return (cap.MembersTable.response.data.company.members.nodes || []).map((n) => n && n.id).filter(Boolean);
+      // Gusto moved MembersTable from a plain nodes[] list to a Relay edges[].node connection (2026-10-26);
+      // read edges, falling back to nodes so an older/cached response still works.
+      const members = cap.MembersTable.response.data.company.members;
+      const list = Array.isArray(members.nodes) ? members.nodes
+        : Array.isArray(members.edges) ? members.edges.map((e) => e && e.node) : [];
+      return list.map((n) => n && n.id).filter(Boolean);
     } catch (e) { return []; }
   }
 

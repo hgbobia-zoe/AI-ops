@@ -45,19 +45,38 @@ export interface GustoSnapshot {
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v : null);
 
-/** Parse a raw MembersTable GraphQL response into normalized members. Defensive to field changes. */
+/** Parse a raw MembersTable GraphQL response into normalized members. Defensive to field changes.
+ *  Gusto changed MembersTable (captured live 2026-10-26): the roster moved from a plain `members.nodes[]`
+ *  list to a Relay-style `members.edges[].node` connection, `department` became an object `{ title }`
+ *  (was a string), and the country now rides on `latestEmployment.countryCode` ("US"/"PH"/…). This reads
+ *  the new shape (edges-first) AND keeps the old paths as fallbacks, so a cached/older response still parses. */
 export function parseGustoMembers(raw: unknown): GustoSnapshotMember[] {
-  const nodes = (raw as { data?: { company?: { members?: { nodes?: unknown[] } } } })?.data?.company?.members?.nodes;
-  if (!Array.isArray(nodes)) return [];
+  const members = (raw as {
+    data?: { company?: { members?: { nodes?: unknown[]; edges?: Array<{ node?: unknown }> } } };
+  })?.data?.company?.members;
+  const nodes: unknown[] = Array.isArray(members?.nodes)
+    ? members!.nodes!
+    : Array.isArray(members?.edges)
+      ? members!.edges!.map((e) => e?.node).filter((n): n is unknown => n != null)
+      : [];
+  if (nodes.length === 0) return [];
   const out: GustoSnapshotMember[] = [];
   for (const n of nodes) {
     const m = n as Record<string, unknown>;
     const id = str(m.id);
     if (!id) continue;
     const pt = String(m.personType ?? "").toLowerCase();
-    // Country may live at a few places depending on employment; try the common ones, else null (honest).
     const emp = (m.latestEmployment ?? {}) as Record<string, unknown>;
-    const country = str(m.country) ?? str(m.workCountry) ?? str((emp.workAddress as Record<string, unknown> | undefined)?.country) ?? str(emp.country);
+    // `department` is now an object { title } (was a plain string); support both.
+    const deptRaw = m.department;
+    const department = typeof deptRaw === "string" ? str(deptRaw) : str((deptRaw as Record<string, unknown> | undefined)?.title);
+    // Country may live at a few places depending on employment; current shape = latestEmployment.countryCode.
+    const country =
+      str(m.country) ??
+      str(m.workCountry) ??
+      str(emp.countryCode) ??
+      str((emp.workAddress as Record<string, unknown> | undefined)?.country) ??
+      str(emp.country);
     out.push({
       id,
       firstName: str(m.legalFirstName) ?? "",
@@ -65,7 +84,7 @@ export function parseGustoMembers(raw: unknown): GustoSnapshotMember[] {
       preferredName: str(m.preferredFullName),
       businessName: str(m.businessName),
       personType: pt || "unknown",
-      department: str(m.department),
+      department,
       jobTitle: str(m.jobTitle),
       country,
       employmentEntityUuid: str(m.currentEmploymentTypeEntityUuid),
