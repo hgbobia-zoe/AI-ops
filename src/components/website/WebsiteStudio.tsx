@@ -338,7 +338,7 @@ function BrowserPane({
   };
 
   return (
-    <div className="overflow-hidden rounded border border-border">
+    <div className="flex h-full flex-col overflow-hidden rounded border border-border">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-[var(--row-hover)] px-2.5 py-2">
         {/* Environment toggle */}
@@ -388,8 +388,8 @@ function BrowserPane({
         </div>
       </div>
 
-      {/* Viewport */}
-      <div className="relative bg-background" style={{ height: 460 }}>
+      {/* Viewport — fills the remaining height of the pane */}
+      <div className="relative min-h-[320px] flex-1 bg-background">
         <iframe
           key={`${currentUrl}#${reloadNonce}`}
           src={currentUrl}
@@ -499,18 +499,70 @@ export function WebsiteStudio({ initialJobs, envUrls }: { initialJobs: WebsiteJo
   };
 
   return (
-    <main className="max-w-[920px] p-6">
-      <header className="mb-5">
-        <h1 className="flex items-center gap-2 text-[22px] font-medium tracking-tight">
-          <Globe className="size-5 text-meta" /> Website Studio
-        </h1>
-        <p className="mt-1 text-[13px] text-meta">
-          Browse the company website below, land on the page you want to change, and describe the change in plain English. We make it on a private copy, show you screenshots to review, and — once you approve — open a pull request. Nothing goes live until a teammate reviews and merges it.
-        </p>
-      </header>
+    <main className="flex h-full min-h-[600px] flex-col lg:flex-row">
+      {/* Left column (25%) — describe the change + your recent requests */}
+      <div className="flex w-full shrink-0 flex-col gap-5 overflow-y-auto p-5 lg:w-1/4 lg:min-w-[320px] lg:max-w-[460px] lg:border-r lg:border-border">
+        <header>
+          <h1 className="flex items-center gap-2 text-[18px] font-medium tracking-tight">
+            <Globe className="size-[18px] text-meta" /> Website Studio
+          </h1>
+          <p className="mt-1 text-[12px] text-meta">
+            Browse to the page you want to change on the right, then describe the change in plain English. We make it on a private copy, show you a preview to review, and open a pull request once you approve. Nothing goes live until a teammate merges it.
+          </p>
+        </header>
 
-      {/* Embedded browser — the review + targeting surface */}
-      <section className="mb-5">
+        {/* Page-aware prompt box */}
+        <section>
+          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+            <label htmlFor="ws-prompt" className="block text-[12px] font-medium uppercase tracking-[0.08em] text-tertiary-text">
+              What should change?
+            </label>
+            <span className="inline-flex items-center gap-1.5 rounded border border-border bg-[var(--row-hover)] px-2 py-0.5 text-[11.5px] text-tertiary-text">
+              <Eye className="size-3" /> Editing: <span className="font-medium text-foreground">{targetLabel}</span> on {ENV_LABEL[environment]}
+            </span>
+          </div>
+          <textarea
+            id="ws-prompt"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={onKeyDown}
+            rows={5}
+            placeholder="Describe the change to the page you're viewing… e.g. Change the main headline to “Fall tent sale — book by October 31” and make the button gold."
+            className="w-full resize-y rounded border border-border bg-transparent px-3 py-2.5 text-[13.5px] text-foreground outline-none placeholder:text-meta focus:border-foreground/40"
+          />
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <span className="text-[11.5px] text-meta">Targets the page on the right. {modifierHint()}+Enter to submit.</span>
+            <Button onClick={() => void submit()} disabled={!prompt.trim() || submitting}>
+              {submitting ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
+              {submitting ? "Submitting…" : "Submit request"}
+            </Button>
+          </div>
+          {error && <p className="mt-2 text-[12.5px] text-critical">{error}</p>}
+        </section>
+
+        {/* Worklist */}
+        <section className="min-h-0">
+          <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Your recent requests</h2>
+          {jobs.length === 0 ? (
+            <div className="flex items-start gap-2 rounded border border-border bg-[var(--row-hover)] px-3 py-2.5 text-[12.5px] text-tertiary-text">
+              <Info className="mt-0.5 size-3.5 shrink-0 text-meta" />
+              <span>No requests yet. Browse to a page on the right, describe a change, and submit it — it will appear here and move from Queued to Working to Ready to review.</span>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2.5">
+              {jobs.map((j) => (
+                <JobCard key={j.id} job={j} onDecide={decide} />
+              ))}
+            </div>
+          )}
+          <p className="mt-4 text-[11.5px] text-meta">
+            A teammate runs the change on the office computer and prepares the preview. If a request stays Queued for a while, that computer may be offline — check with your admin.
+          </p>
+        </section>
+      </div>
+
+      {/* Right column (75%) — the embedded browser: the review + targeting surface */}
+      <div className="flex min-w-0 flex-1 flex-col p-4">
         <BrowserPane
           envUrls={envUrls}
           environment={environment}
@@ -518,56 +570,7 @@ export function WebsiteStudio({ initialJobs, envUrls }: { initialJobs: WebsiteJo
           currentUrl={currentUrl}
           setCurrentUrl={setCurrentUrl}
         />
-      </section>
-
-      {/* Page-aware prompt box */}
-      <section className="mb-6">
-        <div className="mb-1.5 flex items-center justify-between gap-2">
-          <label htmlFor="ws-prompt" className="block text-[12px] font-medium uppercase tracking-[0.08em] text-tertiary-text">
-            What should change?
-          </label>
-          <span className="inline-flex items-center gap-1.5 rounded border border-border bg-[var(--row-hover)] px-2 py-0.5 text-[11.5px] text-tertiary-text">
-            <Eye className="size-3" /> Editing: <span className="font-medium text-foreground">{targetLabel}</span> on {ENV_LABEL[environment]}
-          </span>
-        </div>
-        <textarea
-          id="ws-prompt"
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={onKeyDown}
-          rows={4}
-          placeholder="Describe the change to the page you're viewing… e.g. Change the main headline to “Fall tent sale — book by October 31” and make the button gold."
-          className="w-full resize-y rounded border border-border bg-transparent px-3 py-2.5 text-[13.5px] text-foreground outline-none placeholder:text-meta focus:border-foreground/40"
-        />
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <span className="text-[11.5px] text-meta">Your request targets the page shown above. Press {modifierHint()}+Enter to submit.</span>
-          <Button onClick={() => void submit()} disabled={!prompt.trim() || submitting}>
-            {submitting ? <Loader2 className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}
-            {submitting ? "Submitting…" : "Submit request"}
-          </Button>
-        </div>
-        {error && <p className="mt-2 text-[12.5px] text-critical">{error}</p>}
-      </section>
-
-      {/* Worklist */}
-      <section>
-        <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Your recent requests</h2>
-        {jobs.length === 0 ? (
-          <div className="flex items-start gap-2 rounded border border-border bg-[var(--row-hover)] px-3 py-2.5 text-[12.5px] text-tertiary-text">
-            <Info className="mt-0.5 size-3.5 shrink-0 text-meta" />
-            <span>No requests yet. Browse to a page above, describe a change, and submit it — it will appear here and move from Queued to Working to Ready to review.</span>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2.5">
-            {jobs.map((j) => (
-              <JobCard key={j.id} job={j} onDecide={decide} />
-            ))}
-          </div>
-        )}
-        <p className="mt-4 text-[11.5px] text-meta">
-          A teammate runs the change on the office computer and prepares the preview. If a request stays Queued for a while, that computer may be offline — check with your admin.
-        </p>
-      </section>
+      </div>
     </main>
   );
 }
