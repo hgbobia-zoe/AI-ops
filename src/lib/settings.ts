@@ -25,6 +25,12 @@ import {
   nextOpenLabel,
   type BusinessHoursSchedule,
 } from "@/lib/businessHours";
+import {
+  approverIds,
+  approversFromEnv,
+  coerceSlackApprovers,
+  type SlackApprover,
+} from "@/lib/slack/approvers";
 
 export interface MessageTemplates {
   // Delivery (drop-off) texts.
@@ -108,6 +114,11 @@ export interface AppSettings {
    *  id and fails closed if a name is missing one. Hand-seeded (ids have no clean public lookup), extended in
    *  /admin. */
   zoeCategories: ZoeCategory[];
+  /** WHO may approve/decide an AI action from Slack (the Block Kit buttons). Each is a Slack member id plus an
+   *  optional display name. Managed in /admin → "Slack approvers"; the in-code default is seeded from the
+   *  SLACK_APPROVER_USER_IDS env var (bootstrap), and once edited in /admin the stored list takes over. Empty
+   *  → NOBODY can approve from Slack (fail-safe; decisions stay in the app). See slack/approvers.ts. */
+  slackApprovers: SlackApprover[];
 }
 
 export interface PrepOpportunitySettings {
@@ -223,6 +234,7 @@ export function defaultSettings(): AppSettings {
       envJson<ZoeCategory[]>(process.env.ZOE_CATEGORIES_JSON, DEFAULT_ZOE_CATEGORIES),
       DEFAULT_ZOE_CATEGORIES,
     ),
+    slackApprovers: approversFromEnv(process.env.SLACK_APPROVER_USER_IDS),
   };
 }
 
@@ -318,6 +330,8 @@ function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSetting
       ? coerceInventoryPartners(over.inventoryPartners, base.inventoryPartners)
       : base.inventoryPartners,
     zoeCategories: over.zoeCategories ? coerceZoeCategories(over.zoeCategories, base.zoeCategories) : base.zoeCategories,
+    // An explicitly-saved list (including an empty one = nobody) overrides the env default; absent keeps it.
+    slackApprovers: over.slackApprovers ? coerceSlackApprovers(over.slackApprovers, base.slackApprovers) : base.slackApprovers,
   };
 }
 
@@ -337,6 +351,17 @@ export function getSettings(): AppSettings {
     }
   }
   return merge(defaultSettings(), stored);
+}
+
+/** The Slack user ids allowed to approve/decide from Slack — the admin-managed list merged over the
+ *  SLACK_APPROVER_USER_IDS env default. Server-only (reads the DB); the pure parse/validate lives in
+ *  slack/approvers.ts. Never throws: an unreadable settings row falls back to the env list. */
+export function slackApproverIds(): string[] {
+  try {
+    return approverIds(getSettings().slackApprovers);
+  } catch {
+    return approverIds(approversFromEnv(process.env.SLACK_APPROVER_USER_IDS));
+  }
 }
 
 /** The configured business-hours schedule (admin override merged over the in-code default). Server-only

@@ -8,6 +8,7 @@ import { NextResponse } from "next/server";
 import { getSettings, saveSettings, type AppSettings } from "@/lib/settings";
 import { sanitizeSchedule } from "@/lib/businessHours";
 import { coerceInventoryPartners, coerceZoeCategories } from "@/lib/inventory/partners";
+import { coerceSlackApprovers } from "@/lib/slack/approvers";
 
 export const dynamic = "force-dynamic";
 
@@ -95,6 +96,10 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
       ? coerceInventoryPartners(b.inventoryPartners, current.inventoryPartners)
       : current.inventoryPartners,
     zoeCategories: Array.isArray(b.zoeCategories) ? coerceZoeCategories(b.zoeCategories, current.zoeCategories) : current.zoeCategories,
+    // Slack approvers — valid member ids only, de-duped (slack/approvers.ts). An explicit array overrides
+    // (including [] = nobody can approve from Slack); a missing/non-array field keeps the current list, so a
+    // save that omits it never wipes the approvers. These are member ids, not secrets.
+    slackApprovers: Array.isArray(b.slackApprovers) ? coerceSlackApprovers(b.slackApprovers, current.slackApprovers) : current.slackApprovers,
   };
 }
 
