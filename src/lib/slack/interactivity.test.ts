@@ -77,11 +77,18 @@ describe("isSlackApprover (fail-safe allowlist)", () => {
   it("is nobody when the allowlist is unset", () => {
     expect(isSlackApprover("U123")).toBe(false);
   });
-  it("admits only the listed Slack user ids", () => {
+  it("admits only the listed Slack user ids (env fallback when no ids passed)", () => {
     process.env.SLACK_APPROVER_USER_IDS = "U123, U456";
     expect(isSlackApprover("U123")).toBe(true);
     expect(isSlackApprover("U456")).toBe(true);
     expect(isSlackApprover("U999")).toBe(false);
     expect(isSlackApprover("")).toBe(false);
+  });
+  it("uses the passed id list (the route's settings-resolved allowlist) over the env", () => {
+    process.env.SLACK_APPROVER_USER_IDS = "U123"; // env says U123…
+    // …but the explicit list (from settings) is authoritative when provided.
+    expect(isSlackApprover("U123", ["U456"])).toBe(false);
+    expect(isSlackApprover("U456", ["U456"])).toBe(true);
+    expect(isSlackApprover("U456", [])).toBe(false); // empty list = nobody
   });
 });

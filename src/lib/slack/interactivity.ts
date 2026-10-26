@@ -100,13 +100,17 @@ export function decidedCardView(status: ApprovalStatus): DecidedCardView {
   }
 }
 
-/** Who may approve/decide from Slack: the Slack user ids in SLACK_APPROVER_USER_IDS (comma-separated). Empty
- *  or unset → NOBODY (fail-safe) — clicking returns a notice and the decision stays in the app. Executing an
- *  approved op sends to real customers, so this gate is deliberately strict + opt-in. */
-export function isSlackApprover(userId: string): boolean {
-  const ids = (process.env.SLACK_APPROVER_USER_IDS || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return ids.length > 0 && !!userId && ids.includes(userId);
+/** Who may approve/decide from Slack. PURE: pass the allowlisted Slack user ids (the route resolves them from
+ *  app settings via slackApproverIds(), which defaults to SLACK_APPROVER_USER_IDS). When `ids` is omitted it
+ *  falls back to reading that env var directly — the original behavior, kept for simple callers/tests. Empty →
+ *  NOBODY (fail-safe): the click returns a notice and the decision stays in the app. Executing an approved op
+ *  sends to real customers, so this gate is deliberately strict + opt-in. */
+export function isSlackApprover(userId: string, ids?: string[]): boolean {
+  const list =
+    ids ??
+    (process.env.SLACK_APPROVER_USER_IDS || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  return list.length > 0 && !!userId && list.includes(userId);
 }

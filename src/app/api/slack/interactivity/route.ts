@@ -10,6 +10,7 @@
 import { NextResponse } from "next/server";
 import { verifySlackSignature } from "@/lib/slack/verify";
 import { parseInteractivity, decisionForAction, isSlackApprover, decidedCardView } from "@/lib/slack/interactivity";
+import { slackApproverIds } from "@/lib/settings";
 import { decideApproval, getApproval } from "@/lib/aiorg/approvals";
 import { cardBlocks } from "@/lib/notify/aiBots";
 
@@ -42,13 +43,14 @@ export async function POST(req: Request): Promise<NextResponse> {
   const decision = decisionForAction(action.actionId);
   if (!decision) return NextResponse.json({ ok: true });
 
-  // Gate WHO may decide. Not an approver → tell just them (ephemeral), change nothing.
-  if (!isSlackApprover(action.userId)) {
+  // Gate WHO may decide, from the admin-managed approver list (Settings → Slack approvers; defaults to the
+  // SLACK_APPROVER_USER_IDS env). Not an approver → tell just them (ephemeral), change nothing.
+  if (!isSlackApprover(action.userId, slackApproverIds())) {
     if (action.responseUrl) {
       await respondToSlack(action.responseUrl, {
         response_type: "ephemeral",
         replace_original: false,
-        text: ":lock: You're not set up to approve from Slack. Open the approvals page in the app to decide, or ask an admin to add you to SLACK_APPROVER_USER_IDS.",
+        text: ":lock: You're not set up to approve from Slack. Open the approvals page in the app to decide, or ask an admin to add you in Settings → Slack approvers.",
       });
     }
     return NextResponse.json({ ok: true });

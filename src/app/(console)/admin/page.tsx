@@ -6,8 +6,9 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2, Users, Globe, Clock3, Boxes, Plus, X } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2, Users, Globe, Clock3, Boxes, Plus, X, UserCheck } from "lucide-react";
 import type { BusinessHoursSchedule, DayHours } from "@/lib/businessHours";
+import { isSlackUserId, type SlackApprover } from "@/lib/slack/approvers";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
 import { SeoCredentialSettings } from "@/components/SeoCredentialSettings";
@@ -46,6 +47,7 @@ interface Settings {
   monitorUrls: string[];
   businessHours: BusinessHoursSchedule;
   zoeCategories: ZoeCategory[];
+  slackApprovers: SlackApprover[];
 }
 interface ZoeCategory {
   name: string;
@@ -208,6 +210,16 @@ export default function AdminPage() {
             <Field label="ETA notify number" hint="Zonar texts this number — keep it your company line, never a customer's.">
               <TextInput value={s.notifyPhone} onChange={(v) => setS({ ...s, notifyPhone: v })} />
             </Field>
+          </Section>
+
+          {/* Slack approvers — who may approve/dismiss an AI action from the Slack approval-card buttons. */}
+          <Section icon={<UserCheck className="size-4" />} title="Slack approvers">
+            <p className="text-sm text-muted-foreground">
+              These people can approve or dismiss an AI action (like sending a quote) straight from the buttons on
+              a Slack approval card. Anyone not listed is told to decide in the app instead. With no one listed,
+              nobody can approve from Slack — decisions still work on the approvals page in the app.
+            </p>
+            <ApproversEditor value={s.slackApprovers ?? []} onChange={(v) => setS({ ...s, slackApprovers: v })} />
           </Section>
 
           {/* Ignition */}
@@ -662,6 +674,167 @@ function ZoeCategoriesEditor({
       >
         <Plus className="size-4" /> Add category
       </button>
+    </div>
+  );
+}
+
+// Editor for the Slack approver list. Loads the workspace directory from /api/slack/users so approvers can be
+// added by NAME (a picker); if the bot token isn't set or the directory can't load, it falls back to manual
+// member-id entry. Stored approvers from the env default have no name — we resolve a display name from the
+// directory by id when we can, else show the raw id. The server coerces/validates on save.
+interface WorkspaceUser {
+  id: string;
+  name: string;
+  realName: string;
+}
+
+function ApproversEditor({ value, onChange }: { value: SlackApprover[]; onChange: (v: SlackApprover[]) => void }) {
+  const [users, setUsers] = useState<WorkspaceUser[]>([]);
+  const [configured, setConfigured] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [pick, setPick] = useState("");
+  const [manualId, setManualId] = useState("");
+  const [manualName, setManualName] = useState("");
+  const [manualErr, setManualErr] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/slack/users")
+      .then((r) => r.json())
+      .then((d: { users?: WorkspaceUser[]; configured?: boolean }) => {
+        setUsers(Array.isArray(d.users) ? d.users : []);
+        setConfigured(d.configured !== false);
+      })
+      .catch(() => {
+        setUsers([]);
+        setConfigured(false);
+      })
+      .finally(() => setLoaded(true));
+  }, []);
+
+  const nameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const u of users) m[u.id] = u.realName || u.name || u.id;
+    return m;
+  }, [users]);
+
+  const addedIds = new Set(value.map((a) => a.id));
+  const available = users.filter((u) => !addedIds.has(u.id));
+
+  const add = (id: string, name: string): void => {
+    if (!isSlackUserId(id) || addedIds.has(id)) return;
+    onChange([...value, { id, name }]);
+  };
+  const remove = (id: string): void => onChange(value.filter((a) => a.id !== id));
+  const addFromPicker = (): void => {
+    const u = users.find((x) => x.id === pick);
+    if (!u) return;
+    add(u.id, u.realName || u.name || "");
+    setPick("");
+  };
+  const addManual = (): void => {
+    const id = manualId.trim();
+    if (!isSlackUserId(id)) {
+      setManualErr(true);
+      return;
+    }
+    add(id, manualName.trim());
+    setManualId("");
+    setManualName("");
+    setManualErr(false);
+  };
+
+  const usePicker = loaded && configured && users.length > 0;
+
+  return (
+    <div className="space-y-3">
+      {value.length === 0 ? (
+        <p className="text-xs text-amber-400/90">No Slack approvers yet — no one can approve from Slack right now.</p>
+      ) : (
+        <div className="space-y-2">
+          {value.map((a) => (
+            <div
+              key={a.id}
+              className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2"
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">{a.name || nameById[a.id] || a.id}</div>
+                <div className="truncate font-mono text-[11px] text-muted-foreground">{a.id}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => remove(a.id)}
+                aria-label="Remove approver"
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-white/10 text-muted-foreground hover:bg-accent"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {usePicker ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={pick}
+            onChange={(e) => setPick(e.target.value)}
+            className="min-w-[14rem] flex-1 rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <option value="">Add a person…</option>
+            {available.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.realName || u.name || u.id}
+                {u.name && u.realName ? ` (@${u.name})` : ""}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={addFromPicker}
+            disabled={!pick}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm text-muted-foreground hover:bg-accent disabled:opacity-50"
+          >
+            <Plus className="size-4" /> Add
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {loaded && (
+            <p className="text-xs text-muted-foreground">
+              {configured ? "Couldn't load your Slack directory. " : "Connect the Slack bot token to pick people by name. "}
+              Add by Slack member id instead — in Slack, open a person&apos;s profile → ⋯ → Copy member ID.
+            </p>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              value={manualId}
+              placeholder="U0123ABCD"
+              onChange={(e) => {
+                setManualId(e.target.value.trim());
+                setManualErr(false);
+              }}
+              className="w-40 rounded-xl border border-white/10 bg-background px-3 py-2 font-mono text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <input
+              type="text"
+              value={manualName}
+              placeholder="Name (optional)"
+              onChange={(e) => setManualName(e.target.value)}
+              className="min-w-[8rem] flex-1 rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <button
+              type="button"
+              onClick={addManual}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/10 px-3 py-2 text-sm text-muted-foreground hover:bg-accent"
+            >
+              <Plus className="size-4" /> Add
+            </button>
+          </div>
+          {manualErr && <p className="text-xs text-red-400">That doesn&apos;t look like a Slack member id (it starts with U).</p>}
+        </div>
+      )}
+      <p className="text-[11px] text-muted-foreground">Changes take effect when you click Save.</p>
     </div>
   );
 }
