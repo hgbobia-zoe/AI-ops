@@ -61,7 +61,10 @@ export function TodayMap(): React.JSX.Element {
 
       // Init the map + dark basemap once.
       if (!mapRef.current && ref.current) {
-        const map = L.map(ref.current, { zoomControl: false, attributionControl: true, scrollWheelZoom: false });
+        // zoomSnap: 0 lets fitBounds land on the exact fractional zoom that frames the stops. With the
+        // default integer snap, this short wide card floored the zoom down by up to a whole level — the main
+        // reason the map read as "too zoomed out".
+        const map = L.map(ref.current, { zoomControl: false, attributionControl: true, scrollWheelZoom: false, zoomSnap: 0 });
         // OpenStreetMap standard tiles — genuinely free and keyless. They are light, so the
         // `.map-dark-tiles` CSS filter inverts them into a dark basemap that matches Nocturne (the filter
         // hits only the tile imagery, not the markers/labels). Low-volume internal use per the OSM policy.
@@ -92,7 +95,10 @@ export function TodayMap(): React.JSX.Element {
 
       if (firstFit.current) {
         const bounds = L.latLngBounds(all.map((a) => [a.lat, a.lng] as [number, number]));
-        map.fitBounds(bounds.pad(0.25), { maxZoom: 13 });
+        // Fixed pixel padding (keeps pins off the edges) instead of a proportional pad() that, in this short
+        // wide card, blew the view out to the whole region; a higher maxZoom lets clustered stops zoom in to
+        // street level while fitBounds still backs off automatically when the stops are genuinely spread.
+        map.fitBounds(bounds, { padding: [28, 28], maxZoom: 15 });
         firstFit.current = false;
       }
       // Leaflet needs a size recalc after the container becomes visible.
