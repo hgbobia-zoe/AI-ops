@@ -61,6 +61,8 @@ const GUSTO_HOME = "https://app.gusto.com/";
 const CREATE_TIMEOUT_MS = 90_000; // reap an unclaimed/stuck create tab after this
 const GUSTO_SYNC_WATCHDOG = "zoe-gusto-watchdog";
 const GUSTO_SYNC_TIMEOUT_MS = 120_000; // reap the dedicated on-demand Gusto tab if it never posts
+const GUSTO_PUSH_WATCHDOG = "zoe-gusto-push-watchdog";
+const GUSTO_PUSH_TIMEOUT_MS = 180_000; // reap the dedicated DRAFT-hours-push tab if it never reports done
 
 // ── Badge ─────────────────────────────────────────────────────────────────────
 async function setBadge(text, color) {
@@ -239,6 +241,64 @@ async function reapGustoSync(pending) {
   } catch (e) {
     /* no-op */
   }
+}
+
+// ── On-demand Gusto DRAFT hours PUSH (the WRITE side; NOT on any loop) ───────────────────────────────
+// DRAFT ONLY. The Zoe app sends {type:"zoe-gusto-push", payload:{which, period, entries}}. We open ONE
+// dedicated hidden app.gusto.com tab and arm a push job keyed to that exact tab. gusto-bridge.js (isolated)
+// CLAIMS the job for that tab and hands the entries to gusto-push.js (MAIN), which drives the draft run's
+// inputs step and replays AutoSaveWorkedHours per worker (it ABORTS if the run isn't a DRAFT, and never
+// submits payroll). On its "done" relay we close the exact tab; a watchdog reaps it if it stalls. Mirrors
+// the read-sync tab lifecycle. One push at a time (guarded) so a user's own Gusto tab is never driven.
+async function getGustoPush() {
+  const { gustoPush } = await chrome.storage.local.get("gustoPush");
+  return gustoPush || null;
+}
+async function setGustoPush(v) {
+  if (v) await chrome.storage.local.set({ gustoPush: v });
+  else await chrome.storage.local.remove("gustoPush");
+}
+async function reapGustoPush(pending) {
+  try {
+    if (pending && pending.tabId != null) await chrome.tabs.remove(pending.tabId);
+  } catch (e) {
+    /* tab already gone */
+  }
+  await setGustoPush(null);
+  try {
+    await chrome.alarms.clear(GUSTO_PUSH_WATCHDOG);
+  } catch (e) {
+    /* no-op */
+  }
+}
+
+/** Trigger one on-demand DRAFT hours push. Guards against a concurrent push (one marker, stale after the
+ *  timeout). The entries come from Zoe's owner/admin-gated push-payload builder — we only transport them. */
+async function startGustoPush(payload) {
+  const entries = payload && Array.isArray(payload.entries) ? payload.entries : [];
+  if (!entries.length) return { ok: false, reason: "no_entries" };
+  const pending = await getGustoPush();
+  if (pending) {
+    if (Date.now() - pending.startedAt > GUSTO_PUSH_TIMEOUT_MS) {
+      await reapGustoPush(pending); // stale — reap and start fresh below
+    } else {
+      return { ok: true, already: true };
+    }
+  }
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: GUSTO_HOME, pinned: false, active: false });
+  } catch (e) {
+    return { ok: false, reason: "no_tab" };
+  }
+  await setGustoPush({
+    tabId: tab.id,
+    startedAt: Date.now(),
+    claimed: false,
+    job: { entries, period: (payload && payload.period) || null, initiatedBy: (payload && payload.initiatedBy) || null },
+  });
+  chrome.alarms.create(GUSTO_PUSH_WATCHDOG, { delayInMinutes: GUSTO_PUSH_TIMEOUT_MS / 60000 });
+  return { ok: true, tabId: tab.id };
 }
 
 /** Trigger one on-demand Gusto sync. Guards against a concurrent sync: if one is already in flight (and
@@ -522,6 +582,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     getGustoSync().then((p) => {
       if (p && Date.now() - p.startedAt > GUSTO_SYNC_TIMEOUT_MS - 1000) reapGustoSync(p);
     });
+  } else if (alarm.name === GUSTO_PUSH_WATCHDOG) {
+    getGustoPush().then((p) => {
+      if (p && Date.now() - p.startedAt > GUSTO_PUSH_TIMEOUT_MS - 1000) reapGustoPush(p);
+    });
   }
 });
 
@@ -567,6 +631,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       const p = await getGustoSync();
       if (p && sender.tab && sender.tab.id === p.tabId) await reapGustoSync(p);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  // gusto-bridge.js (isolated world) claims the DRAFT-push job for ITS tab → return the entries ONLY for the
+  // exact tab we opened, and only once (atomic claim), so a user's own Gusto tab is never driven.
+  if (msg.type === "zoe-gusto-push-claim") {
+    (async () => {
+      const p = await getGustoPush();
+      if (p && sender.tab && sender.tab.id === p.tabId && !p.claimed) {
+        p.claimed = true;
+        await setGustoPush(p);
+        sendResponse({ job: p.job });
+      } else {
+        sendResponse({ job: null });
+      }
+    })();
+    return true;
+  }
+
+  // gusto-push.js finished the DRAFT write (via the bridge) → close the exact push tab + clear the marker.
+  if (msg.type === "zoe-gusto-push-done") {
+    (async () => {
+      const p = await getGustoPush();
+      if (p && sender.tab && sender.tab.id === p.tabId) await reapGustoPush(p);
       sendResponse({ ok: true });
     })();
     return true;
@@ -665,6 +755,17 @@ chrome.runtime.onMessageExternal.addListener((msg, _sender, sendResponse) => {
     (async () => {
       const r = await startGustoSync("handshake").catch(() => ({ ok: false, reason: "error" }));
       sendResponse({ ok: true, sync: r });
+    })();
+    return true;
+  }
+
+  // On-demand DRAFT hours PUSH: the Zoe app (owner/admin, after building the payload) hands us the entries to
+  // write into the current Gusto draft. We open one hidden Gusto tab; gusto-push.js writes the DRAFT only and
+  // never submits payroll. This is the only thing besides the sync that opens an app.gusto.com tab.
+  if (msg.type === "zoe-gusto-push") {
+    (async () => {
+      const r = await startGustoPush(msg.payload).catch(() => ({ ok: false, reason: "error" }));
+      sendResponse({ ok: true, push: r });
     })();
     return true;
   }

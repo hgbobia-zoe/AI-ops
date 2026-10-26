@@ -42,6 +42,7 @@ const PUBLIC: string[] = [
   "/api/route/import",
   "/api/instawork/import", // Auto-Pull Instawork browser pull POST (from a logged-in app.instawork.com tab); own token (fail-open), CORS-locked to app.instawork.com — must not bounce to auth
   "/api/payroll/gusto/import", // Auto-Pull Gusto browser pull POST (from a logged-in app.gusto.com tab); GS_INGEST_TOKEN (fail-open), CORS-locked to app.gusto.com — must not bounce to auth (and NOT be caught by the owner/admin /api/payroll gate)
+  "/api/payroll/gusto/push-result", // Auto-Pull Gusto hours-PUSH outcome POST (from the logged-in app.gusto.com tab after the DRAFT write); GS_INGEST_TOKEN (fail-open), CORS-locked to app.gusto.com — same gate as import; NOTE the push-PAYLOAD builder (/api/payroll/gusto/push-payload) is NOT here — it stays session + owner/admin gated
 
   "/api/route/prune", // Auto-Pull sanitize: drop routes GS no longer has; own token (fail-open), CORS-locked
   "/api/gs/projects",
