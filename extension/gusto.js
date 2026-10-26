@@ -73,6 +73,9 @@
   function maybeSeedNavigate() {
     try {
       if (!document.hidden || window.__zoeGustoNav) return;
+      // Never hop this tab to the People page if a DRAFT hours PUSH is running in it (gusto-push.js sets this
+      // flag the moment it claims a job) — that would yank the push off the payroll run mid-write.
+      if (window.__zoeGustoPushActive) return;
       const p = location.pathname;
       if (/\/people(\/|$)/.test(p) || /\/pay(\/|$|\?)/.test(p)) return; // already where queries fire
       if (cap.MembersTable) return; // already captured

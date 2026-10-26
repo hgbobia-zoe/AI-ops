@@ -34,6 +34,8 @@ import { getLatestImportBySource } from "@/lib/pull/state";
 import { WorkerEditor, type GustoPick } from "@/components/payroll/WorkerEditor";
 import { SyncButton } from "@/components/payroll/SyncButton";
 import { SyncGustoButton } from "@/components/payroll/SyncGustoButton";
+import { PushGustoHoursButton } from "@/components/payroll/PushGustoHoursButton";
+import { gustoPushDisabled, readGustoPushResult } from "@/lib/payroll/gustoPushState";
 import { ApproveButton } from "@/components/payroll/ApproveButton";
 import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 import { ExceptionActions } from "@/components/payroll/ExceptionActions";
@@ -130,7 +132,7 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
       {tab === "contractors" && <WorkersTab period={period} mode="contractors" />}
       {tab === "exceptions" && <ExceptionsTab />}
       {tab === "history" && <HistoryTab />}
-      {tab === "settings" && <SettingsTab />}
+      {tab === "settings" && <SettingsTab which={which} />}
     </main>
   );
 }
@@ -605,11 +607,13 @@ function HistoryTab(): React.JSX.Element {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────────────────────────────
-function SettingsTab(): React.JSX.Element {
+function SettingsTab({ which }: { which: "current" | "previous" }): React.JSX.Element {
   const ctOk = connecteamConfigured();
   const guOk = gustoConfigured();
   const cfg = getPayrollConfig();
   const gustoImport = getLatestImportBySource()["gusto"] ?? null;
+  const pushDisabled = gustoPushDisabled();
+  const lastPush = readGustoPushResult();
   return (
     <div className="max-w-2xl space-y-3">
       <section className="surface border p-4">
@@ -624,6 +628,17 @@ function SettingsTab(): React.JSX.Element {
             Gusto no longer syncs on the 10-minute loop. Sync it on demand: the office-browser extension opens one Gusto tab, pulls the roster + pay rates, and closes it.
           </p>
           <SyncGustoButton lastSyncedAt={gustoImport?.ts ?? null} lastOk={gustoImport?.ok ?? false} />
+        </div>
+        {/* DRAFT-ONLY hours push — writes reconciled hours into the current Gusto draft; never submits payroll. */}
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-rule pt-3">
+          <p className="max-w-sm text-[11.5px] text-meta">
+            Push reconciled hours into the current Gusto <span className="font-medium text-secondary-text">DRAFT</span> payroll run (the office-browser extension writes mapped, unblocked workers via Gusto&apos;s own save-hours action). It never submits, runs, or approves payroll.
+          </p>
+          <PushGustoHoursButton
+            which={which}
+            disabled={pushDisabled}
+            lastPush={lastPush ? { at: lastPush.at, ok: lastPush.ok, aborted: lastPush.aborted, pushed: lastPush.pushed, skipped: lastPush.skipped, failed: lastPush.failed } : null}
+          />
         </div>
       </section>
       <PayrollSettingsForm initial={cfg} />
