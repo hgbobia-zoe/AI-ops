@@ -169,3 +169,129 @@ export function reconciliationRunsConfig(): ReconciliationRunsConfig {
     enabled: (process.env.FINANCE_RECONCILIATION_RUNS ?? "1") !== "0",
   };
 }
+
+// ── Item-intelligence config (FI Stage 6 / audit G5) — the title-keyword → operational-MINUTES map used to
+//    infer a PROVISIONAL setup/handling/breakdown time estimate from a project's line-item TITLES. This is
+//    an OPERATIONAL-TIME estimate for context only: it NEVER produces a dollar cost and NEVER writes
+//    cost_entries (line-item titles carry no price or quantity — audit §2.5). No magic numbers: every
+//    minute figure lives here with a documented rationale, env- and settings-KV-overridable like the
+//    ops-cycle knob. A keyword set to 0/absent simply adds no extra time (it is not an error).
+export interface ItemHandlingRule {
+  /** Lower-cased substring matched against each line-item title. */
+  keyword: string;
+  /** Extra setup/install minutes when a title matches (crew-minutes at the stop, one match per keyword). */
+  setupMin: number;
+  /** Extra breakdown/strike minutes at the pickup for the same keyword. */
+  breakdownMin: number;
+}
+
+export interface ItemIntelligenceConfig {
+  /** Baseline load+unload handling minutes charged PER captured line-item title, before keyword escalations.
+   *  Covers the generic touch of moving one line off/on the truck. Default 5 min/item; override via env. */
+  baseMinutesPerItem: number;
+  /** The keyword → extra-minutes escalations. Heavier/structural rentals (tents, flooring, staging, drape,
+   *  dance floors, lighting, bars) carry materially more setup + breakdown time than a stack of chairs. */
+  rules: ItemHandlingRule[];
+}
+
+const ITEM_INTEL_KEY = "finance.itemIntelligence";
+
+// Documented defaults (crew-minutes, NOT dollars). Rationale: a 5-minute baseline per line is a light
+// off/on-truck touch; the escalations reflect structures that must be built and struck on site. These are
+// deliberately conservative, labeled PROVISIONAL at the point of use, and fully overridable — they are a
+// starting heuristic, never an authoritative time study.
+const DEFAULT_ITEM_BASE_MINUTES = 5;
+const DEFAULT_ITEM_RULES: ItemHandlingRule[] = [
+  { keyword: "tent", setupMin: 90, breakdownMin: 60 }, // staking/framing + strike is the single biggest driver
+  { keyword: "flooring", setupMin: 60, breakdownMin: 45 },
+  { keyword: "floor", setupMin: 45, breakdownMin: 30 }, // dance floor / subfloor panels
+  { keyword: "stage", setupMin: 60, breakdownMin: 40 },
+  { keyword: "staging", setupMin: 60, breakdownMin: 40 },
+  { keyword: "drape", setupMin: 40, breakdownMin: 25 }, // pipe-and-drape
+  { keyword: "pipe and drape", setupMin: 40, breakdownMin: 25 },
+  { keyword: "lighting", setupMin: 30, breakdownMin: 20 },
+  { keyword: "bar", setupMin: 20, breakdownMin: 15 },
+  { keyword: "lounge", setupMin: 20, breakdownMin: 15 },
+  { keyword: "arch", setupMin: 15, breakdownMin: 10 }, // arbor / arch
+];
+
+/** The item-intelligence keyword→minutes map. Override order: settings-KV row → env JSON → documented
+ *  defaults. A malformed stored/env value is ignored (fall back) — a bad knob never breaks the estimate. */
+export function itemIntelligenceConfig(): ItemIntelligenceConfig {
+  let baseMinutesPerItem = numEnv("FINANCE_ITEM_BASE_MINUTES") ?? DEFAULT_ITEM_BASE_MINUTES;
+  let rules = parseItemRules(process.env.FINANCE_ITEM_RULES_JSON) ?? DEFAULT_ITEM_RULES;
+  try {
+    const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(ITEM_INTEL_KEY) as { value: string } | undefined;
+    if (row) {
+      const stored = JSON.parse(row.value) as Partial<ItemIntelligenceConfig>;
+      if (typeof stored.baseMinutesPerItem === "number" && Number.isFinite(stored.baseMinutesPerItem)) {
+        baseMinutesPerItem = stored.baseMinutesPerItem;
+      }
+      const storedRules = parseItemRules(JSON.stringify(stored.rules));
+      if (storedRules) rules = storedRules;
+    }
+  } catch {
+    /* fall back to env/default */
+  }
+  baseMinutesPerItem = Math.max(0, baseMinutesPerItem);
+  return { baseMinutesPerItem, rules };
+}
+
+/** Persist a new item-intelligence map into the settings KV (team-editable, no deploy). */
+export function saveItemIntelligenceConfig(cfg: ItemIntelligenceConfig): void {
+  const clean: ItemIntelligenceConfig = {
+    baseMinutesPerItem: Math.max(0, Number.isFinite(cfg.baseMinutesPerItem) ? cfg.baseMinutesPerItem : DEFAULT_ITEM_BASE_MINUTES),
+    rules: (parseItemRules(JSON.stringify(cfg.rules)) ?? DEFAULT_ITEM_RULES),
+  };
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    )
+    .run(ITEM_INTEL_KEY, JSON.stringify(clean), new Date().toISOString());
+}
+
+/** Parse + sanitize a rules array from JSON (env or stored). Returns null on anything malformed so the
+ *  caller cleanly falls back; drops individual bad rules but keeps the good ones. */
+function parseItemRules(raw: string | null | undefined): ItemHandlingRule[] | null {
+  if (raw == null || raw.trim() === "") return null;
+  try {
+    const v = JSON.parse(raw);
+    if (!Array.isArray(v)) return null;
+    const rules: ItemHandlingRule[] = [];
+    for (const r of v) {
+      if (r == null || typeof r !== "object") continue;
+      const keyword = typeof (r as ItemHandlingRule).keyword === "string" ? (r as ItemHandlingRule).keyword.trim().toLowerCase() : "";
+      if (!keyword) continue;
+      const setupMin = Number((r as ItemHandlingRule).setupMin);
+      const breakdownMin = Number((r as ItemHandlingRule).breakdownMin);
+      rules.push({
+        keyword,
+        setupMin: Number.isFinite(setupMin) ? Math.max(0, setupMin) : 0,
+        breakdownMin: Number.isFinite(breakdownMin) ? Math.max(0, breakdownMin) : 0,
+      });
+    }
+    return rules.length > 0 ? rules : null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Insights config (FI Stage 7c / audit §6) — the historical-learning layer. The FACTS are computed
+//    deterministically from the existing history; the LLM only INTERPRETS them (dormant-safe). The only
+//    knobs here are the low-margin threshold used to flag categories and the minimum sample size before a
+//    category trend is asserted (below it a category stays labeled THIN, never a confident claim).
+export interface InsightsConfig {
+  /** A project/category whose contribution margin is at or below this fraction is flagged "low margin".
+   *  Defaults to financeConfig().targetContributionMarginPct when that is set, else this floor. Default 0.2. */
+  lowMarginPct: number;
+  /** Minimum number of margin-bearing projects in a category before its trend is asserted (not THIN). Default 3. */
+  minCategorySample: number;
+}
+
+export function insightsConfig(): InsightsConfig {
+  return {
+    lowMarginPct: numEnv("FINANCE_LOW_MARGIN_PCT") ?? financeConfig().targetContributionMarginPct ?? 0.2,
+    minCategorySample: Math.max(1, Math.round(numEnv("FINANCE_INSIGHTS_MIN_SAMPLE") ?? 3)),
+  };
+}

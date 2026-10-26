@@ -6,8 +6,10 @@
 // level, the reconciliation view, and per-number data lineage.
 
 import Link from "next/link";
-import { financeForPeriod, projectFinancials } from "@/lib/finance/service";
+import { financeForPeriod, projectFinancials, projectHandlingEstimate, financeInsights } from "@/lib/finance/service";
 import type { ProjectSnapshot } from "@/lib/finance/projectSnapshot";
+import type { ItemHandlingEstimate } from "@/lib/finance/itemIntelligence";
+import type { InsightsResult, InsightFact } from "@/lib/finance/insights";
 import type { RevenueComponents } from "@/lib/finance/revenueModel";
 import { getPeriod, PERIOD_KEYS, priorWeek, priorCycle, customRange, priorRange, type Period, type PeriodKey } from "@/lib/finance/periods";
 import { opsCycleConfig } from "@/lib/finance/config";
@@ -32,7 +34,7 @@ const money = (n: number | null | undefined): string => (n == null ? "—" : (n 
 const hrs = (n: number | null): string => (n == null ? "—" : `${n} h`);
 const pct = (n: number | null): string => (n == null ? "—" : `${Math.round(n * 100)}%`);
 
-const VIEWS = ["overview", "week", "cycle", "routes", "projects", "labor", "instawork", "variance", "reconciliation", "visits"] as const;
+const VIEWS = ["overview", "week", "cycle", "routes", "projects", "labor", "instawork", "variance", "reconciliation", "visits", "insights"] as const;
 type ViewKey = (typeof VIEWS)[number];
 const VIEW_LABEL: Record<ViewKey, string> = {
   overview: "Overview",
@@ -45,6 +47,7 @@ const VIEW_LABEL: Record<ViewKey, string> = {
   variance: "Variance",
   reconciliation: "Reconciliation",
   visits: "Visits (GPS vs dispatch)",
+  insights: "Insights",
 };
 
 function VarianceTag({ v, kind }: { v: Variance; kind: "money" | "hours" }): React.JSX.Element {
@@ -117,6 +120,10 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const projectSnap = selectedProject ? projectFinancials(selectedProject) : null;
   // Stage 7a: the project's durable reconciliation-run history (snapshot→revision→final + variance-vs-prior).
   const projectRuns = selectedProject ? getReconciliationRuns(selectedProject) : [];
+  // Stage 6: the project's provisional item-level handling-time estimate (titles only, no money).
+  const projectHandling = selectedProject ? projectHandlingEstimate(selectedProject) : null;
+  // Stage 7c: deterministic insight facts (+ dormant-safe AI interpretation) for the Insights view.
+  const insights = !selectedProject && view === "insights" ? await financeInsights(period) : null;
   const canEditCost = canSeeFinancials(await viewerRole()); // owner/admin may add/edit/delete manual costs
 
   const tempHourShare = L.totalHours != null && L.totalHours > 0 && L.tempHours != null ? L.tempHours / L.totalHours : null;
@@ -178,7 +185,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
       )}
 
       {selectedProject ? (
-        <ProjectDetail snap={projectSnap} id={selectedProject} runs={projectRuns} backHref={href({ view: "projects", project: undefined })} canEdit={canEditCost} />
+        <ProjectDetail snap={projectSnap} id={selectedProject} runs={projectRuns} handling={projectHandling} backHref={href({ view: "projects", project: undefined })} canEdit={canEditCost} />
       ) : (
         <>
           {(view === "overview" || view === "week" || view === "cycle") && <Overview s={s} L={L} tempHourShare={tempHourShare} href={href} />}
@@ -189,6 +196,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
           {view === "variance" && <VarianceView s={s} L={L} priorCost={priorLaborCost(period, cycle)} />}
           {view === "reconciliation" && <Reconciliation rows={getLaborReconciliation(period.start, period.end)} runs={getRecentReconciliationRuns(period.start, period.end)} href={href} />}
           {view === "visits" && <VisitReconciliationView rows={getVisitReconciliation(period.start, period.end)} />}
+          {view === "insights" && insights && <InsightsView insights={insights} href={href} />}
 
           {sp?.lineage && <Lineage eventId={sp.lineage} label={s.events.find((e) => e.eventId === sp.lineage)?.label ?? sp.lineage} />}
         </>
@@ -402,7 +410,7 @@ function RevisionHistory({ runs }: { runs: ReconciliationRunRow[] }): React.JSX.
   );
 }
 
-function ProjectDetail({ snap, id, runs, backHref, canEdit }: { snap: ProjectSnapshot | null; id: string; runs: ReconciliationRunRow[]; backHref: string; canEdit: boolean }): React.JSX.Element {
+function ProjectDetail({ snap, id, runs, handling, backHref, canEdit }: { snap: ProjectSnapshot | null; id: string; runs: ReconciliationRunRow[]; handling: ItemHandlingEstimate | null; backHref: string; canEdit: boolean }): React.JSX.Element {
   if (!snap) {
     return (
       <section>
@@ -486,6 +494,10 @@ function ProjectDetail({ snap, id, runs, backHref, canEdit }: { snap: ProjectSna
         <span>Residual <span className="tabular-nums">{snap.reconciliation.residual == null ? "—" : money(snap.reconciliation.residual)}</span></span>
         <span className={snap.reconciliation.balanced ? "text-positive" : "text-critical"}>{snap.reconciliation.balanced ? "Balanced" : "UNBALANCED"}</span>
       </div>
+
+      {/* Stage 6: item-level handling-time intelligence — PROVISIONAL, inferred from line-item titles only.
+          Operational time for context; NOT a dollar cost and NOT part of the money math above. */}
+      <HandlingEstimatePanel h={handling} />
 
       {/* Honest gaps */}
       <div className="mt-4">
@@ -838,6 +850,110 @@ function VisitReconciliationView({ rows }: { rows: ReturnType<typeof getVisitRec
           <p className="mt-3 text-[12px] text-meta">When GPS and dispatch agree within {cfg.visitDiscrepancyMinutes} min, the authoritative window is GPS enter → dispatch complete. Beyond that they are flagged and the dispatch window is kept as the labeled default (the crew action is the billing anchor). Only a genuine GPS dwell lifts a project&apos;s labor to the ACTUAL_STOP method — dispatch alone never does, so it stays Derived/Planned, honestly labeled.</p>
         </>
       )}
+    </section>
+  );
+}
+
+// ── Item-level handling-time estimate (FI Stage 6) — PROVISIONAL, titles-only, no money ─────────────
+function fmtMinutes(min: number): string {
+  if (min < 60) return `${Math.round(min)} min`;
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
+function HandlingEstimatePanel({ h }: { h: ItemHandlingEstimate | null }): React.JSX.Element {
+  return (
+    <div className="mt-6">
+      <h3 className="mb-1 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Estimated handling time <span className="text-[11px] normal-case tracking-normal text-attention">provisional, from item titles</span></h3>
+      {!h || !h.available ? (
+        <p className="text-[12.5px] text-meta">No line-item titles captured for this project yet, so an operational-time estimate is unavailable (not zero). Titles populate on the Goodshuffle pull.</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 border border-border bg-panel px-4 py-3 text-[12.5px]">
+            <span className="text-meta">Setup <span className="tabular-nums text-foreground">{fmtMinutes(h.setupMinutes)}</span></span>
+            <span className="text-meta">Breakdown <span className="tabular-nums text-foreground">{fmtMinutes(h.breakdownMinutes)}</span></span>
+            <span className="text-meta">Total crew-minutes <span className="tabular-nums text-foreground">{fmtMinutes(h.totalMinutes)}</span></span>
+            <span className="text-meta">Items <span className="tabular-nums text-foreground">{h.itemCount}</span></span>
+            <span className="ml-auto text-[11px] uppercase tracking-[0.06em] text-attention">Confidence {h.confidence}</span>
+          </div>
+          <p className="mt-2 text-[12px] text-meta">Inferred from item titles only (no quantities or prices exist in the data), using the configurable keyword-to-minutes map. This is an operational-time estimate shown for context. It is never a dollar cost and does not affect the profitability figures above.{h.keywords.length > 0 ? ` Keywords matched: ${h.keywords.join(", ")}.` : " No heavier-handling keywords matched, so only the per-item baseline applies."}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Insights (FI Stage 7c) — deterministic facts first, AI interpretation clearly secondary + labeled ──
+const INSIGHT_CATEGORY_LABEL: Record<InsightFact["category"], string> = {
+  margin: "Margin",
+  labor_grain: "Labor grain",
+  category_margin: "Category",
+  reconciliation_trend: "Reconciliation",
+};
+
+function InsightsView({ insights, href }: { insights: InsightsResult; href: (p: Partial<{ view: string; project: string }>) => string }): React.JSX.Element {
+  const o = insights.overview;
+  return (
+    <section className="space-y-6">
+      <div className="rounded border border-border bg-panel px-4 py-3 text-[12.5px] text-meta">
+        Historical learning for <span className="text-foreground">{insights.periodLabel}</span>. The facts below are computed deterministically from this period&apos;s project snapshots and reconciliation history. The AI interpretation, when present, only reads those facts, it never adds a number.
+      </div>
+
+      {/* Deterministic overview tiles */}
+      <section className="grid gap-px overflow-hidden border border-border bg-border md:grid-cols-3">
+        <Block title="Margin" tag="computed" headline={o.avgMarginPct == null ? <Unavail /> : pct(o.avgMarginPct)}>
+          <BRow label="Projects with margin">{o.marginProjectCount || "—"}</BRow>
+          <BRow label={`Low margin (≤ ${pct(o.lowMarginPct)})`}>{o.marginProjectCount ? <span className={o.lowMarginCount ? "text-attention" : undefined}>{o.lowMarginCount}</span> : "—"}</BRow>
+        </Block>
+        <Block title="Labor grain" tag="estimated vs actual" headline={o.laborProjectCount ? `${o.estimatedLaborCount}/${o.laborProjectCount}` : <Unavail />}>
+          <BRow label="Estimated grain">{o.estimatedLaborCount}</BRow>
+          <BRow label="Verified actual">{o.actualLaborCount}</BRow>
+        </Block>
+        <Block title="Categories" tag="by item keyword" headline={`${o.categories.length}`}>
+          <BRow label="Tracked categories">{o.categories.length || "—"}</BRow>
+          <BRow label="Below book">{o.categories.filter((c) => !c.thin && c.deltaVsOverallPct <= -0.05).length || "—"}</BRow>
+        </Block>
+      </section>
+
+      {/* Deterministic facts (first-class) */}
+      <div>
+        <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Facts (computed)</h2>
+        {insights.facts.length === 0 ? (
+          <p className="text-[12.5px] text-meta">No facts could be computed for this period yet. This needs project snapshots with a known margin and some reconciliation history. It is empty, not zero.</p>
+        ) : (
+          <ul className="space-y-2">
+            {insights.facts.map((f) => (
+              <li key={f.id} className="flex items-start gap-3 border border-border bg-panel px-4 py-2.5 text-[12.5px]">
+                <span className="mt-[1px] min-w-[96px] text-[11px] uppercase tracking-[0.06em] text-meta">{INSIGHT_CATEGORY_LABEL[f.category]}</span>
+                <span className="flex-1">{f.text}{f.thin ? <span className="ml-2 text-[10px] uppercase tracking-[0.06em] text-attention">thin</span> : null}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* AI interpretation (clearly secondary + labeled) */}
+      <div>
+        <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">AI interpretation <span className="ml-1 text-[11px] normal-case tracking-normal text-attention">reads the facts above, adds no numbers</span></h2>
+        {insights.interpretation ? (
+          <div className="border border-border bg-panel px-4 py-3">
+            {insights.interpretation.summary && <p className="mb-3 text-[13px]">{insights.interpretation.summary}</p>}
+            {insights.interpretation.recommendations.length > 0 && (
+              <ul className="list-disc space-y-1.5 pl-5 text-[12.5px]">
+                {insights.interpretation.recommendations.map((rec, i) => (
+                  <li key={i}>{rec.text}{rec.basedOn ? <span className="ml-1 text-[10px] uppercase tracking-[0.06em] text-meta">({rec.basedOn})</span> : null}</li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-3 border-t border-[var(--row-rule)] pt-2 text-[11.5px] text-meta">{insights.interpretationNote}{insights.interpretation.model ? ` · ${insights.interpretation.model}` : ""}</p>
+          </div>
+        ) : (
+          <p className="text-[12.5px] text-meta">{insights.interpretationNote}</p>
+        )}
+      </div>
+
+      <p className="text-[12px] text-meta"><Link href={href({ view: "projects" })} className="underline">See the projects behind these facts →</Link></p>
     </section>
   );
 }

@@ -3,11 +3,13 @@
 // executive scorecard. RULES CALCULATE — every figure is deterministic or explicitly UNAVAILABLE.
 
 import { getPlannedHours, getActualHours, getPayRates, rateForUserOn } from "@/lib/connecteam";
-import { getBookingsRevenueInRange, getBookingsInRange, getEventDirectCosts, getLaborLedgerSummary, getBookingById, getProjectCostFamilies, getBookingUpdatedAt, getBookingRevenueComponents, type LaborLedgerSummary } from "@/lib/db/repo";
+import { getBookingsRevenueInRange, getBookingsInRange, getEventDirectCosts, getLaborLedgerSummary, getBookingById, getProjectCostFamilies, getBookingUpdatedAt, getBookingRevenueComponents, getRecentReconciliationRuns, type LaborLedgerSummary } from "@/lib/db/repo";
 import { saveLaborSnapshot, getLaborTrajectory, type LaborSnapshotRow } from "./laborHistory";
-import { financeConfig } from "./config";
+import { financeConfig, itemIntelligenceConfig, insightsConfig } from "./config";
 import { projectSnapshot, type ProjectSnapshot } from "./projectSnapshot";
 import { buildRevenueModel } from "./revenueModel";
+import { estimateHandlingTime, type ItemHandlingEstimate } from "./itemIntelligence";
+import { assembleInsightFacts, interpretInsights, type InsightsResult, type InsightProjectInput, type InsightRunInput } from "./insights";
 import { computeVariance, laborPctOfRevenue, contribution, contributionMargin, type Variance, type MoneyStatus } from "./calc";
 import type { Period } from "./periods";
 
@@ -185,6 +187,70 @@ export function projectFinancials(txId: string, now: Date = new Date()): Project
     revenueAsOf: updatedAt,
     stale,
   });
+}
+
+/**
+ * FI Stage 6 — a project's PROVISIONAL item-level handling-time estimate (setup/breakdown crew-minutes),
+ * inferred from its captured line-item TITLES only (audit §2.5 — no price/qty exists). Compute-on-read:
+ * reads the bookings title list + the configurable keyword→minutes map and runs the PURE estimator. This
+ * is an operational-time estimate shown for context; it produces NO money figure and writes nothing.
+ * Returns null when the project isn't in bookings yet; `available:false` when it has no usable titles.
+ */
+export function projectHandlingEstimate(txId: string): ItemHandlingEstimate | null {
+  const b = getBookingById(txId);
+  if (!b) return null;
+  return estimateHandlingTime(b.lineItems, itemIntelligenceConfig());
+}
+
+/**
+ * FI Stage 7c — historical learning / recommendations. Assembles DETERMINISTIC facts over the period's
+ * project snapshots + reconciliation-run history, then runs the dormant-safe LLM interpretation pass (facts
+ * computed here, the LLM only interprets them). Always returns the facts; the interpretation is null with an
+ * honest note when no model is configured. `now` is injectable for staleness in the per-project snapshots.
+ */
+export async function financeInsights(period: Period, now: Date = new Date()): Promise<InsightsResult> {
+  const { start, end } = period;
+  const itemCfg = itemIntelligenceConfig();
+  const bookings = getBookingsInRange(start, end);
+
+  const projects: InsightProjectInput[] = [];
+  for (const b of bookings) {
+    const snap = projectFinancials(b.bookingId, now);
+    if (!snap) continue;
+    const laborFam = snap.costFamilies.find((f) => f.type === "labor") ?? null;
+    const keywords = estimateHandlingTime(b.lineItems, itemCfg).keywords;
+    projects.push({
+      projectId: snap.projectId,
+      label: snap.label,
+      eventDate: snap.eventDate,
+      marginPct: snap.marginPct,
+      contribution: snap.contribution,
+      revenue: snap.revenue.contracted,
+      status: snap.status,
+      directCostStatus: snap.directCostStatus,
+      laborMethod: laborFam?.method ?? null,
+      laborConfidence: laborFam?.confidence ?? null,
+      keywords,
+    });
+  }
+
+  // Reconciliation-run variance trends in the window — reduced to reason+delta (the only facts insights uses).
+  const runs: InsightRunInput[] = getRecentReconciliationRuns(start, end).map((r) => ({
+    projectId: r.projectId,
+    lines: (r.variance?.lines ?? []).map((ln) => ({ reason: ln.reason, delta: ln.delta })),
+  }));
+
+  const { facts, overview } = assembleInsightFacts({ periodLabel: period.label, projects, runs, config: insightsConfig() });
+  const { interpretation, note, error } = await interpretInsights(facts, period.label);
+  return {
+    periodLabel: period.label,
+    facts,
+    overview,
+    llmAvailable: interpretation != null,
+    interpretation,
+    interpretationNote: note,
+    llmError: error,
+  };
 }
 
 function eventsEconomics(start: string, end: string): EventEconomics[] {
