@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { opsCycleConfig, saveOpsCycleConfig } from "./config";
+import { opsCycleConfig, saveOpsCycleConfig, itemIntelligenceConfig, saveItemIntelligenceConfig } from "./config";
 import { DEFAULT_OPS_CYCLE } from "./periods";
 
 // DATABASE_PATH is ":memory:" (vitest.config.ts) → a throwaway settings KV. No env overrides set here, so
@@ -19,5 +19,23 @@ describe("opsCycleConfig — settings-KV round-trip (the ops-cycle admin editor)
     expect(opsCycleConfig()).toEqual({ anchorDow: 2, lengthDays: 14 });
     saveOpsCycleConfig({ anchorDow: -1, lengthDays: 0 }); // -1 → 6 (Sat); length floored at 1
     expect(opsCycleConfig()).toEqual({ anchorDow: 6, lengthDays: 1 });
+  });
+});
+
+describe("itemIntelligenceConfig — keyword→minutes map (Stage 6)", () => {
+  it("ships sane documented defaults (a base per item + a tent escalation, lower-cased keywords)", () => {
+    const c = itemIntelligenceConfig();
+    expect(c.baseMinutesPerItem).toBeGreaterThan(0);
+    const tent = c.rules.find((r) => r.keyword === "tent");
+    expect(tent).toBeTruthy();
+    expect(tent!.setupMin).toBeGreaterThan(0);
+    expect(c.rules.every((r) => r.keyword === r.keyword.toLowerCase())).toBe(true);
+  });
+
+  it("persists and reads back a custom map (team-editable, no deploy)", () => {
+    saveItemIntelligenceConfig({ baseMinutesPerItem: 8, rules: [{ keyword: "Glow", setupMin: 7, breakdownMin: 3 }] });
+    const c = itemIntelligenceConfig();
+    expect(c.baseMinutesPerItem).toBe(8);
+    expect(c.rules).toEqual([{ keyword: "glow", setupMin: 7, breakdownMin: 3 }]); // keyword lower-cased on save
   });
 });
