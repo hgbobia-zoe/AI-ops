@@ -113,7 +113,7 @@ export function PushGustoHoursButton({
       };
       chromeApi!.runtime!.sendMessage!(EXTENSION_ID, { type: "zoe-gusto-push", payload }, (response) => {
         if (chromeApi!.runtime?.lastError) {
-          toast.error("Couldn't reach the Auto-Pull extension", { id: "push-gusto", description: "Make sure it's installed and enabled (v1.14.0+)." });
+          toast.error("Couldn't reach the Auto-Pull extension", { id: "push-gusto", description: "Make sure it's installed and enabled (v1.15.0+)." });
           done();
           return;
         }
@@ -147,6 +147,8 @@ export function PushGustoHoursButton({
       <span className="text-[11px] text-meta">
         {disabled ? (
           "Push disabled (GUSTO_PUSH_DISABLED)"
+        ) : lastPush?.aborted === "not_logged_in" ? (
+          <span className="text-amber-300">Sign in to Gusto (tab opened), then push again</span>
         ) : last ? (
           <>
             Last push {last}

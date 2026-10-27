@@ -45,6 +45,9 @@
       // HOURS PUSH handshakes.
       if (d.__zoeGustoPush === true) {
         if (d.type === "ready") { claimPushJob(); return; }
+        // Signed-out: gusto-push wants this hidden tab brought to the front (+ detached from the watchdog) so
+        // the operator can sign in to Gusto. Relay to the background, which owns chrome.tabs/windows.
+        if (d.type === "reveal") { chrome.runtime.sendMessage({ type: "zoe-gusto-push-reveal" }); return; }
         if (d.type === "done") { chrome.runtime.sendMessage({ type: "zoe-gusto-push-done", ok: !!d.ok }); return; }
       }
     } catch (err) {

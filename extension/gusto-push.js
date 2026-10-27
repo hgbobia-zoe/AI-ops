@@ -27,6 +27,11 @@
   const INPUTS_OP = "PayrollInputStepDraftEmployeePayrollsByIds";
   const SAVE_OP = "AutoSaveWorkedHours";
   const MARK_OP = "MarkCompanyTouchedHours";
+  // A signed-out Gusto session lands this hidden tab on an auth page instead of the run. Detect it so we can
+  // REVEAL the tab for the operator to sign in and abort with a clear `not_logged_in` (not the vague
+  // could_not_reach_inputs). Path match for the login/MFA routes + a password field as a belt-and-braces
+  // heuristic (a real DRAFT run page never has one, so this won't false-abort a legit push).
+  const AUTH_RE = /\/(login|sign[_-]?in|signin|session|sso|saml|oauth|mfa|two[_-]?factor)\b/i;
   // Any operation that could advance/submit payroll — we must NEVER POST one of these. Belt-and-braces guard.
   const FORBIDDEN_OP = /(submit|run|process|approve|finaliz|cancel|delete|skip)/i;
   // Fallback mutation doc (the app's own captured query is preferred — see captureTemplate).
@@ -74,6 +79,22 @@
   };
 
   function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
+
+  // Are we sitting on a Gusto sign-in / MFA page (expired session) rather than the app?
+  function onAuthPage() {
+    try {
+      if (AUTH_RE.test(location.pathname)) return true;
+      if (document.querySelector('input[type="password"]')) return true;
+    } catch (e) { /* ignore */ }
+    return false;
+  }
+
+  // Ask the background (via the isolated-world bridge) to bring THIS hidden push tab to the front + focus its
+  // window, so the operator can sign in. The bridge also DETACHES the tab from the push watchdog, so the
+  // login tab is left open (never reaped) — the operator signs in, then clicks "Push" again on a fresh session.
+  function revealTab() {
+    try { window.postMessage({ __zoeGustoPush: true, type: "reveal" }, location.origin); } catch (e) { /* no-op */ }
+  }
 
   // Parse PayrollInputStepDraftEmployeePayrollsByIds → member→{employeeUuid, employeeJobUuid, current hours}.
   // The presence of data.company.draftPayroll (NOT processedPayroll) is our DRAFT signal.
@@ -152,12 +173,16 @@
     return false;
   }
 
+  // Resolves with WHY we stopped waiting: "inputs" (captured the draft), "auth" (signed out → reveal + abort),
+  // or "timeout". Give the auth check a beat to settle (the hidden tab may still be redirecting to login on
+  // the first ticks), so we only trust it after a short grace period.
   function waitForInputs(timeoutMs) {
     return new Promise((resolve) => {
       const start = Date.now();
       const tick = () => {
-        if (memberMap) return resolve(true);
-        if (Date.now() - start > timeoutMs) return resolve(false);
+        if (memberMap) return resolve("inputs");
+        if (Date.now() - start > 4000 && onAuthPage()) return resolve("auth");
+        if (Date.now() - start > timeoutMs) return resolve("timeout");
         clickCandidates(); // nudge the flow forward one safe step, then re-poll
         setTimeout(tick, 1500);
       };
@@ -235,7 +260,13 @@
 
     // 1) Reach the inputs step + capture the member map (and thereby confirm DRAFT). Never submits.
     const reached = await waitForInputs(45000);
-    if (!reached || !memberMap) { result.aborted = "could_not_reach_inputs"; return result; }
+    if (reached === "auth") {
+      // Expired Gusto session — reveal this tab so the operator can sign in, then re-run the push.
+      revealTab();
+      result.aborted = "not_logged_in";
+      return result;
+    }
+    if (reached !== "inputs" || !memberMap) { result.aborted = "could_not_reach_inputs"; return result; }
     if (!isDraft) { result.aborted = "not_a_draft"; return result; } // HARD SAFETY: only ever a DRAFT run
     if (!headerTemplate) { result.aborted = "no_graphql_headers"; return result; }
     result.draftPayrollId = draftPayrollId;
@@ -302,7 +333,9 @@
       try { result = await runPush(d.job); }
       catch (err) { result = { ok: false, aborted: "exception:" + ((err && err.message) || "error"), workers: [], sessionMode: null, draftPayrollId: null, periodStart: null, periodEnd: null }; }
       await sendResult(d.job, result);
-      signalDone(result.ok && !result.aborted);
+      // On a signed-out abort we've already asked the background to REVEAL + detach this tab for sign-in — do
+      // NOT signal done, which would close it. Every other outcome closes the dedicated hidden tab as usual.
+      if (result.aborted !== "not_logged_in") signalDone(result.ok && !result.aborted);
     })();
   });
 
