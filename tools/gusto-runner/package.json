@@ -1,0 +1,13 @@
+{
+  "name": "gusto-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Office-machine runner for AI-OPS Gusto remote-browser push: claims approved DRAFT hours-push jobs from the app, drives a persistent-profile (logged-in) Gusto browser on a residential IP, replays AutoSaveWorkedHours per worker (DRAFT-ONLY — never submits/runs/approves payroll), and streams a live screenshot + per-worker results back to the app so /payroll shows the remote browser. Replaces the per-user browser extension for the push.",
+  "scripts": {
+    "start": "node runner.js"
+  },
+  "dependencies": {
+    "playwright": "1.64.1"
+  }
+}
