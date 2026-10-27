@@ -16,32 +16,31 @@ not a DRAFT**. Identical guarantees to `extension/gusto-push.js`.
 
 ## One-time setup
 
-1. **App side (Fly):** set `GUSTO_RUNNER_TOKEN` to a long random string. Until it's set, the runner endpoints
-   return 503 (fail-closed) and `/payroll` shows the remote-browser push as "not set up" — so this is off by
-   default. Deploy.
-2. **Office machine:**
+1. **App side (Fly):** set `GUSTO_RUNNER_TOKEN` to a long random string:
    ```bash
-   cd tools/gusto-runner
-   npm install
-   npx playwright install chromium
+   fly secrets set GUSTO_RUNNER_TOKEN=$(openssl rand -hex 32) -a zoe-dispatch
    ```
-3. Create a `.env` (or export) with:
+   Until it's set, the runner endpoints return 503 (fail-closed) and `/payroll` shows the remote-browser push
+   as "not set up" — so this is off by default. (Note the value; you'll paste it into the runner's `.env`.)
+2. **Office machine** — from `tools/gusto-runner`, run setup once, then fill in `.env`:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\setup.ps1
    ```
-   APP_URL=https://zoe-dispatch.fly.dev
-   GUSTO_RUNNER_TOKEN=<the same value you set on Fly>
-   GUSTO_PROFILE_DIR=./.gusto-profile      # persistent Chrome profile (keeps Gusto logged in)
-   # GUSTO_HEADLESS=1                       # leave UNSET for the first run so you can sign in to Gusto
+   It installs deps + Chromium and creates `.env`. Open `.env` and set `GUSTO_RUNNER_TOKEN` to the **same value**
+   you set on Fly. (`APP_URL` and `GUSTO_HEADLESS=1` are pre-filled.)
+3. **Run it as an always-on service** (survives reboots, restarts on failure):
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\install-service.ps1
+   Start-ScheduledTask -TaskName ZoeGustoRunner
    ```
-4. **First run (seed the logged-in profile):**
-   ```bash
-   APP_URL=... GUSTO_RUNNER_TOKEN=... npm start
-   ```
-   A Chrome window opens. The first time a push runs and the session is signed out, sign in once (here, or from
-   the app pane — see below). The persistent profile keeps you logged in for later runs.
+   Or run it in the foreground to watch it: `.\start.ps1`.
 
-Keep it running like the other office-machine loops (Auto-Pull, responder). One job at a time; a failed job is
-marked `failed` in the app and the loop continues. Once the profile is reliably logged in you can set
-`GUSTO_HEADLESS=1` and run it as a background service — re-logins are then handled from the app pane.
+That's it. **No sign-in step here** — the runner can run headless from day one, and the first Gusto login (and
+every later re-login) happens from the `/payroll` pane (see below). Keep the machine powered on and logged into
+Windows. One job at a time; a failed job is marked `failed` in the app and the loop continues.
+
+Config lives in `.env` (git-ignored). You can still override any value inline, e.g. `GUSTO_HEADLESS= .\start.ps1`
+to force a visible window for debugging.
 
 ## Interactive sign-in from the app (Phase 2)
 
@@ -60,7 +59,7 @@ if you prefer to sign in at the machine.
 | `APP_URL` | — (required) | The Zoe app origin |
 | `GUSTO_RUNNER_TOKEN` | — (required) | Shared secret; must match the app's env |
 | `GUSTO_PROFILE_DIR` | `./.gusto-profile` | Persistent Chrome profile dir (the logged-in session) |
-| `GUSTO_HEADLESS` | unset (headful) | Set to `1` only once the profile is reliably logged in |
+| `GUSTO_HEADLESS` | unset (headful) | `1` = no visible window (recommended; sign-in still works from the pane) |
 | `POLL_INTERVAL_MS` | `10000` | How often to poll for a job |
 | `FRAME_INTERVAL_MS` | `1500` | Live screenshot cadence to the app |
 | `SIGNIN_POLL_MS` | `600` | During interactive sign-in: how often to replay forwarded input + stream a fresh frame |

@@ -25,7 +25,24 @@
 // from the app; the runner polls the job and stops. One job failing never crashes the loop.
 
 import { chromium } from "playwright";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+
+// ── Load a local .env first (KEY=VALUE per line) so the token + config can live in a file instead of the shell
+// — no dependency, a tiny parser. A var already set in the real environment always wins, so `GUSTO_RUNNER_TOKEN=…
+// npm start` still overrides the file. Point elsewhere with GUSTO_RUNNER_ENV.
+(function loadDotEnv() {
+  try {
+    const p = process.env.GUSTO_RUNNER_ENV || "./.env";
+    if (!existsSync(p)) return;
+    for (const line of readFileSync(p, "utf8").split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+      if (!m || line.trimStart().startsWith("#")) continue;
+      let val = m[2];
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) val = val.slice(1, -1);
+      if (process.env[m[1]] === undefined) process.env[m[1]] = val;
+    }
+  } catch { /* a malformed .env is non-fatal — explicit env vars still work */ }
+})();
 
 // ── Config from the environment ──────────────────────────────────────────────
 const APP_URL = (process.env.APP_URL || "").replace(/\/+$/, "");
