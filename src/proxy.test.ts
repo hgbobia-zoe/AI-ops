@@ -105,6 +105,7 @@ describe("proxy — Gusto remote-browser push boundary", () => {
       "/api/payroll/gusto/runner/job",
       "/api/payroll/gusto/runner/update",
       "/api/payroll/gusto/runner/artifact",
+      "/api/payroll/gusto/runner/input",
     ]) {
       const res = await proxy(reqFor(p));
       expect(res.status, `expected 200 (public) for ${p}`).toBe(200);
@@ -112,7 +113,7 @@ describe("proxy — Gusto remote-browser push boundary", () => {
   });
 
   it("keeps the CONSOLE (session) endpoints owner/admin only — a member is blocked", async () => {
-    for (const p of ["/api/payroll/gusto/console", "/api/payroll/gusto/console/cancel", "/api/payroll/gusto/console/screenshot"]) {
+    for (const p of ["/api/payroll/gusto/console", "/api/payroll/gusto/console/cancel", "/api/payroll/gusto/console/screenshot", "/api/payroll/gusto/console/input"]) {
       const res = await proxy(await reqAs("member", p));
       expect(res.status, `expected 403 for ${p}`).toBe(403);
     }

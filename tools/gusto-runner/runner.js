@@ -1,10 +1,15 @@
-// Gusto remote-browser push — office-machine runner (Phase 1).
+// Gusto remote-browser push — office-machine runner.
 //
 // WHY THIS EXISTS: Gusto has no API and Cloudflare blocks datacenter IPs, so a DRAFT hours push can only run
 // from a real, logged-in browser on a residential IP. This replaces the per-user browser EXTENSION with ONE
 // office-machine browser the whole team drives from the app — so a payroll person with nothing installed can
 // push hours from /payroll and WATCH the remote browser. Mirrors the Website Studio runner (app queues, office
 // machine executes) and the extension's DRAFT-only replay (gusto-push.js), just driven from Playwright.
+//
+// Phase 2 — INTERACTIVE SIGN-IN: when the office Gusto session has lapsed, the runner streams the live login
+// screen and REPLAYS the payroll person's clicks/keystrokes (forwarded from the pane) into it, so they sign in
+// from the app without touching the office machine. Input is replayed ONLY while on a gusto.com auth screen
+// (applyInput's guards) — never into the draft/hours write, which stays fully automated and DRAFT-only.
 //
 // ╔══════════════════════════════════════════════════════════════════════════════════════════════════════╗
 // ║ HARD SAFETY — DRAFT ONLY. NON-NEGOTIABLE (identical to extension/gusto-push.js).                       ║
@@ -34,6 +39,7 @@ const HEADLESS = /^(1|true|yes|on)$/i.test(process.env.GUSTO_HEADLESS || "");
 const POLL_MS = Number(process.env.POLL_INTERVAL_MS || 10000);
 const FRAME_MS = Number(process.env.FRAME_INTERVAL_MS || 1500); // live screenshot cadence
 const SIGNIN_TIMEOUT_MS = Number(process.env.SIGNIN_TIMEOUT_MS || 10 * 60 * 1000); // wait up to 10 min for a human login
+const SIGNIN_POLL_MS = Number(process.env.SIGNIN_POLL_MS || 600); // during interactive sign-in: poll input + stream a fresh frame this often
 const INPUTS_TIMEOUT_MS = Number(process.env.INPUTS_TIMEOUT_MS || 60 * 1000); // reach the draft inputs step
 
 function requireEnv() {
@@ -68,6 +74,43 @@ async function postUpdate(body) {
   } catch (e) {
     log(`update failed: ${e.message}`);
     return null;
+  }
+}
+
+// Drain the pending INTERACTIVE SIGN-IN input the pane forwarded for this job (claim-once on the server).
+async function fetchInput(id) {
+  try {
+    const res = await appFetch(`/api/payroll/gusto/runner/input?id=${encodeURIComponent(id)}`);
+    if (!res.ok) return [];
+    const { events } = await res.json();
+    return Array.isArray(events) ? events : [];
+  } catch {
+    return [];
+  }
+}
+
+// Allowlisted special keys — matches the server-side allowlist. Printable chars arrive as {kind:'type'}.
+const ALLOWED_KEYS = new Set([
+  "Enter", "Tab", "Backspace", "Delete", "Escape",
+  "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End",
+]);
+
+// Replay forwarded sign-in input into the live Gusto login page. DEFENSE IN DEPTH (independent of the app's
+// own gates): only act while the page is actually a gusto.com AUTH screen, so a forwarded keystroke (incl. a
+// password) can never reach the draft write or any non-Gusto origin.
+async function applyInput(page, events) {
+  if (!events.length) return;
+  if (!(await onAuthPage(page))) return;
+  let host = "";
+  try { host = new URL(page.url()).host; } catch {}
+  if (!/(^|\.)gusto\.com$/i.test(host)) return; // never forward input to an unexpected origin
+  for (const ev of events) {
+    try {
+      if (ev.kind === "click") await page.mouse.click(Number(ev.x) || 0, Number(ev.y) || 0);
+      else if (ev.kind === "type" && typeof ev.text === "string") await page.keyboard.type(ev.text, { delay: 8 });
+      else if (ev.kind === "key" && typeof ev.key === "string" && ALLOWED_KEYS.has(ev.key)) await page.keyboard.press(ev.key);
+      else if (ev.kind === "scroll") await page.mouse.wheel(0, Number(ev.deltaY) || 0);
+    } catch { /* one bad event never stops the rest */ }
   }
 }
 
@@ -240,14 +283,24 @@ async function processJob(context, job) {
   try {
     await page.goto(GUSTO_HOME, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => {});
 
-    // 1) Sign-in gate — if the session lapsed, surface the login screen and wait for a human to sign in.
+    // 1) Sign-in gate — if the session lapsed, surface the login screen and let a human sign in. Phase 2: the
+    // person signs in FROM THE PANE — we stream the live frame fast and replay their forwarded clicks/keys.
     if (await onAuthPage(page)) {
-      await setPhase("Waiting for Gusto sign-in", "signin_required");
+      await setPhase("Sign in to Gusto", "signin_required");
       const deadline = Date.now() + SIGNIN_TIMEOUT_MS;
-      while (await onAuthPage(page)) {
+      let clearChecks = 0; // require 2 consecutive "off the auth page" reads before proceeding (rides out redirects)
+      for (;;) {
         if (Date.now() > deadline) { await postUpdate({ id: job.id, status: "done", aborted: "not_logged_in" }); return; }
         if (await jobIsCanceled(job.id)) { log(`job ${job.id} canceled during sign-in`); return; }
-        await sleep(2000);
+        const onAuth = await onAuthPage(page);
+        if (onAuth) {
+          clearChecks = 0;
+          await applyInput(page, await fetchInput(job.id)); // replay the pane's sign-in input
+        } else if (++clearChecks >= 2) {
+          break; // signed in and settled
+        }
+        await streamFrame(page, job.id, onAuth ? "Sign in to Gusto" : "Finishing sign-in");
+        await sleep(SIGNIN_POLL_MS);
       }
       await page.goto(GUSTO_HOME, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => {});
     }

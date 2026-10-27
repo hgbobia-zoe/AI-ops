@@ -32,16 +32,26 @@ not a DRAFT**. Identical guarantees to `extension/gusto-push.js`.
    GUSTO_PROFILE_DIR=./.gusto-profile      # persistent Chrome profile (keeps Gusto logged in)
    # GUSTO_HEADLESS=1                       # leave UNSET for the first run so you can sign in to Gusto
    ```
-4. **First run (interactive login):**
+4. **First run (seed the logged-in profile):**
    ```bash
    APP_URL=... GUSTO_RUNNER_TOKEN=... npm start
    ```
-   A Chrome window opens. When a push runs and the session is signed out, the window shows Gusto's login — sign
-   in once. The persistent profile keeps you logged in for later runs. (Phase 2 will let the payroll person
-   sign in from the app pane; for now sign-in happens here at the office machine.)
+   A Chrome window opens. The first time a push runs and the session is signed out, sign in once (here, or from
+   the app pane — see below). The persistent profile keeps you logged in for later runs.
 
 Keep it running like the other office-machine loops (Auto-Pull, responder). One job at a time; a failed job is
-marked `failed` in the app and the loop continues.
+marked `failed` in the app and the loop continues. Once the profile is reliably logged in you can set
+`GUSTO_HEADLESS=1` and run it as a background service — re-logins are then handled from the app pane.
+
+## Interactive sign-in from the app (Phase 2)
+
+When the Gusto session lapses, the job goes to `signin_required` and the pane streams the **live login screen**.
+The payroll person signs in **from `/payroll`** — their clicks and keystrokes are forwarded to this browser — so
+**nobody has to touch the office machine** for a routine re-login. Guards: the runner only replays forwarded
+input while the page is a `gusto.com` auth screen (`applyInput`), and the app only accepts input from an
+owner/admin while the job is `signin_required`. The DRAFT hours write is always fully automated and never takes
+forwarded input. For headless background operation this is the normal re-login path; keep a headful window only
+if you prefer to sign in at the machine.
 
 ## Config (env)
 
@@ -53,6 +63,7 @@ marked `failed` in the app and the loop continues.
 | `GUSTO_HEADLESS` | unset (headful) | Set to `1` only once the profile is reliably logged in |
 | `POLL_INTERVAL_MS` | `10000` | How often to poll for a job |
 | `FRAME_INTERVAL_MS` | `1500` | Live screenshot cadence to the app |
+| `SIGNIN_POLL_MS` | `600` | During interactive sign-in: how often to replay forwarded input + stream a fresh frame |
 | `SIGNIN_TIMEOUT_MS` | `600000` | How long to wait for a human sign-in before aborting the job |
 | `INPUTS_TIMEOUT_MS` | `60000` | How long to reach the draft inputs step before aborting |
 
@@ -61,7 +72,8 @@ marked `failed` in the app and the loop continues.
 1. Owner/admin clicks **Push hours to Gusto** in `/payroll` → the app builds the per-worker entries
    (owner/admin-gated, same builder as the extension) and records a `queued` job.
 2. This runner claims it, opens Gusto, and:
-   - if signed out → reports `signin_required` and shows the login screen (sign in at the office machine);
+   - if signed out → reports `signin_required` and shows the login screen; the payroll person signs in from the
+     app pane (or someone at the office machine), then it continues automatically;
    - drives to the DRAFT inputs step, captures the member map + headers, and replays `AutoSaveWorkedHours`
      for each matched worker (skips unmatched + idempotent-no-change).
 3. It streams a live frame (~1.5s) and posts the per-worker result. `/payroll` shows the live browser + the

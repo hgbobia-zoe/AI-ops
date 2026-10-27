@@ -2134,6 +2134,27 @@ CREATE TABLE IF NOT EXISTS gusto_push_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_gusto_push_jobs_status ON gusto_push_jobs(status, created_at);
 
+-- Gusto DRAFT push — INTERACTIVE SIGN-IN input queue (feat/gusto-remote-browser Phase 2). When the office
+-- runner's Gusto session has lapsed, the job sits in signin_required and streams the live login screen; the
+-- payroll person signs in from the /payroll pane WITHOUT touching the office machine. Their clicks/keystrokes
+-- are forwarded here, and the runner replays them into the real Gusto login page. HARD SCOPE: input is accepted
+-- (server-side) and replayed (runner-side) ONLY while the job is signin_required and the page is a gusto.com
+-- auth screen — NEVER during the automated DRAFT write. Rows are ephemeral: each is claimed once by the runner
+-- (consumed_at) and all rows are cleared when the job ends.
+CREATE TABLE IF NOT EXISTS gusto_push_input (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id      TEXT NOT NULL,            -- the gusto_push_jobs.id this input is for
+  kind        TEXT NOT NULL,            -- 'click' | 'type' | 'key' | 'scroll'
+  x           REAL,                     -- click/scroll: screenshot-space coords (runner viewport px, DSF 1)
+  y           REAL,
+  text        TEXT,                     -- type: literal characters to type into the focused field
+  key         TEXT,                     -- key: an allowlisted special key (Enter/Tab/Backspace/Arrow…/Escape)
+  delta_y     REAL,                     -- scroll: wheel delta
+  created_at  TEXT NOT NULL,
+  consumed_at TEXT                      -- set when the runner has claimed it (claim-once)
+);
+CREATE INDEX IF NOT EXISTS idx_gusto_push_input_job ON gusto_push_input(job_id, id);
+
 -- Financial Intelligence Stage 7b — saved dashboard views. TEAM-LEVEL (shared across owner/admin, not
 -- per-user): a named snapshot of the /finance URL STATE only (active view + period/custom range + any
 -- project filter), never analytics. Idempotent by name (case-insensitive UNIQUE) so re-saving a name

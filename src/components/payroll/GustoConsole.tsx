@@ -52,7 +52,9 @@ export function GustoConsole({
 }): React.JSX.Element {
   const [job, setJob] = useState<GustoPushJob | null>(initialJob);
   const [busy, setBusy] = useState(false);
+  const [frameNonce, setFrameNonce] = useState(0);
   const liveRef = useRef(true);
+  const signinRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -103,6 +105,81 @@ export function GustoConsole({
       setBusy(false);
     }
   }, [busy, which]);
+
+  // ── Interactive sign-in (Phase 2) ──────────────────────────────────────────────
+  // While the job is signin_required, the pane shows the live Gusto login screen and forwards the payroll
+  // person's clicks/keystrokes to the office browser, so they sign in here WITHOUT touching the office machine.
+  const signingIn = job?.status === "signin_required";
+
+  const sendInput = useCallback(
+    async (events: unknown[]) => {
+      if (!job || !events.length) return;
+      try {
+        await fetch("/api/payroll/gusto/console/input", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id: job.id, events }),
+        });
+      } catch {
+        /* a dropped keystroke is non-fatal — the next frame shows the current state */
+      }
+    },
+    [job],
+  );
+
+  // Click on the live frame → forward to the office browser, mapping display pixels back to screenshot pixels.
+  const onFrameClick = useCallback(
+    (e: React.MouseEvent<HTMLImageElement>) => {
+      if (!signingIn) return;
+      const img = e.currentTarget;
+      const rect = img.getBoundingClientRect();
+      if (!rect.width || !rect.height || !img.naturalWidth) return;
+      const x = Math.round((e.clientX - rect.left) * (img.naturalWidth / rect.width));
+      const y = Math.round((e.clientY - rect.top) * (img.naturalHeight / rect.height));
+      signinRef.current?.focus();
+      void sendInput([{ kind: "click", x, y }]);
+    },
+    [signingIn, sendInput],
+  );
+
+  const SPECIAL_KEYS = ["Enter", "Tab", "Backspace", "Delete", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"];
+  const onFrameKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!signingIn) return;
+      const k = e.key;
+      if (k === "Shift" || k === "Control" || k === "Alt" || k === "Meta") return;
+      if (SPECIAL_KEYS.includes(k)) {
+        e.preventDefault();
+        void sendInput([{ kind: "key", key: k }]);
+      } else if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        void sendInput([{ kind: "type", text: k }]);
+      }
+    },
+    [signingIn, sendInput], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  // Paste support — lets the payroll person paste a password / one-time code into the Gusto field.
+  const onFramePaste = useCallback(
+    (e: React.ClipboardEvent<HTMLDivElement>) => {
+      if (!signingIn) return;
+      const text = e.clipboardData?.getData("text") ?? "";
+      if (text) {
+        e.preventDefault();
+        void sendInput([{ kind: "type", text: text.slice(0, 500) }]);
+      }
+    },
+    [signingIn, sendInput],
+  );
+
+  // Refresh the live frame fast while signing in (independent of the 2s job poll), and focus the surface so
+  // keystrokes land without an extra click.
+  useEffect(() => {
+    if (!signingIn) return;
+    signinRef.current?.focus();
+    const t = setInterval(() => setFrameNonce((n) => n + 1), 600);
+    return () => clearInterval(t);
+  }, [signingIn]);
 
   const cancel = useCallback(async () => {
     if (!job) return;
@@ -185,23 +262,59 @@ export function GustoConsole({
             {job.periodLabel && <span className="text-[11px] text-meta">{job.periodLabel}</span>}
           </div>
 
-          {job.status === "signin_required" && (
-            <p className="mt-1.5 flex items-center gap-1.5 text-[11.5px] text-attention">
-              <LogIn className="size-3.5" /> The office Gusto session is signed out — sign in on the office machine window shown below, then it continues automatically.
+          {signingIn && (
+            <p className="mt-1.5 flex items-start gap-1.5 text-[11.5px] text-attention">
+              <LogIn className="mt-0.5 size-3.5 shrink-0" /> The office Gusto session is signed out. Sign in right
+              here: click a field in the login screen below, then type your email, password, and any verification
+              code. The push continues automatically once you&apos;re in — no need to touch the office machine.
             </p>
           )}
 
-          {/* Live remote-browser frame. Cache-busted by updatedAt so each new frame shows. */}
-          {active && job.screenshot && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={`/api/payroll/gusto/console/screenshot?id=${encodeURIComponent(job.id)}&t=${encodeURIComponent(job.updatedAt)}`}
-              alt="Gusto remote browser (live)"
-              className="mt-2 w-full rounded border border-rule"
-            />
-          )}
-          {active && !job.screenshot && (
-            <p className="mt-2 text-[11.5px] text-meta">Connecting to the office browser…</p>
+          {/* INTERACTIVE sign-in: the live login screen, driven from the app (clicks + keystrokes forwarded). */}
+          {signingIn ? (
+            <div className="mt-2">
+              <div
+                ref={signinRef}
+                tabIndex={0}
+                role="application"
+                aria-label="Gusto sign-in (remote office browser) — click a field and type to sign in"
+                onKeyDown={onFrameKeyDown}
+                onPaste={onFramePaste}
+                className="relative overflow-hidden rounded border border-attention/60 outline-none focus-visible:ring-2 focus-visible:ring-attention"
+              >
+                {job.screenshot ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`/api/payroll/gusto/console/screenshot?id=${encodeURIComponent(job.id)}&t=${frameNonce}`}
+                    alt="Gusto sign-in (live, interactive)"
+                    draggable={false}
+                    onClick={onFrameClick}
+                    className="w-full cursor-crosshair select-none"
+                  />
+                ) : (
+                  <p className="px-3 py-6 text-center text-[11.5px] text-meta">Connecting to the office browser…</p>
+                )}
+              </div>
+              <p className="mt-1 text-[11px] text-meta">
+                Click a field, then type (paste works too). Your sign-in goes straight to Gusto on the office
+                browser and is never stored by this app.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Live remote-browser frame (view-only). Cache-busted by updatedAt so each new frame shows. */}
+              {active && job.screenshot && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={`/api/payroll/gusto/console/screenshot?id=${encodeURIComponent(job.id)}&t=${encodeURIComponent(job.updatedAt)}`}
+                  alt="Gusto remote browser (live)"
+                  className="mt-2 w-full rounded border border-rule"
+                />
+              )}
+              {active && !job.screenshot && (
+                <p className="mt-2 text-[11.5px] text-meta">Connecting to the office browser…</p>
+              )}
+            </>
           )}
 
           {/* Outcome summary once terminal. */}

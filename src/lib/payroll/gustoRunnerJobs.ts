@@ -24,6 +24,16 @@ import type { GustoPushEntry } from "@/lib/payroll/gustoPush";
 // Re-export so the job store is the single import site for "a push job + its entries".
 export type { GustoPushEntry };
 
+/** One forwarded input event from the /payroll pane during INTERACTIVE SIGN-IN (Phase 2). The payroll person
+ *  drives the office machine's live Gusto login screen from the app; these are their clicks/keystrokes. Coords
+ *  are in screenshot space (the runner's viewport pixels, device-scale 1), so the runner applies them directly.
+ *  Keys are an allowlisted set (never arbitrary chords); input is only ever honored while signin_required. */
+export type GustoPushInputEvent =
+  | { kind: "click"; x: number; y: number }
+  | { kind: "scroll"; x: number; y: number; deltaY: number }
+  | { kind: "type"; text: string }
+  | { kind: "key"; key: string };
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type GustoPushJobStatus =
   | "queued"
@@ -316,6 +326,7 @@ export function completeJob(
         now,
       });
     if (res.changes !== 1) return null;
+    clearInputs(id); // the job is over — drop any unconsumed sign-in input
     const row = rowById(id);
     return row ? toJob(row) : null;
   } catch {
@@ -335,6 +346,7 @@ export function failJob(id: string, error: string): GustoPushJob | null {
       )
       .run({ id, error: (error || "unknown error").slice(0, 2000), now });
     if (res.changes !== 1) return null;
+    clearInputs(id);
     const row = rowById(id);
     return row ? toJob(row) : null;
   } catch {
@@ -354,10 +366,103 @@ export function cancelJob(id: string, actor?: string | null): GustoPushJob | nul
       )
       .run({ id, actor: actor?.trim() || null, now });
     if (res.changes !== 1) return null;
+    clearInputs(id);
     const row = rowById(id);
     return row ? toJob(row) : null;
   } catch {
     return null;
+  }
+}
+
+// ── Interactive sign-in input queue (Phase 2) ─────────────────────────────────────
+// A tiny claim-once queue of forwarded login input. The pane enqueues the payroll person's clicks/keystrokes;
+// the runner claims them (marking them consumed) and replays them into the live Gusto login page. Rows are
+// ephemeral — cleared when the job ends (completeJob/failJob/cancelJob). The ENDPOINTS enforce the hard scope
+// (owner/admin + only while signin_required); the store just transports.
+
+interface InputRow {
+  id: number;
+  job_id: string;
+  kind: string;
+  x: number | null;
+  y: number | null;
+  text: string | null;
+  key: string | null;
+  delta_y: number | null;
+  created_at: string;
+  consumed_at: string | null;
+}
+
+function toInputEvent(r: InputRow): GustoPushInputEvent | null {
+  if (r.kind === "click") return { kind: "click", x: num(r.x), y: num(r.y) };
+  if (r.kind === "scroll") return { kind: "scroll", x: num(r.x), y: num(r.y), deltaY: num(r.delta_y) };
+  if (r.kind === "type") return typeof r.text === "string" ? { kind: "type", text: r.text } : null;
+  if (r.kind === "key") return typeof r.key === "string" ? { kind: "key", key: r.key } : null;
+  return null;
+}
+
+/** Enqueue forwarded sign-in input for a job. Returns how many rows were written (0 on any fault). Never
+ *  throws. The caller (console/input route) has already validated + clamped every event. */
+export function enqueueInput(jobId: string, events: GustoPushInputEvent[]): number {
+  try {
+    const db = getDb();
+    const now = new Date().toISOString();
+    const stmt = db.prepare(
+      `INSERT INTO gusto_push_input (job_id, kind, x, y, text, key, delta_y, created_at)
+       VALUES (@jobId, @kind, @x, @y, @text, @key, @deltaY, @now)`,
+    );
+    const insertAll = db.transaction((evs: GustoPushInputEvent[]): number => {
+      let n = 0;
+      for (const e of evs) {
+        stmt.run({
+          jobId,
+          kind: e.kind,
+          x: e.kind === "click" || e.kind === "scroll" ? e.x : null,
+          y: e.kind === "click" || e.kind === "scroll" ? e.y : null,
+          text: e.kind === "type" ? e.text : null,
+          key: e.kind === "key" ? e.key : null,
+          deltaY: e.kind === "scroll" ? e.deltaY : null,
+          now,
+        });
+        n++;
+      }
+      return n;
+    });
+    return insertAll(events);
+  } catch {
+    return 0;
+  }
+}
+
+/** Claim all unconsumed input for a job, oldest first, marking them consumed in the same transaction so each
+ *  event is replayed exactly once. Returns the events (or [] on any fault). Never throws. */
+export function claimInputs(jobId: string): GustoPushInputEvent[] {
+  try {
+    const db = getDb();
+    const now = new Date().toISOString();
+    const claim = db.transaction((): InputRow[] => {
+      const rows = db
+        .prepare("SELECT * FROM gusto_push_input WHERE job_id=? AND consumed_at IS NULL ORDER BY id ASC")
+        .all(jobId) as InputRow[];
+      if (rows.length) {
+        db.prepare("UPDATE gusto_push_input SET consumed_at=@now WHERE job_id=@jobId AND consumed_at IS NULL").run({ jobId, now });
+      }
+      return rows;
+    });
+    return claim()
+      .map(toInputEvent)
+      .filter((e): e is GustoPushInputEvent => e !== null);
+  } catch {
+    return [];
+  }
+}
+
+/** Drop all input for a job (called when it ends). Best-effort — never throws. */
+export function clearInputs(jobId: string): void {
+  try {
+    getDb().prepare("DELETE FROM gusto_push_input WHERE job_id=?").run(jobId);
+  } catch {
+    /* best-effort */
   }
 }
 

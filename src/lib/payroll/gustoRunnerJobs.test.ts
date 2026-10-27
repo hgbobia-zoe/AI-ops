@@ -11,12 +11,16 @@ import {
   latestJob,
   hasActiveJob,
   listJobs,
+  enqueueInput,
+  claimInputs,
+  clearInputs,
   type GustoPushEntry,
 } from "./gustoRunnerJobs";
 
 // The setup clears tables per FILE, not per test — isolate each case so FIFO/latest/active assertions hold.
 beforeEach(() => {
   getDb().prepare("DELETE FROM gusto_push_jobs").run();
+  getDb().prepare("DELETE FROM gusto_push_input").run();
 });
 
 const entry = (id: string, reg = 40, ot = 0): GustoPushEntry => ({
@@ -148,5 +152,52 @@ describe("gustoRunnerJobs state machine", () => {
     expect(latestJob()?.id).toBe(b.id);
     expect(listJobs(10).map((j) => j.id)).toContain(a.id);
     expect(getJob(a.id)?.status).toBe("done");
+  });
+});
+
+describe("gustoRunnerJobs interactive sign-in input queue", () => {
+  it("enqueues and claims input once, oldest first", () => {
+    const n = enqueueInput("J1", [
+      { kind: "click", x: 100, y: 200 },
+      { kind: "type", text: "hi@zoe.com" },
+      { kind: "key", key: "Enter" },
+    ]);
+    expect(n).toBe(3);
+    const first = claimInputs("J1");
+    expect(first).toHaveLength(3);
+    expect(first[0]).toEqual({ kind: "click", x: 100, y: 200 });
+    expect(first[1]).toEqual({ kind: "type", text: "hi@zoe.com" });
+    expect(first[2]).toEqual({ kind: "key", key: "Enter" });
+    // Claim-once: a second drain returns nothing until more is enqueued.
+    expect(claimInputs("J1")).toHaveLength(0);
+  });
+
+  it("keeps input scoped to its own job", () => {
+    enqueueInput("J1", [{ kind: "type", text: "a" }]);
+    enqueueInput("J2", [{ kind: "type", text: "b" }]);
+    expect(claimInputs("J2")).toEqual([{ kind: "type", text: "b" }]);
+    expect(claimInputs("J1")).toEqual([{ kind: "type", text: "a" }]);
+  });
+
+  it("claims newly enqueued input after an earlier drain", () => {
+    enqueueInput("J1", [{ kind: "type", text: "a" }]);
+    expect(claimInputs("J1")).toHaveLength(1);
+    enqueueInput("J1", [{ kind: "scroll", x: 1, y: 2, deltaY: 120 }]);
+    expect(claimInputs("J1")).toEqual([{ kind: "scroll", x: 1, y: 2, deltaY: 120 }]);
+  });
+
+  it("clears all input for a job", () => {
+    enqueueInput("J1", [{ kind: "type", text: "a" }, { kind: "type", text: "b" }]);
+    clearInputs("J1");
+    expect(claimInputs("J1")).toHaveLength(0);
+  });
+
+  it("terminal transitions clear a job's pending input", () => {
+    const made = createJob({ which: "current", entries: [entry("A")] })!;
+    claimNextQueued();
+    reportProgress(made.id, { status: "signin_required" });
+    enqueueInput(made.id, [{ kind: "type", text: "secret" }]);
+    cancelJob(made.id, "HG");
+    expect(claimInputs(made.id)).toHaveLength(0);
   });
 });
