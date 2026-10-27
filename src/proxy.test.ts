@@ -96,6 +96,35 @@ async function reqAs(role: Role, path: string): Promise<NextRequest> {
   return new NextRequest(new URL(`http://localhost${path}`), { headers });
 }
 
+describe("proxy — Gusto remote-browser push boundary", () => {
+  it("lets the office RUNNER endpoints through without a session (token-checked in-handler)", async () => {
+    // These fail-CLOSED on GUSTO_RUNNER_TOKEN inside the route; the proxy must not bounce them to auth, and
+    // must NOT let the owner/admin /api/payroll gate catch them (the runner has no session).
+    for (const p of [
+      "/api/payroll/gusto/runner/next",
+      "/api/payroll/gusto/runner/job",
+      "/api/payroll/gusto/runner/update",
+      "/api/payroll/gusto/runner/artifact",
+      "/api/payroll/gusto/runner/input",
+    ]) {
+      const res = await proxy(reqFor(p));
+      expect(res.status, `expected 200 (public) for ${p}`).toBe(200);
+    }
+  });
+
+  it("keeps the CONSOLE (session) endpoints owner/admin only — a member is blocked", async () => {
+    for (const p of ["/api/payroll/gusto/console", "/api/payroll/gusto/console/cancel", "/api/payroll/gusto/console/screenshot", "/api/payroll/gusto/console/input"]) {
+      const res = await proxy(await reqAs("member", p));
+      expect(res.status, `expected 403 for ${p}`).toBe(403);
+    }
+  });
+
+  it("the console is NOT public — no session is a 401", async () => {
+    const res = await proxy(reqFor("/api/payroll/gusto/console"));
+    expect(res.status).toBe(401);
+  });
+});
+
 describe("proxy — marketing role is scoped (deny-by-default)", () => {
   it("ALLOWS the Marketing blade + Website Studio + their APIs", async () => {
     for (const p of ["/marketing", "/marketing/campaigns", "/marketing/reviews", "/website-studio", "/api/marketing/campaigns", "/api/website/jobs"]) {

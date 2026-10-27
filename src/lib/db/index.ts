@@ -2095,6 +2095,66 @@ CREATE TABLE IF NOT EXISTS website_jobs (
 CREATE INDEX IF NOT EXISTS idx_website_jobs_status ON website_jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_website_jobs_requester ON website_jobs(requester, created_at DESC);
 
+-- Gusto DRAFT hours PUSH — in-app remote-browser path (feat/gusto-remote-browser). Mirrors the Website Studio
+-- queue+office-runner pattern so a payroll person with NO browser extension can push hours from the app: the
+-- app RECORDS an approved push job here; the office-machine runner (tools/gusto-runner, a persistent-profile
+-- Playwright browser on a residential IP already logged into Gusto) claims it, drives the DRAFT payroll run,
+-- replays Gusto's AutoSaveWorkedHours mutation per worker (DRAFT-ONLY — never submit/run/approve), and streams
+-- a live screenshot + per-worker results back so the /payroll "Gusto Console" shows the remote browser. The
+-- the entries are built server-side by the SAME owner/admin-gated builder as the extension path (push-payload /
+-- gustoPush.ts) — the runner only transports + writes them. Lifecycle:
+--   queued            app recorded the approved push (entries baked in)
+--   claimed           the office runner claimed it (single-assignment)
+--   signin_required   the runner's Gusto session is expired — the pane shows the live login screen
+--   pushing           driving the draft run + writing hours
+--   done              finished (workers[] holds per-worker pushed/skipped/failed; aborted set if it bailed cleanly)
+--   failed            the runner errored
+--   canceled          a human canceled it from the app before it finished
+CREATE TABLE IF NOT EXISTS gusto_push_jobs (
+  id               TEXT PRIMARY KEY,   -- "GPJ-"+uuid
+  which            TEXT NOT NULL,      -- 'current' | 'previous' (which pay period the entries are for)
+  period_start     TEXT,               -- YYYY-MM-DD
+  period_end       TEXT,
+  period_label     TEXT,               -- human label for the pane
+  entries          TEXT NOT NULL,      -- JSON PushEntry[] {gustoMemberId,name,regularHours,overtimeHours,doubleOvertimeHours}
+  requester        TEXT,               -- human actor who approved + started the push (attribution)
+  status           TEXT NOT NULL,      -- queued | claimed | signin_required | pushing | done | failed | canceled
+  phase            TEXT,               -- short live phase label for the pane ("Opening draft run", "Writing hours"…)
+  draft_payroll_id TEXT,               -- the Gusto draft the runner wrote into (set while pushing)
+  session_mode     TEXT,               -- 'captured' | 'generated' | null (session-id strategy that worked)
+  workers          TEXT,               -- JSON WorkerResult[] per-worker pushed/skipped/failed (set as it goes / at done)
+  screenshot       TEXT,               -- latest live screenshot basename on the volume (replaced each frame)
+  error            TEXT,               -- short failure reason (set on failed)
+  aborted          TEXT,               -- clean-abort reason (e.g. not_a_draft) when done without writing
+  canceled_by      TEXT,               -- human who canceled (attribution)
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL,
+  claimed_at       TEXT,               -- when the runner claimed it (queued → claimed)
+  finished_at      TEXT                -- when it reached done/failed/canceled
+);
+CREATE INDEX IF NOT EXISTS idx_gusto_push_jobs_status ON gusto_push_jobs(status, created_at);
+
+-- Gusto DRAFT push — INTERACTIVE SIGN-IN input queue (feat/gusto-remote-browser Phase 2). When the office
+-- runner's Gusto session has lapsed, the job sits in signin_required and streams the live login screen; the
+-- payroll person signs in from the /payroll pane WITHOUT touching the office machine. Their clicks/keystrokes
+-- are forwarded here, and the runner replays them into the real Gusto login page. HARD SCOPE: input is accepted
+-- (server-side) and replayed (runner-side) ONLY while the job is signin_required and the page is a gusto.com
+-- auth screen — NEVER during the automated DRAFT write. Rows are ephemeral: each is claimed once by the runner
+-- (consumed_at) and all rows are cleared when the job ends.
+CREATE TABLE IF NOT EXISTS gusto_push_input (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id      TEXT NOT NULL,            -- the gusto_push_jobs.id this input is for
+  kind        TEXT NOT NULL,            -- 'click' | 'type' | 'key' | 'scroll'
+  x           REAL,                     -- click/scroll: screenshot-space coords (runner viewport px, DSF 1)
+  y           REAL,
+  text        TEXT,                     -- type: literal characters to type into the focused field
+  key         TEXT,                     -- key: an allowlisted special key (Enter/Tab/Backspace/Arrow…/Escape)
+  delta_y     REAL,                     -- scroll: wheel delta
+  created_at  TEXT NOT NULL,
+  consumed_at TEXT                      -- set when the runner has claimed it (claim-once)
+);
+CREATE INDEX IF NOT EXISTS idx_gusto_push_input_job ON gusto_push_input(job_id, id);
+
 -- Financial Intelligence Stage 7b — saved dashboard views. TEAM-LEVEL (shared across owner/admin, not
 -- per-user): a named snapshot of the /finance URL STATE only (active view + period/custom range + any
 -- project filter), never analytics. Idempotent by name (case-insensitive UNIQUE) so re-saving a name

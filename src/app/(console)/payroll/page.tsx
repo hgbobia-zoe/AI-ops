@@ -35,7 +35,10 @@ import { WorkerEditor, type GustoPick } from "@/components/payroll/WorkerEditor"
 import { SyncButton } from "@/components/payroll/SyncButton";
 import { SyncGustoButton } from "@/components/payroll/SyncGustoButton";
 import { PushGustoHoursButton } from "@/components/payroll/PushGustoHoursButton";
+import { GustoConsole } from "@/components/payroll/GustoConsole";
 import { gustoPushDisabled, readGustoPushResult } from "@/lib/payroll/gustoPushState";
+import { gustoRunnerConfigured } from "@/lib/payroll/gustoRunnerAuth";
+import { latestJob as latestGustoPushJob } from "@/lib/payroll/gustoRunnerJobs";
 import { ApproveButton } from "@/components/payroll/ApproveButton";
 import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 import { ExceptionActions } from "@/components/payroll/ExceptionActions";
@@ -638,6 +641,16 @@ function SettingsTab({ which }: { which: "current" | "previous" }): React.JSX.El
             which={which}
             disabled={pushDisabled}
             lastPush={lastPush ? { at: lastPush.at, ok: lastPush.ok, aborted: lastPush.aborted, pushed: lastPush.pushed, skipped: lastPush.skipped, failed: lastPush.failed } : null}
+          />
+        </div>
+        {/* Remote-browser push (no extension) — the office-machine runner does the DRAFT write and streams it
+            here live, so a payroll person with nothing installed can push + watch. DRAFT-only, same as above. */}
+        <div className="mt-3 border-t border-rule pt-3">
+          <GustoConsole
+            which={which}
+            runnerConfigured={gustoRunnerConfigured()}
+            disabled={pushDisabled}
+            initialJob={latestGustoPushJob()}
           />
         </div>
       </section>
