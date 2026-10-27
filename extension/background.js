@@ -272,6 +272,18 @@ async function reapGustoPush(pending) {
   }
 }
 
+/** Clear the in-flight push marker + watchdog WITHOUT closing the tab. Used when a signed-out push reveals
+ *  its hidden tab for the operator to sign in: the watchdog must no longer reap that tab (it's now a normal
+ *  Gusto tab the operator is using), and the marker must clear so the next "Push" can open a fresh tab. */
+async function detachGustoPush() {
+  await setGustoPush(null);
+  try {
+    await chrome.alarms.clear(GUSTO_PUSH_WATCHDOG);
+  } catch (e) {
+    /* no-op */
+  }
+}
+
 /** Trigger one on-demand DRAFT hours push. Guards against a concurrent push (one marker, stale after the
  *  timeout). The entries come from Zoe's owner/admin-gated push-payload builder — we only transport them. */
 async function startGustoPush(payload) {
@@ -657,6 +669,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       const p = await getGustoPush();
       if (p && sender.tab && sender.tab.id === p.tabId) await reapGustoPush(p);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  // gusto-push.js hit a signed-out Gusto → bring ITS hidden tab to the front so the operator can sign in, and
+  // DETACH it from the watchdog (so it's never reaped). Only the exact tab we opened. The operator signs in,
+  // then clicks "Push" again on a fresh session.
+  if (msg.type === "zoe-gusto-push-reveal") {
+    (async () => {
+      const p = await getGustoPush();
+      if (p && sender.tab && sender.tab.id === p.tabId) {
+        await detachGustoPush();
+        try { await chrome.tabs.update(p.tabId, { active: true }); } catch (e) { /* tab gone */ }
+        try { if (sender.tab.windowId != null) await chrome.windows.update(sender.tab.windowId, { focused: true }); } catch (e) { /* no window */ }
+      }
       sendResponse({ ok: true });
     })();
     return true;
