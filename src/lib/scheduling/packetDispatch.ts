@@ -15,6 +15,8 @@ import { getSettings, DEFAULT_PREMIUM_WINDOW_KEYWORDS, DEFAULT_EVENT_READINESS_K
 import type { CrewMember } from "@/lib/connecteam";
 import type { PacketContext, PacketCoworker } from "./packet";
 import type { ShiftAssignment, StaffShift } from "./types";
+import { ROLE_WORD } from "./commsTemplates";
+import type { ShiftDebriefContext, ShiftDebriefStop } from "./shiftDebrief";
 
 /** The app's public origin for links built OUTSIDE a request (the runtime job has no Request). Mirrors
  *  http/origin.ts's env branch: PUBLIC_BASE_URL only (no host headers available), else "" → links drop. */
@@ -134,6 +136,51 @@ export function buildSharedPacketContext(shift: StaffShift, users: Map<number, C
   const supUser = shift.supervisorUserId != null ? users.get(shift.supervisorUserId) : undefined;
   const supervisor = supUser ? { name: supUser.name, phone: supUser.phone ?? null } : null;
   return { truck, route, supervisor };
+}
+
+/** Assemble the route debrief context for a shift's Connecteam NOTE, from the SAME readers the packet uses
+ *  (route stops + the editable premium/readiness keyword lists + the shift's equipment/instructions). Pure
+ *  data gathering; returns null for a shift with no route (only route shifts carry an operational debrief). */
+export function assembleShiftDebriefContext(shift: StaffShift, users: Map<number, CrewMember>): ShiftDebriefContext | null {
+  if (!shift.routeId || !shift.truckId) return null;
+  const route = getRoutesForDate(shift.truckId, shift.date).find((x) => x.routeId === shift.routeId);
+  if (!route) return null;
+  const truckName = getActiveVehicles().find((v) => v.truckId === shift.truckId)?.name ?? shift.truckId;
+  const crew: string[] = shift.assignees
+    .map((uid) => users.get(uid)?.name)
+    .filter((n): n is string => !!n);
+
+  const settings = getSettings();
+  const premiumKw = settings.premiumWindowKeywords ?? DEFAULT_PREMIUM_WINDOW_KEYWORDS;
+  const readinessKw = settings.eventReadinessKeywords ?? DEFAULT_EVENT_READINESS_KEYWORDS;
+
+  const stops: ShiftDebriefStop[] = route.stops.map((s) => ({
+    kind: s.kind ?? "stop",
+    customer: s.custName || "Customer",
+    address: s.address || null,
+    window: s.plannedWindow ?? s.eta ?? null,
+    items: (s.items ?? []).map((it) => (it.quantity && it.quantity > 1 ? `${it.name} x${it.quantity}` : it.name)).slice(0, 12),
+  }));
+  const premiumCustomers = [
+    ...new Set(route.stops.filter((s) => isPremiumWindowStop(s.items, premiumKw)).map((s) => s.custName).filter((n): n is string => !!n)),
+  ];
+  const eventReadinessCustomers = [
+    ...new Set(route.stops.filter((s) => isEventReadinessStop(s.items, readinessKw)).map((s) => s.custName).filter((n): n is string => !!n)),
+  ];
+
+  return {
+    roleLabel: ROLE_WORD[shift.role],
+    date: shift.date,
+    startTime: shift.startTime,
+    endTime: shift.endTime,
+    truck: truckName,
+    crew,
+    stops,
+    equipment: shift.equipment ?? [],
+    premiumCustomers,
+    eventReadinessCustomers,
+    instructions: shift.instructions,
+  };
 }
 
 /** Per-assignment dispatch inputs: the full PacketContext (coworkers computed from the OTHER live

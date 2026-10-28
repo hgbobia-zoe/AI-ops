@@ -8,8 +8,10 @@ import { NextResponse } from "next/server";
 import { viewerRole, currentActor } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 import { getShiftById, updateShift } from "@/lib/scheduling/store";
-import { createPublishedShift, updatePublishedShift, getDefaultScheduler, getSchedulers } from "@/lib/connecteam";
+import { createPublishedShift, updatePublishedShift, getDefaultScheduler, getSchedulers, getUsers, connecteamShiftNotesEnabled } from "@/lib/connecteam";
 import { insertAudit } from "@/lib/db/repo";
+import { assembleShiftDebriefContext } from "@/lib/scheduling/packetDispatch";
+import { buildShiftDebriefNote } from "@/lib/scheduling/shiftDebrief";
 import type { ShiftRole } from "@/lib/scheduling/types";
 
 export const dynamic = "force-dynamic";
@@ -63,6 +65,19 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     return fail(400, "BAD_TIME", { error: "bad_time", message: "The shift's time window is invalid." });
   }
 
+  // Route debrief → Connecteam shift note (Improvement 1). Assembled from the same structured route facts as
+  // the SMS packet (no LLM). Only attached when note writes are enabled (the field is unverified against the
+  // live API, so it is opt-in and can never break a publish by default). Build failures never block the send.
+  let note: string | undefined;
+  if (connecteamShiftNotesEnabled()) {
+    try {
+      const ctx = assembleShiftDebriefContext(shift, await getUsers());
+      if (ctx) note = buildShiftDebriefNote(ctx);
+    } catch (e) {
+      console.error("[publish] debrief note build failed (ignored):", String(e));
+    }
+  }
+
   const input = {
     schedulerId: scheduler.schedulerId,
     title: `${ROLE_LABEL[shift.role]} — ${shift.eventLabel || shift.date}`,
@@ -70,6 +85,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     endUnix,
     timezone: scheduler.timezone,
     assignedUserIds: shift.assignees,
+    note,
   };
   const result = isUpdate
     ? await updatePublishedShift({ ...input, shiftId: shift.connecteamShiftId! })

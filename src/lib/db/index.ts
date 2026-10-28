@@ -2403,6 +2403,15 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // no page captured; null environment => treated as 'production').
   { table: "website_jobs", column: "context_url", type: "TEXT" },    // the page URL the request targets (edit context)
   { table: "website_jobs", column: "environment", type: "TEXT" },    // 'production' | 'local'
+  // Route handoff automation (multi-route-per-truck). Both NULL by default → behavior unchanged until a
+  // handoff fires. auto_finalized_at records that AUTOMATION finalized a VERIFIED-complete route (so it is
+  // attributable to the system, not a driver closeout); handoff_flag records a Scenario-B route left OPEN
+  // but flagged for office reconciliation (its real status + timestamps are preserved — never a fake close).
+  { table: "routes", column: "auto_finalized_at", type: "TEXT" },    // ISO — automation finalized this verified-complete route
+  { table: "routes", column: "handoff_flag", type: "TEXT" },         // reconciliation reason when released for handoff without verified completion (else null)
+  // Connecteam shift-notes sync (debrief → shift notes). Content hash of the app-generated debrief block we
+  // last wrote into the shift, so a re-sync is idempotent and only a MATERIAL change triggers an update.
+  { table: "staff_shifts", column: "connecteam_debrief_hash", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {

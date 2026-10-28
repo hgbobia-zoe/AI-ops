@@ -351,6 +351,10 @@ export interface CrewShift {
    *  docs, and the pre-existing reader never captured it). The importer treats it as best-effort: it uses
    *  it when present, and falls back to content-hash conflict detection when absent. NEVER fabricated. */
   lastModifiedUnix?: number;
+  /** The shift's note / description text IF the payload exposes one (probed shape-tolerantly across likely
+   *  keys). undefined when absent. Lets the debrief-note sync READ the current note so an update can preserve
+   *  manual content; its very presence is what gates safe note updates (see shiftDebrief). NEVER fabricated. */
+  note?: string;
   /** Resolved assignee names (falls back to a user id when a name is missing). */
   assignees: CrewMember[];
 }
@@ -437,6 +441,26 @@ function shiftLastModifiedUnix(s: Record<string, unknown>): number | null {
   return null;
 }
 
+/** The shift's note / description text when the payload carries one. Connecteam has no public API docs, so
+ *  we probe the keys a scheduler shift most likely uses and accept either a plain string or a rich-text
+ *  object ({plainText}/{html}/{text}). Returns null when absent — never fabricated. This read-back is what
+ *  makes a SAFE note update possible (merge preserving manual content); until a real payload confirms the
+ *  field round-trips, the write path stays gated (see shiftDebrief / CONNECTEAM_SHIFT_NOTES). */
+function shiftNoteOf(s: Record<string, unknown>): string | null {
+  const keys = ["note", "notes", "description", "comment", "comments", "shiftNote"];
+  for (const k of keys) {
+    if (!(k in s)) continue;
+    const v = s[k];
+    if (typeof v === "string" && v.trim()) return v;
+    if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      const inner = o.plainText ?? o.text ?? o.html ?? o.value;
+      if (typeof inner === "string" && inner.trim()) return inner;
+    }
+  }
+  return null;
+}
+
 /** `YYYY-MM-DD` for a Unix-seconds instant in timezone `tz`. */
 function localYmd(unix: number, tz: string): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -497,6 +521,7 @@ async function getCrewForDateSafeUncached(date: string): Promise<CrewDayResult> 
         address: loc?.gps?.address || undefined,
         isPublished: typeof s.isPublished === "boolean" ? (s.isPublished as boolean) : undefined,
         lastModifiedUnix: shiftLastModifiedUnix(s) ?? undefined,
+        note: shiftNoteOf(s) ?? undefined,
         assignees: ids.map(
           (id): CrewMember => users.get(id) ?? { userId: id, name: `#${id}`, role: "other" },
         ),
@@ -1025,6 +1050,18 @@ export interface PublishShiftInput {
   endUnix: number;
   timezone: string;
   assignedUserIds: number[];
+  /** Optional shift note (the route debrief). Only included in the write when set AND note writes are
+   *  enabled (connecteamShiftNotesEnabled) — the note field is unverified against the live API, so it is
+   *  opt-in to avoid a strict API rejecting an unknown field and breaking all publishes. */
+  note?: string;
+}
+
+/** Whether to WRITE the debrief note onto a Connecteam shift. Default OFF: Connecteam has no public API docs
+ *  and we have not confirmed the shift write accepts a note field (a strict API could 400 on an unknown
+ *  field, which would break every publish). Turn on with CONNECTEAM_SHIFT_NOTES=1 after a one-shot live
+ *  check (publish a test shift with a note, confirm 200 + the note round-trips via the reader). */
+export function connecteamShiftNotesEnabled(): boolean {
+  return /^(1|true|yes|on)$/i.test(process.env.CONNECTEAM_SHIFT_NOTES || "");
 }
 
 export interface PublishShiftResult {
@@ -1047,6 +1084,11 @@ function shiftBody(input: PublishShiftInput, shiftId?: string): Record<string, u
     isOpenShift: input.assignedUserIds.length === 0,
     assignedUserIds: input.assignedUserIds,
   };
+  // The note is included ONLY when provided AND note writes are enabled — keeps an unverified field out of
+  // the body by default so a publish can never break on it. Capped to a safe length.
+  if (input.note && input.note.trim() && connecteamShiftNotesEnabled()) {
+    o.note = input.note.slice(0, 4000);
+  }
   if (shiftId) o.shiftId = shiftId;
   return o;
 }
