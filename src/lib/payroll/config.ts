@@ -12,6 +12,8 @@ export interface PayrollConfig {
   approvalPolicy: "always_require" | "auto_if_clean"; // never auto-approve unless explicitly set
   overtimeThreshold: number; // weekly hours above which overtime is flagged (EXCEPTION)
   rateWriteback: boolean; // when a Gusto pull syncs rates, also write them back into Connecteam (PUT)
+  gustoRateSyncAuto: boolean; // DEFAULT OFF — when on, the Gusto→Connecteam rate engine writes WITHOUT per-proposal approval
+  gustoSalaryToHourly: boolean; // DEFAULT OFF — when on, a Gusto ANNUAL salary is converted to an hourly rate (÷2080) for estimates
   // ── Payroll-readiness pre-check (prepares Lisa for the Tuesday payroll run) ──
   precheckEnabled: boolean; // the scheduled readiness pre-check + Slack summary on/off
   payrollDay: number; // the day payroll is RUN (0=Sun … 6=Sat; default Tuesday) — the deadline
@@ -31,6 +33,8 @@ export const DEFAULT_PAYROLL_CONFIG: PayrollConfig = {
   approvalPolicy: "always_require",
   overtimeThreshold: 40,
   rateWriteback: true,
+  gustoRateSyncAuto: false,
+  gustoSalaryToHourly: false,
   precheckEnabled: false,
   payrollDay: 2, // Tuesday
   payrollHour: 9,
@@ -61,6 +65,8 @@ export function savePayrollConfig(patch: Partial<PayrollConfig>): PayrollConfig 
     approvalPolicy: patch.approvalPolicy === "auto_if_clean" || patch.approvalPolicy === "always_require" ? patch.approvalPolicy : cur.approvalPolicy,
     overtimeThreshold: clampInt(patch.overtimeThreshold, 1, 168, cur.overtimeThreshold),
     rateWriteback: typeof patch.rateWriteback === "boolean" ? patch.rateWriteback : cur.rateWriteback,
+    gustoRateSyncAuto: typeof patch.gustoRateSyncAuto === "boolean" ? patch.gustoRateSyncAuto : cur.gustoRateSyncAuto,
+    gustoSalaryToHourly: typeof patch.gustoSalaryToHourly === "boolean" ? patch.gustoSalaryToHourly : cur.gustoSalaryToHourly,
     precheckEnabled: typeof patch.precheckEnabled === "boolean" ? patch.precheckEnabled : cur.precheckEnabled,
     payrollDay: clampInt(patch.payrollDay, 0, 6, cur.payrollDay),
     payrollHour: clampInt(patch.payrollHour, 0, 23, cur.payrollHour),

@@ -16,7 +16,8 @@ interface WorkerRow {
   id: string; name: string; email: string | null; worker_type: string; employment_status: string;
   connecteam_user_id: number | null; instawork_worker: string | null; gusto_id: string | null;
   gusto_entity_type: string | null; pay_type: string | null; pay_rate: number | null;
-  currency: string | null; country: string | null; active: number; notes: string | null;
+  currency: string | null; country: string | null; active: number;
+  excluded: number | null; exclude_reason: string | null; notes: string | null;
   created_at: string; updated_at: string;
 }
 function toWorker(r: WorkerRow): WorkerRecord {
@@ -26,7 +27,8 @@ function toWorker(r: WorkerRow): WorkerRecord {
     connecteamUserId: r.connecteam_user_id, instaworkWorker: r.instawork_worker,
     gustoId: r.gusto_id, gustoEntityType: (r.gusto_entity_type as GustoEntityType | null) ?? null,
     payType: (r.pay_type as PayType | null) ?? null, payRate: r.pay_rate,
-    currency: r.currency, country: r.country, active: r.active === 1, notes: r.notes,
+    currency: r.currency, country: r.country, active: r.active === 1,
+    excluded: r.excluded === 1, excludeReason: r.exclude_reason ?? null, notes: r.notes,
     createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -72,7 +74,8 @@ export function ensureWorkerFromConnecteam(seed: ConnecteamSeed): WorkerRecord {
 export interface WorkerPatch {
   name?: string; email?: string | null; workerType?: WorkerType; employmentStatus?: EmploymentStatus;
   gustoId?: string | null; gustoEntityType?: GustoEntityType | null; payType?: PayType | null;
-  payRate?: number | null; currency?: string | null; country?: string | null; active?: boolean; notes?: string | null;
+  payRate?: number | null; currency?: string | null; country?: string | null; active?: boolean;
+  excluded?: boolean; excludeReason?: string | null; notes?: string | null;
 }
 export function updateWorker(id: string, patch: WorkerPatch): WorkerRecord | null {
   const cur = getWorkerById(id);
@@ -89,6 +92,8 @@ export function updateWorker(id: string, patch: WorkerPatch): WorkerRecord | nul
     currency: patch.currency === undefined ? cur.currency : patch.currency,
     country: patch.country === undefined ? cur.country : patch.country,
     active: (patch.active ?? cur.active) ? 1 : 0,
+    excluded: (patch.excluded === undefined ? cur.excluded : patch.excluded) ? 1 : 0,
+    exclude_reason: patch.excludeReason === undefined ? cur.excludeReason : patch.excludeReason,
     notes: patch.notes === undefined ? cur.notes : patch.notes,
     now: new Date().toISOString(),
     id,
@@ -96,9 +101,48 @@ export function updateWorker(id: string, patch: WorkerPatch): WorkerRecord | nul
   getDb().prepare(
     `UPDATE hr_workers SET name=@name, email=@email, worker_type=@worker_type, employment_status=@employment_status,
       gusto_id=@gusto_id, gusto_entity_type=@gusto_entity_type, pay_type=@pay_type, pay_rate=@pay_rate,
-      currency=@currency, country=@country, active=@active, notes=@notes, updated_at=@now WHERE id=@id`,
+      currency=@currency, country=@country, active=@active, excluded=@excluded, exclude_reason=@exclude_reason,
+      notes=@notes, updated_at=@now WHERE id=@id`,
   ).run(next);
   return getWorkerById(id);
+}
+
+// ── hr_payroll_exclusions (per-period skip — exclude a worker from ONE run only) ─────────────────────
+// Distinct from the permanent hr_workers.excluded flag: this skips a worker for a single pay period
+// (keyed by the review worker key ct:<id> | hw:<id>), leaving them in every other period. Idempotent.
+export interface PeriodExclusion {
+  workerKey: string;
+  reason: string | null;
+  excludedBy: string | null;
+  createdAt: string;
+}
+interface ExclusionRow {
+  period_start: string; period_end: string; worker_key: string;
+  reason: string | null; excluded_by: string | null; created_at: string;
+}
+/** All per-period exclusions for a period, as a map keyed by worker_key. Empty when none. */
+export function listPeriodExclusions(periodStart: string, periodEnd: string): Map<string, PeriodExclusion> {
+  const rows = getDb().prepare(
+    "SELECT * FROM hr_payroll_exclusions WHERE period_start=? AND period_end=?",
+  ).all(periodStart, periodEnd) as ExclusionRow[];
+  const m = new Map<string, PeriodExclusion>();
+  for (const r of rows) m.set(r.worker_key, { workerKey: r.worker_key, reason: r.reason, excludedBy: r.excluded_by, createdAt: r.created_at });
+  return m;
+}
+/** Idempotent upsert of a per-period skip (re-skipping refreshes the reason/actor). */
+export function addPeriodExclusion(p: {
+  periodStart: string; periodEnd: string; workerKey: string; reason?: string | null; excludedBy?: string | null;
+}): void {
+  getDb().prepare(
+    `INSERT INTO hr_payroll_exclusions (period_start, period_end, worker_key, reason, excluded_by, created_at)
+     VALUES (@ps, @pe, @key, @reason, @by, @now)
+     ON CONFLICT(period_start, period_end, worker_key) DO UPDATE SET reason=@reason, excluded_by=@by, created_at=@now`,
+  ).run({ ps: p.periodStart, pe: p.periodEnd, key: p.workerKey, reason: p.reason ?? null, by: p.excludedBy ?? null, now: new Date().toISOString() });
+}
+/** Remove a per-period skip (un-exclude for this period). No-op when absent. */
+export function removePeriodExclusion(periodStart: string, periodEnd: string, workerKey: string): void {
+  getDb().prepare("DELETE FROM hr_payroll_exclusions WHERE period_start=? AND period_end=? AND worker_key=?")
+    .run(periodStart, periodEnd, workerKey);
 }
 
 // ── hr_sync_runs ───────────────────────────────────────────────────────────────────────────────────

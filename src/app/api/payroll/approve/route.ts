@@ -6,7 +6,7 @@ import { NextResponse } from "next/server";
 import { viewerRole, currentActor } from "@/lib/auth/getSession";
 import { canManagePayroll } from "@/lib/auth/roles";
 import { commandCenter } from "@/lib/command/service";
-import { namedPeriod } from "@/lib/payroll/period";
+import { resolvePeriod, namedPeriod, completedWeeksBack } from "@/lib/payroll/period";
 import { payrollReview } from "@/lib/payroll/review";
 import { upsertApproval } from "@/lib/payroll/store";
 
@@ -15,9 +15,16 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request): Promise<Response> {
   if (!canManagePayroll(await viewerRole())) return NextResponse.json({ error: "forbidden" }, { status: 403 });
 
-  const body = (await req.json().catch(() => ({}))) as { which?: "current" | "previous" };
+  // Payroll targets a COMPLETED week: the UI now sends the exact period (start/end). `which` is kept only as a
+  // back-compat alias; when nothing is given we default to the last completed week (never the in-progress one).
+  const body = (await req.json().catch(() => ({}))) as { which?: "current" | "previous"; start?: string; end?: string };
   const today = await safeToday();
-  const period = namedPeriod(today, body.which === "previous" ? "previous" : "current");
+  const period =
+    body.start && body.end
+      ? resolvePeriod(today, body.start, body.end)
+      : body.which === "current" || body.which === "previous"
+        ? namedPeriod(today, body.which)
+        : completedWeeksBack(today, 1);
 
   const rv = await payrollReview(period);
   if (rv.counts.ready === 0) {

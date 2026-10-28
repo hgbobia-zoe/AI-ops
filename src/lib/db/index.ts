@@ -1825,6 +1825,8 @@ CREATE TABLE IF NOT EXISTS hr_workers (
   currency           TEXT,                        -- USD | EUR | ... (international contractors)
   country            TEXT,                        -- USA | France | ...
   active             INTEGER NOT NULL DEFAULT 1,
+  excluded           INTEGER NOT NULL DEFAULT 0,   -- 1 = permanently excluded from payroll (paid elsewhere / never in Gusto); reversible
+  exclude_reason     TEXT,                         -- why they're excluded (shown in the Excluded bucket)
   notes              TEXT,
   created_at         TEXT NOT NULL,
   updated_at         TEXT NOT NULL,
@@ -1933,6 +1935,19 @@ CREATE TABLE IF NOT EXISTS hr_payroll_approvals (
   snapshot_json       TEXT,              -- what was approved/excluded at approval time
   updated_at          TEXT NOT NULL,
   PRIMARY KEY (period_start, period_end)
+);
+
+-- Per-period payroll exclusion — skip a worker for ONE pay period only (distinct from the permanent
+-- hr_workers.excluded flag). Keyed by the review worker key (ct:<userId> | hw:<id>). A skipped worker is
+-- pulled out of that period's run (not counted, not gated) but returns automatically next period.
+CREATE TABLE IF NOT EXISTS hr_payroll_exclusions (
+  period_start TEXT NOT NULL,            -- YYYY-MM-DD
+  period_end   TEXT NOT NULL,
+  worker_key   TEXT NOT NULL,            -- ct:<userId> | hw:<id>
+  reason       TEXT,
+  excluded_by  TEXT,                     -- actor label
+  created_at   TEXT NOT NULL,
+  PRIMARY KEY (period_start, period_end, worker_key)
 );
 
 -- Event Lifecycle Engine (Phase 3) — durable geocode cache for the weather module. Addresses are
@@ -2412,6 +2427,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Connecteam shift-notes sync (debrief → shift notes). Content hash of the app-generated debrief block we
   // last wrote into the shift, so a re-sync is idempotent and only a MATERIAL change triggers an update.
   { table: "staff_shifts", column: "connecteam_debrief_hash", type: "TEXT" },
+  // Payroll worker exclusion (permanent). Default 0 → existing rows are NOT excluded, behavior unchanged.
+  { table: "hr_workers", column: "excluded", type: "INTEGER NOT NULL DEFAULT 0" },
+  { table: "hr_workers", column: "exclude_reason", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {

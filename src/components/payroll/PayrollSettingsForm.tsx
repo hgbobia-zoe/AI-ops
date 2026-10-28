@@ -71,6 +71,22 @@ export function PayrollSettingsForm({ initial }: { initial: PayrollConfig }): Re
           </select>
         </label>
         <label className="flex flex-col gap-1">
+          <span className={labelCls}>Auto rate sync (no per-row approval)</span>
+          <select className={fieldCls} value={cfg.gustoRateSyncAuto ? "on" : "off"} onChange={(e) => set("gustoRateSyncAuto", e.target.value === "on")}>
+            <option value="off">Off — approve each Gusto → Connecteam rate write (recommended)</option>
+            <option value="on">On — let the engine write Gusto rates without approval</option>
+          </select>
+          <span className="text-[10.5px] text-meta">Rate writes fund payroll. Keep off until you trust the proposals.</span>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className={labelCls}>Salary → hourly estimate</span>
+          <select className={fieldCls} value={cfg.gustoSalaryToHourly ? "on" : "off"} onChange={(e) => set("gustoSalaryToHourly", e.target.value === "on")}>
+            <option value="off">Off — salaried workers show as &quot;no hourly rate&quot; (recommended)</option>
+            <option value="on">On — convert a Gusto annual salary to hourly (÷2080)</option>
+          </select>
+          <span className="text-[10.5px] text-meta">Only affects estimates for salaried people. Changes computed pay figures.</span>
+        </label>
+        <label className="flex flex-col gap-1">
           <span className={labelCls}>Sync day</span>
           <select className={fieldCls} value={cfg.syncDay} onChange={(e) => set("syncDay", Number(e.target.value))} disabled={!cfg.autoSyncEnabled}>
             {DOW.map((d, i) => <option key={i} value={i}>{d}</option>)}

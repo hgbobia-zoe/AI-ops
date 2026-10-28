@@ -76,3 +76,39 @@ describe("classifyReview", () => {
     expect(r.status).toBe("READY");
   });
 });
+
+describe("classifyReview — exclusions", () => {
+  it("a PERMANENTLY excluded worker is pulled out of the run (not counted, not gated)", () => {
+    const workers = [
+      w({ key: "a", gustoMapped: true, payRate: 8, periodHours: 25 }), // READY
+      // excluded + would otherwise BLOCK (no mapping) — must NOT block the run
+      { ...w({ key: "b", gustoMapped: false, payRate: 20, periodHours: 20 }), excluded: true, excludeReason: "paid via Instawork" },
+    ];
+    const r = classifyReview(period, workers, true);
+    expect(r.counts.workers).toBe(1);
+    expect(r.counts.blocked).toBe(0);
+    expect(r.excludedCount).toBe(1);
+    expect(r.excluded[0]).toMatchObject({ key: "b", excludeMode: "permanent", excludeReason: "paid via Instawork" });
+    expect(r.status).toBe("READY"); // the blocker was excluded, so the run is ready
+    expect(r.hours).toBe(25); // excluded hours are not in the run total
+  });
+
+  it("a PER-PERIOD skip pulls a worker out of just that period", () => {
+    const workers = [
+      w({ key: "a", gustoMapped: true, payRate: 8, periodHours: 25 }),
+      w({ key: "ct:99", gustoMapped: true, payRate: 10, periodHours: 10 }),
+    ];
+    const skips = new Map([["ct:99", { workerKey: "ct:99", reason: "double-counted this week", excludedBy: "Lisa", createdAt: "" }]]);
+    const r = classifyReview(period, workers, true, DEFAULT_REVIEW_OPTIONS, skips);
+    expect(r.counts.workers).toBe(1);
+    expect(r.excludedCount).toBe(1);
+    expect(r.excluded[0]).toMatchObject({ key: "ct:99", excludeMode: "period", excludeReason: "double-counted this week" });
+  });
+
+  it("carries the rate source through to the review row", () => {
+    const worker = { ...w({ key: "a", gustoMapped: true, payRate: 22, periodHours: 10 }), rateSource: "gusto" as const, gustoRate: 22, connecteamRate: 15 };
+    const r = classifyReview(period, [worker], true);
+    expect(r.ready[0].rateSource).toBe("gusto");
+    expect(r.ready[0].connecteamRate).toBe(15);
+  });
+});

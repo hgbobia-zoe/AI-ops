@@ -14,7 +14,7 @@ import { viewerRole } from "@/lib/auth/getSession";
 import { canManagePayroll } from "@/lib/auth/roles";
 import { commandCenter } from "@/lib/command/service";
 import { connecteamConfigured } from "@/lib/connecteam";
-import { namedPeriod } from "@/lib/payroll/period";
+import { completedWeeksBack } from "@/lib/payroll/period";
 import { payrollOverview } from "@/lib/payroll/overview";
 import { unifiedWorkers } from "@/lib/payroll/workers";
 import { payrollReview } from "@/lib/payroll/review";
@@ -42,6 +42,10 @@ import { latestJob as latestGustoPushJob } from "@/lib/payroll/gustoRunnerJobs";
 import { ApproveButton } from "@/components/payroll/ApproveButton";
 import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 import { ExceptionActions } from "@/components/payroll/ExceptionActions";
+import { ExcludeControl } from "@/components/payroll/ExcludeControl";
+import { RateSyncPanel } from "@/components/payroll/RateSyncPanel";
+import { buildRateSyncPlan } from "@/lib/payroll/rateSync";
+import { RATE_SOURCE_LABEL } from "@/lib/payroll/types";
 
 export const dynamic = "force-dynamic";
 
@@ -79,15 +83,20 @@ const SEV_TONE: Record<ExceptionSeverity, string> = {
   MEDIUM: "text-secondary-text bg-[var(--row)]", LOW: "text-meta bg-[var(--row)]",
 };
 
-export default async function PayrollPage({ searchParams }: { searchParams: Promise<{ tab?: string; period?: string }> }): Promise<React.JSX.Element> {
+export default async function PayrollPage({ searchParams }: { searchParams: Promise<{ tab?: string; period?: string; weeksAgo?: string }> }): Promise<React.JSX.Element> {
   if (!canManagePayroll(await viewerRole())) redirect("/");
   const sp = await searchParams;
   const tab: Tab = (TABS.some((t) => t.key === sp.tab) ? sp.tab : "overview") as Tab;
-  const which: "current" | "previous" = sp.period === "previous" ? "previous" : "current";
+  // Payroll is ALWAYS run for a COMPLETED week (Tuesday, for the week that just ended) — never the in-progress
+  // week. So the blade defaults to last completed week; `weeksAgo` steps further back through completed weeks.
+  // (`?period=previous` stays as a back-compat alias for weeksAgo=1; the old in-progress "current" option is gone.)
+  const rawWeeks = Number(sp.weeksAgo);
+  const weeksAgo = Number.isFinite(rawWeeks) && rawWeeks >= 1 ? Math.min(8, Math.floor(rawWeeks)) : 1;
 
   const today = await safeToday();
-  const period = namedPeriod(today, which);
-  const tabHref = (t: Tab): string => `/payroll?tab=${t}${which === "previous" ? "&period=previous" : ""}`;
+  const period = completedWeeksBack(today, weeksAgo);
+  const periodQS = weeksAgo > 1 ? `&weeksAgo=${weeksAgo}` : "";
+  const tabHref = (t: Tab): string => `/payroll?tab=${t}${periodQS}`;
 
   return (
     <main className="mx-auto max-w-[1400px] p-3 pb-10 leading-[1.3] md:p-4">
@@ -104,11 +113,12 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
             <span className="ml-1 text-tertiary-text">· pay period {period.label}</span>
           </p>
         </div>
+        {/* Completed weeks only — payroll never targets the in-progress week. Steps backward from last week. */}
         <div className="flex items-center gap-1.5 rounded-md border border-border bg-[var(--panel)] p-0.5 text-[12px]">
-          {(["current", "previous"] as const).map((w) => (
-            <Link key={w} href={`/payroll?tab=${tab}${w === "previous" ? "&period=previous" : ""}`}
-              className={`rounded px-2.5 py-1 transition-colors ${which === w ? "bg-foreground/[0.08] text-foreground" : "text-meta hover:text-foreground"}`}>
-              {w === "current" ? "This week" : "Last week"}
+          {[1, 2, 3, 4].map((n) => (
+            <Link key={n} href={`/payroll?tab=${tab}${n > 1 ? `&weeksAgo=${n}` : ""}`}
+              className={`rounded px-2.5 py-1 transition-colors ${weeksAgo === n ? "bg-foreground/[0.08] text-foreground" : "text-meta hover:text-foreground"}`}>
+              {n === 1 ? "Last week" : `${n} weeks ago`}
             </Link>
           ))}
         </div>
@@ -128,14 +138,14 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
 
       <div className="mb-4"><BladeAgents blade="payroll" /></div>
 
-      {tab === "overview" && <OverviewTab period={period} which={which} />}
-      {tab === "review" && <ReviewTab period={period} which={which} />}
-      {tab === "sync" && <SyncTab period={period} which={which} />}
+      {tab === "overview" && <OverviewTab period={period} weeksAgo={weeksAgo} />}
+      {tab === "review" && <ReviewTab period={period} />}
+      {tab === "sync" && <SyncTab period={period} weeksAgo={weeksAgo} />}
       {tab === "workers" && <WorkersTab period={period} mode="all" />}
       {tab === "contractors" && <WorkersTab period={period} mode="contractors" />}
       {tab === "exceptions" && <ExceptionsTab />}
       {tab === "history" && <HistoryTab />}
-      {tab === "settings" && <SettingsTab which={which} />}
+      {tab === "settings" && <SettingsTab />}
     </main>
   );
 }
@@ -151,7 +161,8 @@ async function safeToday(): Promise<string> {
 // ── Overview (Payroll Command Center) ────────────────────────────────────────────────────────────────
 // The one question it answers: "Can I approve payroll?" Status comes from the deterministic review
 // classification; blockers / exceptions / missing-config are shown distinctly (never conflated).
-async function OverviewTab({ period, which }: { period: { start: string; end: string; label: string }; which: "current" | "previous" }): Promise<React.JSX.Element> {
+async function OverviewTab({ period, weeksAgo }: { period: { start: string; end: string; label: string }; weeksAgo: number }): Promise<React.JSX.Element> {
+  const periodQS = weeksAgo > 1 ? `&weeksAgo=${weeksAgo}` : "";
   const o = await payrollOverview(period);
   const r = o.review;
   const ready = r.status === "READY";
@@ -182,11 +193,11 @@ async function OverviewTab({ period, which }: { period: { start: string; end: st
           </div>
         </div>
         <div className="flex items-end gap-3">
-          <Link href={`/payroll?tab=review${which === "previous" ? "&period=previous" : ""}`}
+          <Link href={`/payroll?tab=review${periodQS}`}
             className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-foreground px-4 text-[13px] font-medium text-background transition-opacity hover:opacity-90">
             <ClipboardCheck className="size-4" /> Review Payroll
           </Link>
-          <SyncButton which={which} label="Sync Hours" variant="secondary" />
+          <SyncButton period={period} label="Sync Hours" variant="secondary" />
         </div>
       </section>
 
@@ -267,12 +278,13 @@ async function ReadinessPanel({ period }: { period: { start: string; end: string
 }
 
 // ── Payroll Review (the human checkpoint) ────────────────────────────────────────────────────────────
-async function ReviewTab({ period, which }: { period: { start: string; end: string; label: string }; which: "current" | "previous" }): Promise<React.JSX.Element> {
+async function ReviewTab({ period }: { period: { start: string; end: string; label: string } }): Promise<React.JSX.Element> {
   const r = await payrollReview(period);
   const approval = getApproval(period.start, period.end);
   if (r.status === "NO_DATA") {
     return <EmptyState icon={<ClipboardCheck className="size-5" />} title="Nothing to review yet" body="No worker hours for this period (or Connecteam is unavailable). Run a sync to pull hours, then review." />;
   }
+  const ratePlan = await buildRateSyncPlan(period.end);
   return (
     <div className="space-y-4">
       <section className="surface flex flex-wrap items-center justify-between gap-4 border p-4">
@@ -286,20 +298,40 @@ async function ReviewTab({ period, which }: { period: { start: string; end: stri
             <span className="text-positive">{r.counts.ready} ready · {money(r.estReadyPayroll)}</span>
             <span className="text-attention">{r.counts.review} review</span>
             <span className="text-critical">{r.counts.blocked} blocked · {money(r.estBlockedPayroll)}</span>
+            {r.excludedCount > 0 && <span className="text-meta">{r.excludedCount} excluded</span>}
           </div>
         </div>
-        <ApproveButton which={which} readyCount={r.counts.ready} />
+        <ApproveButton period={period} readyCount={r.counts.ready} />
       </section>
 
-      <ReviewGroup title="Blocked" tone="critical" rows={r.blocked} note="A blocking issue prevents payroll — resolve before approving." />
-      <ReviewGroup title="Requires review" tone="attention" rows={r.review} note="Anomalies or incomplete config — review, then they become ready." />
-      <ReviewGroup title="Ready" tone="positive" rows={r.ready} note="Clean records, eligible for approval." />
+      <RateSyncPanel proposals={ratePlan.proposals} asOf={ratePlan.asOf} salaried={ratePlan.salaried} noGustoRate={ratePlan.noGustoRate} />
+
+      <ReviewGroup title="Blocked" tone="critical" rows={r.blocked} note="A blocking issue prevents payroll — resolve or exclude before approving." period={period} />
+      <ReviewGroup title="Requires review" tone="attention" rows={r.review} note="Anomalies or incomplete config — review, then they become ready." period={period} />
+      <ReviewGroup title="Ready" tone="positive" rows={r.ready} note="Clean records, eligible for approval." period={period} />
+      <ReviewGroup title="Excluded" tone="muted" rows={r.excluded} note="Pulled out of this run (not counted or paid). Include to put them back." period={period} excluded />
     </div>
   );
 }
 
-function ReviewGroup({ title, tone, rows, note }: { title: string; tone: "critical" | "attention" | "positive"; rows: ReviewWorker[]; note: string }): React.JSX.Element {
-  const dot = tone === "critical" ? "bg-critical" : tone === "attention" ? "bg-attention" : "bg-positive";
+function rateCell(w: ReviewWorker): React.JSX.Element {
+  if (w.payRate == null) return <span className="text-attention">missing</span>;
+  const src = w.rateSource ? RATE_SOURCE_LABEL[w.rateSource] : null;
+  return (
+    <span>
+      {money(w.payRate, w.currency)}/hr
+      {src && <span className="ml-1 text-[10px] text-meta">· {src}</span>}
+    </span>
+  );
+}
+
+function ReviewGroup({ title, tone, rows, note, period, excluded }: {
+  title: string; tone: "critical" | "attention" | "positive" | "muted"; rows: ReviewWorker[]; note: string;
+  period: { start: string; end: string; label: string }; excluded?: boolean;
+}): React.JSX.Element {
+  const dot = tone === "critical" ? "bg-critical" : tone === "attention" ? "bg-attention" : tone === "positive" ? "bg-positive" : "bg-meta";
+  // Hide the Excluded group entirely when empty (it's not an action item), but always show the three run groups.
+  if (excluded && rows.length === 0) return <></>;
   return (
     <div>
       <div className="mb-1 flex items-center gap-2">
@@ -311,7 +343,7 @@ function ReviewGroup({ title, tone, rows, note }: { title: string; tone: "critic
         <p className="pl-4 text-[12px] text-meta">None.</p>
       ) : (
         <div className="surface overflow-x-auto border">
-          <table className="w-full min-w-[820px] text-[12.5px]">
+          <table className="w-full min-w-[920px] text-[12.5px]">
             <thead>
               <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
                 <th className="px-3 py-2 font-medium">Worker</th>
@@ -320,7 +352,8 @@ function ReviewGroup({ title, tone, rows, note }: { title: string; tone: "critic
                 <th className="px-3 py-2 text-right font-medium">Rate</th>
                 <th className="px-3 py-2 text-right font-medium">Est. pay</th>
                 <th className="px-3 py-2 font-medium">Gusto</th>
-                <th className="px-3 py-2 font-medium">Reason</th>
+                <th className="px-3 py-2 font-medium">{excluded ? "Excluded" : "Reason"}</th>
+                <th className="px-3 py-2 text-right font-medium"> </th>
               </tr>
             </thead>
             <tbody>
@@ -329,17 +362,34 @@ function ReviewGroup({ title, tone, rows, note }: { title: string; tone: "critic
                   <td className="px-3 py-2 font-medium text-foreground">{w.name}</td>
                   <td className="px-3 py-2 text-tertiary-text">{WORKER_TYPE_LABEL[w.workerType]}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{w.hours == null ? "—" : w.hours.toLocaleString("en-US")}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{w.payRate != null ? `${money(w.payRate, w.currency)}/hr` : <span className="text-attention">missing</span>}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{rateCell(w)}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{money(w.estPay, w.currency)}</td>
                   <td className="px-3 py-2"><span className={w.mappingStatus === "UNMATCHED" ? "text-attention" : "text-secondary-text"}>{MAPPING_STATUS_LABEL[w.mappingStatus]}</span></td>
                   <td className="px-3 py-2">
-                    {w.issues.length === 0 ? <span className="text-positive">—</span> : (
+                    {excluded ? (
+                      <span className="text-[11.5px] text-meta">
+                        <span className="rounded bg-[var(--row)] px-1.5 py-0.5 text-[10px] text-tertiary-text">{w.excludeMode === "period" ? "This period" : "Permanent"}</span>
+                        {w.excludeReason ? <span className="ml-1.5">{w.excludeReason}</span> : null}
+                      </span>
+                    ) : w.issues.length === 0 ? <span className="text-positive">—</span> : (
                       <span className="flex flex-wrap gap-1">
                         {w.issues.map((i) => (
                           <span key={i.code} className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${i.kind === "BLOCKING" ? "bg-critical/15 text-critical" : i.kind === "EXCEPTION" ? "bg-attention/15 text-attention" : "bg-[var(--row)] text-meta"}`}>{i.label}</span>
                         ))}
                       </span>
                     )}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <ExcludeControl
+                      workerKey={w.key}
+                      recordId={w.recordId ?? null}
+                      connecteamUserId={w.connecteamUserId ?? null}
+                      name={w.name}
+                      periodStart={period.start}
+                      periodEnd={period.end}
+                      excluded={excluded}
+                      excludeMode={w.excludeMode}
+                    />
                   </td>
                 </tr>
               ))}
@@ -352,7 +402,7 @@ function ReviewGroup({ title, tone, rows, note }: { title: string; tone: "critic
 }
 
 // ── Time Sync (the pipeline) ─────────────────────────────────────────────────────────────────────────
-async function SyncTab({ period, which }: { period: { start: string; end: string; label: string }; which: "current" | "previous" }): Promise<React.JSX.Element> {
+async function SyncTab({ period, weeksAgo }: { period: { start: string; end: string; label: string }; weeksAgo: number }): Promise<React.JSX.Element> {
   const records = countTimeEntries(period.start, period.end);
   const last = listSyncRuns(1)[0] ?? null;
   const r = await payrollReview(period);
@@ -378,7 +428,7 @@ async function SyncTab({ period, which }: { period: { start: string; end: string
         <div className="mb-3 grid grid-cols-2 gap-x-6 gap-y-3 text-[12.5px]">
           <Field label="Source" value="Connecteam" sub={connecteamConfigured() ? "connected" : "not connected"} />
           <Field label="Destination" value="Gusto" sub={gustoConfigured() ? "connected" : "not connected (push disabled)"} />
-          <Field label="Pay period" value={period.label} sub={which === "current" ? "this week" : "last week"} />
+          <Field label="Pay period" value={period.label} sub={weeksAgo === 1 ? "last week" : `${weeksAgo} weeks ago`} />
           <Field label="Normalized records" value={String(records)} sub="time entries stored" />
         </div>
         <div className="border-t border-rule pt-3">
@@ -394,7 +444,7 @@ async function SyncTab({ period, which }: { period: { start: string; end: string
           </ol>
         </div>
         <div className="mt-4 flex items-center gap-3 border-t border-rule pt-4">
-          <SyncButton which={which} label="Sync Now" variant="primary" />
+          <SyncButton period={period} label="Sync Now" variant="primary" />
           <p className="text-[11.5px] text-meta">
             Pulls Connecteam hours, normalizes + matches workers, reconciles and flags blockers/exceptions. Idempotent — running twice never duplicates hours.{last ? ` Last run ${relTime(last.finishedAt ?? last.startedAt)} · ${last.status.toLowerCase().replace(/_/g, " ")}.` : ""} Gusto push runs only after approval.
           </p>
@@ -610,7 +660,9 @@ function HistoryTab(): React.JSX.Element {
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────────────────────────────
-function SettingsTab({ which }: { which: "current" | "previous" }): React.JSX.Element {
+function SettingsTab(): React.JSX.Element {
+  // The Gusto DRAFT push always targets the last completed week (the week payroll is run for on Tuesday).
+  const which = "previous" as const;
   const ctOk = connecteamConfigured();
   const guOk = gustoConfigured();
   const cfg = getPayrollConfig();
