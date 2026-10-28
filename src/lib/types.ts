@@ -191,6 +191,14 @@ export interface Route {
   /** Goodshuffle's own routeID for this route, when the route came from a Goodshuffle
    *  pull. The write-back target for two-way sync (e.g. removing a waypoint). */
   gsRouteId?: string;
+  /** Set by the route-handoff automation when it finalized a VERIFIED-complete route (all stops terminal)
+   *  that a driver left open. Distinguishes an automation finalize from a human closeout; status is still
+   *  "done" because completion was real (never fabricated). Absent on normal routes. */
+  autoFinalizedAt?: string;
+  /** Set when the handoff automation RELEASED the truck for its next route WITHOUT verified completion
+   *  (Scenario B): the route stays open with its real status + timestamps, but is flagged here for office
+   *  reconciliation. A short reason string (e.g. "window_passed_unverified"); absent when not flagged. */
+  handoffFlag?: string;
   stops: Stop[];
 }
 

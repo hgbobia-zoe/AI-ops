@@ -19,6 +19,8 @@ import { connecteamConfigured, refreshConnecteamHealth, warmConnecteamCaches } f
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { runScheduledPayrollSyncIfDue, runScheduledPrecheckIfDue } from "@/lib/payroll/scheduler";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
+import { runRouteHandoffTick } from "@/lib/dispatch/handoffTick";
+import { getHandoffConfig } from "@/lib/dispatch/handoffConfig";
 import { runConnecteamImportTick, connecteamImportEnabled } from "@/lib/scheduling/connecteamReconcile";
 import { runRouteAutoSyncTick, connecteamAutosyncEnabled } from "@/lib/scheduling/routeAutoSync";
 import { runPeopleLifecycleTick } from "@/lib/people/lifecycleTick";
@@ -140,6 +142,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     note: "Recomputes shift readiness, advances lifecycle states, mirrors Connecteam timesheets (read-only), reconciles Instawork fills, and persists the exception queue. No sends, no external writes.",
     run: async () => {
       const r = await runShiftLifecycleTick();
+      return { ok: r.ok, detail: r.detail };
+    },
+  },
+  {
+    key: "route-handoff",
+    label: "Route handoff (multi-route trucks)",
+    bucket: "server",
+    configured: () => getHandoffConfig().enabled, // app-owned; the visibility fix is always on, this does the reconcile writes
+    note: "For a truck running back-to-back routes with different drivers: once a later route's handoff window opens, auto-finalizes the earlier route ONLY with verified completion evidence, else leaves it open, flags it for reconciliation, and alerts dispatch on a genuine conflict. Never fabricates a completion; the next driver's route is visible regardless.",
+    run: async () => {
+      const r = await runRouteHandoffTick();
       return { ok: r.ok, detail: r.detail };
     },
   },

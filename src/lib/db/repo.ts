@@ -8,6 +8,8 @@ import { getSettings } from "@/lib/settings";
 import { logChange } from "@/lib/history/store";
 import { detectLinenItems } from "@/lib/salesos/linen";
 import { slackNotify } from "@/lib/notify/slack";
+import { pickWorkableRoute, isVerifiedComplete } from "@/lib/dispatch/handoff";
+import { getHandoffConfig } from "@/lib/dispatch/handoffConfig";
 import type { Route, RouteStatus, Stop, StopState } from "@/lib/types";
 import type { CallRecap } from "@/lib/coach/recap";
 import { computeCallMetrics } from "@/lib/coach/metrics";
@@ -56,6 +58,8 @@ interface RouteRow {
   status: string;
   gs_route_id: string | null;
   updated_at: string;
+  auto_finalized_at?: string | null;
+  handoff_flag?: string | null;
 }
 
 function toStop(r: StopRow): Stop {
@@ -108,6 +112,8 @@ function buildRoute(row: RouteRow): Route {
     driverName: row.driver_name ?? undefined,
     status: row.status as RouteStatus,
     gsRouteId: row.gs_route_id ?? undefined,
+    autoFinalizedAt: row.auto_finalized_at ?? undefined,
+    handoffFlag: row.handoff_flag ?? undefined,
     stops,
   };
 }
@@ -141,15 +147,21 @@ function earliestStopMs(r: Route): number {
  *  returns the most-recently-updated one (a sane end state → the screen re-prompts). Falls back to the
  *  most recent still-unfinished route from on/before today (an overnight/carried-over job). Never a
  *  FUTURE route — the multi-week pull seeds days ahead. Returns null when the truck has nothing. */
-export function getActiveRouteForTruck(truckId: string, today: string = todayInOpsTz()): Route | null {
+export function getActiveRouteForTruck(truckId: string, today: string = todayInOpsTz(), nowMs: number = Date.now()): Route | null {
   const db = getDb();
   const rows = db.prepare("SELECT * FROM routes WHERE truck_id = ? AND date = ?").all(truckId, today) as RouteRow[];
   if (rows.length > 0) {
     const built = rows.map((row) => ({ row, route: buildRoute(row) }));
     const workable = built.filter((b) => b.route.status !== "done");
     if (workable.length > 0) {
-      workable.sort((a, b) => earliestStopMs(a.route) - earliestStopMs(b.route) || a.row.updated_at.localeCompare(b.row.updated_at));
-      return workable[0].route;
+      // Handoff visibility (multi-route-per-truck): once we are within the handoff buffer before a later
+      // route's start, surface THAT route even if an earlier one is still open, so a forgotten close never
+      // hides the next driver's assignment. Only applied when `today` is the real operating day (historical
+      // / carryover reads keep the plain earliest-first order). See dispatch/handoff.ts.
+      const applyHandoff = today === todayInOpsTz(new Date(nowMs));
+      const { bufferMinutes } = getHandoffConfig();
+      const picked = pickWorkableRoute(workable.map((b) => b.route), nowMs, bufferMinutes, applyHandoff);
+      if (picked) return picked;
     }
     // Every route today is done → show the one closed most recently (maps to a re-prompt, not a resurrect).
     built.sort((a, b) => b.row.updated_at.localeCompare(a.row.updated_at));
@@ -221,6 +233,13 @@ export function getRoutesForDate(truckId: string, date: string): Route[] {
     .prepare("SELECT * FROM routes WHERE truck_id = ? AND date = ?")
     .all(truckId, date) as RouteRow[];
   return rows.map(buildRoute).sort((a, b) => earliestStopMs(a) - earliestStopMs(b));
+}
+
+/** Distinct truck ids that have at least one route on a calendar day — the sweep set for the handoff tick. */
+export function getTruckIdsWithRoutesOnDate(date: string): string[] {
+  return (
+    getDb().prepare("SELECT DISTINCT truck_id FROM routes WHERE date = ?").all(date) as { truck_id: string }[]
+  ).map((r) => r.truck_id);
 }
 
 /** A stop on a route scheduled for a given calendar day — a precise delivery/pickup anchor for the
@@ -392,6 +411,46 @@ export function closeRoute(routeId: string): {
     return { ok: true, routeId, truckId: route.truckId, already: true, incomplete };
   setRouteStatus(routeId, "done");
   return { ok: true, routeId, truckId: route.truckId, incomplete };
+}
+
+/** Automation finalize of a VERIFIED-complete route (handoff Scenario A). Sets status "done" and stamps
+ *  auto_finalized_at so the close is attributable to the system, not a driver. Re-verifies completion at
+ *  write time (defends against a stop changing between plan and apply) and NEVER fabricates a completion:
+ *  returns ok:false if the route is missing or not every stop is terminal. Idempotent (no-op if done). */
+export function autoFinalizeRoute(routeId: string): { ok: boolean; already?: boolean; reason?: string } {
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM routes WHERE route_id = ?").get(routeId) as RouteRow | undefined;
+  if (!row) return { ok: false, reason: "missing" };
+  if (row.status === "done") return { ok: true, already: true };
+  if (!isVerifiedComplete(buildRoute(row))) return { ok: false, reason: "not_verified_complete" };
+  const now = new Date().toISOString();
+  db.prepare("UPDATE routes SET status = 'done', auto_finalized_at = ?, updated_at = ? WHERE route_id = ?").run(now, now, routeId);
+  return { ok: true };
+}
+
+/** Flag a stale earlier route for office reconciliation (handoff Scenario B) WITHOUT changing its status —
+ *  its real state + timestamps are preserved (never a fabricated close). Idempotent: a no-op if already
+ *  flagged, and it never clears a flag. */
+export function flagRouteForHandoff(routeId: string, reason: string): { ok: boolean; already?: boolean } {
+  const db = getDb();
+  const row = db.prepare("SELECT handoff_flag FROM routes WHERE route_id = ?").get(routeId) as
+    | { handoff_flag: string | null }
+    | undefined;
+  if (!row) return { ok: false };
+  if (row.handoff_flag) return { ok: true, already: true };
+  db.prepare("UPDATE routes SET handoff_flag = ?, updated_at = ? WHERE route_id = ?").run(
+    reason,
+    new Date().toISOString(),
+    routeId,
+  );
+  return { ok: true };
+}
+
+/** Clear a handoff reconciliation flag once the office has resolved the route. */
+export function clearRouteHandoffFlag(routeId: string): void {
+  getDb()
+    .prepare("UPDATE routes SET handoff_flag = NULL, updated_at = ? WHERE route_id = ?")
+    .run(new Date().toISOString(), routeId);
 }
 
 /**
