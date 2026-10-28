@@ -43,6 +43,7 @@ import { ApproveButton } from "@/components/payroll/ApproveButton";
 import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 import { ExceptionActions } from "@/components/payroll/ExceptionActions";
 import { ExcludeControl } from "@/components/payroll/ExcludeControl";
+import { ApproveControl } from "@/components/payroll/ApproveControl";
 import { RateSyncPanel } from "@/components/payroll/RateSyncPanel";
 import { buildRateSyncPlan } from "@/lib/payroll/rateSync";
 import { RATE_SOURCE_LABEL } from "@/lib/payroll/types";
@@ -285,6 +286,11 @@ async function ReviewTab({ period }: { period: { start: string; end: string; lab
     return <EmptyState icon={<ClipboardCheck className="size-5" />} title="Nothing to review yet" body="No worker hours for this period (or Connecteam is unavailable). Run a sync to pull hours, then review." />;
   }
   const ratePlan = await buildRateSyncPlan(period.end);
+  // Gusto members for the inline worker editor on review rows (map / classify / set rate). Same source the
+  // Workers tab uses, so a mapping set from the review table is identical to one set on the Workers tab.
+  const gustoMembers: GustoPick[] = (readGustoSnapshot()?.members ?? []).map((m) => ({
+    id: m.id, name: m.preferredName || `${m.firstName} ${m.lastName}`.trim() || m.id, personType: m.personType, country: m.country,
+  }));
   return (
     <div className="space-y-4">
       <section className="surface flex flex-wrap items-center justify-between gap-4 border p-4">
@@ -306,10 +312,10 @@ async function ReviewTab({ period }: { period: { start: string; end: string; lab
 
       <RateSyncPanel proposals={ratePlan.proposals} asOf={ratePlan.asOf} salaried={ratePlan.salaried} noGustoRate={ratePlan.noGustoRate} />
 
-      <ReviewGroup title="Blocked" tone="critical" rows={r.blocked} note="A blocking issue prevents payroll — resolve or exclude before approving." period={period} />
-      <ReviewGroup title="Requires review" tone="attention" rows={r.review} note="Anomalies or incomplete config — review, then they become ready." period={period} />
-      <ReviewGroup title="Ready" tone="positive" rows={r.ready} note="Clean records, eligible for approval." period={period} />
-      <ReviewGroup title="Excluded" tone="muted" rows={r.excluded} note="Pulled out of this run (not counted or paid). Include to put them back." period={period} excluded />
+      <ReviewGroup title="Blocked" tone="critical" rows={r.blocked} note="A blocking issue prevents payroll — map the worker to Gusto, or exclude them, before approving." period={period} group="blocked" gustoMembers={gustoMembers} />
+      <ReviewGroup title="Requires review" tone="attention" rows={r.review} note="Anomalies or incomplete config — approve to accept into the run, edit to resolve, or exclude." period={period} group="review" gustoMembers={gustoMembers} />
+      <ReviewGroup title="Ready" tone="positive" rows={r.ready} note="Clean records, eligible for approval." period={period} group="ready" gustoMembers={gustoMembers} />
+      <ReviewGroup title="Excluded" tone="muted" rows={r.excluded} note="Pulled out of this run (not counted or paid). Include to put them back." period={period} group="excluded" excluded gustoMembers={gustoMembers} />
     </div>
   );
 }
@@ -325,9 +331,10 @@ function rateCell(w: ReviewWorker): React.JSX.Element {
   );
 }
 
-function ReviewGroup({ title, tone, rows, note, period, excluded }: {
+function ReviewGroup({ title, tone, rows, note, period, excluded, group, gustoMembers }: {
   title: string; tone: "critical" | "attention" | "positive" | "muted"; rows: ReviewWorker[]; note: string;
   period: { start: string; end: string; label: string }; excluded?: boolean;
+  group: "blocked" | "review" | "ready" | "excluded"; gustoMembers: GustoPick[];
 }): React.JSX.Element {
   const dot = tone === "critical" ? "bg-critical" : tone === "attention" ? "bg-attention" : tone === "positive" ? "bg-positive" : "bg-meta";
   // Hide the Excluded group entirely when empty (it's not an action item), but always show the three run groups.
@@ -343,7 +350,7 @@ function ReviewGroup({ title, tone, rows, note, period, excluded }: {
         <p className="pl-4 text-[12px] text-meta">None.</p>
       ) : (
         <div className="surface overflow-x-auto border">
-          <table className="w-full min-w-[920px] text-[12.5px]">
+          <table className="w-full min-w-[1040px] text-[12.5px]">
             <thead>
               <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
                 <th className="px-3 py-2 font-medium">Worker</th>
@@ -353,7 +360,7 @@ function ReviewGroup({ title, tone, rows, note, period, excluded }: {
                 <th className="px-3 py-2 text-right font-medium">Est. pay</th>
                 <th className="px-3 py-2 font-medium">Gusto</th>
                 <th className="px-3 py-2 font-medium">{excluded ? "Excluded" : "Reason"}</th>
-                <th className="px-3 py-2 text-right font-medium"> </th>
+                <th className="px-3 py-2 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -380,16 +387,19 @@ function ReviewGroup({ title, tone, rows, note, period, excluded }: {
                     )}
                   </td>
                   <td className="px-3 py-2 text-right">
-                    <ExcludeControl
-                      workerKey={w.key}
-                      recordId={w.recordId ?? null}
-                      connecteamUserId={w.connecteamUserId ?? null}
-                      name={w.name}
-                      periodStart={period.start}
-                      periodEnd={period.end}
-                      excluded={excluded}
-                      excludeMode={w.excludeMode}
-                    />
+                    {group === "excluded" ? (
+                      <ExcludeControl workerKey={w.key} recordId={w.recordId ?? null} connecteamUserId={w.connecteamUserId ?? null} name={w.name} periodStart={period.start} periodEnd={period.end} excluded excludeMode={w.excludeMode} />
+                    ) : (
+                      <div className="flex items-start justify-end gap-1.5">
+                        {group === "review" && <ApproveControl workerKey={w.key} name={w.name} periodStart={period.start} periodEnd={period.end} />}
+                        {group === "ready" && w.accepted && <ApproveControl workerKey={w.key} name={w.name} periodStart={period.start} periodEnd={period.end} accepted acceptedBy={w.acceptedBy ?? null} />}
+                        <WorkerEditor
+                          worker={{ recordId: w.recordId ?? null, connecteamUserId: w.connecteamUserId ?? null, name: w.name, workerType: w.workerType, payType: w.payType ?? null, payRate: w.payRate, currency: w.currency, country: w.country ?? null, gustoId: w.gustoId ?? null }}
+                          gustoMembers={gustoMembers}
+                        />
+                        <ExcludeControl workerKey={w.key} recordId={w.recordId ?? null} connecteamUserId={w.connecteamUserId ?? null} name={w.name} periodStart={period.start} periodEnd={period.end} />
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

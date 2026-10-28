@@ -6,7 +6,7 @@
 
 import { unifiedWorkers } from "./workers";
 import { getPayrollConfig } from "./config";
-import { listPeriodExclusions, type PeriodExclusion } from "./store";
+import { listPeriodExclusions, listReviewAccepts, type PeriodExclusion, type ReviewAccept } from "./store";
 import type { ExcludeMode, IssueTag, PayPeriod, PayrollReviewResult, ReviewStatus, ReviewWorker, UnifiedWorker } from "./types";
 
 export interface ReviewOptions {
@@ -48,6 +48,7 @@ export function classifyWorker(w: UnifiedWorker, opts: ReviewOptions): ReviewWor
     recordId: w.recordId, connecteamUserId: w.connecteamUserId,
     rateSource: w.rateSource ?? null, gustoRate: w.gustoRate ?? null, gustoRateUnit: w.gustoRateUnit ?? null,
     connecteamRate: w.connecteamRate ?? null,
+    gustoId: w.gustoId ?? null, country: w.country ?? null, payType: w.payType ?? null,
   };
 }
 
@@ -68,11 +69,13 @@ export function classifyReview(
   connecteamOk: boolean,
   opts: ReviewOptions = DEFAULT_REVIEW_OPTIONS,
   periodExclusions: Map<string, PeriodExclusion> = new Map(),
+  reviewAccepts: Map<string, ReviewAccept> = new Map(),
 ): PayrollReviewResult {
   // Candidates for the run = active workers with actual hours this period.
   const candidates = workers.filter((w) => w.active && (w.periodHours ?? 0) > 0);
 
   // EXCLUDED — pulled out of the run (permanent flag on the worker, OR a per-period skip). Not counted/gated.
+  // Exclusion wins over a review accept — a worker who is both excluded and accepted stays excluded.
   const excluded: ReviewWorker[] = [];
   const toClassify: UnifiedWorker[] = [];
   for (const w of candidates) {
@@ -85,7 +88,17 @@ export function classifyReview(
     }
   }
 
-  const paid = toClassify.map((w) => classifyWorker(w, opts));
+  // Classify, then PROMOTE accepted review workers to READY. A human reviewed a REQUIRES_REVIEW worker and
+  // accepted them into this run, so they become pushable. GUARD: only a REQUIRES_REVIEW worker is ever
+  // promoted — a BLOCKED (unmapped) worker is never accepted into the run (the push would fail for them),
+  // and excluded workers were already pulled out above.
+  const paid = toClassify.map((w) => {
+    const rw = classifyWorker(w, opts);
+    if (rw.status === "REQUIRES_REVIEW" && reviewAccepts.has(rw.key)) {
+      return { ...rw, status: "READY" as ReviewStatus, accepted: true, acceptedBy: reviewAccepts.get(rw.key)?.acceptedBy ?? null };
+    }
+    return rw;
+  });
 
   const ready = paid.filter((w) => w.status === "READY");
   const review = paid.filter((w) => w.status === "REQUIRES_REVIEW");
@@ -116,5 +129,6 @@ export async function payrollReview(period: PayPeriod, opts?: ReviewOptions): Pr
   const { workers, connecteamOk } = await unifiedWorkers(period);
   const resolved = opts ?? { overtimeThreshold: getPayrollConfig().overtimeThreshold };
   const periodExclusions = listPeriodExclusions(period.start, period.end);
-  return classifyReview(period, workers, connecteamOk, resolved, periodExclusions);
+  const reviewAccepts = listReviewAccepts(period.start, period.end);
+  return classifyReview(period, workers, connecteamOk, resolved, periodExclusions, reviewAccepts);
 }

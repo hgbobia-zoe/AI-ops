@@ -1950,6 +1950,19 @@ CREATE TABLE IF NOT EXISTS hr_payroll_exclusions (
   PRIMARY KEY (period_start, period_end, worker_key)
 );
 
+-- Per-period review ACCEPT — the inverse of an exclusion. A human reviewed a REQUIRES_REVIEW worker and
+-- accepts them into THIS period's run, promoting them to READY (pushable). Never promotes a BLOCKED (unmapped)
+-- or EXCLUDED worker. Keyed by the review worker key (ct:<userId> | hw:<id>); scoped to one pay period.
+CREATE TABLE IF NOT EXISTS hr_payroll_review_accepts (
+  period_start TEXT NOT NULL,            -- YYYY-MM-DD
+  period_end   TEXT NOT NULL,
+  worker_key   TEXT NOT NULL,            -- ct:<userId> | hw:<id>
+  accepted_by  TEXT,                     -- actor label
+  note         TEXT,                     -- optional note
+  created_at   TEXT NOT NULL,
+  PRIMARY KEY (period_start, period_end, worker_key)
+);
+
 -- Event Lifecycle Engine (Phase 3) — durable geocode cache for the weather module. Addresses are
 -- STABLE, so geocodes are cached forever (Census is free but slow); resolved=0 records a KNOWN-miss so
 -- we don't re-hit Census for an address that won't geocode. Forecasts are volatile and are NEVER cached

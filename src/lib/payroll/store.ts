@@ -145,6 +145,44 @@ export function removePeriodExclusion(periodStart: string, periodEnd: string, wo
     .run(periodStart, periodEnd, workerKey);
 }
 
+// ── hr_payroll_review_accepts (per-period review accept — the inverse of a per-period exclusion) ─────
+// A human reviewed a REQUIRES_REVIEW worker and accepts them into THIS period's run, promoting them to
+// READY (pushable). Keyed by the review worker key (ct:<userId> | hw:<id>); one pay period. Idempotent.
+export interface ReviewAccept {
+  workerKey: string;
+  acceptedBy: string | null;
+  note: string | null;
+  createdAt: string;
+}
+interface ReviewAcceptRow {
+  period_start: string; period_end: string; worker_key: string;
+  accepted_by: string | null; note: string | null; created_at: string;
+}
+/** All per-period review accepts for a period, as a map keyed by worker_key. Empty when none. */
+export function listReviewAccepts(periodStart: string, periodEnd: string): Map<string, ReviewAccept> {
+  const rows = getDb().prepare(
+    "SELECT * FROM hr_payroll_review_accepts WHERE period_start=? AND period_end=?",
+  ).all(periodStart, periodEnd) as ReviewAcceptRow[];
+  const m = new Map<string, ReviewAccept>();
+  for (const r of rows) m.set(r.worker_key, { workerKey: r.worker_key, acceptedBy: r.accepted_by, note: r.note, createdAt: r.created_at });
+  return m;
+}
+/** Idempotent upsert of a per-period review accept (re-accepting refreshes the actor/note). */
+export function addReviewAccept(p: {
+  periodStart: string; periodEnd: string; workerKey: string; acceptedBy?: string | null; note?: string | null;
+}): void {
+  getDb().prepare(
+    `INSERT INTO hr_payroll_review_accepts (period_start, period_end, worker_key, accepted_by, note, created_at)
+     VALUES (@ps, @pe, @key, @by, @note, @now)
+     ON CONFLICT(period_start, period_end, worker_key) DO UPDATE SET accepted_by=@by, note=@note, created_at=@now`,
+  ).run({ ps: p.periodStart, pe: p.periodEnd, key: p.workerKey, by: p.acceptedBy ?? null, note: p.note ?? null, now: new Date().toISOString() });
+}
+/** Remove a review accept (un-approve for this period). No-op when absent. */
+export function removeReviewAccept(periodStart: string, periodEnd: string, workerKey: string): void {
+  getDb().prepare("DELETE FROM hr_payroll_review_accepts WHERE period_start=? AND period_end=? AND worker_key=?")
+    .run(periodStart, periodEnd, workerKey);
+}
+
 // ── hr_sync_runs ───────────────────────────────────────────────────────────────────────────────────
 interface SyncRow {
   id: string; period_start: string; period_end: string; trigger: string; initiated_by: string | null;
