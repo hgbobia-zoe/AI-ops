@@ -1,9 +1,14 @@
 # Gusto remote-browser runner (office machine)
 
 Lets a payroll person **with no browser extension** push DRAFT hours to Gusto from the app and watch it
-happen. The app queues an approved push; this runner — a persistent, logged-in Gusto browser on the office
-machine (residential IP, so Cloudflare is happy) — claims it, writes the hours into the **current DRAFT run**,
-and streams a live screenshot + per-worker results back to `/payroll`.
+happen. The app queues an approved push; this runner — a residential-IP browser on the office machine (so
+Cloudflare is happy) — claims it and writes the hours into the **current DRAFT run**, streaming a live
+screenshot + per-worker results back to `/payroll`.
+
+**No persistent Gusto login.** Every push uses a fresh, logged-out session: the person who triggered it signs
+into Gusto with **their own credentials** in the pane, the write is made **as them** (so it's audited to them in
+Gusto's own log), and the session is discarded when the push finishes. Nobody is ever kept signed into Gusto on
+the office machine, and anyone with payroll access can push whenever they want — they just sign in for that push.
 
 Same pattern as the Website Studio runner (app queues, office machine executes). It replaces the per-user
 `gusto-push.js` extension path — nothing to install on the payroll person's machine.
@@ -35,9 +40,9 @@ not a DRAFT**. Identical guarantees to `extension/gusto-push.js`.
    ```
    Or run it in the foreground to watch it: `.\start.ps1`.
 
-That's it. **No sign-in step here** — the runner can run headless from day one, and the first Gusto login (and
-every later re-login) happens from the `/payroll` pane (see below). Keep the machine powered on and logged into
-Windows. One job at a time; a failed job is marked `failed` in the app and the loop continues.
+That's it. **No sign-in step here** — the runner runs headless, and **every push's Gusto sign-in happens from
+the `/payroll` pane** (see below) with the triggering person's own credentials. Keep the machine powered on and
+logged into Windows. One job at a time; a failed job is marked `failed` in the app and the loop continues.
 
 Config lives in `.env` (git-ignored). You can still override any value inline, e.g. `GUSTO_HEADLESS= .\start.ps1`
 to force a visible window for debugging.
@@ -86,15 +91,16 @@ convert that back to a top-level `import`.
 **Diagnosing a silent task exit:** the runner tees stdout/stderr and fatal errors to **`boot.log`** in its own
 folder (the scheduled task itself discards them). After a failed start, read `boot.log` for the real error.
 
-## Interactive sign-in from the app (Phase 2)
+## Per-user sign-in from the app
 
-When the Gusto session lapses, the job goes to `signin_required` and the pane streams the **live login screen**.
-The payroll person signs in **from `/payroll`** — their clicks and keystrokes are forwarded to this browser — so
-**nobody has to touch the office machine** for a routine re-login. Guards: the runner only replays forwarded
-input while the page is a `gusto.com` auth screen (`applyInput`), and the app only accepts input from an
-owner/admin while the job is `signin_required`. The DRAFT hours write is always fully automated and never takes
-forwarded input. For headless background operation this is the normal re-login path; keep a headful window only
-if you prefer to sign in at the machine.
+**Every** push starts logged out (the context is fresh), so the job goes to `signin_required` and the pane
+streams the **live Gusto login screen**. The person pushing signs in **from `/payroll`** with **their own Gusto
+credentials** — their clicks and keystrokes are forwarded to this browser — so the write is made as them (and
+audited to them in Gusto), and **nobody has to touch the office machine**. When the push finishes the session is
+discarded; the next push prompts for sign-in again. Guards: the runner only replays forwarded input while the
+page is a `gusto.com` auth screen (`applyInput`), and the app only accepts input from an owner/admin while the
+job is `signin_required`. The DRAFT hours write is always fully automated and never takes forwarded input.
+(Trade-off: a sign-in, including 2FA, on every push — the cost of no standing login + per-person attribution.)
 
 ## Config (env)
 
@@ -102,7 +108,6 @@ if you prefer to sign in at the machine.
 |-----|---------|---------|
 | `APP_URL` | — (required) | The Zoe app origin |
 | `GUSTO_RUNNER_TOKEN` | — (required) | Shared secret; must match the app's env |
-| `GUSTO_PROFILE_DIR` | `./.gusto-profile` | Persistent Chrome profile dir (the logged-in session) |
 | `GUSTO_HEADLESS` | unset (headful) | `1` = no visible window (recommended; sign-in still works from the pane) |
 | `POLL_INTERVAL_MS` | `10000` | How often to poll for a job |
 | `FRAME_INTERVAL_MS` | `1500` | Live screenshot cadence to the app |
