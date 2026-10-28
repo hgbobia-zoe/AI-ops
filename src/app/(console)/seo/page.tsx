@@ -61,7 +61,7 @@ export default function SeoOverviewPage(): React.JSX.Element {
           <div className="mt-3 flex items-start gap-2 rounded border border-border bg-[var(--row-hover)] px-3 py-2.5 text-[12.5px] text-tertiary-text">
             <Info className="mt-0.5 size-3.5 shrink-0 text-meta" />
             <span>
-              No opportunities yet. Keyword discovery and matching land in a later phase; once the Ubersuggest connection is live and a research pull runs, opportunities will appear here awaiting analysis.
+              No opportunities yet. The discovery + matching engine is live; it populates once the office machine signs into Ubersuggest and pushes keyword data (the free tier drips a few/day). Opportunities then appear here awaiting analysis.
             </span>
           </div>
         )}
@@ -76,7 +76,7 @@ export default function SeoOverviewPage(): React.JSX.Element {
               Connections <ArrowUpRight className="size-3.5" />
             </Link>
           </div>
-          <SeoHealthCard health={d.health} />
+          <SeoHealthCard health={d.health} watcher={d.watcher} />
         </section>
 
         {/* Retrieval diagnostics — honest log of what the boundary actually did. */}

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Search } from "lucide-react";
 import { StatusMark } from "@/components/console-primitives";
 import type { SeoHealth, SeoHealthStatus } from "@/lib/seo/types";
+import type { SeoWatcherStatus } from "@/lib/seo/watcher";
 
 const TONE: Record<SeoHealthStatus, "positive" | "attention" | "critical" | "idle"> = {
   ok: "positive",
@@ -27,7 +28,7 @@ function ago(iso: string | null): string {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
-export function SeoHealthCard({ health }: { health: SeoHealth }): React.JSX.Element {
+export function SeoHealthCard({ health, watcher }: { health: SeoHealth; watcher?: SeoWatcherStatus }): React.JSX.Element {
   return (
     <div className="rounded border border-border p-4">
       <div className="flex items-start justify-between gap-3">
@@ -54,6 +55,20 @@ export function SeoHealthCard({ health }: { health: SeoHealth }): React.JSX.Elem
           <>
             <dt className="text-meta">Last error</dt>
             <dd className="truncate text-right text-critical" title={health.lastError}>{health.lastError}</dd>
+          </>
+        )}
+        {watcher && (
+          <>
+            <dt className="text-meta">Keywords pulled</dt>
+            <dd className="text-right tabular-nums text-foreground">{watcher.discovered} / {watcher.totalSeeds} <span className="text-meta">({watcher.pending} pending)</span></dd>
+            <dt className="text-meta">Last keyword pull</dt>
+            <dd className={`text-right tabular-nums ${watcher.lastIngestAt ? "text-foreground" : "text-meta"}`}>{ago(watcher.lastIngestAt)}</dd>
+            {watcher.lastLimitHitAt && (
+              <>
+                <dt className="text-meta">Daily limit last hit</dt>
+                <dd className="text-right tabular-nums text-attention" title="Ubersuggest free-tier daily limit. Upgrade to paid or wait for reset.">{ago(watcher.lastLimitHitAt)}</dd>
+              </>
+            )}
           </>
         )}
       </dl>

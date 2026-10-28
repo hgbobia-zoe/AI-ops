@@ -8,7 +8,7 @@
 // pipeline against a MOCKED boundary (the ONLY place mocks are allowed).
 
 import { callTool as realCallTool, configured as realConfigured, type McpResult } from "./ubersuggest";
-import { upsertOpportunity, findOpportunityByDedupe, getOpportunity, setAnalysis, setOpportunityStage } from "./store";
+import { upsertOpportunity, findOpportunityByDedupe, getOpportunity, setAnalysis, setOpportunityStage, allDedupeKeys, dedupeKey, recordRetrieval } from "./store";
 import { analyzeOpportunity } from "./analyze";
 import { ZOE_PAGES } from "./zoe-pages";
 import type { SeoIntent, SeoMetrics, ZoePage } from "./types";
@@ -218,6 +218,28 @@ export interface DiscoverResult {
 
 const DEFAULT_TOOL = process.env.UBERSUGGEST_KEYWORD_TOOL || "keyword_ideas";
 
+/** Persist one parsed keyword's facts: upsert the opportunity (dedupe-safe) + analyze (match/priority) +
+ *  advance DISCOVERED → ANALYZING. The SHARED core of both the server-side pull (discover) and the
+ *  office-runner push (ingestKeywordResults), so they can never diverge. Returns new-vs-refreshed + analyzed. */
+export function applyKeywordFacts(seed: SeedKeyword, parsed: ParsedKeyword, retrievedAt: string | null, pages: ZoePage[] = ZOE_PAGES): { id: string; created: boolean; analyzed: boolean } {
+  const intent = parsed.intent ?? seed.intent;
+  const existed = findOpportunityByDedupe(seed.keyword, intent, seed.location) != null;
+  const id = upsertOpportunity({
+    keyword: seed.keyword,
+    intent,
+    location: seed.location,
+    category: seed.category,
+    relatedKeywords: parsed.relatedKeywords,
+    competitorRefs: parsed.competitorRefs,
+    metrics: parsed.hasMetrics ? parsed.metrics : null,
+    metricsSource: parsed.hasMetrics ? "ubersuggest" : "none",
+    source: "ubersuggest",
+    researchAt: retrievedAt,
+  });
+  const analyzed = reanalyze(id, pages);
+  return { id, created: !existed, analyzed };
+}
+
 /** Re-run match + priority for an opportunity and persist (used by discovery and the re-analyze path). */
 export function reanalyze(id: string, pages: ZoePage[] = ZOE_PAGES): boolean {
   const opp = getOpportunity(id);
@@ -270,25 +292,132 @@ export async function discover(opts: DiscoverOptions = {}): Promise<DiscoverResu
       continue;
     }
 
-    const intent = parsed.intent ?? seed.intent;
-    const existed = findOpportunityByDedupe(seed.keyword, intent, seed.location) != null;
-    const id = upsertOpportunity({
-      keyword: seed.keyword,
-      intent,
-      location: seed.location,
-      category: seed.category,
-      relatedKeywords: parsed.relatedKeywords,
-      competitorRefs: parsed.competitorRefs,
-      metrics: parsed.hasMetrics ? parsed.metrics : null,
-      metricsSource: parsed.hasMetrics ? "ubersuggest" : "none",
-      source: "ubersuggest",
-      researchAt: res.retrievedAt,
-    });
-    if (existed) result.updated++;
-    else result.created++;
-    if (reanalyze(id, pages)) result.analyzed++;
+    const { created, analyzed } = applyKeywordFacts(seed, parsed, res.retrievedAt, pages);
+    if (created) result.created++;
+    else result.updated++;
+    if (analyzed) result.analyzed++;
   }
 
   result.note = `Pulled ${result.attempted} keyword(s): ${result.created} new, ${result.updated} refreshed, ${result.analyzed} analyzed, ${result.skipped} gated out, ${result.errors} errors.`;
   return result;
+}
+
+// ── office-runner PUSH path (path B) ──────────────────────────────────────────────────────────────
+// Ubersuggest's MCP is OAuth-only (no static token), so the OFFICE MACHINE runs the MCP client, does the
+// one-time browser sign-in, pulls keyword data, and PUSHES it here via /api/seo/ingest. The app never calls
+// Ubersuggest in this path. ingestKeywordResults reuses the EXACT parse → gate → upsert → analyze core
+// (applyKeywordFacts), so pushed data lands identically to a server-side pull. HONESTY: a limit-hit records a
+// rate-limited diagnostic and creates NO fabricated rows — the watcher surfaces it.
+
+function safeTruncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}… (${s.length} chars)` : s;
+}
+
+/** One pushed keyword result from the runner: the seed identity + the RAW MCP tool result (parsed here, so
+ *  the unverified schema is handled in one place). */
+export interface SeoIngestKeywordInput {
+  keyword: string;
+  category?: string | null;
+  location?: string | null;
+  intent?: SeoIntent | null;
+  rawResult: unknown;
+}
+
+/** Batch-level signal from the runner: quota/limit state + the first-run schema capture (toolsList/toolName). */
+export interface SeoIngestMeta {
+  limitHit?: boolean;
+  quota?: { remaining?: number | null; resetAt?: string | null };
+  error?: string | null;
+  toolName?: string | null;
+  toolsList?: unknown;
+  retrievedAt?: string | null;
+}
+
+export interface SeoIngestBatch {
+  keywords?: SeoIngestKeywordInput[];
+  meta?: SeoIngestMeta;
+}
+
+export interface SeoIngestResult {
+  received: number;
+  created: number;
+  updated: number;
+  analyzed: number;
+  skipped: number;
+  errors: number;
+  limitHit: boolean;
+  note: string;
+  ranAt: string;
+}
+
+/** Apply a batch the office runner pushed. Pure persistence (no network). Records retrieval diagnostics so
+ *  the health card's freshness + the watcher's limit-hit are driven by REAL ingests, never fabricated. */
+export function ingestKeywordResults(batch: SeoIngestBatch, opts: { pages?: ZoePage[] } = {}): SeoIngestResult {
+  const ranAt = new Date().toISOString();
+  const pages = opts.pages ?? ZOE_PAGES;
+  const meta = batch.meta ?? {};
+  const toolName = meta.toolName ?? null;
+  const result: SeoIngestResult = { received: 0, created: 0, updated: 0, analyzed: 0, skipped: 0, errors: 0, limitHit: !!meta.limitHit, note: "", ranAt };
+  const kws = Array.isArray(batch.keywords) ? batch.keywords : [];
+
+  for (const kw of kws) {
+    if (!kw || typeof kw.keyword !== "string" || !kw.keyword.trim()) {
+      result.errors++;
+      continue;
+    }
+    result.received++;
+    const seed: SeedKeyword = {
+      keyword: kw.keyword.trim(),
+      category: (kw.category ?? "").toString().trim() || "uncategorized",
+      location: kw.location ?? null,
+      intent: (typeof kw.intent === "string" ? kw.intent : "commercial") as SeoIntent,
+    };
+    let parsed: ParsedKeyword;
+    try {
+      parsed = parseKeywordResult(kw.rawResult);
+    } catch {
+      result.errors++;
+      recordRetrieval({ operation: "ingest", ok: false, tool: toolName, detail: `parse error: ${seed.keyword}` });
+      continue;
+    }
+    if (!passesGate(seed, parsed)) {
+      result.skipped++;
+      continue;
+    }
+    try {
+      const { created, analyzed } = applyKeywordFacts(seed, parsed, meta.retrievedAt ?? ranAt, pages);
+      if (created) result.created++;
+      else result.updated++;
+      if (analyzed) result.analyzed++;
+      recordRetrieval({ operation: "ingest", ok: true, tool: toolName, detail: `ingested: ${seed.keyword}` });
+    } catch (e) {
+      // Failure isolation: one bad keyword never aborts the batch.
+      result.errors++;
+      recordRetrieval({ operation: "ingest", ok: false, tool: toolName, detail: `ingest error (${seed.keyword}): ${safeTruncate(String(e), 300)}` });
+    }
+  }
+
+  // First-run schema capture — the live Ubersuggest tool name + a sample result shape, so the parser can be
+  // confirmed/tweaked against reality. Stored as a diagnostic (also visible in recentDiagnostics).
+  if (meta.toolsList !== undefined) {
+    recordRetrieval({ operation: "ingest.schema", ok: true, tool: toolName, detail: safeTruncate(JSON.stringify(meta.toolsList), 4000) });
+  }
+  // Limit-hit → an honest rate-limited diagnostic (drives the watcher). NO data is fabricated.
+  if (meta.limitHit) {
+    recordRetrieval({ operation: "ingest", ok: false, tool: toolName, rateLimited: true, detail: `Ubersuggest daily limit reached${meta.quota?.resetAt ? ` — resets ${meta.quota.resetAt}` : ""}` });
+  } else if (meta.error) {
+    recordRetrieval({ operation: "ingest", ok: false, tool: toolName, detail: safeTruncate(meta.error, 500) });
+  }
+
+  result.note = `Ingested ${result.received}: ${result.created} new, ${result.updated} refreshed, ${result.analyzed} analyzed, ${result.skipped} gated out, ${result.errors} errors${meta.limitHit ? " (daily limit hit)" : ""}.`;
+  return result;
+}
+
+/** The seed keywords NOT yet discovered — what the office runner should pull next (so a 3/day free-tier drip
+ *  resumes without re-pulling). Computed from the committed seed catalog minus the stored dedupe keys. */
+export function pendingSeedKeywords(opts: { limit?: number; maxGeosPerCategory?: number; categories?: string[] } = {}): SeedKeyword[] {
+  const seeds = buildSeedKeywords({ maxGeosPerCategory: opts.maxGeosPerCategory, categories: opts.categories });
+  const have = allDedupeKeys();
+  const pending = seeds.filter((s) => !have.has(dedupeKey(s.keyword, s.intent, s.location)));
+  return typeof opts.limit === "number" ? pending.slice(0, Math.max(0, opts.limit)) : pending;
 }

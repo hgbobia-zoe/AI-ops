@@ -1,0 +1,13 @@
+{
+  "name": "seo-runner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Office-machine runner for AI-OPS SEO Growth (path B): runs the Ubersuggest MCP client (OAuth sign-in once, headless thereafter), pulls a small batch of pending keywords, and PUSHES the raw results to the app at /api/seo/ingest. Free-tier safe: drips SEO_BATCH keywords/run and stops on a quota/limit response so the app's watcher can alert. Never fabricates data.",
+  "scripts": {
+    "start": "node runner.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0"
+  }
+}

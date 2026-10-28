@@ -65,6 +65,7 @@ const PUBLIC: string[] = [
   "/api/radar/ingest", // Opportunity Radar browser-agent POST; RADAR_INGEST_TOKEN + CORS-locked, not a session
   "/api/radar/cron", // Opportunity Radar scheduled source pull; RADAR_INGEST_TOKEN, hit by an external scheduler
   "/api/seo/cron", // SEO Growth scheduled discovery pull; SEO_INGEST_TOKEN, hit by an external scheduler (not a session)
+  "/api/seo/ingest", // SEO Growth office-runner PUSH (Ubersuggest MCP is OAuth-only, so the office machine pulls + posts here); SEO_INGEST_TOKEN (fail-open), CORS-locked — not a session
   "/api/website/runner", // Website Studio office-runner endpoints (next/update); WEBSITE_RUNNER_TOKEN-gated in-handler, fail-CLOSED (503 until set) — the office machine hits these, NOT a session. Only the /runner sub-path is public; /api/website/jobs stays session + role-gated below.
 ];
 

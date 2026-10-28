@@ -45,6 +45,11 @@ goodshuffle-auth.json
 *storage-state*.json
 worker.env
 
+# Office-machine runner artifacts — deps, logs, cached creds/browsers (never committed)
+tools/*/node_modules/
+tools/*/boot.log
+tools/seo-runner/.seo-oauth/
+
 # SQLite database (runtime data)
 /data/
 *.db
