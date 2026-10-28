@@ -10,10 +10,11 @@
 //    dispatch board + driver surface; no money, no settings, no supervisor board writes.
 //  - Marketing: a SCOPED, human-assignable staff role for the demand-gen team. Deny-by-default: it may reach
 //    its whole demand-generation surface — the Marketing blade incl. Creative Engine (/marketing, /creative),
-//    Opportunity Radar (/radar), SEO Growth (/seo), and Website Studio (/website-studio) and their APIs — but
-//    NOT money, settings, dispatch, scheduling, risk, payroll, user management, AI approvals/ops, coaching,
-//    events, etc. (every money/settings capability is FALSE for it below). Its whole surface is
-//    financial-data-free. The proxy is the hard boundary.
+//    Opportunity Radar (/radar), SEO Growth (/seo), and Website Studio (/website-studio) and their APIs —
+//    EXCEPT the Capability Profile (/radar/capability) and Visual DNA (/creative/dna), which stay owner/admin
+//    (see MARKETING_DENY_PREFIXES). NOT money, settings, dispatch, scheduling, risk, payroll, user
+//    management, AI approvals/ops, coaching, events, etc. (every money/settings capability is FALSE for it
+//    below). Its whole surface is financial-data-free. The proxy is the hard boundary.
 export type Role = "owner" | "admin" | "member" | "marketing" | "guest";
 
 // The human, assignable roles (Team management + role pickers iterate this — guest is NOT here).
@@ -71,8 +72,20 @@ export function canSeeMarketing(role: Role): boolean {
  *  anything else is blocked) and the nav (shows only matching blades). API allow-listing lives in the proxy's
  *  MARKETING_ALLOW, which builds on these. None of these surfaces carries financial data. */
 export const MARKETING_PAGE_PREFIXES = ["/marketing", "/creative", "/radar", "/seo", "/website-studio"] as const;
-/** True when `pathname` is on the marketing role's allowed PAGE surface (exact or a sub-path). Pure. */
+/** Carve-outs INSIDE an allowed prefix that the marketing role must NOT reach — kept owner/admin: the
+ *  Capability Profile (`/radar/capability`, a bid/settings-class surface) and Visual DNA (`/creative/dna` +
+ *  its write `/api/creative/visual-dna`, the brand identity). Listed here so the proxy and the nav agree.
+ *  (The Capability Profile write `/api/pursuit` is simply not in the proxy's MARKETING_ALLOW, so it's denied
+ *  by default without needing a carve-out.) */
+export const MARKETING_DENY_PREFIXES = ["/radar/capability", "/creative/dna", "/api/creative/visual-dna"] as const;
+/** True when `pathname` is a marketing carve-out (blocked even though it sits under an allowed prefix). Pure. */
+export function marketingDenied(pathname: string): boolean {
+  return MARKETING_DENY_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"));
+}
+/** True when `pathname` is on the marketing role's allowed PAGE surface (exact or a sub-path) and not a
+ *  carve-out. Pure. */
 export function marketingCanReachPage(pathname: string): boolean {
+  if (marketingDenied(pathname)) return false;
   return MARKETING_PAGE_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"));
 }
 

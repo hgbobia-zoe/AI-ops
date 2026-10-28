@@ -16,6 +16,7 @@ import {
   canSeeCoaching,
   canManagePayroll,
   marketingCanReachPage,
+  marketingDenied,
 } from "./roles";
 
 describe("access matrix", () => {
@@ -127,21 +128,33 @@ describe("marketing role — scoped, deny-by-default", () => {
     expect(assignableRoles("admin")).toContain("marketing");
   });
 
-  it("marketingCanReachPage admits the whole demand-gen surface, nothing else", () => {
+  it("marketingCanReachPage admits the whole demand-gen surface, minus the carve-outs, nothing else", () => {
     for (const p of [
       "/marketing", "/marketing/campaigns",
-      "/creative", "/creative/dna", // Creative Engine (incl. Visual DNA) is under the Marketing blade
-      "/radar", "/radar/analytics", "/radar/capability", // all of Opportunity Radar incl. Capability Profile
+      "/creative", "/creative/new", "/creative/benchmarks", // Creative Engine is under the Marketing blade
+      "/radar", "/radar/analytics", "/radar/companies", // Opportunity Radar
       "/seo", "/seo/opportunities",
       "/website-studio", "/website-studio/anything",
     ]) {
       expect(marketingCanReachPage(p), p).toBe(true);
     }
     for (const p of [
+      "/radar/capability", // Capability Profile — carved out (owner/admin only)
+      "/creative/dna", // Visual DNA — carved out (owner/admin only)
       "/finance", "/dispatch", "/admin", "/sales", "/salesos", "/payroll", "/people", "/dashboard", "/ai-command",
       "/marketingx", "/seox", // not sub-paths of an allowed prefix
     ]) {
       expect(marketingCanReachPage(p), p).toBe(false);
     }
+  });
+
+  it("the carve-outs (Capability Profile + Visual DNA) are denied, their write APIs too", () => {
+    expect(marketingDenied("/radar/capability")).toBe(true);
+    expect(marketingDenied("/creative/dna")).toBe(true);
+    expect(marketingDenied("/api/creative/visual-dna")).toBe(true);
+    // but the rest of radar/creative is NOT denied
+    expect(marketingDenied("/radar/companies")).toBe(false);
+    expect(marketingDenied("/creative/new")).toBe(false);
+    expect(marketingDenied("/api/creative/jobs")).toBe(false);
   });
 });

@@ -11,7 +11,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { verifySession, SESSION_COOKIE } from "@/lib/auth/session";
-import { canSeeFinancials, canManageSettings, canSeeCoaching, canManagePayroll, canManageUsers, canUseWebsiteStudio, canUseSeo, canSeeMarketing, MARKETING_PAGE_PREFIXES } from "@/lib/auth/roles";
+import { canSeeFinancials, canManageSettings, canSeeCoaching, canManagePayroll, canManageUsers, canUseWebsiteStudio, canUseSeo, canSeeMarketing, marketingDenied, MARKETING_PAGE_PREFIXES } from "@/lib/auth/roles";
 import { verifyImageSig } from "@/lib/creative/assetUrl";
 
 const PUBLIC: string[] = [
@@ -140,11 +140,13 @@ const MARKETING_ALLOW: string[] = [
   "/api/creative", // Creative Engine (jobs/experiments/provider/visual-dna/upload) — under the Marketing blade
   "/api/radar", // Opportunity Radar data (sources/companies/outreach-plan/import)
   "/api/opportunity", // Radar opportunity pipeline (interpret/stage/handoff/campaign/seed)
-  "/api/pursuit", // Radar → Capability Profile (capability-profile/opportunity) — demand-gen content
+  // NOTE: /api/pursuit (Capability Profile writes) is deliberately NOT here — Capability Profile stays
+  // owner/admin. Visual DNA's page + write are carved out via marketingDenied below.
   "/api/seo", // SEO Growth data (discovery/opportunities/competitors/content/queue/performance)
   "/api/website/jobs", // Website Studio submit/list/decision (also canUseWebsiteStudio-gated below)
 ];
-const marketingAllowed = (p: string): boolean => MARKETING_ALLOW.some((a) => p === a || p.startsWith(a + "/"));
+// Allowed iff it matches a MARKETING_ALLOW prefix AND is not a carve-out (Capability Profile page / Visual DNA).
+const marketingAllowed = (p: string): boolean => !marketingDenied(p) && MARKETING_ALLOW.some((a) => p === a || p.startsWith(a + "/"));
 // Marketing blade — reachable by back-office staff (owner/admin/member) AND the scoped marketing role; a
 // guest never (handled by the earlier guest branch). Explicit gate so a future role without canSeeMarketing
 // is denied by default; deny-by-default for the marketing role itself is enforced in its own branch above.
