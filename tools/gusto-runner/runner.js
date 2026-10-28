@@ -29,7 +29,7 @@
 // static `import ... from "playwright"` would read the env var before .env is applied and cache the wrong
 // (default per-user AppData) browser location. Deferring the import lets a PLAYWRIGHT_BROWSERS_PATH set in
 // .env win, which is how we keep the browsers co-located with the runner (portable, survives profile quirks).
-import { existsSync, mkdirSync, readFileSync, appendFileSync } from "node:fs";
+import { existsSync, readFileSync, appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -79,11 +79,12 @@ function bootLog(tag, ...a) {
 // ── Config from the environment ──────────────────────────────────────────────
 const APP_URL = (process.env.APP_URL || "").replace(/\/+$/, "");
 const RUNNER_TOKEN = process.env.GUSTO_RUNNER_TOKEN || "";
-// Persistent Chrome profile dir — this is what keeps Gusto logged in between runs. Default under the user dir.
-const PROFILE_DIR = process.env.GUSTO_PROFILE_DIR || join(SCRIPT_DIR, ".gusto-profile");
 const GUSTO_HOME = "https://app.gusto.com/";
-// Headful by default so a human can sign in at the office machine when the session lapses. Set GUSTO_HEADLESS=1
-// only once the profile is reliably logged in and no interactive login is expected.
+// EPHEMERAL per-user auth: the runner keeps NO persistent Gusto profile. Every push uses a fresh, logged-out
+// browser session, so the person who triggered it signs into Gusto with THEIR OWN credentials in the pane, the
+// write is made AS THEM (their Gusto audit), and the whole session is discarded when the job ends — no Gusto
+// login is ever stored on this machine. Headless is fine; the interactive sign-in still streams to + replays
+// from the /payroll pane. Trade-off: every push requires a sign-in (incl. 2FA); there is no standing session.
 const HEADLESS = /^(1|true|yes|on)$/i.test(process.env.GUSTO_HEADLESS || "");
 const POLL_MS = Number(process.env.POLL_INTERVAL_MS || 10000);
 const FRAME_MS = Number(process.env.FRAME_INTERVAL_MS || 1500); // live screenshot cadence
@@ -398,13 +399,8 @@ async function main() {
   // Import playwright only now — .env (incl. any PLAYWRIGHT_BROWSERS_PATH) has been applied above, so
   // playwright-core resolves the browsers against the configured path rather than the default AppData one.
   const { chromium } = await import("playwright");
-  if (!existsSync(PROFILE_DIR)) mkdirSync(PROFILE_DIR, { recursive: true });
-  log(`starting. app=${APP_URL} profile=${PROFILE_DIR} headless=${HEADLESS} poll=${POLL_MS}ms`);
-  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
-    headless: HEADLESS,
-    viewport: { width: 1280, height: 900 },
-  });
-  await context.addInitScript(CAPTURE_INIT);
+  log(`starting. app=${APP_URL} headless=${HEADLESS} poll=${POLL_MS}ms · ephemeral per-user Gusto sessions (no persistent login)`);
+  const browser = await chromium.launch({ headless: HEADLESS });
 
   for (;;) {
     let job = null;
@@ -420,11 +416,18 @@ async function main() {
 
     if (job) {
       log(`claimed job ${job.id} — ${job.entries.length} worker(s), period ${job.periodLabel || "?"}`);
+      // A FRESH, logged-OUT context for THIS job: the person who triggered the push signs into Gusto with their
+      // own credentials in the pane, the write runs as them, and the context (cookies + session) is discarded
+      // when the job ends. Nothing persists — the next push starts logged out and prompts again.
+      const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+      await context.addInitScript(CAPTURE_INIT);
       try {
         await processJob(context, job);
       } catch (e) {
         await postUpdate({ id: job.id, status: "failed", error: e && e.message ? e.message : String(e) });
         log(`job ${job.id} FAILED: ${e && e.message ? e.message : e}`);
+      } finally {
+        await context.close().catch(() => {}); // discard the ephemeral per-user session
       }
     } else {
       await sleep(POLL_MS);
