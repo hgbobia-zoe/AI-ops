@@ -201,3 +201,27 @@ describe("gustoRunnerJobs interactive sign-in input queue", () => {
     expect(claimInputs(made.id)).toHaveLength(0);
   });
 });
+
+describe("gustoRunnerJobs input queue — credential hardening", () => {
+  it("encrypts the keystroke text at rest, and round-trips it only on claim", () => {
+    process.env.GUSTO_RUNNER_TOKEN = "test-runner-token";
+    try {
+      enqueueInput("JSEC", [{ kind: "type", text: "s3cr3t-password" }]);
+      // The stored row is ciphertext — the password is never in the DB in the clear.
+      const raw = getDb().prepare("SELECT text FROM gusto_push_input WHERE job_id=?").get("JSEC") as { text: string };
+      expect(raw.text).toMatch(/^enc1:/);
+      expect(raw.text).not.toContain("s3cr3t-password");
+      // Claiming decrypts it for the runner.
+      expect(claimInputs("JSEC")).toEqual([{ kind: "type", text: "s3cr3t-password" }]);
+    } finally {
+      delete process.env.GUSTO_RUNNER_TOKEN;
+    }
+  });
+
+  it("deletes rows on claim (delete-on-consume) so plaintext never lingers", () => {
+    enqueueInput("JDEL", [{ kind: "type", text: "a" }, { kind: "key", key: "Enter" }]);
+    expect(getDb().prepare("SELECT COUNT(*) AS n FROM gusto_push_input WHERE job_id=?").get("JDEL")).toEqual({ n: 2 });
+    claimInputs("JDEL");
+    expect(getDb().prepare("SELECT COUNT(*) AS n FROM gusto_push_input WHERE job_id=?").get("JDEL")).toEqual({ n: 0 });
+  });
+});

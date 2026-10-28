@@ -1,7 +1,7 @@
 // Gusto DRAFT hours PUSH — the in-app remote-browser JOB QUEUE store. A JOB is one approved push: the exact
 // per-worker hours (built server-side by the owner/admin-gated builder, NOT here) to write into the current
-// Gusto DRAFT run. The app only RECORDS the job; the office-machine runner (tools/gusto-runner — a persistent
-// Playwright browser on a residential IP, already logged into Gusto) claims it, drives the draft run, replays
+// Gusto DRAFT run. The app only RECORDS the job; the office-machine runner (tools/gusto-runner — a residential-IP
+// Playwright browser with an EPHEMERAL per-user Gusto login, no persistent session) claims it, drives the run, replays
 // AutoSaveWorkedHours per worker (DRAFT-ONLY), and streams a live screenshot + per-worker results back. This
 // lets a payroll person with NO browser extension push hours from the app and watch the remote browser.
 //
@@ -16,7 +16,7 @@
 //   cancelJob        → queued|active → canceled       (a human stops it from the app)
 // "active" = claimed | signin_required | pushing.
 
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash, randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import { getDb } from "@/lib/db";
 import type { GustoPushWorkerResult } from "@/lib/payroll/gustoPushState";
 import type { GustoPushEntry } from "@/lib/payroll/gustoPush";
@@ -376,9 +376,46 @@ export function cancelJob(id: string, actor?: string | null): GustoPushJob | nul
 
 // ── Interactive sign-in input queue (Phase 2) ─────────────────────────────────────
 // A tiny claim-once queue of forwarded login input. The pane enqueues the payroll person's clicks/keystrokes;
-// the runner claims them (marking them consumed) and replays them into the live Gusto login page. Rows are
-// ephemeral — cleared when the job ends (completeJob/failJob/cancelJob). The ENDPOINTS enforce the hard scope
-// (owner/admin + only while signin_required); the store just transports.
+// the runner claims them and replays them into the live Gusto login page. SECURITY: a forwarded keystroke can
+// be the person's Gusto PASSWORD, so (1) the `text` is ENCRYPTED AT REST (encText/decText, key derived from the
+// shared GUSTO_RUNNER_TOKEN), (2) claiming DELETES the rows (delete-on-consume), so plaintext never lingers past
+// the one fetch that replays it, and (3) a TTL sweep + job-end clear catch any straggler. It is not end-to-end
+// (the app process must handle it in memory to relay it), but a DB-only exposure (backup/replica/dump) never
+// yields the password. The ENDPOINTS enforce the hard scope (owner/admin + only while signin_required).
+
+// ── Field encryption for the forwarded keystroke text (the password transits here) ──
+const INPUT_TTL_MS = 120_000; // a forwarded keystroke older than this is swept even if a job never cleared
+function inputKey(): Buffer | null {
+  const tok = process.env.GUSTO_RUNNER_TOKEN || "";
+  return tok ? createHash("sha256").update(`gusto-input-v1:${tok}`).digest() : null; // 32 bytes
+}
+function encText(plain: string): string {
+  const key = inputKey();
+  if (!key) return plain; // no token → the runner endpoints are 503 anyway; don't block the (dormant) path
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", key, iv);
+  const ct = Buffer.concat([c.update(plain, "utf8"), c.final()]);
+  return `enc1:${Buffer.concat([iv, c.getAuthTag(), ct]).toString("base64")}`;
+}
+function decText(stored: string | null): string | null {
+  if (stored == null) return null;
+  if (!stored.startsWith("enc1:")) return stored; // legacy/plaintext row → return as-is
+  try {
+    const key = inputKey();
+    if (!key) return null;
+    const buf = Buffer.from(stored.slice(5), "base64");
+    const d = createDecipheriv("aes-256-gcm", key, buf.subarray(0, 12));
+    d.setAuthTag(buf.subarray(12, 28));
+    return Buffer.concat([d.update(buf.subarray(28)), d.final()]).toString("utf8");
+  } catch {
+    return null; // tampered / wrong key → drop the event rather than type garbage into Gusto
+  }
+}
+function sweepStaleInput(): void {
+  try {
+    getDb().prepare("DELETE FROM gusto_push_input WHERE created_at < ?").run(new Date(Date.now() - INPUT_TTL_MS).toISOString());
+  } catch { /* best-effort */ }
+}
 
 interface InputRow {
   id: number;
@@ -419,7 +456,7 @@ export function enqueueInput(jobId: string, events: GustoPushInputEvent[]): numb
           kind: e.kind,
           x: e.kind === "click" || e.kind === "scroll" ? e.x : null,
           y: e.kind === "click" || e.kind === "scroll" ? e.y : null,
-          text: e.kind === "type" ? e.text : null,
+          text: e.kind === "type" ? encText(e.text) : null, // encrypted at rest — never stored in the clear
           key: e.kind === "key" ? e.key : null,
           deltaY: e.kind === "scroll" ? e.deltaY : null,
           now,
@@ -434,23 +471,21 @@ export function enqueueInput(jobId: string, events: GustoPushInputEvent[]): numb
   }
 }
 
-/** Claim all unconsumed input for a job, oldest first, marking them consumed in the same transaction so each
- *  event is replayed exactly once. Returns the events (or [] on any fault). Never throws. */
+/** Claim all input for a job, oldest first, and DELETE it in the same transaction (delete-on-consume) so each
+ *  event is replayed exactly once AND the plaintext keystrokes (incl. the password, once decrypted here) never
+ *  linger in the DB past this single fetch. Also sweeps any stale input first. Returns the events (or [] on any
+ *  fault). Never throws. */
 export function claimInputs(jobId: string): GustoPushInputEvent[] {
   try {
+    sweepStaleInput();
     const db = getDb();
-    const now = new Date().toISOString();
     const claim = db.transaction((): InputRow[] => {
-      const rows = db
-        .prepare("SELECT * FROM gusto_push_input WHERE job_id=? AND consumed_at IS NULL ORDER BY id ASC")
-        .all(jobId) as InputRow[];
-      if (rows.length) {
-        db.prepare("UPDATE gusto_push_input SET consumed_at=@now WHERE job_id=@jobId AND consumed_at IS NULL").run({ jobId, now });
-      }
+      const rows = db.prepare("SELECT * FROM gusto_push_input WHERE job_id=? ORDER BY id ASC").all(jobId) as InputRow[];
+      if (rows.length) db.prepare("DELETE FROM gusto_push_input WHERE job_id=?").run(jobId);
       return rows;
     });
     return claim()
-      .map(toInputEvent)
+      .map((r) => toInputEvent({ ...r, text: decText(r.text) })) // decrypt only now, on the way to the runner
       .filter((e): e is GustoPushInputEvent => e !== null);
   } catch {
     return [];
