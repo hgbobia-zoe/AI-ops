@@ -9,6 +9,13 @@ const nextConfig: NextConfig = {
   // Native / heavy Node packages used only in server code (route handlers,
   // ingestion). Keep them out of the bundle so they load from node_modules.
   serverExternalPackages: ["better-sqlite3", "playwright"],
+  // Do NOT type-check during `next build`. The merge gate (ci.yml) already runs `tsc --noEmit` and the test
+  // suite on every PR, so this is redundant work in the Docker image build — and crucially, the in-build
+  // type-check OOM-kills the Fly REMOTE builder (SIGKILL at ~15min / "deadline_exceeded"), which silently
+  // breaks auto-deploy (deploy.yml uses `flyctl deploy --remote-only`). Skipping it keeps the image build to
+  // the ~17s compile so merges deploy themselves again. Correctness stays gated in CI. (This Next version no
+  // longer runs ESLint during `next build`, so there's nothing to disable there.)
+  typescript: { ignoreBuildErrors: true },
 };
 
 export default nextConfig;
