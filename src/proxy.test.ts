@@ -126,11 +126,43 @@ describe("proxy — Gusto remote-browser push boundary", () => {
 });
 
 describe("proxy — marketing role is scoped (deny-by-default)", () => {
-  it("ALLOWS the Marketing blade + Website Studio + their APIs", async () => {
-    for (const p of ["/marketing", "/marketing/campaigns", "/marketing/reviews", "/website-studio", "/api/marketing/campaigns", "/api/website/jobs"]) {
+  it("ALLOWS its whole demand-gen surface (Marketing+Creative, Radar, SEO, Website Studio) + their APIs", async () => {
+    for (const p of [
+      "/marketing", "/marketing/campaigns", "/marketing/reviews",
+      "/creative", "/creative/new", "/radar", "/radar/analytics", "/radar/companies",
+      "/seo", "/seo/opportunities", "/seo/performance", "/website-studio",
+      "/api/marketing/campaigns", "/api/creative/jobs", "/api/radar/source/run",
+      "/api/opportunity/stage", "/api/seo/discovery", "/api/website/jobs",
+    ]) {
       const res = await proxy(await reqAs("marketing", p));
       expect(res.status, `expected 200 for ${p}`).toBe(200); // NextResponse.next()
     }
+  });
+
+  it("CARVE-OUTS: Capability Profile + Visual DNA stay owner/admin — marketing is blocked, owner is not", async () => {
+    // Marketing: pages bounce to /marketing, write APIs are 403.
+    for (const p of ["/radar/capability", "/creative/dna"]) {
+      const res = await proxy(await reqAs("marketing", p));
+      expect(res.status, `expected redirect for ${p}`).toBe(307);
+      expect(new URL(res.headers.get("location")!).pathname).toBe("/marketing");
+    }
+    for (const p of ["/api/pursuit/capability-profile", "/api/creative/visual-dna"]) {
+      expect((await proxy(await reqAs("marketing", p))).status, `expected 403 for ${p}`).toBe(403);
+    }
+    // Owner still reaches both (the carve-out only constrains the marketing role).
+    expect((await proxy(await reqAs("owner", "/radar/capability"))).status).toBe(200);
+    expect((await proxy(await reqAs("owner", "/creative/dna"))).status).toBe(200);
+  });
+
+  it("SEO Growth: owner + marketing reach it; a Member does NOT", async () => {
+    expect((await proxy(await reqAs("owner", "/seo"))).status).toBe(200);
+    expect((await proxy(await reqAs("marketing", "/seo"))).status).toBe(200);
+    expect((await proxy(await reqAs("marketing", "/api/seo/discovery"))).status).toBe(200);
+    // A Member never had SEO (it stayed owner/admin + marketing) — page bounces to "/", API is 403.
+    const memPage = await proxy(await reqAs("member", "/seo"));
+    expect(memPage.status).toBe(307);
+    expect(new URL(memPage.headers.get("location")!).pathname).toBe("/");
+    expect((await proxy(await reqAs("member", "/api/seo/discovery"))).status).toBe(403);
   });
 
   it("BLOCKS sensitive APIs with a 403 (money / payroll / people / AI sessions / dispatch)", async () => {
@@ -141,7 +173,7 @@ describe("proxy — marketing role is scoped (deny-by-default)", () => {
   });
 
   it("BOUNCES every other console PAGE to /marketing (never loops through '/')", async () => {
-    for (const p of ["/finance", "/admin", "/dispatch", "/payroll", "/scheduling", "/dashboard", "/ai-command", "/creative"]) {
+    for (const p of ["/finance", "/admin", "/dispatch", "/payroll", "/scheduling", "/dashboard", "/ai-command", "/sales", "/customers"]) {
       const res = await proxy(await reqAs("marketing", p));
       expect(res.status, `expected redirect for ${p}`).toBe(307);
       expect(new URL(res.headers.get("location")!).pathname).toBe("/marketing");

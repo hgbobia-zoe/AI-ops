@@ -24,7 +24,7 @@ import {
   BrainCircuit, Tent, Wallet, Boxes,
   type LucideIcon,
 } from "lucide-react";
-import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, marketingCanReachPage, ROLE_LABEL, type Role } from "@/lib/auth/roles";
+import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, canUseSeo, marketingCanReachPage, ROLE_LABEL, type Role } from "@/lib/auth/roles";
 
 interface Blade {
   href: string;
@@ -33,6 +33,7 @@ interface Blade {
   financial?: boolean; // only where role can see $
   coaching?: boolean; // only where role can see call transcripts
   manage?: boolean; // owner/admin only (e.g. Capability Profile)
+  seo?: boolean; // owner/admin + the scoped marketing role (canUseSeo) — SEO Growth blades
   exact?: boolean; // highlight only on an exact path match (section landing pages)
 }
 interface Group {
@@ -125,9 +126,6 @@ const GROUPS: Group[] = [
       { href: "/marketing/campaigns", label: "Campaigns", icon: Megaphone },
       { href: "/marketing/content", label: "Content", icon: CalendarDays },
       { href: "/marketing/reviews", label: "Reviews", icon: Star },
-      // Website Studio — prompt a website change in plain English, preview the rendered result, approve → PR.
-      // Any staff (canUseWebsiteStudio) so marketing can use it; the office runner does the actual edit.
-      { href: "/website-studio", label: "Website Studio", icon: Globe },
       // Creative Engine — AI-directed creative production (AI creates, rules constrain, AI evaluates,
       // humans approve). It produces the marketing/web imagery, so it lives under Marketing.
       { href: "/creative", label: "Creative Engine", icon: Aperture, exact: true },
@@ -137,19 +135,23 @@ const GROUPS: Group[] = [
     ],
   },
   {
-    // SEO Growth — the organic-demand engine: keyword research (Ubersuggest MCP), opportunity matching,
-    // competitor intelligence, content production (reusing the Creative Engine) and publishing. A big blade
-    // alongside Marketing (it fills the same top-of-funnel). Owner/admin only — it manages an integration
-    // credential — so every sub-blade carries `manage` (gated by canManageSettings, like settings-ish blades).
-    label: "SEO Growth",
+    // SEO & Website — the organic-demand engine grouped with Website Studio, because the website exists to
+    // drive SEO: keyword research (Ubersuggest MCP), opportunity matching, competitor intelligence, content
+    // production (reusing the Creative Engine), publishing, AND the prompt→PR website editor that feeds it.
+    // SEO sub-blades carry `seo` (owner/admin + marketing via canUseSeo; the integration CREDENTIAL stays
+    // settings-gated). Website Studio is any-staff (canUseWebsiteStudio) + marketing; it only QUEUES a PR.
+    label: "SEO & Website",
     icon: Search,
     blades: [
-      { href: "/seo", label: "Overview", icon: Gauge, exact: true, manage: true },
-      { href: "/seo/opportunities", label: "Opportunities", icon: Search, manage: true },
-      { href: "/seo/competitors", label: "Competitors", icon: Building2, manage: true },
-      { href: "/seo/content", label: "Content Studio", icon: FileText, manage: true },
-      { href: "/seo/queue", label: "Review Queue", icon: ClipboardCheck, manage: true },
-      { href: "/seo/performance", label: "Performance", icon: Rocket, manage: true },
+      { href: "/seo", label: "SEO Overview", icon: Gauge, exact: true, seo: true },
+      { href: "/seo/opportunities", label: "Opportunities", icon: Search, seo: true },
+      { href: "/seo/competitors", label: "Competitors", icon: Building2, seo: true },
+      { href: "/seo/content", label: "Content Studio", icon: FileText, seo: true },
+      { href: "/seo/queue", label: "Review Queue", icon: ClipboardCheck, seo: true },
+      { href: "/seo/performance", label: "Performance", icon: Rocket, seo: true },
+      // Website Studio — prompt a website change in plain English, preview the rendered result, approve → PR.
+      // Grouped here because the website's job is to drive SEO. Any staff (canUseWebsiteStudio) + marketing.
+      { href: "/website-studio", label: "Website Studio", icon: Globe },
     ],
   },
   {
@@ -211,14 +213,17 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
   const bladeActive = (b: Blade) => (b.exact ? pathname === b.href : isActive(b.href));
-  // The scoped marketing role sees ONLY its allowed blades (Marketing + Website Studio) — same allow-list
-  // the proxy enforces as the hard boundary; this keeps the nav from advertising routes it would be denied.
+  // The scoped marketing role sees its WHOLE allowed surface (Marketing incl. Creative, Opportunity Radar,
+  // SEO Growth, Website Studio) — the same allow-list the proxy enforces as the hard boundary. Within that
+  // surface it sees every blade (there are no financial ones there), so the `manage`/`seo` flags — which exist
+  // to gate the OTHER roles' deny-list model — don't hide anything from it; the financial flag is still
+  // honored defensively. Non-marketing roles keep the original "see everything except flagged-sensitive".
   const isMarketingRole = role === "marketing";
   const canSee = (b: Blade) =>
-    (!isMarketingRole || marketingCanReachPage(b.href)) &&
     (!b.financial || canSeeFinancials(role)) &&
-    (!b.coaching || canSeeCoaching(role)) &&
-    (!b.manage || canManageSettings(role));
+    (isMarketingRole
+      ? marketingCanReachPage(b.href)
+      : (!b.coaching || canSeeCoaching(role)) && (!b.seo || canUseSeo(role)) && (!b.manage || canManageSettings(role)));
 
   // Admin is another expandable parent, built from what the role can manage.
   const adminBlades: Blade[] = [];

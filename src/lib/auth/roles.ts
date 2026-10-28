@@ -8,10 +8,13 @@
 //  - Guest:  a Shift Pass holder (temporary/contractor). NOT a human account — minted only by the
 //    /pass/<token> gateway, never assignable in Team management. Scoped hard in the proxy to the
 //    dispatch board + driver surface; no money, no settings, no supervisor board writes.
-//  - Marketing: a SCOPED, human-assignable staff role for the demand-gen team. Deny-by-default: it may
-//    reach ONLY the Marketing blade (/marketing) + Website Studio (/website-studio) and their APIs — NOT
-//    money, settings, dispatch, scheduling, risk, payroll, user management, AI approvals/ops, coaching,
-//    events, etc. (every other Member capability is FALSE for it below). The proxy is the hard boundary.
+//  - Marketing: a SCOPED, human-assignable staff role for the demand-gen team. Deny-by-default: it may reach
+//    its whole demand-generation surface — the Marketing blade incl. Creative Engine (/marketing, /creative),
+//    Opportunity Radar (/radar), SEO Growth (/seo), and Website Studio (/website-studio) and their APIs —
+//    EXCEPT the Capability Profile (/radar/capability) and Visual DNA (/creative/dna), which stay owner/admin
+//    (see MARKETING_DENY_PREFIXES). NOT money, settings, dispatch, scheduling, risk, payroll, user
+//    management, AI approvals/ops, coaching, events, etc. (every money/settings capability is FALSE for it
+//    below). Its whole surface is financial-data-free. The proxy is the hard boundary.
 export type Role = "owner" | "admin" | "member" | "marketing" | "guest";
 
 // The human, assignable roles (Team management + role pickers iterate this — guest is NOT here).
@@ -63,12 +66,26 @@ export function canSeeMarketing(role: Role): boolean {
   return role === "owner" || role === "admin" || role === "member" || role === "marketing";
 }
 
-/** Console PAGE path prefixes the scoped marketing role may reach: the Marketing blade and Website Studio.
- *  Single source of truth shared by the proxy (deny-by-default: anything else is blocked) and the nav (shows
- *  only matching blades). API allow-listing lives in the proxy's MARKETING_ALLOW, which builds on these. */
-export const MARKETING_PAGE_PREFIXES = ["/marketing", "/website-studio"] as const;
-/** True when `pathname` is on the marketing role's allowed PAGE surface (exact or a sub-path). Pure. */
+/** Console PAGE path prefixes the scoped marketing role may reach — its whole demand-generation surface: the
+ *  Marketing blade (incl. Creative Engine, `/creative`), Opportunity Radar (`/radar`), SEO Growth (`/seo`),
+ *  and Website Studio (`/website-studio`). Single source of truth shared by the proxy (deny-by-default:
+ *  anything else is blocked) and the nav (shows only matching blades). API allow-listing lives in the proxy's
+ *  MARKETING_ALLOW, which builds on these. None of these surfaces carries financial data. */
+export const MARKETING_PAGE_PREFIXES = ["/marketing", "/creative", "/radar", "/seo", "/website-studio"] as const;
+/** Carve-outs INSIDE an allowed prefix that the marketing role must NOT reach — kept owner/admin: the
+ *  Capability Profile (`/radar/capability`, a bid/settings-class surface) and Visual DNA (`/creative/dna` +
+ *  its write `/api/creative/visual-dna`, the brand identity). Listed here so the proxy and the nav agree.
+ *  (The Capability Profile write `/api/pursuit` is simply not in the proxy's MARKETING_ALLOW, so it's denied
+ *  by default without needing a carve-out.) */
+export const MARKETING_DENY_PREFIXES = ["/radar/capability", "/creative/dna", "/api/creative/visual-dna"] as const;
+/** True when `pathname` is a marketing carve-out (blocked even though it sits under an allowed prefix). Pure. */
+export function marketingDenied(pathname: string): boolean {
+  return MARKETING_DENY_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"));
+}
+/** True when `pathname` is on the marketing role's allowed PAGE surface (exact or a sub-path) and not a
+ *  carve-out. Pure. */
 export function marketingCanReachPage(pathname: string): boolean {
+  if (marketingDenied(pathname)) return false;
   return MARKETING_PAGE_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"));
 }
 
@@ -79,6 +96,15 @@ export function marketingCanReachPage(pathname: string): boolean {
  *  The marketing role is confined to THIS + the Marketing blade by the proxy (deny-by-default). */
 export function canUseWebsiteStudio(role: Role): boolean {
   return role === "owner" || role === "admin" || role === "member" || role === "marketing";
+}
+
+/** SEO Growth — the organic-demand engine (keyword research, opportunity matching, competitor intel, content
+ *  production + publishing). The marketing team runs it, so it's open to owner/admin AND the scoped marketing
+ *  role — but NOT Members (it stayed owner/admin before this). It carries no financial data. The SEO
+ *  integration CREDENTIAL stays settings-gated (owner/admin), so marketing operates the tool without the
+ *  secret. Distinct from canManageSettings on purpose. */
+export function canUseSeo(role: Role): boolean {
+  return role === "owner" || role === "admin" || role === "marketing";
 }
 
 /** Can `actor` create/modify/deactivate a user whose role is `target`?
