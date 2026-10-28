@@ -13,7 +13,7 @@ $taskName = "ZoeGustoRunner"
 $node = (Get-Command node -ErrorAction Stop).Source
 
 # runner.js loads .env itself, so the task just runs node in this folder. No token on the command line.
-$action   = New-ScheduledTaskAction -Execute $node -Argument "runner.js" -WorkingDirectory $PSScriptRoot
+$action   = New-ScheduledTaskAction -Execute $node -Argument ('"' + (Join-Path $PSScriptRoot 'runner.js') + '"') -WorkingDirectory $PSScriptRoot
 $trigger  = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet `
   -StartWhenAvailable `

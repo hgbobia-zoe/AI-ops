@@ -26,13 +26,19 @@
 
 import { chromium } from "playwright";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Resolve .env and the profile dir against THIS script's directory, not the current working directory. A Windows
+// Scheduled Task does not reliably honor its "Start in" dir, so the runner must never depend on cwd.
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 // ── Load a local .env first (KEY=VALUE per line) so the token + config can live in a file instead of the shell
 // — no dependency, a tiny parser. A var already set in the real environment always wins, so `GUSTO_RUNNER_TOKEN=…
 // npm start` still overrides the file. Point elsewhere with GUSTO_RUNNER_ENV.
 (function loadDotEnv() {
   try {
-    const p = process.env.GUSTO_RUNNER_ENV || "./.env";
+    const p = process.env.GUSTO_RUNNER_ENV || join(SCRIPT_DIR, ".env");
     if (!existsSync(p)) return;
     for (const line of readFileSync(p, "utf8").split(/\r?\n/)) {
       const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
@@ -48,7 +54,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 const APP_URL = (process.env.APP_URL || "").replace(/\/+$/, "");
 const RUNNER_TOKEN = process.env.GUSTO_RUNNER_TOKEN || "";
 // Persistent Chrome profile dir — this is what keeps Gusto logged in between runs. Default under the user dir.
-const PROFILE_DIR = process.env.GUSTO_PROFILE_DIR || "./.gusto-profile";
+const PROFILE_DIR = process.env.GUSTO_PROFILE_DIR || join(SCRIPT_DIR, ".gusto-profile");
 const GUSTO_HOME = "https://app.gusto.com/";
 // Headful by default so a human can sign in at the office machine when the session lapses. Set GUSTO_HEADLESS=1
 // only once the profile is reliably logged in and no interactive login is expected.
