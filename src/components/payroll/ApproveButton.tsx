@@ -7,7 +7,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2 } from "lucide-react";
 
-export function ApproveButton({ which, readyCount }: { which: "current" | "previous"; readyCount: number }): React.JSX.Element {
+export function ApproveButton({ period, readyCount }: { period: { start: string; end: string }; readyCount: number }): React.JSX.Element {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; tone: "ok" | "bad" } | null>(null);
@@ -19,7 +19,7 @@ export function ApproveButton({ which, readyCount }: { which: "current" | "previ
     setMsg(null);
     try {
       const res = await fetch("/api/payroll/approve", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ which }),
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ start: period.start, end: period.end }),
       });
       const data = (await res.json().catch(() => null)) as { readyCount?: number; error?: string } | null;
       if (!res.ok) {

@@ -8,11 +8,11 @@ import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 
 export function SyncButton({
-  which,
+  period,
   label = "Sync Hours",
   variant = "primary",
 }: {
-  which: "current" | "previous";
+  period: { start: string; end: string };
   label?: string;
   variant?: "primary" | "secondary";
 }): React.JSX.Element {
@@ -27,7 +27,7 @@ export function SyncButton({
       const res = await fetch("/api/payroll/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ which }),
+        body: JSON.stringify({ start: period.start, end: period.end }),
       });
       const data = (await res.json().catch(() => null)) as { summary?: { status: string; message: string } } | null;
       if (!res.ok || !data?.summary) {

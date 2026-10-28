@@ -39,6 +39,17 @@ export function previousPayPeriod(today: string): PayPeriod {
   return { start, end, label: periodLabel(start, end) };
 }
 
+/** A COMPLETED Monday–Sunday week, counting back from the in-progress week. weeksAgo=1 is the last completed
+ *  week (== previousPayPeriod — what payroll is run for on Tuesday); 2 is the week before that, and so on.
+ *  Never returns the in-progress current week (weeksAgo is clamped to ≥ 1). */
+export function completedWeeksBack(today: string, weeksAgo = 1): PayPeriod {
+  const n = Math.max(1, Math.floor(Number.isFinite(weeksAgo) ? weeksAgo : 1));
+  const cur = currentPayPeriod(today);
+  const start = addDays(cur.start, -7 * n);
+  const end = addDays(start, 6);
+  return { start, end, label: periodLabel(start, end) };
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 function fmt(ymdStr: string): string {
   const d = parse(ymdStr);

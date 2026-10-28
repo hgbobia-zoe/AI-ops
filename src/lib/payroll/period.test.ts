@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { currentPayPeriod, previousPayPeriod, resolvePeriod, periodLabel, addDays, namedPeriod } from "./period";
+import { currentPayPeriod, previousPayPeriod, completedWeeksBack, resolvePeriod, periodLabel, addDays, namedPeriod } from "./period";
 import { workerCounts } from "./workers";
 import type { UnifiedWorker, WorkerType } from "./types";
 
@@ -29,6 +29,23 @@ describe("pay-period math", () => {
   it("namedPeriod selects current vs previous", () => {
     expect(namedPeriod("2026-10-07", "current").start).toBe("2026-10-05");
     expect(namedPeriod("2026-10-07", "previous").start).toBe("2026-09-28");
+  });
+
+  describe("completedWeeksBack (blade default = last completed week; never the in-progress week)", () => {
+    it("weeksAgo=1 is the last completed week (same as previousPayPeriod)", () => {
+      expect(completedWeeksBack("2026-10-07", 1)).toEqual(previousPayPeriod("2026-10-07"));
+      expect(completedWeeksBack("2026-10-07", 1)).toEqual({ start: "2026-09-28", end: "2026-10-04", label: "Sep 28 – Oct 4" });
+    });
+    it("steps backward through completed weeks", () => {
+      expect(completedWeeksBack("2026-10-07", 2)).toEqual({ start: "2026-09-21", end: "2026-09-27", label: "Sep 21 – Sep 27" });
+      expect(completedWeeksBack("2026-10-07", 3).start).toBe("2026-09-14");
+    });
+    it("never returns the in-progress current week, even for weeksAgo < 1 or invalid", () => {
+      const current = currentPayPeriod("2026-10-07").start; // 2026-10-05
+      expect(completedWeeksBack("2026-10-07", 0).start).not.toBe(current);
+      expect(completedWeeksBack("2026-10-07", 0).start).toBe("2026-09-28"); // clamped to 1
+      expect(completedWeeksBack("2026-10-07", NaN).start).toBe("2026-09-28");
+    });
   });
 
   describe("resolvePeriod", () => {
