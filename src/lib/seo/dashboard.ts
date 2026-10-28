@@ -5,6 +5,7 @@
 
 import { countsByStage, latestSuccess, recentDiagnostics } from "./store";
 import { getHealth } from "./ubersuggest";
+import { seoWatcherStatus, type SeoWatcherStatus } from "./watcher";
 import type { SeoHealth, SeoStage, SeoDiagnostic } from "./types";
 
 export interface SeoOverview {
@@ -24,6 +25,8 @@ export interface SeoOverview {
   lastSuccess: SeoDiagnostic | null;
   /** Recent integration diagnostics (newest first) for the errors/stale display. */
   diagnostics: SeoDiagnostic[];
+  /** Free-tier keyword-pull progress + limit-hit freshness (office-runner, path B). */
+  watcher: SeoWatcherStatus;
 }
 
 export function seoOverview(): SeoOverview {
@@ -44,5 +47,6 @@ export function seoOverview(): SeoOverview {
     health: getHealth(),
     lastSuccess: latestSuccess(),
     diagnostics: recentDiagnostics(8),
+    watcher: seoWatcherStatus(),
   };
 }

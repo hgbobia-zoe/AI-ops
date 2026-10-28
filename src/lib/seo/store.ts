@@ -204,6 +204,13 @@ export function findOpportunityByDedupe(keyword: string, intent: SeoIntent | nul
   return r ? toOpportunity(r) : null;
 }
 
+/** Every stored opportunity's dedupe key, as a Set — one query, so callers can compute "which seeds are
+ *  already discovered" in memory instead of a point lookup per seed (the office-runner drip asks this often). */
+export function allDedupeKeys(): Set<string> {
+  const rows = getDb().prepare("SELECT dedupe_key FROM seo_opportunities").all() as { dedupe_key: string }[];
+  return new Set(rows.map((r) => r.dedupe_key));
+}
+
 export interface ListOpportunitiesFilter {
   status?: SeoStatus;
   limit?: number;
@@ -415,6 +422,12 @@ export function latestDiagnostic(): SeoDiagnostic | null {
 /** The most recent SUCCESSFUL diagnostic, or null — the honest "last successful retrieval". */
 export function latestSuccess(): SeoDiagnostic | null {
   const r = getDb().prepare("SELECT * FROM seo_diagnostics WHERE ok = 1 ORDER BY ts DESC, rowid DESC LIMIT 1").get() as Parameters<typeof toDiag>[0] | undefined;
+  return r ? toDiag(r) : null;
+}
+
+/** The most recent RATE-LIMITED diagnostic, or null — the honest "last time we hit the Ubersuggest quota". */
+export function latestRateLimited(): SeoDiagnostic | null {
+  const r = getDb().prepare("SELECT * FROM seo_diagnostics WHERE rate_limited = 1 ORDER BY ts DESC, rowid DESC LIMIT 1").get() as Parameters<typeof toDiag>[0] | undefined;
   return r ? toDiag(r) : null;
 }
 
