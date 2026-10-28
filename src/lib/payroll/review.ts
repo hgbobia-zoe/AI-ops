@@ -6,7 +6,8 @@
 
 import { unifiedWorkers } from "./workers";
 import { getPayrollConfig } from "./config";
-import type { IssueTag, PayPeriod, PayrollReviewResult, ReviewStatus, ReviewWorker, UnifiedWorker } from "./types";
+import { listPeriodExclusions, type PeriodExclusion } from "./store";
+import type { ExcludeMode, IssueTag, PayPeriod, PayrollReviewResult, ReviewStatus, ReviewWorker, UnifiedWorker } from "./types";
 
 export interface ReviewOptions {
   overtimeThreshold: number; // weekly hours above which overtime is flagged (EXCEPTION)
@@ -25,7 +26,7 @@ export function classifyWorker(w: UnifiedWorker, opts: ReviewOptions): ReviewWor
 
   // BLOCKING — prevents payroll approval.
   if (!w.gustoMapped) issues.push({ kind: "BLOCKING", code: "NO_GUSTO_MAPPING", label: "No Gusto mapping" });
-  if ((hours ?? 0) > 0 && payRate == null) issues.push({ kind: "BLOCKING", code: "NO_PAY_RATE", label: "Pay rate missing" });
+  if ((hours ?? 0) > 0 && payRate == null) issues.push({ kind: "BLOCKING", code: "NO_PAY_RATE", label: missingRateLabel(w) });
 
   // MISSING_CONFIG — required setup incomplete (not itself a hard blocker, but needs attention).
   if (w.workerType === "UNKNOWN" || w.typeInferred) issues.push({ kind: "MISSING_CONFIG", code: "TYPE_UNCONFIRMED", label: "Worker type not confirmed" });
@@ -42,13 +43,50 @@ export function classifyWorker(w: UnifiedWorker, opts: ReviewOptions): ReviewWor
   return {
     key: w.key, name: w.name, workerType: w.workerType, hours, payRate, currency: w.currency,
     estPay, mappingStatus: w.mappingStatus, status, issues,
+    recordId: w.recordId, connecteamUserId: w.connecteamUserId,
+    rateSource: w.rateSource ?? null, gustoRate: w.gustoRate ?? null, gustoRateUnit: w.gustoRateUnit ?? null,
+    connecteamRate: w.connecteamRate ?? null,
   };
 }
 
-/** Classify a whole roster for a period (pure — takes already-fetched workers). */
-export function classifyReview(period: PayPeriod, workers: UnifiedWorker[], connecteamOk: boolean, opts: ReviewOptions = DEFAULT_REVIEW_OPTIONS): PayrollReviewResult {
-  // Only workers with actual hours this period are part of the payroll run.
-  const paid = workers.filter((w) => w.active && (w.periodHours ?? 0) > 0).map((w) => classifyWorker(w, opts));
+/** The "pay rate missing" label, said in terms of WHERE it's missing from, so HR fixes the right system. */
+function missingRateLabel(w: UnifiedWorker): string {
+  // Gusto has a rate but it's a salary (non-hourly) — honest: we don't fabricate an hourly number.
+  if (w.gustoRate != null && !(typeof w.gustoRateUnit === "string" && /hour/i.test(w.gustoRateUnit))) {
+    return "Salaried in Gusto (no hourly rate)";
+  }
+  const inGusto = w.gustoRate != null;
+  const inConnecteam = w.connecteamRate != null;
+  if (!inGusto && !inConnecteam) return w.gustoMapped ? "Pay rate missing (not in Gusto or Connecteam)" : "Pay rate missing";
+  if (!inGusto) return "Pay rate missing (not in Gusto)";
+  return "Pay rate missing";
+}
+
+/** Classify a whole roster for a period (pure — takes already-fetched workers + any per-period skips). */
+export function classifyReview(
+  period: PayPeriod,
+  workers: UnifiedWorker[],
+  connecteamOk: boolean,
+  opts: ReviewOptions = DEFAULT_REVIEW_OPTIONS,
+  periodExclusions: Map<string, PeriodExclusion> = new Map(),
+): PayrollReviewResult {
+  // Candidates for the run = active workers with actual hours this period.
+  const candidates = workers.filter((w) => w.active && (w.periodHours ?? 0) > 0);
+
+  // EXCLUDED — pulled out of the run (permanent flag on the worker, OR a per-period skip). Not counted/gated.
+  const excluded: ReviewWorker[] = [];
+  const toClassify: UnifiedWorker[] = [];
+  for (const w of candidates) {
+    const mode: ExcludeMode | null = w.excluded ? "permanent" : periodExclusions.has(w.key) ? "period" : null;
+    if (mode) {
+      const rw = classifyWorker(w, opts);
+      excluded.push({ ...rw, excludeMode: mode, excludeReason: mode === "permanent" ? w.excludeReason ?? null : periodExclusions.get(w.key)?.reason ?? null });
+    } else {
+      toClassify.push(w);
+    }
+  }
+
+  const paid = toClassify.map((w) => classifyWorker(w, opts));
 
   const ready = paid.filter((w) => w.status === "READY");
   const review = paid.filter((w) => w.status === "REQUIRES_REVIEW");
@@ -64,6 +102,7 @@ export function classifyReview(period: PayPeriod, workers: UnifiedWorker[], conn
 
   return {
     period, workers: paid, ready, review, blocked,
+    excluded, excludedCount: excluded.length,
     counts: { workers: paid.length, ready: ready.length, review: review.length, blocked: blocked.length },
     hours, blockingIssues, exceptions, missingConfig,
     estReadyPayroll: sumOr(ready.map((w) => w.estPay)),
@@ -77,5 +116,6 @@ export function classifyReview(period: PayPeriod, workers: UnifiedWorker[], conn
 export async function payrollReview(period: PayPeriod, opts?: ReviewOptions): Promise<PayrollReviewResult> {
   const { workers, connecteamOk } = await unifiedWorkers(period);
   const resolved = opts ?? { overtimeThreshold: getPayrollConfig().overtimeThreshold };
-  return classifyReview(period, workers, connecteamOk, resolved);
+  const periodExclusions = listPeriodExclusions(period.start, period.end);
+  return classifyReview(period, workers, connecteamOk, resolved, periodExclusions);
 }

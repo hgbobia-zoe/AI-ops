@@ -42,6 +42,10 @@ import { latestJob as latestGustoPushJob } from "@/lib/payroll/gustoRunnerJobs";
 import { ApproveButton } from "@/components/payroll/ApproveButton";
 import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 import { ExceptionActions } from "@/components/payroll/ExceptionActions";
+import { ExcludeControl } from "@/components/payroll/ExcludeControl";
+import { RateSyncPanel } from "@/components/payroll/RateSyncPanel";
+import { buildRateSyncPlan } from "@/lib/payroll/rateSync";
+import { RATE_SOURCE_LABEL } from "@/lib/payroll/types";
 
 export const dynamic = "force-dynamic";
 
@@ -273,6 +277,7 @@ async function ReviewTab({ period, which }: { period: { start: string; end: stri
   if (r.status === "NO_DATA") {
     return <EmptyState icon={<ClipboardCheck className="size-5" />} title="Nothing to review yet" body="No worker hours for this period (or Connecteam is unavailable). Run a sync to pull hours, then review." />;
   }
+  const ratePlan = await buildRateSyncPlan(period.end);
   return (
     <div className="space-y-4">
       <section className="surface flex flex-wrap items-center justify-between gap-4 border p-4">
@@ -286,20 +291,40 @@ async function ReviewTab({ period, which }: { period: { start: string; end: stri
             <span className="text-positive">{r.counts.ready} ready · {money(r.estReadyPayroll)}</span>
             <span className="text-attention">{r.counts.review} review</span>
             <span className="text-critical">{r.counts.blocked} blocked · {money(r.estBlockedPayroll)}</span>
+            {r.excludedCount > 0 && <span className="text-meta">{r.excludedCount} excluded</span>}
           </div>
         </div>
         <ApproveButton which={which} readyCount={r.counts.ready} />
       </section>
 
-      <ReviewGroup title="Blocked" tone="critical" rows={r.blocked} note="A blocking issue prevents payroll — resolve before approving." />
-      <ReviewGroup title="Requires review" tone="attention" rows={r.review} note="Anomalies or incomplete config — review, then they become ready." />
-      <ReviewGroup title="Ready" tone="positive" rows={r.ready} note="Clean records, eligible for approval." />
+      <RateSyncPanel proposals={ratePlan.proposals} asOf={ratePlan.asOf} salaried={ratePlan.salaried} noGustoRate={ratePlan.noGustoRate} />
+
+      <ReviewGroup title="Blocked" tone="critical" rows={r.blocked} note="A blocking issue prevents payroll — resolve or exclude before approving." period={period} />
+      <ReviewGroup title="Requires review" tone="attention" rows={r.review} note="Anomalies or incomplete config — review, then they become ready." period={period} />
+      <ReviewGroup title="Ready" tone="positive" rows={r.ready} note="Clean records, eligible for approval." period={period} />
+      <ReviewGroup title="Excluded" tone="muted" rows={r.excluded} note="Pulled out of this run (not counted or paid). Include to put them back." period={period} excluded />
     </div>
   );
 }
 
-function ReviewGroup({ title, tone, rows, note }: { title: string; tone: "critical" | "attention" | "positive"; rows: ReviewWorker[]; note: string }): React.JSX.Element {
-  const dot = tone === "critical" ? "bg-critical" : tone === "attention" ? "bg-attention" : "bg-positive";
+function rateCell(w: ReviewWorker): React.JSX.Element {
+  if (w.payRate == null) return <span className="text-attention">missing</span>;
+  const src = w.rateSource ? RATE_SOURCE_LABEL[w.rateSource] : null;
+  return (
+    <span>
+      {money(w.payRate, w.currency)}/hr
+      {src && <span className="ml-1 text-[10px] text-meta">· {src}</span>}
+    </span>
+  );
+}
+
+function ReviewGroup({ title, tone, rows, note, period, excluded }: {
+  title: string; tone: "critical" | "attention" | "positive" | "muted"; rows: ReviewWorker[]; note: string;
+  period: { start: string; end: string; label: string }; excluded?: boolean;
+}): React.JSX.Element {
+  const dot = tone === "critical" ? "bg-critical" : tone === "attention" ? "bg-attention" : tone === "positive" ? "bg-positive" : "bg-meta";
+  // Hide the Excluded group entirely when empty (it's not an action item), but always show the three run groups.
+  if (excluded && rows.length === 0) return <></>;
   return (
     <div>
       <div className="mb-1 flex items-center gap-2">
@@ -311,7 +336,7 @@ function ReviewGroup({ title, tone, rows, note }: { title: string; tone: "critic
         <p className="pl-4 text-[12px] text-meta">None.</p>
       ) : (
         <div className="surface overflow-x-auto border">
-          <table className="w-full min-w-[820px] text-[12.5px]">
+          <table className="w-full min-w-[920px] text-[12.5px]">
             <thead>
               <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
                 <th className="px-3 py-2 font-medium">Worker</th>
@@ -320,7 +345,8 @@ function ReviewGroup({ title, tone, rows, note }: { title: string; tone: "critic
                 <th className="px-3 py-2 text-right font-medium">Rate</th>
                 <th className="px-3 py-2 text-right font-medium">Est. pay</th>
                 <th className="px-3 py-2 font-medium">Gusto</th>
-                <th className="px-3 py-2 font-medium">Reason</th>
+                <th className="px-3 py-2 font-medium">{excluded ? "Excluded" : "Reason"}</th>
+                <th className="px-3 py-2 text-right font-medium"> </th>
               </tr>
             </thead>
             <tbody>
@@ -329,17 +355,34 @@ function ReviewGroup({ title, tone, rows, note }: { title: string; tone: "critic
                   <td className="px-3 py-2 font-medium text-foreground">{w.name}</td>
                   <td className="px-3 py-2 text-tertiary-text">{WORKER_TYPE_LABEL[w.workerType]}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{w.hours == null ? "—" : w.hours.toLocaleString("en-US")}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{w.payRate != null ? `${money(w.payRate, w.currency)}/hr` : <span className="text-attention">missing</span>}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{rateCell(w)}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{money(w.estPay, w.currency)}</td>
                   <td className="px-3 py-2"><span className={w.mappingStatus === "UNMATCHED" ? "text-attention" : "text-secondary-text"}>{MAPPING_STATUS_LABEL[w.mappingStatus]}</span></td>
                   <td className="px-3 py-2">
-                    {w.issues.length === 0 ? <span className="text-positive">—</span> : (
+                    {excluded ? (
+                      <span className="text-[11.5px] text-meta">
+                        <span className="rounded bg-[var(--row)] px-1.5 py-0.5 text-[10px] text-tertiary-text">{w.excludeMode === "period" ? "This period" : "Permanent"}</span>
+                        {w.excludeReason ? <span className="ml-1.5">{w.excludeReason}</span> : null}
+                      </span>
+                    ) : w.issues.length === 0 ? <span className="text-positive">—</span> : (
                       <span className="flex flex-wrap gap-1">
                         {w.issues.map((i) => (
                           <span key={i.code} className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${i.kind === "BLOCKING" ? "bg-critical/15 text-critical" : i.kind === "EXCEPTION" ? "bg-attention/15 text-attention" : "bg-[var(--row)] text-meta"}`}>{i.label}</span>
                         ))}
                       </span>
                     )}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <ExcludeControl
+                      workerKey={w.key}
+                      recordId={w.recordId ?? null}
+                      connecteamUserId={w.connecteamUserId ?? null}
+                      name={w.name}
+                      periodStart={period.start}
+                      periodEnd={period.end}
+                      excluded={excluded}
+                      excludeMode={w.excludeMode}
+                    />
                   </td>
                 </tr>
               ))}

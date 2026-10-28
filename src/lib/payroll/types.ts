@@ -21,6 +21,12 @@ export const MAPPING_STATUS_LABEL: Record<MappingStatus, string> = {
   UNMATCHED: "Unmatched", SUGGESTED: "Suggested", MATCHED: "Matched", CONFIRMED: "Confirmed",
 };
 
+// Where a worker's effective pay rate came from (Gusto is authoritative — "that's where we hire them").
+export type RateSource = "gusto" | "override" | "connecteam";
+export const RATE_SOURCE_LABEL: Record<RateSource, string> = {
+  gusto: "Gusto", override: "Manual", connecteam: "Connecteam",
+};
+
 // A stored worker-identity override row (the mapping HR owns on top of Connecteam / Instawork / Gusto).
 export interface WorkerRecord {
   id: string;
@@ -37,6 +43,10 @@ export interface WorkerRecord {
   currency: string | null;
   country: string | null;
   active: boolean;
+  // Permanently excluded from payroll (paid another way / never in Gusto). Reversible; distinct from
+  // active=false. An excluded worker is kept visible but is NOT part of any payroll run until re-included.
+  excluded: boolean;
+  excludeReason: string | null;
   notes: string | null;
   createdAt: string;
   updatedAt: string;
@@ -58,12 +68,20 @@ export interface UnifiedWorker {
   gustoId: string | null;
   gustoMapped: boolean;
   payType: PayType | null;
-  payRate: number | null; // worker's currency; from override, else live Connecteam rate
+  payRate: number | null; // worker's currency; Gusto hourly (authoritative) → override → live Connecteam rate
   currency: string;
   active: boolean;
   persisted: boolean;
   periodHours: number | null; // actual hours in the active period (null = source unavailable)
   mappingStatus: MappingStatus;
+  // Rate provenance + diagnostics — so HR can see WHERE a rate came from, and where it's missing from.
+  rateSource?: RateSource | null; // which source supplied payRate (null when rate unknown)
+  gustoRate?: number | null; // the Gusto snapshot amount (hourly or salary figure), null when not in Gusto
+  gustoRateUnit?: string | null; // "Hour" (hourly) | "Year"/"Month"/… (salary) | null
+  connecteamRate?: number | null; // the live Connecteam hourly rate, null when Connecteam has none
+  // Exclusion — permanent (stored on the worker) or just this period (hr_payroll_exclusions).
+  excluded?: boolean; // permanent exclude flag (hr_workers.excluded)
+  excludeReason?: string | null;
 }
 
 // ── Payroll Review (the human checkpoint between reconciliation and Gusto) ───────────────────────────
@@ -75,6 +93,9 @@ export interface IssueTag {
   code: string;
   label: string;
 }
+// How a worker was excluded from a run (for the Excluded bucket in the review).
+export type ExcludeMode = "permanent" | "period";
+
 export interface ReviewWorker {
   key: string;
   name: string;
@@ -86,13 +107,25 @@ export interface ReviewWorker {
   mappingStatus: MappingStatus;
   status: ReviewStatus;
   issues: IssueTag[];
+  recordId?: string | null; // hr_workers.id (for the exclude/include control)
+  connecteamUserId?: number | null;
+  // Rate provenance + diagnostics (surfaced so HR can fix the right system).
+  rateSource?: RateSource | null;
+  gustoRate?: number | null;
+  gustoRateUnit?: string | null;
+  connecteamRate?: number | null;
+  // Set only on workers in the Excluded bucket.
+  excludeMode?: ExcludeMode;
+  excludeReason?: string | null;
 }
 export interface PayrollReviewResult {
   period: PayPeriod;
-  workers: ReviewWorker[]; // workers with hours this period (the ones being paid)
+  workers: ReviewWorker[]; // workers with hours this period (the ones being paid) — EXCLUDES excluded workers
   ready: ReviewWorker[];
   review: ReviewWorker[];
   blocked: ReviewWorker[];
+  excluded: ReviewWorker[]; // removed from the run (permanent or per-period) — NOT counted/gated
+  excludedCount: number;
   counts: { workers: number; ready: number; review: number; blocked: number };
   hours: number | null;
   blockingIssues: number;
