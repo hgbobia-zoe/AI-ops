@@ -42,6 +42,31 @@ Windows. One job at a time; a failed job is marked `failed` in the app and the l
 Config lives in `.env` (git-ignored). You can still override any value inline, e.g. `GUSTO_HEADLESS= .\start.ps1`
 to force a visible window for debugging.
 
+## Verify it's actually running
+
+`install-service.ps1` registers the task but does not prove the runner stayed up. After installing:
+
+```powershell
+(Get-ScheduledTask -TaskName ZoeGustoRunner).State        # want: Running
+Get-ScheduledTaskInfo -TaskName ZoeGustoRunner | Select-Object LastTaskResult, LastRunTime  # want: 0
+```
+
+`State: Ready` + `LastTaskResult: 1` means it launched and exited (see the gotcha below). A healthy start logs
+`[gusto-runner] starting. app=... profile=... headless=true` and keeps polling.
+
+## Known gotcha: the task must call runner.js by ABSOLUTE path
+
+Task Scheduler does **not** reliably honor the action's `WorkingDirectory` ("Start in") at logon under a limited
+run level, so a task that runs `node runner.js` (relative) launches from the wrong cwd, fails with
+`MODULE_NOT_FOUND`, and exits 1 — the runner never stays up. Two things prevent this and **both must hold**:
+
+- `install-service.ps1` passes an **absolute** path to `runner.js` (`Join-Path $PSScriptRoot 'runner.js'`), and
+- `runner.js` resolves `.env` and the Chrome profile dir from its **own** directory (`import.meta.url`), not cwd.
+
+If you ever see `LastTaskResult: 1` with `Arguments: runner.js` (relative) on the registered task, you installed
+an **old** copy — pull the latest and **re-run `install-service.ps1`** to re-register, then `Start-ScheduledTask`.
+Check the registered action with: `(Get-ScheduledTask -TaskName ZoeGustoRunner).Actions | Format-List Execute, Arguments`.
+
 ## Interactive sign-in from the app (Phase 2)
 
 When the Gusto session lapses, the job goes to `signin_required` and the pane streams the **live login screen**.
