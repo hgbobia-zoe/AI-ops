@@ -113,3 +113,45 @@ describe("classifyReview — exclusions", () => {
     expect(r.ready[0].connecteamRate).toBe(15);
   });
 });
+
+describe("classifyReview — review accepts", () => {
+  const accept = (key: string, by = "Lisa") => new Map([[key, { workerKey: key, acceptedBy: by, note: null, createdAt: "" }]]);
+
+  it("promotes an ACCEPTED review worker to READY (counts + estReady include them)", () => {
+    const workers = [
+      w({ key: "a", gustoMapped: true, payRate: 8, periodHours: 25 }), // READY 200
+      w({ key: "b", gustoMapped: true, payRate: 20, periodHours: 10, typeInferred: true }), // REVIEW (type), est 200
+    ];
+    const r = classifyReview(period, workers, true, DEFAULT_REVIEW_OPTIONS, new Map(), accept("b"));
+    expect(r.counts).toMatchObject({ ready: 2, review: 0 });
+    expect(r.ready.find((x) => x.key === "b")).toMatchObject({ status: "READY", accepted: true, acceptedBy: "Lisa" });
+    expect(r.estReadyPayroll).toBe(400); // 200 + 200
+    expect(r.status).toBe("READY");
+  });
+
+  it("never promotes a BLOCKED (unmapped) worker, even if accepted", () => {
+    const workers = [w({ key: "c", gustoMapped: false, payRate: 20, periodHours: 20 })]; // BLOCKED (no mapping)
+    const r = classifyReview(period, workers, true, DEFAULT_REVIEW_OPTIONS, new Map(), accept("c"));
+    expect(r.counts.blocked).toBe(1);
+    expect(r.counts.ready).toBe(0);
+    expect(r.blocked[0].accepted).toBeUndefined();
+    expect(r.status).toBe("BLOCKED");
+  });
+
+  it("exclusion wins over an accept (an excluded + accepted worker stays excluded)", () => {
+    const workers = [
+      w({ key: "a", gustoMapped: true, payRate: 8, periodHours: 25 }),
+      { ...w({ key: "b", gustoMapped: true, payRate: 20, periodHours: 10, typeInferred: true }), excluded: true, excludeReason: "paid elsewhere" },
+    ];
+    const r = classifyReview(period, workers, true, DEFAULT_REVIEW_OPTIONS, new Map(), accept("b"));
+    expect(r.excludedCount).toBe(1);
+    expect(r.excluded[0].key).toBe("b");
+    expect(r.counts.ready).toBe(1); // only "a"
+  });
+
+  it("without an accept, a review worker stays REQUIRES_REVIEW (un-approve returns it here)", () => {
+    const workers = [w({ key: "b", gustoMapped: true, payRate: 20, periodHours: 10, typeInferred: true })];
+    const r = classifyReview(period, workers, true);
+    expect(r.counts).toMatchObject({ review: 1, ready: 0 });
+  });
+});

@@ -114,9 +114,16 @@ export interface ReviewWorker {
   gustoRate?: number | null;
   gustoRateUnit?: string | null;
   connecteamRate?: number | null;
+  // Passthrough for the inline worker editor on review rows (map to Gusto / classify / set rate).
+  gustoId?: string | null;
+  country?: string | null;
+  payType?: PayType | null;
   // Set only on workers in the Excluded bucket.
   excludeMode?: ExcludeMode;
   excludeReason?: string | null;
+  // Set when a REQUIRES_REVIEW worker was accepted into the run (promoted to READY for this period).
+  accepted?: boolean;
+  acceptedBy?: string | null;
 }
 export interface PayrollReviewResult {
   period: PayPeriod;
