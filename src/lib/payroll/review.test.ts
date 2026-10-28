@@ -26,11 +26,12 @@ describe("classifyWorker", () => {
     expect(r.status).toBe("BLOCKED");
     expect(r.issues.some((i) => i.kind === "BLOCKING" && i.code === "NO_GUSTO_MAPPING")).toBe(true);
   });
-  it("BLOCKED when rate is missing and hours worked", () => {
+  it("REQUIRES_REVIEW (not blocked) when rate is missing — Gusto applies its own rate on the push", () => {
     const r = classifyWorker(w({ gustoMapped: true, payRate: null, periodHours: 21 }), DEFAULT_REVIEW_OPTIONS);
-    expect(r.status).toBe("BLOCKED");
+    expect(r.status).toBe("REQUIRES_REVIEW"); // mapped + hours ⇒ pushable; missing rate only affects the estimate
     expect(r.estPay).toBeNull();
-    expect(r.issues.some((i) => i.code === "NO_PAY_RATE")).toBe(true);
+    const rate = r.issues.find((i) => i.code === "NO_PAY_RATE");
+    expect(rate?.kind).toBe("MISSING_CONFIG"); // informational, never BLOCKING
   });
   it("REQUIRES_REVIEW on overtime (exception), not blocked", () => {
     const r = classifyWorker(w({ gustoMapped: true, payRate: 20, periodHours: 52 }), DEFAULT_REVIEW_OPTIONS);

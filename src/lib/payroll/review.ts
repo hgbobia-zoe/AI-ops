@@ -24,11 +24,13 @@ export function classifyWorker(w: UnifiedWorker, opts: ReviewOptions): ReviewWor
   const estPay = hours != null && payRate != null && w.currency === "USD" ? round2(hours * payRate) : null;
   const issues: IssueTag[] = [];
 
-  // BLOCKING — prevents payroll approval.
+  // BLOCKING — prevents payroll approval. Gusto mapping is the ONLY hard blocker: an unmapped worker cannot be
+  // pushed into the Gusto draft at all, so the run would fail for them. (Map them, or exclude them.)
   if (!w.gustoMapped) issues.push({ kind: "BLOCKING", code: "NO_GUSTO_MAPPING", label: "No Gusto mapping" });
-  if ((hours ?? 0) > 0 && payRate == null) issues.push({ kind: "BLOCKING", code: "NO_PAY_RATE", label: missingRateLabel(w) });
 
-  // MISSING_CONFIG — required setup incomplete (not itself a hard blocker, but needs attention).
+  // MISSING_CONFIG — needs attention but does NOT block the push. A missing PAY RATE is here, not in BLOCKING:
+  // Gusto applies its own stored rate when the hours are pushed, so the app's rate only drives the ESTIMATE.
+  if ((hours ?? 0) > 0 && payRate == null) issues.push({ kind: "MISSING_CONFIG", code: "NO_PAY_RATE", label: missingRateLabel(w) });
   if (w.workerType === "UNKNOWN" || w.typeInferred) issues.push({ kind: "MISSING_CONFIG", code: "TYPE_UNCONFIRMED", label: "Worker type not confirmed" });
   if (w.workerType === "INTERNATIONAL_CONTRACTOR" && !w.country) issues.push({ kind: "MISSING_CONFIG", code: "COUNTRY_MISSING", label: "Country missing" });
   if (w.workerType === "INTERNATIONAL_CONTRACTOR" && !w.currency) issues.push({ kind: "MISSING_CONFIG", code: "CURRENCY_MISSING", label: "Currency missing" });
@@ -49,17 +51,14 @@ export function classifyWorker(w: UnifiedWorker, opts: ReviewOptions): ReviewWor
   };
 }
 
-/** The "pay rate missing" label, said in terms of WHERE it's missing from, so HR fixes the right system. */
+/** The "no pay rate" note. This is NOT a blocker — Gusto pays its own rate on the push; the app rate only
+ *  drives the estimate — so the label reassures rather than alarms, while staying honest about the salary case. */
 function missingRateLabel(w: UnifiedWorker): string {
-  // Gusto has a rate but it's a salary (non-hourly) — honest: we don't fabricate an hourly number.
+  // Gusto has a rate but it's a salary (non-hourly) — honest: we don't fabricate an hourly estimate.
   if (w.gustoRate != null && !(typeof w.gustoRateUnit === "string" && /hour/i.test(w.gustoRateUnit))) {
-    return "Salaried in Gusto (no hourly rate)";
+    return "Salaried in Gusto — hourly estimate n/a";
   }
-  const inGusto = w.gustoRate != null;
-  const inConnecteam = w.connecteamRate != null;
-  if (!inGusto && !inConnecteam) return w.gustoMapped ? "Pay rate missing (not in Gusto or Connecteam)" : "Pay rate missing";
-  if (!inGusto) return "Pay rate missing (not in Gusto)";
-  return "Pay rate missing";
+  return "No rate for estimate — Gusto applies its own on the push";
 }
 
 /** Classify a whole roster for a period (pure — takes already-fetched workers + any per-period skips). */
