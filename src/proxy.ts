@@ -11,7 +11,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { verifySession, SESSION_COOKIE } from "@/lib/auth/session";
-import { canSeeFinancials, canManageSettings, canSeeCoaching, canManagePayroll, canManageUsers, canUseWebsiteStudio, canSeeMarketing, MARKETING_PAGE_PREFIXES } from "@/lib/auth/roles";
+import { canSeeFinancials, canManageSettings, canSeeCoaching, canManagePayroll, canManageUsers, canUseWebsiteStudio, canUseSeo, canSeeMarketing, MARKETING_PAGE_PREFIXES } from "@/lib/auth/roles";
 import { verifyImageSig } from "@/lib/creative/assetUrl";
 
 const PUBLIC: string[] = [
@@ -91,9 +91,10 @@ const isSettings = (p: string): boolean =>
   p.startsWith("/api/ai/bridge") ||
   p.startsWith("/api/ai/approvals"); // deciding an AI-proposed action (governance)
 
-// SEO Growth — keyword research + content pipeline. Settings-ish (it manages an integration + is
-// owner/admin-only, mirroring the `manage` nav flag), so it is gated to owner/admin here. Normal
-// session-gated console routes — NOT public, NOT token-gated like the ingest endpoints.
+// SEO Growth — keyword research + content pipeline. Owner/admin AND the scoped marketing role run it
+// (canUseSeo); Members do not. The SEO integration CREDENTIAL stays settings-gated (owner/admin) so marketing
+// operates the tool without the secret. Normal session-gated console routes — NOT public, NOT token-gated
+// like the ingest endpoints. (The marketing role is admitted by its own deny-by-default branch above.)
 const isSeo = (p: string): boolean => p === "/seo" || p.startsWith("/seo/") || p.startsWith("/api/seo");
 
 // Inventory Automation — bulk-copy a partner's Goodshuffle catalog into Zoe's. It manages inventory
@@ -126,16 +127,17 @@ const GUEST_ALLOW: string[] = [
 ];
 const guestAllowed = (p: string): boolean => GUEST_ALLOW.some((a) => p === a || p.startsWith(a + "/"));
 
-// A Marketing (scoped) staff user is confined HARD — deny-by-default — to exactly two product surfaces:
-// the Marketing blade and Website Studio, plus the APIs those pages call. Nothing else a Member can see
-// (money, settings, dispatch, scheduling, risk, payroll, people, AI, coaching, events…) is reachable: an
+// A Marketing (scoped) staff user is confined HARD — deny-by-default — to three product surfaces: the
+// Marketing blade, Website Studio, and SEO Growth, plus the APIs those pages call. Nothing else a Member can
+// see (money, settings, dispatch, scheduling, risk, payroll, people, AI, coaching, events…) is reachable: an
 // unlisted path is blocked HERE at the hard boundary, not merely hidden in the nav. Shared shell CSS/JS is
 // served from /_next/static (excluded by the matcher) and auth/logout is PUBLIC above, so neither needs a
 // slot here. Website Studio only QUEUES a PR request — nothing goes live without a human merging the PR.
 const MARKETING_ALLOW: string[] = [
-  ...MARKETING_PAGE_PREFIXES, // page surface, from roles.ts: "/marketing" (+ sub-views) and "/website-studio"
+  ...MARKETING_PAGE_PREFIXES, // page surface, from roles.ts: "/marketing" (+ sub-views), "/website-studio", "/seo"
   "/api/marketing", // marketing blade data (campaigns/content/reviews/prospects/links)
   "/api/website/jobs", // Website Studio submit/list/decision (also canUseWebsiteStudio-gated below)
+  "/api/seo", // SEO Growth data (discovery/opportunities/competitors/content/queue/performance)
 ];
 const marketingAllowed = (p: string): boolean => MARKETING_ALLOW.some((a) => p === a || p.startsWith(a + "/"));
 // Marketing blade — reachable by back-office staff (owner/admin/member) AND the scoped marketing role; a
@@ -238,7 +240,7 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
 
   if (isFinancial(pathname) && !canSeeFinancials(session.role)) return deny(req, "forbidden");
   if (isSettings(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
-  if (isSeo(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
+  if (isSeo(pathname) && !canUseSeo(session.role)) return deny(req, "forbidden");
   if (isInventory(pathname) && !canManageSettings(session.role)) return deny(req, "forbidden");
   if (isCoaching(pathname) && !canSeeCoaching(session.role)) return deny(req, "forbidden");
   if (isPayroll(pathname) && !canManagePayroll(session.role)) return deny(req, "forbidden");

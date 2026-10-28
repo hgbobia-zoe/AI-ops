@@ -24,7 +24,7 @@ import {
   BrainCircuit, Tent, Wallet, Boxes,
   type LucideIcon,
 } from "lucide-react";
-import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, marketingCanReachPage, ROLE_LABEL, type Role } from "@/lib/auth/roles";
+import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, canUseSeo, marketingCanReachPage, ROLE_LABEL, type Role } from "@/lib/auth/roles";
 
 interface Blade {
   href: string;
@@ -33,6 +33,7 @@ interface Blade {
   financial?: boolean; // only where role can see $
   coaching?: boolean; // only where role can see call transcripts
   manage?: boolean; // owner/admin only (e.g. Capability Profile)
+  seo?: boolean; // owner/admin + the scoped marketing role (canUseSeo) — SEO Growth blades
   exact?: boolean; // highlight only on an exact path match (section landing pages)
 }
 interface Group {
@@ -139,17 +140,17 @@ const GROUPS: Group[] = [
   {
     // SEO Growth — the organic-demand engine: keyword research (Ubersuggest MCP), opportunity matching,
     // competitor intelligence, content production (reusing the Creative Engine) and publishing. A big blade
-    // alongside Marketing (it fills the same top-of-funnel). Owner/admin only — it manages an integration
-    // credential — so every sub-blade carries `manage` (gated by canManageSettings, like settings-ish blades).
+    // alongside Marketing (it fills the same top-of-funnel). Owner/admin AND the scoped marketing role run it
+    // (every sub-blade carries `seo`, gated by canUseSeo); the integration CREDENTIAL stays settings-gated.
     label: "SEO Growth",
     icon: Search,
     blades: [
-      { href: "/seo", label: "Overview", icon: Gauge, exact: true, manage: true },
-      { href: "/seo/opportunities", label: "Opportunities", icon: Search, manage: true },
-      { href: "/seo/competitors", label: "Competitors", icon: Building2, manage: true },
-      { href: "/seo/content", label: "Content Studio", icon: FileText, manage: true },
-      { href: "/seo/queue", label: "Review Queue", icon: ClipboardCheck, manage: true },
-      { href: "/seo/performance", label: "Performance", icon: Rocket, manage: true },
+      { href: "/seo", label: "Overview", icon: Gauge, exact: true, seo: true },
+      { href: "/seo/opportunities", label: "Opportunities", icon: Search, seo: true },
+      { href: "/seo/competitors", label: "Competitors", icon: Building2, seo: true },
+      { href: "/seo/content", label: "Content Studio", icon: FileText, seo: true },
+      { href: "/seo/queue", label: "Review Queue", icon: ClipboardCheck, seo: true },
+      { href: "/seo/performance", label: "Performance", icon: Rocket, seo: true },
     ],
   },
   {
@@ -211,13 +212,15 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
   const bladeActive = (b: Blade) => (b.exact ? pathname === b.href : isActive(b.href));
-  // The scoped marketing role sees ONLY its allowed blades (Marketing + Website Studio) — same allow-list
-  // the proxy enforces as the hard boundary; this keeps the nav from advertising routes it would be denied.
+  // The scoped marketing role sees ONLY its allowed blades (Marketing + Website Studio + SEO Growth) — same
+  // allow-list the proxy enforces as the hard boundary; this keeps the nav from advertising routes it would be
+  // denied. SEO blades carry `seo`, shown to owner/admin + marketing (canUseSeo) but not Members.
   const isMarketingRole = role === "marketing";
   const canSee = (b: Blade) =>
     (!isMarketingRole || marketingCanReachPage(b.href)) &&
     (!b.financial || canSeeFinancials(role)) &&
     (!b.coaching || canSeeCoaching(role)) &&
+    (!b.seo || canUseSeo(role)) &&
     (!b.manage || canManageSettings(role));
 
   // Admin is another expandable parent, built from what the role can manage.

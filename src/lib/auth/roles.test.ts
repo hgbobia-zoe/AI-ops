@@ -11,6 +11,7 @@ import {
   canManageAi,
   aiCapabilityLevel,
   canUseWebsiteStudio,
+  canUseSeo,
   canSeeMarketing,
   canSeeCoaching,
   canManagePayroll,
@@ -84,9 +85,18 @@ describe("access matrix", () => {
 });
 
 describe("marketing role — scoped, deny-by-default", () => {
-  it("reaches ONLY Website Studio + the Marketing blade", () => {
+  it("reaches ONLY Website Studio + the Marketing blade + SEO Growth", () => {
     expect(canUseWebsiteStudio("marketing")).toBe(true);
     expect(canSeeMarketing("marketing")).toBe(true);
+    expect(canUseSeo("marketing")).toBe(true);
+  });
+
+  it("SEO Growth is run by owner/admin + marketing, NOT Members or guests", () => {
+    expect(canUseSeo("owner")).toBe(true);
+    expect(canUseSeo("admin")).toBe(true);
+    expect(canUseSeo("marketing")).toBe(true);
+    expect(canUseSeo("member")).toBe(false);
+    expect(canUseSeo("guest")).toBe(false);
   });
 
   it("is DENIED every money / settings / users / payroll / coaching / AI capability", () => {
@@ -117,14 +127,17 @@ describe("marketing role — scoped, deny-by-default", () => {
     expect(assignableRoles("admin")).toContain("marketing");
   });
 
-  it("marketingCanReachPage allows only /marketing* and /website-studio*", () => {
+  it("marketingCanReachPage allows only /marketing*, /website-studio*, and /seo*", () => {
     expect(marketingCanReachPage("/marketing")).toBe(true);
     expect(marketingCanReachPage("/marketing/campaigns")).toBe(true);
     expect(marketingCanReachPage("/website-studio")).toBe(true);
     expect(marketingCanReachPage("/website-studio/anything")).toBe(true);
+    expect(marketingCanReachPage("/seo")).toBe(true);
+    expect(marketingCanReachPage("/seo/opportunities")).toBe(true);
     expect(marketingCanReachPage("/finance")).toBe(false);
     expect(marketingCanReachPage("/dispatch")).toBe(false);
     expect(marketingCanReachPage("/admin")).toBe(false);
     expect(marketingCanReachPage("/marketingx")).toBe(false); // not a sub-path of /marketing
+    expect(marketingCanReachPage("/seox")).toBe(false); // not a sub-path of /seo
   });
 });
