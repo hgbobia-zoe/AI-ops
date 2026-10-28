@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyReadiness, classifyReadinessWorker, type ReadinessFacts, type ReadinessContext } from "./readiness";
+import { classifyReadiness, classifyReadinessWorker, isExcludedFromRun, type ReadinessFacts, type ReadinessContext } from "./readiness";
 import type { PayPeriod } from "./types";
 
 const period: PayPeriod = { start: "2026-10-05", end: "2026-10-11", label: "Oct 5 – Oct 11" };
@@ -149,5 +149,18 @@ describe("exception detect keys are stable + idempotent", () => {
     // Re-running the same facts yields the identical key (idempotent upsert target).
     const again = classifyReadinessWorker(facts({ key: "ct:5", gustoMapped: false, actualHours: 10 }), ctx({}));
     expect(again.issues.find((i) => i.type === "MISSING_GUSTO_MAPPING")!.detectKey).toBe(exc.detectKey);
+  });
+});
+
+describe("isExcludedFromRun — excluded workers are dropped before readiness is assessed", () => {
+  const none = new Map<string, unknown>();
+  it("drops a permanently excluded worker", () => {
+    expect(isExcludedFromRun(true, "ct:1", none)).toBe(true);
+  });
+  it("drops a worker skipped for THIS period", () => {
+    expect(isExcludedFromRun(false, "ct:2", new Map([["ct:2", { reason: "paid elsewhere" }]]))).toBe(true);
+  });
+  it("keeps a normal worker (still assessed — e.g. flagged for unapproved time)", () => {
+    expect(isExcludedFromRun(false, "ct:3", none)).toBe(false);
   });
 });

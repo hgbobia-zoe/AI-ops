@@ -41,6 +41,7 @@ import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 import { ExceptionActions } from "@/components/payroll/ExceptionActions";
 import { ExcludeControl } from "@/components/payroll/ExcludeControl";
 import { ApproveControl } from "@/components/payroll/ApproveControl";
+import { BulkApproveControl } from "@/components/payroll/BulkApproveControl";
 import { RateSyncPanel } from "@/components/payroll/RateSyncPanel";
 import { buildRateSyncPlan } from "@/lib/payroll/rateSync";
 import { RATE_SOURCE_LABEL } from "@/lib/payroll/types";
@@ -342,6 +343,11 @@ function ReviewGroup({ title, tone, rows, note, period, excluded, group, gustoMe
         <span className={`size-2 rounded-full ${dot}`} />
         <h3 className="text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">{title} <span className="text-meta">({rows.length})</span></h3>
         <span className="text-[11px] text-meta">— {note}</span>
+        {group === "review" && rows.length > 0 && (
+          <div className="ml-auto">
+            <BulkApproveControl workers={rows.map((w) => ({ workerKey: w.key, name: w.name }))} periodStart={period.start} periodEnd={period.end} />
+          </div>
+        )}
       </div>
       {rows.length === 0 ? (
         <p className="pl-4 text-[12px] text-meta">None.</p>
