@@ -35,10 +35,7 @@ import { WorkerEditor, type GustoPick } from "@/components/payroll/WorkerEditor"
 import { SyncButton } from "@/components/payroll/SyncButton";
 import { SyncGustoButton } from "@/components/payroll/SyncGustoButton";
 import { PushGustoHoursButton } from "@/components/payroll/PushGustoHoursButton";
-import { GustoConsole } from "@/components/payroll/GustoConsole";
 import { gustoPushDisabled, readGustoPushResult } from "@/lib/payroll/gustoPushState";
-import { gustoRunnerConfigured } from "@/lib/payroll/gustoRunnerAuth";
-import { latestJob as latestGustoPushJob } from "@/lib/payroll/gustoRunnerJobs";
 import { ApproveButton } from "@/components/payroll/ApproveButton";
 import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 import { ExceptionActions } from "@/components/payroll/ExceptionActions";
@@ -697,22 +694,12 @@ function SettingsTab(): React.JSX.Element {
         {/* DRAFT-ONLY hours push — writes reconciled hours into the current Gusto draft; never submits payroll. */}
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-rule pt-3">
           <p className="max-w-sm text-[11.5px] text-meta">
-            Push reconciled hours into the current Gusto <span className="font-medium text-secondary-text">DRAFT</span> payroll run (the office-browser extension writes mapped, unblocked workers via Gusto&apos;s own save-hours action). It never submits, runs, or approves payroll.
+            Push reconciled hours into the current Gusto <span className="font-medium text-secondary-text">DRAFT</span> payroll run. Runs in <span className="font-medium text-secondary-text">this Chrome</span> via the Auto-Pull extension, using your own signed-in Gusto session (write is audited to you). It writes mapped, unblocked workers via Gusto&apos;s own save-hours action and never submits, runs, or approves payroll.
           </p>
           <PushGustoHoursButton
             which={which}
             disabled={pushDisabled}
             lastPush={lastPush ? { at: lastPush.at, ok: lastPush.ok, aborted: lastPush.aborted, pushed: lastPush.pushed, skipped: lastPush.skipped, failed: lastPush.failed } : null}
-          />
-        </div>
-        {/* Remote-browser push (no extension) — the office-machine runner does the DRAFT write and streams it
-            here live, so a payroll person with nothing installed can push + watch. DRAFT-only, same as above. */}
-        <div className="mt-3 border-t border-rule pt-3">
-          <GustoConsole
-            which={which}
-            runnerConfigured={gustoRunnerConfigured()}
-            disabled={pushDisabled}
-            initialJob={latestGustoPushJob()}
           />
         </div>
       </section>
