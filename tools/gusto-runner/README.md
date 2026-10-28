@@ -67,6 +67,25 @@ If you ever see `LastTaskResult: 1` with `Arguments: runner.js` (relative) on th
 an **old** copy — pull the latest and **re-run `install-service.ps1`** to re-register, then `Start-ScheduledTask`.
 Check the registered action with: `(Get-ScheduledTask -TaskName ZoeGustoRunner).Actions | Format-List Execute, Arguments`.
 
+## Known gotcha: headless needs chrome-headless-shell, co-located with the runner
+
+`GUSTO_HEADLESS=1` launches Playwright's **chrome-headless-shell**, which is a **separate download** from the
+regular chromium (`npx playwright install chromium` alone does NOT get it — use
+`npx playwright install chromium chromium-headless-shell`). `setup.ps1` installs both.
+
+`setup.ps1` also sets **`PLAYWRIGHT_BROWSERS_PATH`** to a `.pw-browsers` folder next to the runner and installs
+the browsers there, instead of the per-user `%LOCALAPPDATA%\ms-playwright` default. Keep it that way: a scheduled
+task can run under a filesystem view where the AppData default is **invisible** (e.g. a redirected or sandboxed
+profile), and Playwright then throws `Executable doesn't exist at ...` and the task exits 1 even though the files
+look present interactively. Co-locating the browsers with the runner removes that dependency.
+
+Because `runner.js` reads `PLAYWRIGHT_BROWSERS_PATH` from `.env`, it imports playwright **dynamically after**
+loading `.env` — a static import would read the variable too early (ESM hoists imports) and ignore it. Don't
+convert that back to a top-level `import`.
+
+**Diagnosing a silent task exit:** the runner tees stdout/stderr and fatal errors to **`boot.log`** in its own
+folder (the scheduled task itself discards them). After a failed start, read `boot.log` for the real error.
+
 ## Interactive sign-in from the app (Phase 2)
 
 When the Gusto session lapses, the job goes to `signin_required` and the pane streams the **live login screen**.

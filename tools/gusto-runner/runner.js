@@ -24,14 +24,40 @@
 // worker → stream a live screenshot throughout → report the result (POST /runner/update). A human can cancel
 // from the app; the runner polls the job and stops. One job failing never crashes the loop.
 
-import { chromium } from "playwright";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+// NOTE: playwright is imported DYNAMICALLY inside main(), AFTER loadDotEnv() runs. playwright-core reads
+// PLAYWRIGHT_BROWSERS_PATH at module-load time, and ESM hoists static imports above all other code — so a
+// static `import ... from "playwright"` would read the env var before .env is applied and cache the wrong
+// (default per-user AppData) browser location. Deferring the import lets a PLAYWRIGHT_BROWSERS_PATH set in
+// .env win, which is how we keep the browsers co-located with the runner (portable, survives profile quirks).
+import { existsSync, mkdirSync, readFileSync, appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Resolve .env and the profile dir against THIS script's directory, not the current working directory. A Windows
 // Scheduled Task does not reliably honor its "Start in" dir, so the runner must never depend on cwd.
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+
+// ── Bootstrap crash log ──────────────────────────────────────────────────────
+// A Scheduled Task discards the process's stdout/stderr, so when a task-launched run exits (e.g. exit 1) there
+// is otherwise no trace of WHY — even when the same command runs fine interactively. Tee console + the fatal
+// handlers to boot.log in the script dir so a task run always leaves a diagnosable record.
+const BOOT_LOG = join(SCRIPT_DIR, "boot.log");
+function bootLog(tag, ...a) {
+  try {
+    const parts = a.map((x) => (typeof x === "string" ? x : (x && x.stack) || JSON.stringify(x)));
+    appendFileSync(BOOT_LOG, `${new Date().toISOString()} [${tag}] ${parts.join(" ")}\n`);
+  } catch { /* logging must never crash the runner */ }
+}
+{
+  const _log = console.log.bind(console);
+  const _err = console.error.bind(console);
+  console.log = (...a) => { bootLog("log", ...a); _log(...a); };
+  console.error = (...a) => { bootLog("err", ...a); _err(...a); };
+  process.on("uncaughtException", (e) => bootLog("uncaughtException", e));
+  process.on("unhandledRejection", (e) => bootLog("unhandledRejection", e));
+  process.on("exit", (code) => bootLog("exit", `code=${code}`));
+  bootLog("boot", `node ${process.version} cwd=${process.cwd()} script=${SCRIPT_DIR}`);
+}
 
 // ── Load a local .env first (KEY=VALUE per line) so the token + config can live in a file instead of the shell
 // — no dependency, a tiny parser. A var already set in the real environment always wins, so `GUSTO_RUNNER_TOKEN=…
@@ -369,6 +395,9 @@ async function processJob(context, job) {
 // ── Main loop (single-flight) ────────────────────────────────────────────────
 async function main() {
   requireEnv();
+  // Import playwright only now — .env (incl. any PLAYWRIGHT_BROWSERS_PATH) has been applied above, so
+  // playwright-core resolves the browsers against the configured path rather than the default AppData one.
+  const { chromium } = await import("playwright");
   if (!existsSync(PROFILE_DIR)) mkdirSync(PROFILE_DIR, { recursive: true });
   log(`starting. app=${APP_URL} profile=${PROFILE_DIR} headless=${HEADLESS} poll=${POLL_MS}ms`);
   const context = await chromium.launchPersistentContext(PROFILE_DIR, {

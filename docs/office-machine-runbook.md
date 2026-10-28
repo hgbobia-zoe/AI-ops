@@ -55,11 +55,19 @@ box or migrated to a proper always-on server later. Each component has its own R
   pane, and that login persists for future headless pushes.
 - **Token:** `GUSTO_RUNNER_TOKEN` (fail-CLOSED — runner endpoints 503 until set on both Fly and the runner's
   `.env`; must match). Write `.env` without a UTF-8 BOM (the first-line regex breaks on a BOM).
-- **⚠️ Gotcha (bit us 2026-10-27/28):** the scheduled task must invoke `runner.js` by **absolute** path, and
+- **⚠️ Gotcha 1 (bit us 2026-10-27/28):** the scheduled task must invoke `runner.js` by **absolute** path, and
   `runner.js` must resolve `.env`/profile from its own dir (`import.meta.url`) — Task Scheduler doesn't honor
   "Start in" at logon, so a relative `node runner.js` fails `MODULE_NOT_FOUND` and exits 1 (`State: Ready`,
   `LastTaskResult: 1`). If you see a relative `Arguments: runner.js` on the task, you installed an old copy —
   re-run the current `install-service.ps1`. Fixed in commit `60f9f99` / PR #142.
+- **⚠️ Gotcha 2 (bit us 2026-10-28):** the task kept exiting 1 with `launchPersistentContext: Executable doesn't
+  exist at ...chrome-headless-shell.exe` even though the file was present interactively. Two causes: (a)
+  `GUSTO_HEADLESS=1` needs the **chrome-headless-shell** browser, a *separate* download from chromium; and (b)
+  the browsers lived in the per-user `%LOCALAPPDATA%\ms-playwright`, which a scheduled task under a
+  redirected/sandboxed profile can't see. Fix: `setup.ps1` now installs **both** browsers into a `.pw-browsers`
+  folder next to the runner and sets `PLAYWRIGHT_BROWSERS_PATH` to it in `.env`; `runner.js` imports playwright
+  **dynamically after** loading `.env` so that path wins, and tees a **`boot.log`** so a silent task exit is
+  diagnosable. The task's own stdout/stderr is otherwise discarded.
 - **README:** [`tools/gusto-runner/README.md`](../tools/gusto-runner/README.md) · design: [`docs/gusto-on-demand.md`](gusto-on-demand.md)
 
 ### 4. Website Studio runner — Claude Agent SDK
