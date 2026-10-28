@@ -127,17 +127,22 @@ const GUEST_ALLOW: string[] = [
 ];
 const guestAllowed = (p: string): boolean => GUEST_ALLOW.some((a) => p === a || p.startsWith(a + "/"));
 
-// A Marketing (scoped) staff user is confined HARD — deny-by-default — to three product surfaces: the
-// Marketing blade, Website Studio, and SEO Growth, plus the APIs those pages call. Nothing else a Member can
-// see (money, settings, dispatch, scheduling, risk, payroll, people, AI, coaching, events…) is reachable: an
-// unlisted path is blocked HERE at the hard boundary, not merely hidden in the nav. Shared shell CSS/JS is
-// served from /_next/static (excluded by the matcher) and auth/logout is PUBLIC above, so neither needs a
-// slot here. Website Studio only QUEUES a PR request — nothing goes live without a human merging the PR.
+// A Marketing (scoped) staff user is confined HARD — deny-by-default — to its demand-generation surface: the
+// Marketing blade (incl. Creative Engine), Opportunity Radar, SEO Growth, and Website Studio, plus the APIs
+// those pages call. Nothing else a Member can see (money, settings, dispatch, scheduling, risk, payroll,
+// people, AI, coaching, events…) is reachable: an unlisted path is blocked HERE at the hard boundary, not
+// merely hidden in the nav. Shared shell CSS/JS is served from /_next/static (excluded by the matcher) and
+// auth/logout is PUBLIC above, so neither needs a slot here. None of these surfaces carries financial data.
+// Website Studio only QUEUES a PR request — nothing goes live without a human merging the PR.
 const MARKETING_ALLOW: string[] = [
-  ...MARKETING_PAGE_PREFIXES, // page surface, from roles.ts: "/marketing" (+ sub-views), "/website-studio", "/seo"
-  "/api/marketing", // marketing blade data (campaigns/content/reviews/prospects/links)
-  "/api/website/jobs", // Website Studio submit/list/decision (also canUseWebsiteStudio-gated below)
+  ...MARKETING_PAGE_PREFIXES, // page surface from roles.ts: /marketing, /creative, /radar, /seo, /website-studio
+  "/api/marketing", // Marketing blade data (campaigns/content/reviews/prospects/links)
+  "/api/creative", // Creative Engine (jobs/experiments/provider/visual-dna/upload) — under the Marketing blade
+  "/api/radar", // Opportunity Radar data (sources/companies/outreach-plan/import)
+  "/api/opportunity", // Radar opportunity pipeline (interpret/stage/handoff/campaign/seed)
+  "/api/pursuit", // Radar → Capability Profile (capability-profile/opportunity) — demand-gen content
   "/api/seo", // SEO Growth data (discovery/opportunities/competitors/content/queue/performance)
+  "/api/website/jobs", // Website Studio submit/list/decision (also canUseWebsiteStudio-gated below)
 ];
 const marketingAllowed = (p: string): boolean => MARKETING_ALLOW.some((a) => p === a || p.startsWith(a + "/"));
 // Marketing blade — reachable by back-office staff (owner/admin/member) AND the scoped marketing role; a
@@ -229,9 +234,10 @@ export async function proxy(req: NextRequest): Promise<NextResponse> {
     return NextResponse.redirect(new URL("/dispatch", req.nextUrl)); // never bounce a guest to "/" (loops)
   }
 
-  // Marketing (scoped staff) is deny-by-default, scoped hard to the Marketing blade + Website Studio + their
-  // APIs — before any of the staff role gates below. Anything not on the allow-list is blocked here: an API
-  // gets a 403; a page bounces to /marketing (never to "/", which would loop through this same deny).
+  // Marketing (scoped staff) is deny-by-default, scoped hard to its demand-generation surface (Marketing +
+  // Creative + Opportunity Radar + SEO Growth + Website Studio + their APIs) — before any of the staff role
+  // gates below. Anything not on the allow-list is blocked here: an API gets a 403; a page bounces to
+  // /marketing (never to "/", which would loop through this same deny).
   if (session.role === "marketing") {
     if (marketingAllowed(pathname)) return NextResponse.next();
     if (pathname.startsWith("/api/")) return NextResponse.json({ error: "forbidden" }, { status: 403 });

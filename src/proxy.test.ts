@@ -126,11 +126,13 @@ describe("proxy — Gusto remote-browser push boundary", () => {
 });
 
 describe("proxy — marketing role is scoped (deny-by-default)", () => {
-  it("ALLOWS the Marketing blade + Website Studio + SEO Growth + their APIs", async () => {
+  it("ALLOWS its whole demand-gen surface (Marketing+Creative, Radar, SEO, Website Studio) + their APIs", async () => {
     for (const p of [
-      "/marketing", "/marketing/campaigns", "/marketing/reviews", "/website-studio",
-      "/seo", "/seo/opportunities", "/seo/performance",
-      "/api/marketing/campaigns", "/api/website/jobs", "/api/seo/discovery",
+      "/marketing", "/marketing/campaigns", "/marketing/reviews",
+      "/creative", "/creative/dna", "/radar", "/radar/analytics", "/radar/capability",
+      "/seo", "/seo/opportunities", "/seo/performance", "/website-studio",
+      "/api/marketing/campaigns", "/api/creative/jobs", "/api/radar/source/run",
+      "/api/opportunity/stage", "/api/pursuit/capability-profile", "/api/seo/discovery", "/api/website/jobs",
     ]) {
       const res = await proxy(await reqAs("marketing", p));
       expect(res.status, `expected 200 for ${p}`).toBe(200); // NextResponse.next()
@@ -156,7 +158,7 @@ describe("proxy — marketing role is scoped (deny-by-default)", () => {
   });
 
   it("BOUNCES every other console PAGE to /marketing (never loops through '/')", async () => {
-    for (const p of ["/finance", "/admin", "/dispatch", "/payroll", "/scheduling", "/dashboard", "/ai-command", "/creative"]) {
+    for (const p of ["/finance", "/admin", "/dispatch", "/payroll", "/scheduling", "/dashboard", "/ai-command", "/sales", "/customers"]) {
       const res = await proxy(await reqAs("marketing", p));
       expect(res.status, `expected redirect for ${p}`).toBe(307);
       expect(new URL(res.headers.get("location")!).pathname).toBe("/marketing");

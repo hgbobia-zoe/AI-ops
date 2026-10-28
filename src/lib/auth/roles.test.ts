@@ -127,17 +127,21 @@ describe("marketing role — scoped, deny-by-default", () => {
     expect(assignableRoles("admin")).toContain("marketing");
   });
 
-  it("marketingCanReachPage allows only /marketing*, /website-studio*, and /seo*", () => {
-    expect(marketingCanReachPage("/marketing")).toBe(true);
-    expect(marketingCanReachPage("/marketing/campaigns")).toBe(true);
-    expect(marketingCanReachPage("/website-studio")).toBe(true);
-    expect(marketingCanReachPage("/website-studio/anything")).toBe(true);
-    expect(marketingCanReachPage("/seo")).toBe(true);
-    expect(marketingCanReachPage("/seo/opportunities")).toBe(true);
-    expect(marketingCanReachPage("/finance")).toBe(false);
-    expect(marketingCanReachPage("/dispatch")).toBe(false);
-    expect(marketingCanReachPage("/admin")).toBe(false);
-    expect(marketingCanReachPage("/marketingx")).toBe(false); // not a sub-path of /marketing
-    expect(marketingCanReachPage("/seox")).toBe(false); // not a sub-path of /seo
+  it("marketingCanReachPage admits the whole demand-gen surface, nothing else", () => {
+    for (const p of [
+      "/marketing", "/marketing/campaigns",
+      "/creative", "/creative/dna", // Creative Engine (incl. Visual DNA) is under the Marketing blade
+      "/radar", "/radar/analytics", "/radar/capability", // all of Opportunity Radar incl. Capability Profile
+      "/seo", "/seo/opportunities",
+      "/website-studio", "/website-studio/anything",
+    ]) {
+      expect(marketingCanReachPage(p), p).toBe(true);
+    }
+    for (const p of [
+      "/finance", "/dispatch", "/admin", "/sales", "/salesos", "/payroll", "/people", "/dashboard", "/ai-command",
+      "/marketingx", "/seox", // not sub-paths of an allowed prefix
+    ]) {
+      expect(marketingCanReachPage(p), p).toBe(false);
+    }
   });
 });
