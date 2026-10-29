@@ -1,12 +1,12 @@
-// SEO Growth — office-runner INGEST endpoint (path B). Ubersuggest's MCP is OAuth-only (no static token we
-// could hold on Fly), so the OFFICE MACHINE runs the MCP client, signs in once, pulls keyword data, and
-// PUSHES it here. The complement to /api/seo/cron (which triggers the server-side pull) — they share the one
-// SEO_INGEST_TOKEN. Same shape as the other browser-pull ingests (CORS-restricted, token-gated in-handler,
-// fail-OPEN until the token is set). The payload is DATA, never code.
+// SEO Growth — office-runner INGEST endpoint. Google blocks our Fly (datacenter) IP, so the OFFICE MACHINE
+// reads live Google SERPs for pending keywords and PUSHES the observed results here (meta.source = "serp"). The
+// app computes the competitive gap. CORS-restricted, token-gated in-handler, fail-OPEN until the token is set.
+// The payload is DATA, never code. (A legacy keyword-metrics shape — meta.source absent — still parses, for
+// back-compat with rows pulled before the SERP pivot.)
 //
-//   POST  body { keywords: [{ keyword, category, location, intent, rawResult }], meta?: { limitHit, quota,
-//               error, toolName, toolsList, retrievedAt } }  → parse + upsert + analyze (ingestKeywordResults)
-//   GET   ?pending=<n>  → the next <n> seed keywords NOT yet discovered (what the runner should pull next)
+//   POST  body { keywords: [{ keyword, category, location, intent, rawResult }], meta?: { source, zoeDomain,
+//               blocked, limitHit, quota, error, toolName, retrievedAt } }  → parse + upsert + analyze
+//   GET   ?pending=<n>  → the next <n> seed keywords NOT yet read (what the runner should read next)
 
 import { NextResponse } from "next/server";
 import { ingestKeywordResults, pendingSeedKeywords, type SeoIngestBatch } from "@/lib/seo/discovery";
@@ -77,8 +77,8 @@ export async function POST(req: Request): Promise<NextResponse> {
     actor: "office-runner (seo)",
     action: "seo.ingest",
     entity: "seo",
-    entityId: "ubersuggest",
-    after: { received: result.received, created: result.created, updated: result.updated, skipped: result.skipped, errors: result.errors, limitHit: result.limitHit, toolName: body.meta?.toolName ?? null },
+    entityId: body.meta?.source ?? "serp",
+    after: { received: result.received, created: result.created, updated: result.updated, skipped: result.skipped, errors: result.errors, limitHit: result.limitHit, blocked: result.blocked, source: body.meta?.source ?? null, toolName: body.meta?.toolName ?? null },
   });
 
   return NextResponse.json({ ok: true, result, alerted }, { headers });

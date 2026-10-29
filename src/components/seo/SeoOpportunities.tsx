@@ -82,7 +82,7 @@ export function SeoOpportunities({ opportunities, health }: { opportunities: Seo
       {!health.configured && (
         <div className="mb-3 flex items-start gap-2 rounded border border-border bg-[var(--row-hover)] px-3 py-2.5 text-[12.5px] text-tertiary-text">
           <Info className="mt-0.5 size-3.5 shrink-0 text-meta" />
-          <span>Ubersuggest is not connected, so Discover will not return keyword data yet. Set the credential in <a href="/admin" className="underline">Settings</a>. The pipeline is live and will populate once connected.</span>
+          <span>No SERP reads yet, so there is nothing to discover. Set the Zoe + competitor domains in <a href="/admin" className="underline">Settings</a>, then run the office SERP runner (tools/seo-runner). The pipeline is live and populates once it reads.</span>
         </div>
       )}
 

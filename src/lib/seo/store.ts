@@ -16,10 +16,13 @@ import {
   type SeoIntent,
   type SeoAction,
   type SeoPriorityBreakdown,
+  type SerpData,
+  type SeoCompetitorDomain,
   SEO_STATUSES,
   SEO_STAGES,
 } from "./types";
 import { canTransition } from "./stages";
+import { aggregateCompetitorDomains, DEFAULT_ZOE_DOMAIN } from "./serp";
 
 // ── dedupe identity ────────────────────────────────────────────────────────────
 /**
@@ -46,6 +49,7 @@ interface OppRow {
   competitor_refs: string | null;
   metrics: string | null;
   metrics_source: string | null;
+  serp: string | null;
   source: string;
   research_at: string | null;
   matched_url: string | null;
@@ -81,6 +85,16 @@ function parseMetrics(s: string | null): SeoMetrics | null {
   }
 }
 
+function parseSerp(s: string | null): SerpData | null {
+  if (!s) return null;
+  try {
+    const v = JSON.parse(s);
+    return v && typeof v === "object" && Array.isArray((v as SerpData).topDomains) ? (v as SerpData) : null;
+  } catch {
+    return null;
+  }
+}
+
 function parseBreakdown(s: string | null): SeoPriorityBreakdown | null {
   if (!s) return null;
   try {
@@ -103,6 +117,7 @@ function toOpportunity(r: OppRow): SeoOpportunity {
     competitorRefs: parseArr(r.competitor_refs),
     metrics: parseMetrics(r.metrics),
     metricsSource: (r.metrics_source as SeoMetricsSource) ?? "none",
+    serp: parseSerp(r.serp),
     source: r.source as SeoSource,
     researchAt: r.research_at,
     matchedUrl: r.matched_url,
@@ -129,6 +144,8 @@ export interface UpsertOpportunityInput {
   competitorRefs?: string[];
   metrics?: SeoMetrics | null;
   metricsSource?: SeoMetricsSource;
+  /** The latest SERP read (observed rankings). Refreshes in place on a re-pull; null leaves any existing read. */
+  serp?: SerpData | null;
   source?: SeoSource;
   /** ISO retrieval time of the metrics. */
   researchAt?: string | null;
@@ -152,15 +169,18 @@ export function upsertOpportunity(input: UpsertOpportunityInput): string {
   const competitors = JSON.stringify(input.competitorRefs ?? []);
   const metrics = input.metrics ? JSON.stringify(input.metrics) : null;
   const metricsSource: SeoMetricsSource = input.metricsSource ?? (input.metrics ? "ubersuggest" : "none");
+  const serp = input.serp ? JSON.stringify(input.serp) : null;
   const source: SeoSource = input.source ?? "ubersuggest";
 
   if (existing) {
+    // A re-pull refreshes the research facts (keyword, related, competitors, metrics, serp). A null serp leaves
+    // any prior read in place (COALESCE), so an unrelated refresh never wipes a SERP we already have.
     db.prepare(
       `UPDATE seo_opportunities SET
          keyword = ?, related_keywords = ?, competitor_refs = ?, metrics = ?, metrics_source = ?,
-         research_at = COALESCE(?, research_at), updated_at = ?
+         serp = COALESCE(?, serp), source = ?, research_at = COALESCE(?, research_at), updated_at = ?
        WHERE id = ?`,
-    ).run(input.keyword.trim(), related, competitors, metrics, metricsSource, input.researchAt ?? null, now, existing.id);
+    ).run(input.keyword.trim(), related, competitors, metrics, metricsSource, serp, source, input.researchAt ?? null, now, existing.id);
     return existing.id;
   }
 
@@ -168,9 +188,9 @@ export function upsertOpportunity(input: UpsertOpportunityInput): string {
   db.prepare(
     `INSERT INTO seo_opportunities (
        id, dedupe_key, keyword, related_keywords, intent, location, category, competitor_refs,
-       metrics, metrics_source, source, research_at, matched_url, recommended_action, priority,
+       metrics, metrics_source, serp, source, research_at, matched_url, recommended_action, priority,
        priority_breakdown, explanation, owner, status, stage, is_seed, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, 'new', 'DISCOVERED', ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, 'new', 'DISCOVERED', ?, ?, ?)`,
   ).run(
     id,
     key,
@@ -182,6 +202,7 @@ export function upsertOpportunity(input: UpsertOpportunityInput): string {
     competitors,
     metrics,
     metricsSource,
+    serp,
     source,
     input.researchAt ?? null,
     input.isSeed ? 1 : 0,
@@ -223,6 +244,18 @@ export function listOpportunities(filter: ListOpportunitiesFilter = {}): SeoOppo
     ? (db.prepare("SELECT * FROM seo_opportunities WHERE status = ? ORDER BY updated_at DESC LIMIT ?").all(filter.status, limit) as OppRow[])
     : (db.prepare("SELECT * FROM seo_opportunities ORDER BY updated_at DESC LIMIT ?").all(limit) as OppRow[]);
   return rows.map(toOpportunity);
+}
+
+/**
+ * Every competitor domain across the stored SERP reads, with how many tracked keywords it ranks for and its
+ * mean rank. Reads every opportunity's SERP blob and delegates to the PURE aggregator (serp.ts). Zoe's own
+ * domain + known directories are excluded. `zoeDomain` defaults to the SERP module default; callers pass the
+ * admin-configured one. Returns [] when nothing has been read yet (honest empty, never fabricated).
+ */
+export function competitorDomainAggregate(zoeDomain: string = DEFAULT_ZOE_DOMAIN): SeoCompetitorDomain[] {
+  const rows = getDb().prepare("SELECT keyword, serp FROM seo_opportunities WHERE serp IS NOT NULL").all() as { keyword: string; serp: string | null }[];
+  const opps = rows.map((r) => ({ keyword: r.keyword, serp: parseSerp(r.serp) }));
+  return aggregateCompetitorDomains(opps, zoeDomain);
 }
 
 /** Count of opportunities in each status (every status present, 0 when none). */

@@ -1,9 +1,14 @@
-// ── Ubersuggest MCP integration boundary (server-only) ────────────────────────────────────────────
+// ── Ubersuggest MCP integration boundary (server-only) — DORMANT ──────────────────────────────────
 //
-// The ONE place the platform talks to the Ubersuggest MCP server. Everything the Phase 2+ engine needs
-// (keyword research, volume/difficulty, competitor ranking keywords, backlinks, site audit, …) goes
-// through here, so credential handling, timeouts, retries, rate-limit backoff, retrieval logging and
-// caching are enforced in a single audited place.
+// STATUS: dormant. The SEO engine's live data source is now the Google-SERP office runner (src/lib/seo/serp.ts
+// + tools/seo-runner); the app no longer talks to Ubersuggest. Ubersuggest's MCP is OAuth-only and its auth
+// server rejects any non-official client, so a headless/server client could never sign in. This module is kept
+// as the (inert) seam for a FUTURE server-side keyword-METRICS provider (volume/difficulty) — it is gated by
+// configured() (a credential that is normally unset) and makes no call otherwise. The overview/health card do
+// NOT use this; they use the freshness-based serpHealth() in watcher.ts.
+//
+// Historically: the ONE place the platform talked to the Ubersuggest MCP server. Credential handling, timeouts,
+// retries, rate-limit backoff, retrieval logging and caching are enforced in a single audited place.
 //
 // HONESTY LAW (matches the rest of the platform): this boundary NEVER fabricates SEO data. If no MCP
 // credential is configured it reports `not_configured` and makes no network call. A probe reports `ok`

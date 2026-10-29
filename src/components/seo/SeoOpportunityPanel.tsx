@@ -165,13 +165,25 @@ export function SeoOpportunityPanel({ id, onClose }: { id: string; onClose: () =
             <section>
               <h3 className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Evidence</h3>
               <div className="rounded border border-border p-3">
-                <div className="text-[11px] uppercase tracking-[0.06em] text-meta">Ubersuggest metrics {o.metricsSource === "none" && "(none pulled)"}</div>
+                <div className="text-[11px] uppercase tracking-[0.06em] text-meta">Keyword metrics {o.metricsSource === "none" && "(not available from a SERP read)"}</div>
                 <div className="mt-1 divide-y divide-[var(--row-rule)]">
                   {metricRow("Volume / mo", o.metrics?.volume)}
                   {metricRow("Difficulty", o.metrics?.difficulty)}
                   {metricRow("Paid difficulty", o.metrics?.paidDifficulty)}
                   {metricRow("CPC", o.metrics?.cpc, " USD")}
                 </div>
+                {o.serp && (
+                  <div className="mt-2 border-t border-[var(--row-rule)] pt-2">
+                    <div className="text-[11px] uppercase tracking-[0.06em] text-meta">Zoe on this SERP</div>
+                    <div className="mt-1 text-[12.5px] text-foreground">
+                      {o.serp.zoePresent && o.serp.zoeRank != null ? (
+                        <>Ranks <span className="font-medium tabular-nums">#{o.serp.zoeRank}</span> on page 1.</>
+                      ) : (
+                        <span className="text-critical">Not on page 1 — a gap.</span>
+                      )}
+                    </div>
+                  </div>
+                )}
                 {o.relatedKeywords.length > 0 && (
                   <div className="mt-2 border-t border-[var(--row-rule)] pt-2">
                     <div className="text-[11px] uppercase tracking-[0.06em] text-meta">Related keywords</div>
@@ -192,7 +204,7 @@ export function SeoOpportunityPanel({ id, onClose }: { id: string; onClose: () =
                     </div>
                   </div>
                 )}
-                <p className="mt-2 text-[11px] text-meta">{o.researchAt ? `Pulled ${o.researchAt.slice(0, 16).replace("T", " ")}` : "No Ubersuggest data pulled yet — metrics are Unknown, not zero."}</p>
+                <p className="mt-2 text-[11px] text-meta">{o.researchAt ? `Read ${o.researchAt.slice(0, 16).replace("T", " ")}` : "No volume/difficulty data — a SERP read gives rankings, not volume. Unknown, not zero."}</p>
               </div>
             </section>
 

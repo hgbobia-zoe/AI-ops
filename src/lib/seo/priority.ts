@@ -6,7 +6,7 @@
 // is absent it uses an explicitly-labelled neutral placeholder and says so in the evidence — a missing metric
 // is UNKNOWN, never 0. The score is a prioritization heuristic over what we know, not a traffic/revenue claim.
 
-import type { SeoAction, SeoIntent, SeoMatchResult, SeoMetrics, SeoPriorityBreakdown, SeoScoreComponent } from "./types";
+import type { SeoAction, SeoIntent, SeoMatchResult, SeoMetrics, SeoPriorityBreakdown, SeoScoreComponent, SerpData } from "./types";
 
 export interface PriorityInput {
   intent: SeoIntent;
@@ -14,6 +14,37 @@ export interface PriorityInput {
   metrics: SeoMetrics | null;
   match: SeoMatchResult;
   competitorRefs?: string[];
+  /** The observed SERP read (who ranks + Zoe's position), or null when we haven't read a SERP yet. */
+  serp?: SerpData | null;
+}
+
+/** Minimum competitors on page 1 (Zoe absent) for a "clear gap". Below this, Zoe's absence is softer evidence. */
+const GAP_COMPETITOR_FLOOR = 2;
+
+/**
+ * The competitive-gap sub-score, straight from OBSERVED SERP positions — the heart of the SERP engine. Zoe
+ * absent while rivals rank = the strongest signal (highest). Zoe already top-3 = little upside (low). A mid
+ * page-1 Zoe = a real improve opportunity. No SERP read = UNKNOWN (neutral placeholder, flagged).
+ */
+function competitiveGapComponent(serp: SerpData | null | undefined): SeoScoreComponent {
+  const base = { key: "competitive_gap", label: "Competitive gap", weight: 0.15 } as const;
+  if (!serp) {
+    return { ...base, score: NEUTRAL, evidence: "No SERP read yet — competitive position unknown (neutral placeholder, not zero).", unknown: true };
+  }
+  const competitors = serp.topDomains.filter((d) => d.rank <= 10).length;
+  if (serp.zoePresent && serp.zoeRank != null) {
+    if (serp.zoeRank <= 3) {
+      return { ...base, score: 25, evidence: `Zoe already ranks #${serp.zoeRank} on page 1 — limited upside, defend the position.`, unknown: false };
+    }
+    const score = Math.max(55, Math.min(80, 50 + serp.zoeRank * 3));
+    return { ...base, score, evidence: `Zoe ranks #${serp.zoeRank} on page 1 — improving the page is the opportunity.`, unknown: false };
+  }
+  // Zoe absent from page 1 — a gap, stronger the more rivals hold it.
+  if (competitors >= GAP_COMPETITOR_FLOOR) {
+    const score = Math.min(96, 78 + competitors * 2);
+    return { ...base, score, evidence: `Zoe does not appear on page 1; ${competitors} competitor domain(s) rank — a clear gap to fill.`, unknown: false };
+  }
+  return { ...base, score: 65, evidence: "Zoe does not appear on page 1 (few competitors read) — a likely gap.", unknown: false };
 }
 
 const NEUTRAL = 50;
@@ -69,16 +100,16 @@ export function scorePriority(input: PriorityInput): SeoPriorityBreakdown {
 
   // 2. Demand (search volume).
   if (m?.volume != null) {
-    components.push({ key: "demand", label: "Search demand", score: volumeScore(m.volume), weight: 0.2, evidence: `Ubersuggest volume ≈ ${m.volume.toLocaleString("en-US")}/mo.`, unknown: false });
+    components.push({ key: "demand", label: "Search demand", score: volumeScore(m.volume), weight: 0.2, evidence: `Estimated volume ≈ ${m.volume.toLocaleString("en-US")}/mo.`, unknown: false });
   } else {
-    components.push({ key: "demand", label: "Search demand", score: NEUTRAL, weight: 0.2, evidence: "Volume unknown — no Ubersuggest data yet (neutral placeholder, not zero).", unknown: true });
+    components.push({ key: "demand", label: "Search demand", score: NEUTRAL, weight: 0.2, evidence: "Volume unknown — a SERP read gives rankings, not volume (neutral placeholder, not zero).", unknown: true });
   }
 
   // 3. Ranking opportunity (inverse difficulty).
   if (m?.difficulty != null) {
     components.push({ key: "ranking", label: "Ranking opportunity", score: Math.max(0, Math.min(100, 100 - m.difficulty)), weight: 0.16, evidence: `SEO difficulty ${m.difficulty}/100 (lower is easier to rank).`, unknown: false });
   } else {
-    components.push({ key: "ranking", label: "Ranking opportunity", score: NEUTRAL, weight: 0.16, evidence: "Difficulty unknown — no Ubersuggest data yet (neutral placeholder).", unknown: true });
+    components.push({ key: "ranking", label: "Ranking opportunity", score: NEUTRAL, weight: 0.16, evidence: "Difficulty unknown — not provided by a SERP read (neutral placeholder).", unknown: true });
   }
 
   // 4. Relevance (matcher confidence + category presence).
@@ -88,6 +119,9 @@ export function scorePriority(input: PriorityInput): SeoPriorityBreakdown {
   // 5. Competitor evidence.
   const comp = input.competitorRefs ?? [];
   components.push({ key: "competitor", label: "Competitor evidence", score: comp.length ? Math.min(80, 40 + comp.length * 10) : NEUTRAL, weight: 0.08, evidence: comp.length ? `${comp.length} competitor domain(s) rank for this: ${comp.slice(0, 3).join(", ")}.` : "No competitor ranking data (neutral placeholder).", unknown: comp.length === 0 });
+
+  // 5b. Competitive gap — observed SERP position (Zoe absent vs. already ranking). The SERP engine's core signal.
+  components.push(competitiveGapComponent(input.serp));
 
   // 6. Existing coverage leverage.
   components.push({ key: "coverage", label: "Existing coverage", score: coverageScore(input.match.action), weight: 0.1, evidence: `Recommended action is ${input.match.action}.`, unknown: false });
@@ -111,7 +145,7 @@ export function scorePriority(input: PriorityInput): SeoPriorityBreakdown {
   const summary =
     input.match.action === "SKIP"
       ? "Low priority — recommended action is SKIP."
-      : `Priority ${score}/100 (${input.match.action}). ${unknowns > 0 ? `${unknowns} input(s) unknown without live Ubersuggest data — scored on a neutral placeholder.` : "All inputs available."}`;
+      : `Priority ${score}/100 (${input.match.action}). ${unknowns > 0 ? `${unknowns} input(s) unknown (no live data yet) — scored on a neutral placeholder.` : "All inputs available."}`;
 
   return { score, components, summary };
 }

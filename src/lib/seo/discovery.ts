@@ -10,8 +10,9 @@
 import { callTool as realCallTool, configured as realConfigured, type McpResult } from "./ubersuggest";
 import { upsertOpportunity, findOpportunityByDedupe, getOpportunity, setAnalysis, setOpportunityStage, allDedupeKeys, dedupeKey, recordRetrieval } from "./store";
 import { analyzeOpportunity } from "./analyze";
+import { parseSerpResult, DEFAULT_ZOE_DOMAIN } from "./serp";
 import { ZOE_PAGES } from "./zoe-pages";
-import type { SeoIntent, SeoMetrics, ZoePage } from "./types";
+import type { SeoIntent, SeoMetrics, SeoSource, SerpData, ZoePage } from "./types";
 
 // ── seed catalog ────────────────────────────────────────────────────────────────────────────────────
 // Each seed term maps to a canonical Zoe category (aligned with zoe-pages categories so the matcher lines up).
@@ -150,6 +151,10 @@ export interface ParsedKeyword {
   relatedKeywords: string[];
   competitorRefs: string[];
   intent: SeoIntent | null;
+  /** A live SERP read (SERP-source ingests only), or null for the legacy keyword-metrics path. */
+  serp?: SerpData | null;
+  /** How this fact was obtained — drives the opportunity's `source`. Defaults to "ubersuggest" for back-compat. */
+  source?: SeoSource;
 }
 
 const INTENTS: SeoIntent[] = ["informational", "commercial", "transactional", "navigational"];
@@ -224,6 +229,7 @@ const DEFAULT_TOOL = process.env.UBERSUGGEST_KEYWORD_TOOL || "keyword_ideas";
 export function applyKeywordFacts(seed: SeedKeyword, parsed: ParsedKeyword, retrievedAt: string | null, pages: ZoePage[] = ZOE_PAGES): { id: string; created: boolean; analyzed: boolean } {
   const intent = parsed.intent ?? seed.intent;
   const existed = findOpportunityByDedupe(seed.keyword, intent, seed.location) != null;
+  const source: SeoSource = parsed.source ?? (parsed.serp ? "serp" : "ubersuggest");
   const id = upsertOpportunity({
     keyword: seed.keyword,
     intent,
@@ -231,9 +237,11 @@ export function applyKeywordFacts(seed: SeedKeyword, parsed: ParsedKeyword, retr
     category: seed.category,
     relatedKeywords: parsed.relatedKeywords,
     competitorRefs: parsed.competitorRefs,
+    // A SERP read never carries volume/difficulty — those stay UNKNOWN (metricsSource "none"), which is honest.
     metrics: parsed.hasMetrics ? parsed.metrics : null,
-    metricsSource: parsed.hasMetrics ? "ubersuggest" : "none",
-    source: "ubersuggest",
+    metricsSource: parsed.hasMetrics ? (source === "serp" ? "serp" : "ubersuggest") : "none",
+    serp: parsed.serp ?? null,
+    source,
     researchAt: retrievedAt,
   });
   const analyzed = reanalyze(id, pages);
@@ -245,7 +253,7 @@ export function reanalyze(id: string, pages: ZoePage[] = ZOE_PAGES): boolean {
   const opp = getOpportunity(id);
   if (!opp) return false;
   const a = analyzeOpportunity(
-    { keyword: opp.keyword, intent: opp.intent, location: opp.location, category: opp.category, relatedKeywords: opp.relatedKeywords, metrics: opp.metrics, competitorRefs: opp.competitorRefs },
+    { keyword: opp.keyword, intent: opp.intent, location: opp.location, category: opp.category, relatedKeywords: opp.relatedKeywords, metrics: opp.metrics, competitorRefs: opp.competitorRefs, serp: opp.serp },
     pages,
   );
   setAnalysis(id, { matchedUrl: a.matchedUrl, recommendedAction: a.recommendedAction, priority: a.priority, priorityBreakdown: a.priorityBreakdown, explanation: a.explanation });
@@ -323,9 +331,15 @@ export interface SeoIngestKeywordInput {
   rawResult: unknown;
 }
 
-/** Batch-level signal from the runner: quota/limit state + the first-run schema capture (toolsList/toolName). */
+/** Batch-level signal from the runner: data source, quota/limit/blocked state + the first-run schema capture. */
 export interface SeoIngestMeta {
+  /** "serp" = the keyword rawResults are live Google SERP reads; absent/"ubersuggest" = legacy keyword metrics. */
+  source?: SeoSource;
+  /** Zoe's own domain, so the SERP parser can detect Zoe's listing + rank. Defaults to DEFAULT_ZOE_DOMAIN. */
+  zoeDomain?: string;
   limitHit?: boolean;
+  /** The SERP read looked blocked (consent wall / CAPTCHA / empty) — an honest "no data", NOT fabricated zeros. */
+  blocked?: boolean;
   quota?: { remaining?: number | null; resetAt?: string | null };
   error?: string | null;
   toolName?: string | null;
@@ -346,6 +360,8 @@ export interface SeoIngestResult {
   skipped: number;
   errors: number;
   limitHit: boolean;
+  /** True when the runner reported the SERP read was blocked (consent/CAPTCHA) — honest, no rows created. */
+  blocked: boolean;
   note: string;
   ranAt: string;
 }
@@ -357,7 +373,9 @@ export function ingestKeywordResults(batch: SeoIngestBatch, opts: { pages?: ZoeP
   const pages = opts.pages ?? ZOE_PAGES;
   const meta = batch.meta ?? {};
   const toolName = meta.toolName ?? null;
-  const result: SeoIngestResult = { received: 0, created: 0, updated: 0, analyzed: 0, skipped: 0, errors: 0, limitHit: !!meta.limitHit, note: "", ranAt };
+  const isSerp = meta.source === "serp";
+  const zoeDomain = meta.zoeDomain || DEFAULT_ZOE_DOMAIN;
+  const result: SeoIngestResult = { received: 0, created: 0, updated: 0, analyzed: 0, skipped: 0, errors: 0, limitHit: !!meta.limitHit, blocked: !!meta.blocked, note: "", ranAt };
   const kws = Array.isArray(batch.keywords) ? batch.keywords : [];
 
   for (const kw of kws) {
@@ -374,7 +392,19 @@ export function ingestKeywordResults(batch: SeoIngestBatch, opts: { pages?: ZoeP
     };
     let parsed: ParsedKeyword;
     try {
-      parsed = parseKeywordResult(kw.rawResult);
+      if (isSerp) {
+        // SERP source: parse observed rankings. No volume/difficulty (stays UNKNOWN). A read with zero organic
+        // results is treated as no data for this keyword (skipped), never fabricated.
+        const ps = parseSerpResult(kw.rawResult, zoeDomain, { locale: seed.location ?? undefined });
+        if (!ps.hasData) {
+          result.skipped++;
+          recordRetrieval({ operation: "ingest", ok: false, tool: toolName, detail: `empty SERP (no organic results): ${seed.keyword}` });
+          continue;
+        }
+        parsed = { metrics: {}, hasMetrics: false, relatedKeywords: ps.relatedKeywords, competitorRefs: ps.competitorRefs, intent: null, serp: ps.serp, source: "serp" };
+      } else {
+        parsed = parseKeywordResult(kw.rawResult);
+      }
     } catch {
       result.errors++;
       recordRetrieval({ operation: "ingest", ok: false, tool: toolName, detail: `parse error: ${seed.keyword}` });
@@ -404,12 +434,16 @@ export function ingestKeywordResults(batch: SeoIngestBatch, opts: { pages?: ZoeP
   }
   // Limit-hit → an honest rate-limited diagnostic (drives the watcher). NO data is fabricated.
   if (meta.limitHit) {
-    recordRetrieval({ operation: "ingest", ok: false, tool: toolName, rateLimited: true, detail: `Ubersuggest daily limit reached${meta.quota?.resetAt ? ` — resets ${meta.quota.resetAt}` : ""}` });
+    recordRetrieval({ operation: "ingest", ok: false, tool: toolName, rateLimited: true, detail: `Data limit reached${meta.quota?.resetAt ? ` — resets ${meta.quota.resetAt}` : ""}` });
+  } else if (meta.blocked) {
+    // A blocked SERP read is an honest FAILURE (not a rate-limit, not fabricated data) — the office runner was
+    // served a consent wall / CAPTCHA / empty page. Surfaces on the health card; never creates rows.
+    recordRetrieval({ operation: "ingest", ok: false, tool: toolName, detail: "SERP read blocked (consent wall / CAPTCHA / empty) — no data pulled this run" });
   } else if (meta.error) {
     recordRetrieval({ operation: "ingest", ok: false, tool: toolName, detail: safeTruncate(meta.error, 500) });
   }
 
-  result.note = `Ingested ${result.received}: ${result.created} new, ${result.updated} refreshed, ${result.analyzed} analyzed, ${result.skipped} gated out, ${result.errors} errors${meta.limitHit ? " (daily limit hit)" : ""}.`;
+  result.note = `Ingested ${result.received}: ${result.created} new, ${result.updated} refreshed, ${result.analyzed} analyzed, ${result.skipped} gated out, ${result.errors} errors${meta.limitHit ? " (data limit hit)" : ""}${meta.blocked ? " (SERP blocked)" : ""}.`;
   return result;
 }
 
