@@ -25,6 +25,7 @@ import {
   defaultPreserve,
   defaultTransform,
 } from "./types";
+import { selectThumb, type ThumbPick } from "./jobView";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -416,6 +417,53 @@ export function insertImage(img: {
       ts: now(),
     });
   return getImage(id)!;
+}
+
+// ── Job thumbnails (one representative image per job, for the grid) ──────────────────────────────────
+// Resolves ONE image per job without loading every generation's pixels into the client: the saved asset,
+// else the latest generation that produced a result, else the source photo. Batched so the list page does
+// a bounded number of queries regardless of job count. Returns a Map keyed by job id (absent = no preview).
+export function jobThumbnails(jobs: CreativeJob[]): Map<string, ThumbPick> {
+  const out = new Map<string, ThumbPick>();
+  if (jobs.length === 0) return out;
+  const db = getDb();
+  const ids = jobs.map((j) => j.id);
+  const placeholders = ids.map(() => "?").join(",");
+
+  // All generations that produced pixels, newest attempt first (one query for the whole page).
+  const gens = db
+    .prepare(
+      `SELECT id, job_id, attempt, result_path, placeholder FROM creative_generations
+         WHERE job_id IN (${placeholders}) AND result_path IS NOT NULL ORDER BY attempt DESC`,
+    )
+    .all(...ids) as { id: string; job_id: string; attempt: number; result_path: string | null; placeholder: number }[];
+  const gensByJob = new Map<string, Generation[]>();
+  for (const g of gens) {
+    const list = gensByJob.get(g.job_id) ?? [];
+    // Only the fields selectThumb needs are populated; the rest are harmless nulls (never rendered here).
+    list.push({ id: g.id, attempt: g.attempt, resultPath: g.result_path, placeholder: !!g.placeholder } as Generation);
+    gensByJob.set(g.job_id, list);
+  }
+
+  // Source images for reference-first jobs with no generation yet (one query).
+  const srcIds = [...new Set(jobs.map((j) => j.sourceImageId).filter((s): s is string => !!s))];
+  const srcById = new Map<string, CreativeImage>();
+  if (srcIds.length) {
+    const rows = db
+      .prepare(`SELECT * FROM creative_images WHERE id IN (${srcIds.map(() => "?").join(",")})`)
+      .all(...srcIds) as any[];
+    for (const r of rows) srcById.set(String(r.id), toImage(r));
+  }
+
+  for (const j of jobs) {
+    const pick = selectThumb(
+      j,
+      gensByJob.get(j.id) ?? [],
+      j.sourceImageId ? srcById.get(j.sourceImageId) ?? null : null,
+    );
+    if (pick) out.set(j.id, pick);
+  }
+  return out;
 }
 
 // ── Events (attributed audit) ───────────────────────────────────────────────────────────────────────
