@@ -8,7 +8,7 @@
 // filled row. "New Project" is the primary action, pinned at the bottom above the viewer.
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useState } from "react";
 import {
   Menu, X, ChevronRight,
@@ -25,15 +25,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, canUseSeo, marketingCanReachPage, ROLE_LABEL, type Role } from "@/lib/auth/roles";
-import { clampWeeksAgo, payrollSubHref, payrollSubActive } from "@/lib/payroll/nav";
 
-// A blade's nested sub-sections — the THIRD nav level (Goodshuffle-style). Reusable across blades; today
-// only HR/Payroll uses it (the migration is scoped to Payroll). Each links to the blade's in-page tab and is
-// matched active by the `tab` query param (so deep links, refresh and back/forward keep the right item lit).
-interface SubLink {
-  tab: string; // the ?tab= value this sub-section maps to ("overview" = the bare blade path)
-  label: string;
-}
 interface Blade {
   href: string;
   label: string;
@@ -43,21 +35,7 @@ interface Blade {
   manage?: boolean; // owner/admin only (e.g. Capability Profile)
   seo?: boolean; // owner/admin + the scoped marketing role (canUseSeo) — SEO Growth blades
   exact?: boolean; // highlight only on an exact path match (section landing pages)
-  children?: SubLink[]; // nested vertical sub-sections (level 3)
 }
-
-// HR / Payroll sub-sections — the in-page tabs promoted to nested sidebar links (replaces the blade's old
-// horizontal tab row). Order + destinations match the page's TABS exactly, so every deep link is preserved.
-const PAYROLL_SUBNAV: SubLink[] = [
-  { tab: "overview", label: "Overview" },
-  { tab: "review", label: "Payroll Review" },
-  { tab: "sync", label: "Time Sync" },
-  { tab: "workers", label: "Workers" },
-  { tab: "contractors", label: "Contractors" },
-  { tab: "exceptions", label: "Exceptions" },
-  { tab: "history", label: "Payroll History" },
-  { tab: "settings", label: "Settings" },
-];
 interface Group {
   label: string;
   icon: LucideIcon;
@@ -133,7 +111,7 @@ const GROUPS: Group[] = [
       // People Lifecycle — onboarding / offboarding + access provisioning. Owner/admin only (manage);
       // the proxy gates /people by canManageUsers, matching Admin → Team.
       { href: "/people", label: "People Lifecycle", icon: Contact, manage: true },
-      { href: "/payroll", label: "HR / Payroll", icon: Wallet, financial: true, children: PAYROLL_SUBNAV },
+      { href: "/payroll", label: "HR / Payroll", icon: Wallet, financial: true },
     ],
   },
   {
@@ -230,15 +208,8 @@ const GROUPS: Group[] = [
 
 export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: string }): React.JSX.Element {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const [open, setOpen] = useState(false); // drawer (mobile)
   const close = () => setOpen(false); // drawer closes on any nav tap
-
-  // Preserve the selected pay period when hopping between payroll sub-sections (the blade reads `weeksAgo`).
-  const navWeeksAgo = clampWeeksAgo(searchParams.get("weeksAgo"));
-  const navTab = searchParams.get("tab");
-  const subHref = (bladeHref: string, tab: string): string => payrollSubHref(bladeHref, tab, navWeeksAgo);
-  const subActive = (bladeHref: string, tab: string): boolean => payrollSubActive(pathname, navTab, bladeHref, tab);
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
   const bladeActive = (b: Blade) => (b.exact ? pathname === b.href : isActive(b.href));
@@ -368,47 +339,19 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
                   {g.blades.map((b) => {
                     const BIcon = b.icon;
                     const active = bladeActive(b);
-                    // A blade with nested sub-sections (level 3): the blade row is the section parent (goes to
-                    // its landing / Overview), and while it's active its children are revealed as indented
-                    // vertical links. The active CHILD is the destination; the parent shows it's the open
-                    // section without claiming aria-current itself (that belongs to the active child).
-                    const hasChildren = !!b.children?.length;
-                    const childActive = hasChildren && active;
                     return (
-                      <div key={b.href}>
-                        <Link
-                          href={b.href}
-                          onClick={close}
-                          aria-current={active && !hasChildren ? "page" : undefined}
-                          aria-expanded={hasChildren ? childActive : undefined}
-                          className={`flex items-center gap-2.5 rounded py-[7px] pl-[34px] pr-2.5 text-[13px] transition-colors ${
-                            active ? `font-medium text-foreground ${hasChildren ? "" : "bg-foreground/[0.08]"}` : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"
-                          }`}
-                        >
-                          <BIcon className={`size-[15px] shrink-0 ${active ? "text-foreground" : "text-meta"}`} />
-                          {b.label}
-                        </Link>
-                        {childActive && (
-                          <div className="mt-0.5 mb-1 flex flex-col gap-0.5 border-l border-border pl-[21px] ml-[40px]">
-                            {b.children!.map((s) => {
-                              const sActive = subActive(b.href, s.tab);
-                              return (
-                                <Link
-                                  key={s.tab}
-                                  href={subHref(b.href, s.tab)}
-                                  onClick={close}
-                                  aria-current={sActive ? "page" : undefined}
-                                  className={`rounded py-[6px] pl-2.5 pr-2.5 text-[12.5px] transition-colors ${
-                                    sActive ? "bg-foreground/[0.08] font-medium text-foreground" : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"
-                                  }`}
-                                >
-                                  {s.label}
-                                </Link>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
+                      <Link
+                        key={b.href}
+                        href={b.href}
+                        onClick={close}
+                        aria-current={active ? "page" : undefined}
+                        className={`flex items-center gap-2.5 rounded py-[7px] pl-[34px] pr-2.5 text-[13px] transition-colors ${
+                          active ? "bg-foreground/[0.08] font-medium text-foreground" : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"
+                        }`}
+                      >
+                        <BIcon className={`size-[15px] shrink-0 ${active ? "text-foreground" : "text-meta"}`} />
+                        {b.label}
+                      </Link>
                     );
                   })}
                 </div>

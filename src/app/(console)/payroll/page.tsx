@@ -35,6 +35,7 @@ import {
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { readGustoSnapshot } from "@/lib/payroll/gustoSnapshot";
 import { getLatestImportBySource } from "@/lib/pull/state";
+import { PayrollSubnav } from "@/components/payroll/PayrollSubnav";
 import { WorkerEditor, type GustoPick } from "@/components/payroll/WorkerEditor";
 import { SyncButton } from "@/components/payroll/SyncButton";
 import { SyncGustoButton } from "@/components/payroll/SyncGustoButton";
@@ -109,18 +110,23 @@ export default async function PayrollPage({
   const today = await safeToday();
   const period = completedWeeksBack(today, weeksAgo);
 
+  // Two vertical menus: the global sidebar (ConsoleNav, in the console layout) + this blade's own vertical
+  // section menu next to it (PayrollSubnav), replacing the old horizontal tab row.
   return (
-    <main className="mx-auto max-w-[1360px] p-4 pb-12 leading-[1.35] md:p-6">
-      <PayrollHeader tab={tab} period={period} weeksAgo={weeksAgo} />
-      {tab === "overview" && <OverviewTab period={period} weeksAgo={weeksAgo} />}
-      {tab === "review" && <ReviewTab period={period} statusFilter={sp.status ?? "all"} q={(sp.q ?? "").trim()} weeksAgo={weeksAgo} />}
-      {tab === "sync" && <SyncTab period={period} weeksAgo={weeksAgo} />}
-      {tab === "workers" && <WorkersTab period={period} mode="all" />}
-      {tab === "contractors" && <WorkersTab period={period} mode="contractors" />}
-      {tab === "exceptions" && <ExceptionsTab />}
-      {tab === "history" && <HistoryTab />}
-      {tab === "settings" && <SettingsTab />}
-    </main>
+    <div className="flex flex-col lg:flex-row lg:items-start">
+      <PayrollSubnav activeTab={tab} weeksAgo={weeksAgo} />
+      <main className="mx-auto w-full min-w-0 max-w-[1240px] flex-1 p-4 pb-12 leading-[1.35] md:p-6">
+        <PayrollHeader tab={tab} period={period} weeksAgo={weeksAgo} />
+        {tab === "overview" && <OverviewTab period={period} weeksAgo={weeksAgo} />}
+        {tab === "review" && <ReviewTab period={period} statusFilter={sp.status ?? "all"} q={(sp.q ?? "").trim()} weeksAgo={weeksAgo} />}
+        {tab === "sync" && <SyncTab period={period} weeksAgo={weeksAgo} />}
+        {tab === "workers" && <WorkersTab period={period} mode="all" />}
+        {tab === "contractors" && <WorkersTab period={period} mode="contractors" />}
+        {tab === "exceptions" && <ExceptionsTab />}
+        {tab === "history" && <HistoryTab />}
+        {tab === "settings" && <SettingsTab />}
+      </main>
+    </div>
   );
 }
 

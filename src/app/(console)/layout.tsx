@@ -3,7 +3,6 @@
 // /route, /select) and customer (/track) pages live outside this group — no shell.
 
 import { redirect } from "next/navigation";
-import { Suspense } from "react";
 import { ConsoleNav } from "@/components/ConsoleNav";
 import { PullHealthBanner } from "@/components/PullHealthBanner";
 import { ExtensionSync } from "@/components/ExtensionSync";
@@ -62,11 +61,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
 
   return (
     <div className="flex min-h-dvh flex-col lg:flex-row">
-      {/* ConsoleNav reads the ?tab query (payroll sub-nav active state) via useSearchParams → Suspense-wrapped.
-          The fallback reserves the desktop sidebar width so there's no layout shift before hydration. */}
-      <Suspense fallback={<div className="hidden shrink-0 lg:block lg:w-[212px] lg:border-r lg:border-border lg:bg-sidebar" aria-hidden />}>
-        <ConsoleNav role={role} viewerName={actor.label} />
-      </Suspense>
+      <ConsoleNav role={role} viewerName={actor.label} />
       <div className="flex min-w-0 flex-1 flex-col">
         <StatusBar integrations={integrations} />
         {canManage && <PullHealthBanner initial={banner} />}
