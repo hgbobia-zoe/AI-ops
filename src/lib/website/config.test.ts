@@ -5,12 +5,14 @@ import {
   websiteEnvUrls,
   websiteRepoSlug,
   websiteDeployBranch,
+  websiteAutoMerge,
   workingBranchPrefix,
   workingBranchForJob,
   DEFAULT_WEBSITE_PROD_URL,
   DEFAULT_WEBSITE_LOCAL_URL,
   DEFAULT_WEBSITE_REPO_SLUG,
   DEFAULT_WEBSITE_DEPLOY_BRANCH,
+  DEFAULT_WEBSITE_AUTO_MERGE,
 } from "./config";
 
 const ENV_KEYS = [
@@ -20,6 +22,7 @@ const ENV_KEYS = [
   "WEBSITE_REPO_SLUG",
   "WEBSITE_DEPLOY_BRANCH",
   "WEBSITE_WORKING_BRANCH_PREFIX",
+  "WEBSITE_AUTO_MERGE",
 ] as const;
 
 afterEach(() => {
@@ -90,6 +93,27 @@ describe("website config", () => {
 
       process.env.WEBSITE_WORKING_BRANCH_PREFIX = "   ";
       expect(workingBranchPrefix()).toBe("website-studio/"); // blank falls back to the default
+    });
+
+    describe("websiteAutoMerge (default = immediate merge; opt-in to native auto-merge)", () => {
+      it("defaults to false (immediate merge) when WEBSITE_AUTO_MERGE is unset", () => {
+        expect(DEFAULT_WEBSITE_AUTO_MERGE).toBe(false);
+        expect(websiteAutoMerge()).toBe(false);
+      });
+
+      it("opts into GitHub native auto-merge for truthy values", () => {
+        for (const v of ["1", "true", "TRUE", "yes", "on", " on ", "On"]) {
+          process.env.WEBSITE_AUTO_MERGE = v;
+          expect(websiteAutoMerge()).toBe(true);
+        }
+      });
+
+      it("stays immediate (false) for 0/false/no/off and any other value", () => {
+        for (const v of ["0", "false", "no", "off", "", "   ", "maybe", "2"]) {
+          process.env.WEBSITE_AUTO_MERGE = v;
+          expect(websiteAutoMerge()).toBe(false);
+        }
+      });
     });
   });
 });
