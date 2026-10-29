@@ -1,186 +1,290 @@
-// People Lifecycle — onboarding & offboarding command surface. Owner/admin only (canManageUsers; the proxy
-// also gates /people). In-page tabs: Onboarding queue · Offboarding · Access policies · Activity. FACTS
-// ONLY — statuses + systems come from the access-policy config + the lifecycle tasks, never hard-coded.
-// RULES CALCULATE (the engine); this renders.
+// People Lifecycle — onboarding & offboarding command surface. Owner/admin only (canManageUsers; the
+// proxy also gates /people). A blade-local vertical section nav (PeopleSubnav) replaces the old
+// horizontal tab row; the four sections preserve the existing `?tab=` deep links: Onboarding ·
+// Offboarding · Access Policies · Activity.
+//
+// FACTS ONLY — statuses, systems and modes come from the access-policy config + the lifecycle tasks,
+// never hard-coded. Only the Zoe platform login is automated; every other system is a tracked manual
+// step, and OFFBOARDED does NOT mean access was removed. RULES CALCULATE (the engine); this renders.
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Contact, UserPlus, LogOut, ShieldCheck, History, ArrowRight, AlertTriangle, CheckCircle2 } from "lucide-react";
+import {
+  Contact, UserPlus, LogOut, ArrowRight, Wallet, Search,
+} from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageUsers } from "@/lib/auth/roles";
-import { FigureStrip, StatusMark } from "@/components/console-primitives";
-import { peopleOverview, type EmployeeSummary } from "@/lib/people/overview";
+import { PageHeader } from "@/components/ui/page-header";
+import { Surface } from "@/components/ui/surface";
+import { Metric, MetricGrid } from "@/components/ui/metric";
+import { StatusBadge } from "@/components/ui/status";
+import { EmptyState, StatusBanner } from "@/components/ui/states";
+import { peopleOverview, lifecycleList, type EmployeeSummary } from "@/lib/people/overview";
 import { listPolicies } from "@/lib/people/store";
 import { getRecentAudit } from "@/lib/db/repo";
-import { NewEmployeeForm } from "@/components/people/NewEmployeeForm";
+import {
+  STAGE_META, ONBOARDING_STAGES, OFFBOARDING_STAGES, type Stage,
+} from "@/lib/people/stages";
+import { filterPeople, parseStageFilter, stageCounts, type StageFilter } from "@/lib/people/list";
+import { ADAPTER_LABEL } from "@/lib/people/policy";
+import type { AdapterMode } from "@/lib/people/types";
+import { AddEmployeeDialog } from "@/components/people/AddEmployeeDialog";
+import { PeopleSubnav, type PeopleTab } from "@/components/people/PeopleSubnav";
 
 export const dynamic = "force-dynamic";
 
-type Tab = "onboarding" | "offboarding" | "policies" | "activity";
-const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
-  { key: "onboarding", label: "Onboarding", icon: <UserPlus className="size-3.5" /> },
-  { key: "offboarding", label: "Offboarding", icon: <LogOut className="size-3.5" /> },
-  { key: "policies", label: "Access Policies", icon: <ShieldCheck className="size-3.5" /> },
-  { key: "activity", label: "Activity", icon: <History className="size-3.5" /> },
-];
+const TABS: PeopleTab[] = ["onboarding", "offboarding", "policies", "activity"];
+const MODE_LABEL: Record<AdapterMode, string> = { automated: "Automated", partial: "Partial", manual: "Manual", future: "Future" };
+const MODE_TONE: Record<AdapterMode, "positive" | "attention" | "neutral"> = { automated: "positive", partial: "attention", manual: "neutral", future: "neutral" };
 
-const MODE_LABEL: Record<string, string> = { automated: "Automated", partial: "Partial", manual: "Manual", future: "Future" };
-
-export default async function PeoplePage({ searchParams }: { searchParams: Promise<{ tab?: string }> }): Promise<React.JSX.Element> {
+export default async function PeoplePage({ searchParams }: { searchParams: Promise<{ tab?: string; stage?: string; q?: string }> }): Promise<React.JSX.Element> {
   const role = await viewerRole();
   if (!canManageUsers(role)) redirect("/dashboard");
   const sp = await searchParams;
-  const tab: Tab = (TABS.some((t) => t.key === sp.tab) ? sp.tab : "onboarding") as Tab;
+  const tab: PeopleTab = (TABS.includes(sp.tab as PeopleTab) ? sp.tab : "onboarding") as PeopleTab;
 
   const ov = peopleOverview();
   const policies = listPolicies();
+  const policyOptions = policies.map((p) => ({ id: p.id, name: p.name }));
 
   return (
-    <main className="mx-auto max-w-[1200px] p-3 pb-10 leading-[1.3] md:p-4">
-      <header className="mb-3">
-        <h1 className="flex items-center gap-2 text-[22px] font-semibold tracking-tight"><Contact className="size-5 text-meta" /> People Lifecycle</h1>
-        <p className="mt-1 text-[12.5px] text-meta">Onboarding &amp; offboarding with honest, audited access provisioning. Only the Zoe platform login is automated today; every other system is a tracked manual step.</p>
-      </header>
+    <div className="flex flex-col lg:flex-row lg:items-start">
+      <PeopleSubnav activeTab={tab} />
+      <main className="mx-auto w-full min-w-0 max-w-[1240px] flex-1 p-3 pb-12 leading-[1.35] md:p-5">
+        <PageHeader
+          title="People Lifecycle"
+          icon={<Contact className="size-5" />}
+          subtitle="Onboarding and offboarding with honest, audited access provisioning."
+          actions={tab === "onboarding" ? <AddEmployeeDialog policies={policyOptions} /> : undefined}
+        />
 
-      <div className="mb-4">
-        <FigureStrip figures={[
-          { label: "People", value: ov.counts.total },
-          { label: "Active", value: ov.counts.active, tone: "positive" },
-          { label: "Onboarding", value: ov.counts.onboarding, sep: true },
-          { label: "Offboarding", value: ov.counts.offboarding },
-          { label: "Open revokes", value: ov.counts.outstandingRevokes, tone: ov.counts.outstandingRevokes > 0 ? "attention" : "default", sep: true },
-        ]} />
-      </div>
-
-      <nav className="mb-4 flex flex-wrap gap-1 border-b border-border">
-        {TABS.map((t) => (
-          <Link key={t.key} href={`/people?tab=${t.key}`}
-            className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-[12.5px] font-medium transition-colors ${
-              tab === t.key ? "border-foreground text-foreground" : "border-transparent text-meta hover:text-foreground"
-            }`}>
-            {t.icon} {t.label}
-          </Link>
-        ))}
-      </nav>
-
-      {tab === "onboarding" && (
-        <div className="flex flex-col gap-5">
-          <NewEmployeeForm policies={policies.map((p) => ({ id: p.id, name: p.name }))} />
-          <QueueGroup title="Starting soon" tone="idle" people={ov.startingSoon} empty="No upcoming hires." />
-          <QueueGroup title="Onboarding" tone="attention" people={ov.onboarding} empty="No one mid-onboarding." />
-          <QueueGroup title="Blocked" tone="critical" people={ov.blocked} empty="No blocked onboardings." />
-          <QueueGroup title="Ready" tone="positive" people={ov.ready} empty="No one ready to activate." />
-          <QueueGroup title="Active" tone="positive" people={ov.active} empty="No active employees yet." />
+        {/* Scope clarification — this registry is NOT the payroll worker directory. */}
+        <div className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-meta">
+          <span>Tracks the onboarding/offboarding lifecycle for {ov.counts.total} {ov.counts.total === 1 ? "person" : "people"}.</span>
+          <span className="inline-flex items-center gap-1">
+            Pay and the worker directory live in
+            <Link href="/payroll" className="inline-flex items-center gap-1 text-tertiary-text underline-offset-2 hover:text-foreground hover:underline">
+              <Wallet className="size-3.5" aria-hidden /> HR / Payroll
+            </Link>.
+          </span>
         </div>
-      )}
 
-      {tab === "offboarding" && (
-        <div className="flex flex-col gap-5">
-          <p className="rounded-md border border-attention/30 bg-attention/[0.06] px-3 py-2 text-[12px] text-attention">
-            OFFBOARDED means the HR process is done — it does NOT mean every access was removed. Manual revokes stay open + escalating until a human confirms them.
-          </p>
-          <QueueGroup title="Offboarding in progress" tone="attention" people={ov.offboarding} empty="No one offboarding." showRevokes />
-          <QueueGroup title="Offboarded" tone="idle" people={ov.offboarded} empty="No offboarded employees." showRevokes />
-        </div>
-      )}
+        <MetricGrid className="mb-6">
+          <Metric label="People" value={ov.counts.total} />
+          <Metric label="Active" value={ov.counts.active} tone={ov.counts.active > 0 ? "positive" : "neutral"} sub={ov.counts.active > 0 ? "fully onboarded" : "none yet"} />
+          <Metric label="Onboarding" value={ov.counts.onboarding} tone={ov.counts.onboarding > 0 ? "attention" : "neutral"} sub="in progress" />
+          <Metric label="Offboarding" value={ov.counts.offboarding} sub="in progress + done" />
+          <Metric label="Open access revokes" value={ov.counts.outstandingRevokes} tone={ov.counts.outstandingRevokes > 0 ? "attention" : "neutral"} sub={ov.counts.outstandingRevokes > 0 ? "awaiting confirmation" : "all confirmed"} />
+        </MetricGrid>
 
-      {tab === "policies" && (
-        <div className="flex flex-col gap-4">
-          <p className="text-[12.5px] text-meta">Seeded, config-driven policies. A rule&apos;s mode is the HONEST capability — not a promise the UI invents. Editing is read-only in Phase 1.</p>
-          {policies.map((p) => (
-            <section key={p.id} className="rounded-lg border border-border bg-[var(--panel)] p-4">
-              <h3 className="mb-2 flex items-center gap-2 text-[14px] font-medium">{p.name} <span className="text-[11px] uppercase tracking-[0.06em] text-meta">{p.seeded ? "seeded" : "custom"}</span></h3>
-              <div className="grid gap-px overflow-hidden rounded border border-border bg-border sm:grid-cols-2">
-                {p.rules.map((r) => (
-                  <div key={r.adapterId} className="flex items-center justify-between gap-2 bg-[var(--panel)] px-3 py-2">
-                    <span className="text-[13px] text-foreground">{r.system}{r.required && <span className="ml-1.5 text-[10px] uppercase text-meta">required</span>}</span>
-                    <ModeBadge mode={r.mode} />
-                  </div>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
-
-      {tab === "activity" && (
-        <div className="rounded-lg border border-border bg-[var(--panel)]">
-          <ActivityList />
-        </div>
-      )}
-    </main>
+        {tab === "onboarding" && <OnboardingTab stage={sp.stage} q={sp.q} policies={policyOptions} />}
+        {tab === "offboarding" && <OffboardingTab stage={sp.stage} q={sp.q} />}
+        {tab === "policies" && <PoliciesTab policies={policies} />}
+        {tab === "activity" && <ActivityTab />}
+      </main>
+    </div>
   );
 }
 
-function ModeBadge({ mode }: { mode: string }): React.JSX.Element {
-  const tone = mode === "automated" ? "border-positive/40 text-positive" : mode === "partial" ? "border-attention/40 text-attention" : "border-border text-meta";
-  return <span className={`rounded border px-1.5 py-0.5 text-[10.5px] font-medium uppercase tracking-[0.05em] ${tone}`}>{MODE_LABEL[mode] ?? mode}</span>;
+// ══ ONBOARDING — the unified, searchable/filterable lifecycle list ══════════════════════════════════════
+function OnboardingTab({ stage, q, policies }: { stage?: string; q?: string; policies: { id: string; name: string }[] }): React.JSX.Element {
+  const scope = lifecycleList().filter((p) => STAGE_META[p.stage].group === "onboarding");
+  const active = parseStageFilter(stage, ONBOARDING_STAGES);
+  const query = (q ?? "").trim();
+  const counts = stageCounts(scope, ONBOARDING_STAGES);
+  const rows = filterPeople(scope, { stage: active, q: query });
+
+  if (scope.length === 0) {
+    return (
+      <EmptyState
+        icon={<UserPlus className="size-6" />}
+        title="No one in the onboarding lifecycle yet"
+        body="Add an employee to create their lifecycle record and provisioning checklist. This registry is separate from the Connecteam-sourced payroll directory."
+        action={<AddEmployeeDialog policies={policies} />}
+      />
+    );
+  }
+
+  return (
+    <section className="flex flex-col gap-4">
+      <FilterBar tab="onboarding" stages={ONBOARDING_STAGES} active={active} counts={counts} q={query} />
+      <PeopleList rows={rows} emptyLabel={query || active !== "all" ? "No people match this filter." : "No people in the onboarding lifecycle."} />
+    </section>
+  );
 }
 
-function QueueGroup({ title, tone, people, empty, showRevokes }: { title: string; tone: "idle" | "attention" | "critical" | "positive"; people: EmployeeSummary[]; empty: string; showRevokes?: boolean }): React.JSX.Element {
+// ══ OFFBOARDING — in-progress + done, with honest revoke priorities ═════════════════════════════════════
+function OffboardingTab({ stage, q }: { stage?: string; q?: string }): React.JSX.Element {
+  const scope = lifecycleList().filter((p) => STAGE_META[p.stage].group === "offboarding");
+  const active = parseStageFilter(stage, OFFBOARDING_STAGES);
+  const query = (q ?? "").trim();
+  const counts = stageCounts(scope, OFFBOARDING_STAGES);
+  const rows = filterPeople(scope, { stage: active, q: query });
+  const openRevokes = scope.reduce((n, s) => n + s.outstandingRevokes, 0);
+
   return (
-    <section>
-      <h2 className="mb-2 flex items-center gap-2 text-[12.5px] font-medium uppercase tracking-[0.08em] text-tertiary-text"><StatusMark tone={tone} label={`${title} · ${people.length}`} /></h2>
-      {people.length === 0 ? (
-        <p className="text-[12.5px] text-meta">{empty}</p>
+    <section className="flex flex-col gap-4">
+      <StatusBanner tone={openRevokes > 0 ? "attention" : "neutral"} title="OFFBOARDED does not mean access was removed">
+        Marking someone offboarded completes the HR process only. Manual access revokes stay open and escalating until a
+        human confirms each one in the external system.{openRevokes > 0 ? ` ${openRevokes} revoke${openRevokes === 1 ? "" : "s"} still open across this list.` : " No open revokes right now."}
+      </StatusBanner>
+
+      {scope.length === 0 ? (
+        <EmptyState icon={<LogOut className="size-6" />} title="No one offboarding" body="People being offboarded, and completed offboardings with any still-open access revokes, appear here." />
       ) : (
-        <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
-          {people.map((s) => <EmployeeCard key={s.employee.id} s={s} showRevokes={showRevokes} />)}
-        </div>
+        <>
+          <FilterBar tab="offboarding" stages={OFFBOARDING_STAGES} active={active} counts={counts} q={query} />
+          <PeopleList rows={rows} showRevokes emptyLabel={query || active !== "all" ? "No people match this filter." : "No one offboarding."} />
+        </>
       )}
     </section>
   );
 }
 
-function EmployeeCard({ s, showRevokes }: { s: EmployeeSummary; showRevokes?: boolean }): React.JSX.Element {
-  const e = s.employee;
-  const ready = s.readiness.ready;
-  const isOnboarding = e.lifecycleState === "ONBOARD";
+// ── Filter bar: stage chips (with counts) + a GET search form (server-rendered filter, deep-linkable) ──
+function FilterBar({ tab, stages, active, counts, q }: {
+  tab: PeopleTab; stages: Stage[]; active: StageFilter; counts: { all: number } & Partial<Record<Stage, number>>; q: string;
+}): React.JSX.Element {
+  const chipHref = (s: StageFilter): string => {
+    const params = new URLSearchParams({ tab });
+    if (s !== "all") params.set("stage", s);
+    if (q) params.set("q", q);
+    return `/people?${params.toString()}`;
+  };
+  const chipCls = (on: boolean): string =>
+    `rounded-md border px-2.5 py-1 text-[11.5px] transition-colors ${on ? "border-foreground/30 bg-foreground/[0.08] text-foreground" : "border-border text-meta hover:text-foreground"}`;
+
   return (
-    <Link href={`/people/${e.id}`} className="flex flex-col gap-2 bg-[var(--panel)] p-4 transition-colors hover:bg-[var(--row-hover)]">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate text-[14px] font-medium text-foreground">{e.displayName}</div>
-          <div className="mt-0.5 text-[11px] uppercase tracking-[0.06em] text-meta">{e.department ?? "no policy"} · {e.lifecycleState}</div>
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap gap-1">
+        <Link href={chipHref("all")} aria-current={active === "all" ? "true" : undefined} className={chipCls(active === "all")}>
+          All <span className="tabular-nums text-meta">({counts.all})</span>
+        </Link>
+        {stages.map((s) => (
+          <Link key={s} href={chipHref(s)} aria-current={active === s ? "true" : undefined} className={chipCls(active === s)} title={STAGE_META[s].hint}>
+            {STAGE_META[s].label} <span className="tabular-nums text-meta">({counts[s] ?? 0})</span>
+          </Link>
+        ))}
+      </div>
+      <form className="ml-auto flex items-center gap-1.5 rounded-md border border-border px-2 py-1" action="/people">
+        <input type="hidden" name="tab" value={tab} />
+        {active !== "all" && <input type="hidden" name="stage" value={active} />}
+        <Search className="size-3.5 text-meta" aria-hidden />
+        <input name="q" defaultValue={q} placeholder="Search people" aria-label="Search people" className="w-36 bg-transparent text-[12px] text-foreground outline-none placeholder:text-meta" />
+      </form>
+    </div>
+  );
+}
+
+// ── The lifecycle list — one responsive list of person rows (no five empty panels) ──────────────────────
+function PeopleList({ rows, showRevokes, emptyLabel }: { rows: EmployeeSummary[]; showRevokes?: boolean; emptyLabel: string }): React.JSX.Element {
+  if (rows.length === 0) {
+    return <Surface className="px-4 py-10 text-center text-[12.5px] text-meta">{emptyLabel}</Surface>;
+  }
+  return (
+    <Surface pad="none" className="divide-y divide-[var(--row-rule)] overflow-hidden">
+      {rows.map((s) => <PersonRow key={s.employee.id} s={s} showRevokes={showRevokes} />)}
+    </Surface>
+  );
+}
+
+function PersonRow({ s, showRevokes }: { s: EmployeeSummary; showRevokes?: boolean }): React.JSX.Element {
+  const e = s.employee;
+  const meta = STAGE_META[s.stage];
+  const isOnboarding = e.lifecycleState === "ONBOARD";
+  const r = s.readiness;
+  return (
+    <Link href={`/people/${e.id}`} className="flex items-center gap-3 px-3.5 py-3 transition-colors hover:bg-[var(--row-hover)]">
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13.5px] font-medium text-foreground">{e.displayName}</div>
+        <div className="mt-0.5 truncate text-[11.5px] text-meta">
+          <span className="capitalize">{e.role}</span> · {e.department ?? "no policy"}
+          {e.startDate && <span> · starts {e.startDate}</span>}
+          {e.endDate && <span className="text-attention"> · ends {e.endDate}</span>}
         </div>
       </div>
+
+      {/* Onboarding progress — required-completion + blocker count, honest (never "provisioned" from a box) */}
       {isOnboarding && (
-        ready
-          ? <span className="inline-flex w-fit items-center gap-1.5 rounded bg-positive/10 px-2 py-1 text-[12px] font-semibold text-positive"><CheckCircle2 className="size-3.5" /> READY</span>
-          : <span className="inline-flex w-fit items-center gap-1.5 rounded bg-critical/10 px-2 py-1 text-[12px] font-semibold text-critical"><AlertTriangle className="size-3.5" /> NOT READY — {s.readiness.blockers.length} BLOCKER{s.readiness.blockers.length === 1 ? "" : "S"}</span>
-      )}
-      {isOnboarding && (
-        <div className="h-1.5 w-full overflow-hidden rounded bg-[var(--row)]">
-          <div className="h-full bg-foreground/60" style={{ width: `${s.readiness.completionPct}%` }} />
+        <div className="hidden w-40 shrink-0 sm:block">
+          <div className="flex items-center justify-between text-[11px] text-meta">
+            <span className="tabular-nums">{r.completed}/{r.totalRequired} required</span>
+            <span className="tabular-nums">{r.completionPct}%</span>
+          </div>
+          <div className="mt-1 h-1.5 w-full overflow-hidden rounded bg-[var(--row)]">
+            <div className="h-full bg-foreground/55" style={{ width: `${r.completionPct}%` }} />
+          </div>
         </div>
       )}
+
+      {/* Offboarding — open-revoke priority */}
       {showRevokes && (
-        s.outstandingRevokes > 0
-          ? <span className="text-[12px] text-attention">{s.outstandingRevokes} access revoke{s.outstandingRevokes === 1 ? "" : "s"} still open</span>
-          : <span className="text-[12px] text-positive">All access revoked</span>
+        <div className="hidden w-40 shrink-0 text-right sm:block">
+          {s.outstandingRevokes > 0
+            ? <StatusBadge tone="attention" size="sm">{s.outstandingRevokes} revoke{s.outstandingRevokes === 1 ? "" : "s"} open</StatusBadge>
+            : <StatusBadge tone="positive" size="sm">All access revoked</StatusBadge>}
+        </div>
       )}
-      <span className="mt-auto inline-flex items-center gap-1 text-[11.5px] text-meta">Open <ArrowRight className="size-3" /></span>
+
+      <div className="w-28 shrink-0 text-right sm:w-32">
+        <StatusBadge tone={meta.tone} size="sm" className="justify-end">{meta.label}</StatusBadge>
+      </div>
+      <ArrowRight className="size-4 shrink-0 text-meta" aria-hidden />
     </Link>
   );
 }
 
-function ActivityList(): React.JSX.Element {
-  const rows = getRecentAudit(["ONBOARDING_STARTED", "MARKED_READY", "ACTIVATED", "OFFBOARDING_STARTED", "OFFBOARDED", "ACCESS_GRANTED", "ACCESS_REVOKED", "TASK_RETRIED", "TASK_SKIPPED"], 80);
-  if (rows.length === 0) return <p className="p-4 text-[12.5px] text-meta">No lifecycle activity yet.</p>;
+// ══ ACCESS POLICIES ═════════════════════════════════════════════════════════════════════════════════════
+function PoliciesTab({ policies }: { policies: ReturnType<typeof listPolicies> }): React.JSX.Element {
   return (
-    <ul className="divide-y divide-[var(--row-rule)]">
+    <div className="flex flex-col gap-4">
+      <p className="text-[12px] text-meta">
+        Seeded, config-driven policies. A rule&apos;s mode is its HONEST capability today — not a promise the UI invents.
+        Only <span className="text-foreground">Automated</span> steps can be executed in-app; the rest are tracked manual steps. Editing is read-only in this phase.
+      </p>
+      {policies.map((p) => (
+        <Surface key={p.id} aria-labelledby={`policy-${p.id}`}>
+          <h3 id={`policy-${p.id}`} className="mb-2.5 flex items-center gap-2 text-[14px] font-medium text-foreground">
+            {p.name}
+            <span className="rounded border border-border px-1.5 py-0.5 text-[10px] uppercase tracking-[0.06em] text-meta">{p.seeded ? "seeded" : "custom"}</span>
+          </h3>
+          <ul className="grid gap-px overflow-hidden rounded border border-border bg-border sm:grid-cols-2">
+            {p.rules.map((rr) => (
+              <li key={rr.adapterId} className="flex items-center justify-between gap-2 bg-[var(--panel)] px-3 py-2">
+                <span className="min-w-0 text-[13px] text-foreground">
+                  <span className="truncate">{ADAPTER_LABEL[rr.adapterId] ?? rr.system}</span>
+                  {rr.required && <span className="ml-1.5 text-[10px] uppercase tracking-[0.05em] text-meta">required</span>}
+                </span>
+                <StatusBadge tone={MODE_TONE[rr.mode]} size="sm">{MODE_LABEL[rr.mode]}</StatusBadge>
+              </li>
+            ))}
+          </ul>
+        </Surface>
+      ))}
+    </div>
+  );
+}
+
+// ══ ACTIVITY ════════════════════════════════════════════════════════════════════════════════════════════
+function ActivityTab(): React.JSX.Element {
+  const rows = getRecentAudit(["ONBOARDING_STARTED", "MARKED_READY", "ACTIVATED", "OFFBOARDING_STARTED", "OFFBOARDED", "ACCESS_GRANTED", "ACCESS_REVOKED", "TASK_RETRIED", "TASK_SKIPPED"], 80);
+  if (rows.length === 0) {
+    return <EmptyState title="No lifecycle activity yet" body="Onboarding, access grants/revokes, activations and offboardings are recorded here with who did them." />;
+  }
+  return (
+    <Surface pad="none" className="divide-y divide-[var(--row-rule)] overflow-hidden">
       {rows.map((r) => (
-        <li key={r.auditId} className="flex items-center justify-between gap-3 px-4 py-2.5">
+        <div key={r.auditId} className="flex items-center justify-between gap-3 px-4 py-2.5">
           <div className="min-w-0">
-            <span className="text-[12.5px] font-medium text-foreground">{r.action.replace(/_/g, " ")}</span>
+            <span className="text-[12.5px] font-medium text-foreground">{r.action.replace(/_/g, " ").toLowerCase()}</span>
             <span className="ml-2 text-[11.5px] text-meta">{r.entityId}</span>
           </div>
           <div className="shrink-0 text-right">
             <div className="text-[11.5px] text-secondary-text">{r.actor}</div>
             <div className="text-[10.5px] text-meta">{new Date(r.ts).toLocaleString()}</div>
           </div>
-        </li>
+        </div>
       ))}
-    </ul>
+    </Surface>
   );
 }

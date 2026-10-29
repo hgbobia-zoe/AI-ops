@@ -4,6 +4,7 @@
 
 import { readinessFor, type Readiness } from "./lifecycle";
 import { listEmployees, listTasks } from "./store";
+import { classifyStage, type Stage } from "./stages";
 import type { Employee } from "./types";
 
 export interface EmployeeSummary {
@@ -11,6 +12,7 @@ export interface EmployeeSummary {
   readiness: Readiness;
   hasFailed: boolean;
   outstandingRevokes: number; // revoke tasks not completed/skipped (manual ones stay open after OFFBOARDED)
+  stage: Stage; // the single derived bucket the UI groups/filters/counts by (same rules as below)
 }
 
 export interface PeopleOverview {
@@ -28,16 +30,24 @@ function summarize(e: Employee): EmployeeSummary {
   const readiness = readinessFor(e.id);
   const provision = listTasks(e.id, "provision");
   const revokes = listTasks(e.id, "revoke");
+  const hasFailed = provision.some((t) => t.status === "failed");
   return {
     employee: e,
     readiness,
-    hasFailed: provision.some((t) => t.status === "failed"),
+    hasFailed,
     outstandingRevokes: revokes.filter((t) => t.status !== "completed" && t.status !== "skipped").length,
+    stage: classifyStage({ lifecycleState: e.lifecycleState, hasFailed, ready: readiness.ready }),
   };
 }
 
+/** The whole population as one flat, stage-annotated list (newest first). The searchable/filterable
+ *  lifecycle list renders from this; `peopleOverview` groups the same summaries for the counts. */
+export function lifecycleList(): EmployeeSummary[] {
+  return listEmployees().map(summarize);
+}
+
 export function peopleOverview(): PeopleOverview {
-  const summaries = listEmployees().map(summarize);
+  const summaries = lifecycleList();
   const startingSoon = summaries.filter((s) => s.employee.lifecycleState === "HIRE");
   const onboardingAll = summaries.filter((s) => s.employee.lifecycleState === "ONBOARD");
   const blocked = onboardingAll.filter((s) => s.hasFailed);
