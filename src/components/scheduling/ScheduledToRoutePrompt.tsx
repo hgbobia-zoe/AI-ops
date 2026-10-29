@@ -118,10 +118,10 @@ export function ScheduledToRoutePrompt({
   }
 
   return (
-    <section className="mb-6 rounded-lg border border-attention/40 bg-attention/[0.05]">
-      <header className="flex items-center gap-2 border-b border-attention/30 px-4 py-2.5">
-        <CalendarClock className="size-4 text-attention" />
-        <h2 className="text-[13px] font-medium">Scheduled in Connecteam, not on a route</h2>
+    <section className="surface mb-6 border border-border border-l-2 border-l-status-warning">
+      <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+        <CalendarClock className="size-4 shrink-0 text-status-warning" aria-hidden />
+        <h2 className="text-[13px] font-medium text-foreground">Scheduled in Connecteam, not on a route</h2>
         <span className="text-[12px] text-meta">
           {people.length} crew scheduled for this day {people.length === 1 ? "isn’t" : "aren’t"} on a route yet
         </span>
@@ -130,7 +130,7 @@ export function ScheduledToRoutePrompt({
         Crew scheduled in Connecteam still need to be assigned to a route here. Assigning closes the route’s
         staffing gap; a Connecteam schedule on its own is not route coverage.
       </p>
-      <ul className="divide-y divide-attention/20">
+      <ul className="divide-y divide-[var(--row-rule)]">
         {people.map((p) => {
           const suggested = p.suggestedRouteId;
           const options = p.eligibleRouteIds
@@ -166,7 +166,7 @@ export function ScheduledToRoutePrompt({
                       >
                         {working === p.userId ? <Loader2 className="size-3 animate-spin" /> : <TruckIcon className="size-3" />}
                         {r.truckName}
-                        {isSuggested && <span className="text-[10px] uppercase tracking-[0.05em] text-positive">suggested</span>}
+                        {isSuggested && <span className="text-[10px] uppercase tracking-[0.05em] text-meta">suggested</span>}
                       </button>
                     );
                   })}

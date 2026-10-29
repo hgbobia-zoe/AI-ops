@@ -4,12 +4,18 @@
 // internal picks and records the temp recommendation; nothing is posted to Instawork). When the current
 // staffing is already optimal we say so plainly (never a manufactured saving). Manual choices always win.
 //
+// Status + metrics use the SHARED Nocturne vocabulary: StatusBadge (health), Metric/MetricGrid (summary,
+// values stay foreground with a coloured dot), StatusMark (per-seat internal/temp). No tinted numbers.
 // Comms style: no em-dashes, no emoji.
 
 import type { StaffingPlan, PlannedAssignment } from "@/lib/scheduling/optimize";
 import type { PlanSummary, StaffingHealth } from "@/lib/scheduling/planView";
 import { STAFFING_HEALTH_LABEL } from "@/lib/scheduling/planView";
 import { ApplyPlanButton } from "@/components/scheduling/ApplyPlanButton";
+import { StatusBadge } from "@/components/ui/status";
+import { Metric, MetricGrid } from "@/components/ui/metric";
+import { StatusMark } from "@/components/console-primitives";
+import type { Tone } from "@/lib/tone";
 import { formatClockTime } from "@/lib/dates";
 
 function hours(n: number | null): string {
@@ -30,12 +36,12 @@ function placementReason(a: PlannedAssignment): string {
   return a.kind === "temp" ? (a.whyTemp ?? a.whyThisRoute) : a.whyThisRoute;
 }
 
-const HEALTH_TONE: Record<StaffingHealth, string> = {
-  FULLY_STAFFED: "border-positive/40 text-positive",
-  READY: "border-positive/40 text-positive",
-  PARTIALLY_STAFFED: "border-attention/40 text-attention",
-  INSTAWORK_REQUIRED: "border-attention/40 text-attention",
-  ACTION_REQUIRED: "border-critical/50 text-critical",
+const HEALTH_TONE: Record<StaffingHealth, Tone> = {
+  FULLY_STAFFED: "positive",
+  READY: "positive",
+  PARTIALLY_STAFFED: "attention",
+  INSTAWORK_REQUIRED: "attention",
+  ACTION_REQUIRED: "critical",
 };
 
 export function StaffingPlanPreview({
@@ -62,22 +68,17 @@ export function StaffingPlanPreview({
     byRoute.set(key, list);
   }
 
-  const tone = plan.betterThanCurrent ? "text-attention" : "text-positive";
   const money = (n: number | null): string => (n == null ? "n/a" : `$${Math.round(n).toLocaleString()}`);
 
   return (
-    <section id="staffing-plan" className="mb-5 rounded-lg border border-border bg-surface p-4">
+    <section id="staffing-plan" className="surface mb-5 border border-border p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2.5">
             <h2 className="text-[13px] font-medium uppercase tracking-[0.08em] text-meta">Proposed staffing plan</h2>
-            {health && (
-              <span className={`rounded border px-1.5 py-px text-[10.5px] font-medium uppercase tracking-[0.06em] ${HEALTH_TONE[health]}`}>
-                {STAFFING_HEALTH_LABEL[health]}
-              </span>
-            )}
+            {health && <StatusBadge tone={HEALTH_TONE[health]} size="sm">{STAFFING_HEALTH_LABEL[health]}</StatusBadge>}
           </div>
-          <p className={`mt-1 text-[13.5px] ${tone}`}>{plan.note}</p>
+          <p className="mt-1.5 text-[13.5px] text-foreground">{plan.note}</p>
           <p className="mt-0.5 text-[11px] text-meta">Proposed only. Approve to commit the internal picks; nothing is posted to Instawork.</p>
         </div>
         <div className="flex items-center gap-5">
@@ -87,38 +88,39 @@ export function StaffingPlanPreview({
         </div>
       </div>
 
-      {/* Plan summary — all figures from coverage / optimize / cost / readiness (no new data). */}
+      {/* Plan summary — all figures from coverage / optimize / cost / readiness (no new data). Values stay
+          foreground; a coloured dot carries the state (Metric). */}
       {summary && (
-        <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 border-t border-[var(--row-rule)] pt-3">
-          <Stat label="Routes" value={summary.routes} />
-          <Stat label="People needed" value={summary.peopleNeeded} />
-          <Stat label="Internal available" value={summary.internalAvailable} tone="positive" />
-          <Stat label="Internal placed" value={summary.internalAssigned} tone="positive" />
-          <Stat label="Staffing gap" value={summary.staffingGap} tone={summary.staffingGap > 0 ? "attention" : "default"} />
-          <Stat label="Instawork required" value={summary.instaworkRequired} tone={summary.instaworkRequired > 0 ? "attention" : "default"} />
-          <Stat label="Readiness" value={summary.readinessPct == null ? "n/a" : `${summary.readinessPct}%`} />
-          <Stat label="Est. Instawork cost" value={money(summary.estInstaworkCost)} />
-        </div>
+        <MetricGrid className="mt-3.5">
+          <Metric label="Routes" value={summary.routes} />
+          <Metric label="People needed" value={summary.peopleNeeded} />
+          <Metric label="Internal available" value={summary.internalAvailable} tone="positive" />
+          <Metric label="Internal placed" value={summary.internalAssigned} tone="positive" />
+          <Metric label="Staffing gap" value={summary.staffingGap} tone={summary.staffingGap > 0 ? "attention" : undefined} />
+          <Metric label="Instawork required" value={summary.instaworkRequired} tone={summary.instaworkRequired > 0 ? "attention" : undefined} />
+          <Metric label="Readiness" value={summary.readinessPct == null ? "n/a" : `${summary.readinessPct}%`} />
+          <Metric label="Est. Instawork cost" value={money(summary.estInstaworkCost)} />
+        </MetricGrid>
       )}
 
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-3.5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {[...byRoute.entries()].map(([routeId, list]) => (
           <div key={routeId} className="rounded border border-[var(--row-rule)] p-2.5">
             <div className="mb-1.5 text-[12.5px] font-medium">{routeLabel(routeId === "other" ? null : routeId)}</div>
             <ul className="space-y-1.5">
               {list.map((a, i) => (
                 <li key={`${a.shiftId}-${i}`} className="text-[12px]">
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className={`size-1.5 rounded-full ${a.kind === "internal" ? "bg-positive" : "bg-attention"}`} aria-hidden />
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <StatusMark tone={a.kind === "internal" ? "positive" : "attention"} label={a.kind === "internal" ? "Internal" : "Temp"} />
                     <span className="text-foreground">{a.name}</span>
                     <span className="text-meta">
-                      {a.kind === "internal" ? "Internal" : "Temp"} · {shiftWindow(a)}
+                      {shiftWindow(a)}
                       {a.hours != null && ` · ${hours(a.hours)}`}
                     </span>
                   </span>
-                  <div className="ml-3 mt-0.5 text-[11px] text-meta">
+                  <div className="ml-5 mt-0.5 text-[11px] text-meta">
                     {placementReason(a)}
-                    {a.moved && <span className="text-attention"> · moved to a longer route</span>}
+                    {a.moved && " · moved to a longer route"}
                   </div>
                 </li>
               ))}
@@ -139,16 +141,6 @@ function Figure({ label, now, then, unit = "" }: { label: string; now: number | 
         <span className="mx-1 text-meta">to</span>
         <span className="text-foreground">{fmt(then)}</span>
       </div>
-      <div className="mt-0.5 text-[10.5px] uppercase tracking-[0.1em] text-meta">{label}</div>
-    </div>
-  );
-}
-
-function Stat({ label, value, tone = "default" }: { label: string; value: number | string; tone?: "default" | "positive" | "attention" }): React.JSX.Element {
-  const toneClass = tone === "positive" ? "text-positive" : tone === "attention" ? "text-attention" : "text-foreground";
-  return (
-    <div className="whitespace-nowrap">
-      <div className={`text-[15px] font-medium tabular-nums ${toneClass}`}>{value}</div>
       <div className="mt-0.5 text-[10.5px] uppercase tracking-[0.1em] text-meta">{label}</div>
     </div>
   );

@@ -9,7 +9,9 @@
 // There is deliberately no manual "mark done": no one can silence the hold on an unstaffed route. All-clear
 // shows an explicit OK state so the panel is honest when nothing is wrong.
 
-import { AlertTriangle, CheckCircle2, Users } from "lucide-react";
+import { Users } from "lucide-react";
+import { StatusBadge } from "@/components/ui/status";
+import { StatusMark } from "@/components/console-primitives";
 import type { RoutePreCheck } from "@/lib/scheduling/preCheck";
 
 const BTN =
@@ -26,10 +28,10 @@ export function StaffingPreCheck({ routes }: { routes: RoutePreCheck[] }): React
   }
 
   return (
-    <section className="mb-6 rounded-lg border border-border">
+    <section className="surface mb-6 border border-border">
       <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-        <Users className="size-4 text-meta" />
-        <h2 className="text-[13px] font-medium">Staffing pre-check</h2>
+        <Users className="size-4 shrink-0 text-meta" aria-hidden />
+        <h2 className="text-[13px] font-medium text-foreground">Staffing pre-check</h2>
         <span className="text-[12px] text-meta">
           {gaps.length === 0
             ? `${routes.length} route${routes.length === 1 ? "" : "s"} checked`
@@ -39,19 +41,19 @@ export function StaffingPreCheck({ routes }: { routes: RoutePreCheck[] }): React
 
       {gaps.length === 0 ? (
         <div className="flex items-center gap-2 px-4 py-3 text-[12.5px] text-meta">
-          <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400" />
-          All {okCount} present route{okCount === 1 ? "" : "s"} have their crew assigned. Debriefs will send
-          normally.
+          <StatusBadge tone="positive" size="sm">
+            All {okCount} present route{okCount === 1 ? "" : "s"} have their crew assigned. Debriefs will send normally.
+          </StatusBadge>
         </div>
       ) : (
-        <ul className="divide-y divide-border">
+        <ul className="divide-y divide-[var(--row-rule)]">
           {gaps.map((r) => (
             <li key={r.routeId} className="px-4 py-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <AlertTriangle className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                    <span className="text-[13px] font-medium">{r.truckName}</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusMark tone="attention" label="On hold" />
+                    <span className="text-[13px] font-medium text-foreground">{r.truckName}</span>
                     <span className="text-[12px] text-meta">
                       {r.stopCount} stop{r.stopCount === 1 ? "" : "s"} · {r.customerCount} customer
                       {r.customerCount === 1 ? "" : "s"}

@@ -562,9 +562,11 @@ export default async function SchedulingPage({
             Workforce allocation · {formatYmdLong(date)} · {routes.length} route{routes.length === 1 ? "" : "s"}
           </p>
         </div>
-        <div className="flex flex-col items-end gap-3">
-          <div className="flex items-end gap-6">
-            <FigureStrip figures={figures} />
+        <div className="flex min-w-0 max-w-full flex-col items-stretch gap-3 sm:items-end">
+          <div className="flex flex-wrap items-end justify-end gap-x-6 gap-y-3">
+            <div className="max-w-full overflow-x-auto">
+              <FigureStrip figures={figures} />
+            </div>
             <DateNav date={date} today={today} />
           </div>
           <SchedulingHeaderActions date={date} roster={roster} eligibilityData={eligibilityData} />

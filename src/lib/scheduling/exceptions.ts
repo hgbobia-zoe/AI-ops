@@ -51,6 +51,24 @@ export interface ScanInput {
 
 const overlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number): boolean => aStart < bEnd && bStart < aEnd;
 
+/** A worker's display handle for an alert (never a bare "A worker"): their name, else the Instawork name,
+ *  else a stable #id. Keeps every alert identifiable so the manager never opens N identical rows to learn who. */
+function workerLabel(a: ShiftAssignment): string {
+  return a.displayName ?? a.instaworkWorker ?? (a.connecteamUserId != null ? `#${a.connecteamUserId}` : "a crew member");
+}
+
+/** Format the affected workers for an alert detail: names up front, capped so one line stays readable, with
+ *  the true count preserved ("+N more") so the summary never drops evidence. */
+function namesPhrase(assignments: ShiftAssignment[], cap = 3): string {
+  const names = assignments.map(workerLabel);
+  if (names.length === 0) return "A worker";
+  if (names.length <= cap) {
+    if (names.length === 1) return names[0];
+    return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  }
+  return `${names.slice(0, cap).join(", ")} and ${names.length - cap} more`;
+}
+
 function startMsOf(s: StaffShift): number | null {
   if (!s.windowKnown || !s.startTime) return null;
   const t = Date.parse(s.startTime);
@@ -109,9 +127,12 @@ export function scanShiftExceptions(input: ScanInput): ShiftException[] {
     // fact, not a comms step). Priority to fill: other qualified internal first, then Instawork. The
     // runtime enriches the detail with the est. additional temp cost. RED near/after start.
     const allAssignments = input.assignmentsByShift?.get(s.id);
-    if (allAssignments && allAssignments.some((a) => a.noShow || a.state === "NO_SHOW")) {
+    const noShows = allAssignments?.filter((a) => a.noShow || a.state === "NO_SHOW") ?? [];
+    if (noShows.length > 0) {
       const red = startMs == null || startMs - now < 2 * HOUR_MS;
-      out.push(ex(s, "replacement_needed", red ? "RED" : "YELLOW", "Replacement needed", "A worker is a no-show. Fill from other internal first, then Instawork.", "Reassign or post gig"));
+      const who = namesPhrase(noShows);
+      const verb = noShows.length === 1 ? "is a no-show" : "are no-shows";
+      out.push(ex(s, "replacement_needed", red ? "RED" : "YELLOW", "Replacement needed", `${who} ${verb}. Fill from other internal first, then Instawork.`, "Reassign or post gig"));
     }
 
     // #12 Assignee marked UNAVAILABLE after being assigned — a Connecteam time-off / unavailability block
@@ -144,14 +165,20 @@ export function scanShiftExceptions(input: ScanInput): ShiftException[] {
     // Assignment-grained checks (only when assignments are provided AND the comms loop is live).
     const assignments = input.assignmentsByShift?.get(s.id);
     if ((input.commsWired ?? true) && assignments && assignments.length > 0) {
-      // #5 Packet not delivered to every assignment — YELLOW.
-      if (assignments.some((a) => a.packetSentAt == null)) {
-        out.push(ex(s, "packet_undelivered", "YELLOW", "Packet not delivered", "A worker has not received the shift packet", "Send packet"));
+      // #5 Packet not delivered to every assignment — YELLOW. Name WHO is missing it (count preserved).
+      const noPacket = assignments.filter((a) => a.packetSentAt == null);
+      if (noPacket.length > 0) {
+        const who = namesPhrase(noPacket);
+        const verb = noPacket.length === 1 ? "has" : "have";
+        out.push(ex(s, "packet_undelivered", "YELLOW", "Packet not delivered", `${who} ${verb} not received the shift packet`, "Send packet"));
       }
-      // #6 Unconfirmed near start — YELLOW, RED within T-2h.
-      if (assignments.some((a) => a.confirmedAt == null)) {
+      // #6 Unconfirmed near start — YELLOW, RED within T-2h. Name WHO has not confirmed (count preserved).
+      const unconfirmed = assignments.filter((a) => a.confirmedAt == null);
+      if (unconfirmed.length > 0) {
         const red = startMs != null && startMs - now < 2 * HOUR_MS;
-        out.push(ex(s, "unconfirmed", red ? "RED" : "YELLOW", "Unconfirmed", "A worker has not confirmed", "Call or confirm"));
+        const who = namesPhrase(unconfirmed);
+        const verb = unconfirmed.length === 1 ? "has" : "have";
+        out.push(ex(s, "unconfirmed", red ? "RED" : "YELLOW", "Unconfirmed", `${who} ${verb} not confirmed`, "Call or confirm"));
       }
     }
   }
