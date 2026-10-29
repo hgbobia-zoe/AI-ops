@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sevenDayOutlook, dayStatus, pctOfTarget, computeRevenueOutlook, situationHeadline, capacityLevel, pipelineCoverageMultiple } from "./calc";
+import { sevenDayOutlook, dayStatus, pctOfTarget, computeRevenueOutlook, situationHeadline, capacityLevel, pipelineCoverageMultiple, capacityCrewLabel, attentionTiming, ATTENTION_OWNER, CAPACITY_LEVEL_LABEL } from "./calc";
 
 describe("command center — calc", () => {
   it("builds a 7-day outlook, summing signed revenue and folding in capacity verdicts", () => {
@@ -72,6 +72,36 @@ describe("command center — calc", () => {
     expect(capacityLevel("TIGHT")).toBe("TIGHT");
     expect(capacityLevel("CONSTRAINED")).toBe("CONSTRAINED");
     expect(capacityLevel("UNVERIFIED")).toBe("UNVERIFIED");
+  });
+
+  it("labels crew capacity explicitly (available vs required), never a bare ratio", () => {
+    const staffed = capacityCrewLabel({ driversScheduled: 3, driversNeeded: 2, jobs: 4 });
+    expect(staffed.hasRatio).toBe(true);
+    expect(staffed.label).toBe("3 of 2 crew");
+    expect(staffed.sub).toBe("3 available · 2 required");
+    expect(staffed.fill).toBe(100); // clamped
+    // short crew → fill reflects the shortfall
+    expect(capacityCrewLabel({ driversScheduled: 1, driversNeeded: 2, jobs: 2 }).fill).toBe(50);
+    // no routes to crew that day → say so, never a fake "0 / 0"
+    const noCrew = capacityCrewLabel({ driversScheduled: null, driversNeeded: 0, jobs: 3 });
+    expect(noCrew.hasRatio).toBe(false);
+    expect(noCrew.label).toBe("3 events");
+    expect(capacityCrewLabel({ driversScheduled: null, driversNeeded: null, jobs: 0 }).label).toBe("Clear");
+    // the status word follows the real verdict (no invented tiers)
+    expect(CAPACITY_LEVEL_LABEL[capacityLevel("CONSTRAINED")]).toBe("At limit");
+    expect(CAPACITY_LEVEL_LABEL[capacityLevel("AVAILABLE")]).toBe("Open");
+  });
+
+  it("phrases attention timing as words, never a bare day number", () => {
+    expect(attentionTiming(0)).toBe("Today");
+    expect(attentionTiming(1)).toBe("Tomorrow");
+    expect(attentionTiming(5)).toBe("In 5 days");
+    expect(attentionTiming(-2)).toBe("2 days overdue");
+    expect(attentionTiming(-1)).toBe("1 day overdue");
+    expect(attentionTiming(null)).toBeNull();
+    expect(attentionTiming(undefined)).toBeNull();
+    expect(ATTENTION_OWNER.risk).toBe("Event Risk");
+    expect(ATTENTION_OWNER.finance).toBe("Finance");
   });
 
   it("computes pipeline coverage of the remaining target gap", () => {
