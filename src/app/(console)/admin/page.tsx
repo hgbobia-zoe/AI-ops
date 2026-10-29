@@ -11,7 +11,6 @@ import type { BusinessHoursSchedule, DayHours } from "@/lib/businessHours";
 import { isSlackUserId, type SlackApprover } from "@/lib/slack/approvers";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
 import { IntegrationsSettings } from "@/components/IntegrationsSettings";
-import { SeoCredentialSettings } from "@/components/SeoCredentialSettings";
 import { InstaworkCredentialSettings } from "@/components/InstaworkCredentialSettings";
 import { OpsCycleSettings } from "@/components/OpsCycleSettings";
 import { PricingSettings } from "@/components/PricingSettings";
@@ -48,6 +47,8 @@ interface Settings {
   businessHours: BusinessHoursSchedule;
   zoeCategories: ZoeCategory[];
   slackApprovers: SlackApprover[];
+  seoZoeDomain: string;
+  seoCompetitorDomains: string[];
 }
 interface ZoeCategory {
   name: string;
@@ -275,9 +276,20 @@ export default function AdminPage() {
             />
           </Section>
 
-          {/* SEO Growth — Ubersuggest MCP credential */}
-          <Section icon={<Search className="size-4" />} title="SEO Growth (Ubersuggest)">
-            <SeoCredentialSettings />
+          {/* SEO Growth — the gap engine's own + competitor domains (read from live Google SERPs). */}
+          <Section icon={<Search className="size-4" />} title="SEO Growth (competitive gap)">
+            <Field label="Zoe domain" hint="Zoe's own public domain — the engine finds Zoe's listing and rank in each SERP.">
+              <TextInput value={s.seoZoeDomain ?? ""} onChange={(v) => setS({ ...s, seoZoeDomain: v })} />
+            </Field>
+            <KeywordList
+              label="Competitor domains"
+              hint="Local rivals to surface first (comma-separated hosts). The engine already treats any non-Zoe, non-directory domain on a read SERP as a competitor; this is the curated set."
+              value={s.seoCompetitorDomains ?? []}
+              onChange={(v) => setS({ ...s, seoCompetitorDomains: v })}
+            />
+            <p className="text-[12px] text-muted-foreground">
+              SERP data is read on the office machine (tools/seo-runner), not here — Google blocks our server. Set these, then run the runner.
+            </p>
           </Section>
 
           <Section icon={<Search className="size-4" />} title="Instawork (temp labor)">

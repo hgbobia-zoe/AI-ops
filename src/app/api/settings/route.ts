@@ -100,6 +100,10 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     // (including [] = nobody can approve from Slack); a missing/non-array field keeps the current list, so a
     // save that omits it never wipes the approvers. These are member ids, not secrets.
     slackApprovers: Array.isArray(b.slackApprovers) ? coerceSlackApprovers(b.slackApprovers, current.slackApprovers) : current.slackApprovers,
+    // SEO gap engine: Zoe's own domain + the tracked competitor domains. A string replaces; a missing field
+    // keeps current. Competitor domains are case-insensitive hosts (lowercased, de-duped).
+    seoZoeDomain: str(b.seoZoeDomain, current.seoZoeDomain).trim() || current.seoZoeDomain,
+    seoCompetitorDomains: strList(b.seoCompetitorDomains, current.seoCompetitorDomains),
   };
 }
 

@@ -119,6 +119,14 @@ export interface AppSettings {
    *  SLACK_APPROVER_USER_IDS env var (bootstrap), and once edited in /admin the stored list takes over. Empty
    *  → NOBODY can approve from Slack (fail-safe; decisions stay in the app). See slack/approvers.ts. */
   slackApprovers: SlackApprover[];
+  /** Zoe's own public domain, used by the SEO gap engine to find Zoe's listing + rank on a read SERP. Default
+   *  zoeeventsdmv.com; edit in /admin → "SEO". A bare host (no protocol/path); the engine normalizes it. */
+  seoZoeDomain: string;
+  /** Competitor domains the SEO gap engine tracks (bare hosts). EMPTY by default — set the real local rivals in
+   *  /admin → "SEO" (or the office runner's SEO_COMPETITOR_DOMAINS) so the gap view shows them specifically.
+   *  Note: the engine already treats ANY non-Zoe, non-directory domain on a read SERP as a competitor; this
+   *  list is the curated set surfaced first. */
+  seoCompetitorDomains: string[];
 }
 
 export interface PrepOpportunitySettings {
@@ -235,6 +243,8 @@ export function defaultSettings(): AppSettings {
       DEFAULT_ZOE_CATEGORIES,
     ),
     slackApprovers: approversFromEnv(process.env.SLACK_APPROVER_USER_IDS),
+    seoZoeDomain: (process.env.SEO_ZOE_DOMAIN || "zoeeventsdmv.com").trim(),
+    seoCompetitorDomains: envUrlList(process.env.SEO_COMPETITOR_DOMAINS, []),
   };
 }
 
@@ -332,6 +342,8 @@ function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSetting
     zoeCategories: over.zoeCategories ? coerceZoeCategories(over.zoeCategories, base.zoeCategories) : base.zoeCategories,
     // An explicitly-saved list (including an empty one = nobody) overrides the env default; absent keeps it.
     slackApprovers: over.slackApprovers ? coerceSlackApprovers(over.slackApprovers, base.slackApprovers) : base.slackApprovers,
+    // An explicitly-saved competitor list (including empty) overrides; absent keeps the env default.
+    seoCompetitorDomains: over.seoCompetitorDomains ?? base.seoCompetitorDomains,
   };
 }
 

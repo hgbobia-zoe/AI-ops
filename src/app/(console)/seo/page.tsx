@@ -1,10 +1,10 @@
 // SEO Growth — Overview. The operating status board for the SEO engine (spec §4): what's awaiting
 // analysis / approval, what's in production, what's live, what's parked, and — honestly — the state of the
-// Ubersuggest integration. Phase 1: the data model + integration boundary are wired; the opportunity
-// pipeline (Phase 2+) is empty, so most counts are 0. That is the correct, honest state, NOT an error.
+// SERP data source (the office runner). Counts are 0 until the runner reads SERPs; that is the correct,
+// honest state, NOT an error.
 //
-// FACTS ONLY. Three data sources are kept visually distinct and never conflated:
-//   • Ubersuggest ESTIMATE (third-party, via the MCP) — surfaced only through the integration-health card.
+// FACTS ONLY. The data sources are kept visually distinct and never conflated:
+//   • Observed Google SERP (who ranks, Zoe's position) — via the office runner; the integration-health card.
 //   • Internal WORKFLOW state (our seo_opportunities table) — the status counts.
 //   • Business OUTCOMES — not tracked yet (Phase 5); shown as such, never faked.
 
@@ -37,7 +37,7 @@ export default function SeoOverviewPage(): React.JSX.Element {
           <TrendingUp className="size-5 text-meta" /> SEO Growth
         </h1>
         <p className="mt-1 text-[13px] text-meta">
-          Find the keywords worth ranking for, decide what to create or improve, and track content from idea to live. Keyword data comes from Ubersuggest; the decisions and workflow live here.
+          Find the keywords where competitors outrank Zoe, decide what to create or improve, and track content from idea to live. Rankings come from live Google SERP reads; the decisions and workflow live here.
         </p>
       </header>
 
@@ -61,14 +61,14 @@ export default function SeoOverviewPage(): React.JSX.Element {
           <div className="mt-3 flex items-start gap-2 rounded border border-border bg-[var(--row-hover)] px-3 py-2.5 text-[12.5px] text-tertiary-text">
             <Info className="mt-0.5 size-3.5 shrink-0 text-meta" />
             <span>
-              No opportunities yet. The discovery + matching engine is live; it populates once the office machine signs into Ubersuggest and pushes keyword data (the free tier drips a few/day). Opportunities then appear here awaiting analysis.
+              No opportunities yet. The gap + matching engine is live; it populates once the office runner reads Google SERPs and pushes them (a small drip a few times a day). Opportunities then appear here awaiting analysis.
             </span>
           </div>
         )}
       </section>
 
       <div className="grid grid-cols-1 gap-x-8 gap-y-5 lg:grid-cols-2">
-        {/* Integration health — the ONLY place third-party Ubersuggest status is shown. */}
+        {/* Integration health — the SERP office-runner data source. */}
         <section>
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Integration</h2>
@@ -84,7 +84,7 @@ export default function SeoOverviewPage(): React.JSX.Element {
           <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Recent retrievals</h2>
           <div className="rounded border border-border">
             {d.diagnostics.length === 0 ? (
-              <p className="p-3 text-[12.5px] text-meta">No retrievals recorded yet. Run a health check from Settings once the credential is set.</p>
+              <p className="p-3 text-[12.5px] text-meta">No reads recorded yet. Run the SERP office runner (tools/seo-runner) to start.</p>
             ) : (
               d.diagnostics.map((x) => (
                 <div key={x.id} className="flex items-center gap-3 border-t border-[var(--row-rule)] px-3 py-2 text-[12.5px] first:border-t-0">

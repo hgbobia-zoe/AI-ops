@@ -4,7 +4,7 @@
 import { matchOpportunity, type MatchInput } from "./match";
 import { scorePriority } from "./priority";
 import { ZOE_PAGES } from "./zoe-pages";
-import type { SeoAction, SeoMetrics, SeoIntent, SeoMatchResult, SeoPriorityBreakdown, ZoePage } from "./types";
+import type { SeoAction, SeoMetrics, SeoIntent, SeoMatchResult, SeoPriorityBreakdown, SerpData, ZoePage } from "./types";
 
 export interface AnalyzeInput {
   keyword: string;
@@ -14,6 +14,8 @@ export interface AnalyzeInput {
   relatedKeywords?: string[];
   metrics?: SeoMetrics | null;
   competitorRefs?: string[];
+  /** Observed SERP read — feeds the competitive-gap sub-score. */
+  serp?: SerpData | null;
 }
 
 export interface AnalysisResult {
@@ -42,6 +44,7 @@ export function analyzeOpportunity(opp: AnalyzeInput, pages: ZoePage[] = ZOE_PAG
     metrics: opp.metrics ?? null,
     match,
     competitorRefs: opp.competitorRefs,
+    serp: opp.serp ?? null,
   });
   const explanation = `${match.reason} ${breakdown.summary}`.trim();
   return {
