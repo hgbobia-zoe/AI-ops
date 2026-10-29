@@ -6,19 +6,23 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, Loader2, Sparkles, Info, ArrowLeft } from "lucide-react";
+import { FileText, Loader2, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { SidePanelOverlay } from "@/components/SidePanelOverlay";
 import { SeoDraftPanel } from "@/components/seo/SeoDraftPanel";
+import { BladeMain } from "@/components/ui/layouts";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBadge } from "@/components/ui/status";
+import { StatusBanner, EmptyState } from "@/components/ui/states";
 import { tableCls, theadCls, thCls, tdCls, rowCls } from "@/components/console-primitives";
+import { qualityDisplay } from "@/lib/seo/display";
 import type { StudioRow } from "@/lib/seo/produce";
 
-function qualityBadge(row: StudioRow): React.JSX.Element {
+function QualityCell({ row }: { row: StudioRow }): React.JSX.Element {
   const d = row.draft;
   if (!d) return <span className="text-meta">No draft</span>;
-  if (d.errors > 0) return <span className="text-critical">{d.errors} error(s)</span>;
-  if (d.warnings > 0) return <span className="text-attention">{d.warnings} warning(s)</span>;
-  return <span className="text-[color:var(--positive,#16a34a)]">Passed</span>;
+  const q = qualityDisplay(d.errors, d.warnings);
+  return <StatusBadge tone={q.tone} size="sm">{q.label}</StatusBadge>;
 }
 
 export function SeoContentStudio({ rows }: { rows: StudioRow[] }): React.JSX.Element {
@@ -49,30 +53,31 @@ export function SeoContentStudio({ rows }: { rows: StudioRow[] }): React.JSX.Ele
   const empty = rows.length === 0;
 
   return (
-    <main className="max-w-[1100px] p-6">
-      <Link href="/seo" className="mb-4 inline-flex items-center gap-1.5 text-[12px] text-meta transition-colors hover:text-foreground"><ArrowLeft className="size-3.5" /> SEO Growth</Link>
-      <header className="mb-4">
-        <h1 className="flex items-center gap-2 text-[22px] font-medium tracking-tight"><FileText className="size-5 text-meta" /> Content Studio</h1>
-        <p className="mt-1 text-[13px] text-meta">Produce a structured landing-page draft for each approved opportunity. Drafts reuse Zoe&apos;s templates and only state verified facts; everything else is marked for human review. Nothing is published here.</p>
-      </header>
+    <BladeMain className="max-w-[1100px]">
+      <PageHeader
+        icon={<FileText className="size-5" />}
+        title="Content Studio"
+        subtitle="Produce a structured landing-page draft for each approved opportunity. Drafts reuse Zoe's templates and only state verified facts; everything else is marked for human review. Nothing is published here."
+      />
 
-      {msg && <div className="mb-3 flex items-start gap-2 rounded border border-border bg-[var(--row-hover)] px-3 py-2 text-[12.5px] text-tertiary-text"><Info className="mt-0.5 size-3.5 shrink-0 text-meta" />{msg}</div>}
+      {msg && <StatusBanner tone="info" title="Content Studio" edge={false} className="mb-3">{msg}</StatusBanner>}
 
       {empty ? (
-        <div className="rounded border border-dashed border-border p-6 text-center">
-          <p className="text-[13px] text-tertiary-text">No approved opportunities yet.</p>
-          <p className="mx-auto mt-1 max-w-md text-[12px] text-meta">Approve an opportunity on the <Link href="/seo/opportunities" className="underline">Opportunities</Link> board first. Content production is gated behind that approval.</p>
-        </div>
+        <EmptyState
+          icon={<FileText className="size-5" />}
+          title="No approved opportunities yet"
+          body={<>Approve an opportunity on the <Link href="/seo/opportunities" className="underline underline-offset-2">Opportunities</Link> board first. Content production is gated behind that approval.</>}
+        />
       ) : (
         <div className="overflow-auto rounded border border-border">
           <table className={tableCls}>
             <thead className={theadCls}>
               <tr>
-                <th className={`${thCls} w-[30%]`}>Keyword</th>
+                <th className={`${thCls} w-[28%]`}>Keyword</th>
                 <th className={thCls}>Action</th>
                 <th className={thCls}>Draft</th>
                 <th className={thCls}>Quality</th>
-                <th className={thCls}>To verify</th>
+                <th className={`${thCls} text-right`}>To verify</th>
                 <th className={`${thCls} text-right`}>Produce / open</th>
               </tr>
             </thead>
@@ -82,13 +87,13 @@ export function SeoContentStudio({ rows }: { rows: StudioRow[] }): React.JSX.Ele
                   <td className={`${tdCls} truncate font-medium text-foreground`} title={row.keyword}>{row.keyword}</td>
                   <td className={`${tdCls} text-secondary-text`}>{row.action ?? "—"}</td>
                   <td className={`${tdCls} text-secondary-text`}>{row.draft ? row.draft.reviewState.replace("_", " ") : "—"}</td>
-                  <td className={tdCls}>{qualityBadge(row)}</td>
-                  <td className={`${tdCls} tabular-nums text-meta`}>{row.draft ? row.draft.unsupportedClaims : "—"}</td>
+                  <td className={tdCls}><QualityCell row={row} /></td>
+                  <td className={`${tdCls} text-right tabular-nums text-meta`}>{row.draft ? row.draft.unsupportedClaims : "—"}</td>
                   <td className={`${tdCls} text-right`}>
                     {row.draft ? (
-                      <button onClick={() => setOpenDraftId(row.draft!.id)} className="rounded border border-border px-2.5 py-1 text-[12px] text-foreground transition-colors hover:bg-[var(--row-hover)]">Open</button>
+                      <button type="button" onClick={() => setOpenDraftId(row.draft!.id)} className="rounded border border-border px-2.5 py-1 text-[12px] text-foreground transition-colors hover:bg-row-hover">Open</button>
                     ) : (
-                      <button disabled={busyId === row.id} onClick={() => void produce(row.id)} className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1 text-[12px] text-foreground transition-colors hover:bg-[var(--row-hover)] disabled:opacity-50">
+                      <button type="button" disabled={busyId === row.id} onClick={() => void produce(row.id)} className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1 text-[12px] text-foreground transition-colors hover:bg-row-hover disabled:opacity-50">
                         {busyId === row.id ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} Produce draft
                       </button>
                     )}
@@ -105,6 +110,6 @@ export function SeoContentStudio({ rows }: { rows: StudioRow[] }): React.JSX.Ele
           <SeoDraftPanel draftId={openDraftId} onClose={() => setOpenDraftId(null)} />
         </SidePanelOverlay>
       )}
-    </main>
+    </BladeMain>
   );
 }
