@@ -335,8 +335,14 @@ export interface UnifiedIssue {
   gate: GateKey;
   detail?: string; // the evidence + resolution, when available
 }
-// A worker's source-timesheet approval posture (Connecteam) — kept distinct from Zoe review approval.
-export type ApprovalState = "APPROVED" | "UNAPPROVED" | "UNVERIFIED" | "NA";
+// A worker's source-timesheet approval posture. APPROVED = Connecteam's own admin-approval confirmed it;
+// APPROVED_IN_ZOE = the business approved payroll in the app (Zoe is the approval authority) and we finalized
+// the days in Connecteam — honestly distinct from Connecteam's own approval, never a false claim of it.
+export type ApprovalState = "APPROVED" | "APPROVED_IN_ZOE" | "UNAPPROVED" | "UNVERIFIED" | "NA";
+// The outcome of the Connecteam day-lock a Zoe approval triggers. LOCKED = finalized in Connecteam; FAILED =
+// approved in Zoe but the Connecteam finalize failed (retry); NA = nothing to lock (no Connecteam id / no
+// worked days); UNLOCKED = the approval was reverted. null = never approved in Zoe for this period.
+export type CtLockStatus = "LOCKED" | "FAILED" | "NA" | "UNLOCKED";
 export interface UnifiedWorkerRow {
   key: string;
   name: string;
@@ -351,6 +357,10 @@ export interface UnifiedWorkerRow {
   approvalState: ApprovalState;
   approvedHours: number | null;
   unapprovedHours: number | null;
+  // Zoe-approval + Connecteam-finalize provenance (set when this worker was approved in the app this period).
+  zoeApprovedBy: string | null; // who recorded the Zoe sign-off (null when not Zoe-approved)
+  ctLockStatus: CtLockStatus | null; // the Connecteam day-lock outcome (null when not Zoe-approved)
+  ctLockDetail: string | null; // honest one-line result (what was locked, or why the finalize failed)
   status: UnifiedWorkerStatus;
   accepted: boolean; // a REQUIRES_REVIEW worker the human accepted into this run
   acceptedBy: string | null;

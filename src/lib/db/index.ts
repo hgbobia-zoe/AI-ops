@@ -1964,6 +1964,26 @@ CREATE TABLE IF NOT EXISTS hr_payroll_review_accepts (
   PRIMARY KEY (period_start, period_end, worker_key)
 );
 
+-- Per-worker Connecteam day-lock outcome of a Zoe payroll approval. Approving payroll IN THE APP finalizes
+-- the worker's worked days in Connecteam (the lock-days write, the only finalization Connecteam exposes).
+-- This row records that outcome so the readiness model can treat the timesheet-approval gate as satisfied by
+-- the recorded Zoe approval AND label honestly whether the Connecteam finalize actually succeeded. Keyed by
+-- the review worker key (ct:<userId> | hw:<id>); one pay period. lock_status: LOCKED | FAILED | NA | UNLOCKED.
+CREATE TABLE IF NOT EXISTS hr_payroll_ct_locks (
+  period_start       TEXT NOT NULL,      -- YYYY-MM-DD
+  period_end         TEXT NOT NULL,
+  worker_key         TEXT NOT NULL,      -- ct:<userId> | hw:<id>
+  connecteam_user_id INTEGER,            -- the Connecteam user locked (null when the worker has none)
+  approved_by        TEXT,               -- actor who approved in Zoe
+  approved_at        TEXT NOT NULL,
+  lock_status        TEXT NOT NULL,      -- LOCKED | FAILED | NA | UNLOCKED
+  lock_detail        TEXT,               -- error/reason when FAILED, else a short note
+  locked_dates       TEXT,               -- JSON array of yyyy-MM-dd actually locked
+  updated_at         TEXT NOT NULL,
+  PRIMARY KEY (period_start, period_end, worker_key)
+);
+CREATE INDEX IF NOT EXISTS idx_hr_ct_locks_period ON hr_payroll_ct_locks(period_start, period_end);
+
 -- Event Lifecycle Engine (Phase 3) — durable geocode cache for the weather module. Addresses are
 -- STABLE, so geocodes are cached forever (Census is free but slow); resolved=0 records a KNOWN-miss so
 -- we don't re-hit Census for an address that won't geocode. Forecasts are volatile and are NEVER cached

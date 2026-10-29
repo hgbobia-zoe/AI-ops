@@ -27,7 +27,7 @@ import { gustoConfigured } from "./gusto";
 import { readGustoSnapshot, gustoSnapshotFresh } from "./gustoSnapshot";
 import { readGustoPushResult } from "./gustoPushState";
 import { getPayrollConfig, payrollDeadlineLabel, precheckScheduleLabel, scheduleLabel } from "./config";
-import { getApproval, latestSyncRun, listSyncRuns } from "./store";
+import { getApproval, latestSyncRun, listSyncRuns, listTimesheetLocks, type TimesheetLockRecord } from "./store";
 import { connecteamConfigured } from "@/lib/connecteam";
 import { getRecentAudit } from "@/lib/db/repo";
 import type {
@@ -103,13 +103,25 @@ function approvalStateFor(rw: ReadinessWorker | undefined, approvalKnown: boolea
   return "APPROVED";
 }
 
+// A worker is APPROVED IN ZOE for the period when a non-UNLOCKED lock record exists for their key. Zoe is the
+// approval authority for this business, so that recorded approval SATISFIES the source timesheet-approval gate
+// (it is NOT a claim that Connecteam's own admin-approval ran — the lock outcome below says what really
+// happened in Connecteam). Pure.
+function zoeApprovedFromLock(lock: TimesheetLockRecord | undefined): boolean {
+  return !!lock && lock.lockStatus !== "UNLOCKED";
+}
+
 // Merge one review worker with its readiness counterpart into a unified row. Dedupes OVERTIME (both engines
-// flag it). The readiness worker is matched by the same stable key (ct:<id> | hw:<id>).
+// flag it). The readiness worker is matched by the same stable key (ct:<id> | hw:<id>). When the worker was
+// approved in Zoe for this period (a lock record), the source-approval issues (UNAPPROVED_TIMESHEET /
+// APPROVAL_UNVERIFIED) are cleared — the gate is satisfied by the REAL recorded approval — and the row carries
+// the honest Connecteam-finalize outcome (locked / failed).
 function mergeWorker(
   rv: ReviewWorker,
   rd: ReadinessWorker | undefined,
   approvalKnown: boolean,
   excluded: boolean,
+  lock: TimesheetLockRecord | undefined,
 ): UnifiedWorkerRow {
   const issues: UnifiedIssue[] = [];
   const seen = new Set<string>();
@@ -117,17 +129,25 @@ function mergeWorker(
   for (const t of rv.issues) add(reviewIssue(t.code, t.label, t.kind));
   if (rd) for (const e of rd.issues) add(readinessIssue(e));
 
+  const zoeApproved = !excluded && zoeApprovedFromLock(lock);
+  // The Zoe approval clears ONLY the source-approval gate (not blockers, not review anomalies) — exactly the
+  // gate the owner said the Zoe sign-off is the authority for.
+  const effectiveIssues = zoeApproved ? issues.filter((i) => i.code !== "UNAPPROVED_TIMESHEET" && i.code !== "APPROVAL_UNVERIFIED") : issues;
+
   const accepted = !!rv.accepted;
-  const status: UnifiedWorkerStatus = excluded ? "EXCLUDED" : workerStatusFrom(issues, accepted);
+  const status: UnifiedWorkerStatus = excluded ? "EXCLUDED" : workerStatusFrom(effectiveIssues, accepted);
 
   return {
     key: rv.key, name: rv.name, workerType: rv.workerType,
     hours: rv.hours, payRate: rv.payRate, rateSource: rv.rateSource ?? null, currency: rv.currency, estPay: rv.estPay,
     mappingStatus: rv.mappingStatus, gustoMapped: rv.mappingStatus !== "UNMATCHED",
-    approvalState: excluded ? "NA" : approvalStateFor(rd, approvalKnown),
+    approvalState: excluded ? "NA" : zoeApproved ? "APPROVED_IN_ZOE" : approvalStateFor(rd, approvalKnown),
     approvedHours: rd?.approvedHours ?? null,
     unapprovedHours: rd?.unapprovedHours ?? null,
-    status, accepted, acceptedBy: rv.acceptedBy ?? null, issues,
+    zoeApprovedBy: zoeApproved ? lock?.approvedBy ?? null : null,
+    ctLockStatus: zoeApproved ? lock?.lockStatus ?? null : null,
+    ctLockDetail: zoeApproved ? lock?.lockDetail ?? null : null,
+    status, accepted, acceptedBy: rv.acceptedBy ?? null, issues: effectiveIssues,
     excludeMode: rv.excludeMode, excludeReason: rv.excludeReason ?? null,
     recordId: rv.recordId ?? null, connecteamUserId: rv.connecteamUserId ?? null,
     gustoId: rv.gustoId ?? null, country: rv.country ?? null, payType: rv.payType ?? null,
@@ -136,11 +156,12 @@ function mergeWorker(
 }
 
 const AUDIT_ACTIONS = [
-  "payroll.approve", "payroll.worker.accept", "payroll.worker.unaccept",
+  "payroll.approve", "payroll.unapprove", "payroll.worker.accept", "payroll.worker.unaccept",
   "payroll.worker.exclude", "payroll.worker.include", "payroll.rate_sync.write", "payroll.gusto.push_hours",
 ];
 const ACTIVITY: Record<string, { layer: PayrollActivityEvent["layer"]; label: string; tone: PayrollTone }> = {
-  "payroll.approve": { layer: "approval", label: "Approved payroll (Zoe sign-off)", tone: "positive" },
+  "payroll.approve": { layer: "approval", label: "Approved payroll (Zoe sign-off + Connecteam finalize)", tone: "positive" },
+  "payroll.unapprove": { layer: "approval", label: "Un-approved payroll (unlocked in Connecteam)", tone: "neutral" },
   "payroll.worker.accept": { layer: "review", label: "Accepted a worker into the run", tone: "neutral" },
   "payroll.worker.unaccept": { layer: "review", label: "Un-accepted a worker", tone: "neutral" },
   "payroll.worker.exclude": { layer: "exclusion", label: "Excluded a worker", tone: "neutral" },
@@ -158,7 +179,8 @@ function buildActivity(): PayrollActivityEvent[] {
       const meta = ACTIVITY[a.action] ?? { layer: "review" as const, label: a.action.replace(/^payroll\./, "").replace(/[._]/g, " "), tone: "neutral" as PayrollTone };
       const d = a.detail ?? {};
       const outcome =
-        a.action === "payroll.approve" ? `${d.readyWorkers ?? "?"} ready approved`
+        a.action === "payroll.approve" ? `${d.readyWorkers ?? "?"} approved${Number(d.ctLocked) ? `, ${Number(d.ctLocked)} locked in Connecteam` : ""}${Number(d.ctLockFailed) ? `, ${Number(d.ctLockFailed)} finalize failed` : ""}`
+          : a.action === "payroll.unapprove" ? `${d.unlocked ?? "?"} unapproved${Number(d.lockConflicts) ? `, ${Number(d.lockConflicts)} still locked in Connecteam` : ""}`
           : a.action === "payroll.gusto.push_hours" ? `${d.pushed ?? "?"} pushed${d.failed ? `, ${d.failed} failed` : ""}`
             : a.action === "payroll.rate_sync.write" ? `${d.name ?? "worker"} → $${d.gustoRate ?? "?"}/hr`
               : (d.name as string | undefined) ?? (d.period as string | undefined) ?? null;
@@ -200,6 +222,10 @@ export interface ComposeInputs {
   activity: PayrollActivityEvent[];
   sources: { connecteam: boolean; gusto: boolean; gustoSnapshotAt: string | null; gustoFresh: boolean; instaworkOk: boolean; instaworkAsOf: string | null };
   schedule: { deadlineLabel: string; precheckLabel: string | null; autoSyncLabel: string | null };
+  // Per-worker Connecteam day-lock records (keyed by worker key) written when payroll was approved in the
+  // app. A non-UNLOCKED record means the worker is APPROVED IN ZOE for this period — which SATISFIES the
+  // timesheet-approval gate (Zoe is the approval authority), labelled honestly by the lock outcome.
+  timesheetLocks: Map<string, TimesheetLockRecord>;
 }
 
 /** The single entry point: gather both engines + the approval/sources/activity and reconcile into one model. */
@@ -213,6 +239,7 @@ export async function derivePayrollReadiness(period: PayPeriod): Promise<Payroll
   ]);
 
   const approval = getApproval(period.start, period.end);
+  const timesheetLocks = listTimesheetLocks(period.start, period.end);
   const pushResult = readGustoPushResult();
   const pushedOk = !!pushResult?.ok && pushResult.aborted == null && (pushResult.pushed ?? 0) > 0;
   const last = latestSyncRun();
@@ -235,6 +262,7 @@ export async function derivePayrollReadiness(period: PayPeriod): Promise<Payroll
       precheckLabel: cfg.precheckEnabled ? precheckScheduleLabel(cfg) : null,
       autoSyncLabel: cfg.autoSyncEnabled ? scheduleLabel(cfg) : null,
     },
+    timesheetLocks,
   });
 }
 
@@ -244,8 +272,9 @@ export function composeReadinessModel(inp: ComposeInputs): PayrollReadinessModel
   const approvalKnown = readiness.approvalKnown;
   const rdByKey = new Map<string, ReadinessWorker>(readiness.workers.map((w) => [w.key, w]));
 
-  const workers: UnifiedWorkerRow[] = review.workers.map((rv) => mergeWorker(rv, rdByKey.get(rv.key), approvalKnown, false));
-  const excludedWorkers: UnifiedWorkerRow[] = review.excluded.map((rv) => mergeWorker(rv, undefined, approvalKnown, true));
+  const locks = inp.timesheetLocks;
+  const workers: UnifiedWorkerRow[] = review.workers.map((rv) => mergeWorker(rv, rdByKey.get(rv.key), approvalKnown, false, locks.get(rv.key)));
+  const excludedWorkers: UnifiedWorkerRow[] = review.excluded.map((rv) => mergeWorker(rv, undefined, approvalKnown, true, undefined));
 
   const included = workers.length;
   const ready = workers.filter((w) => w.status === "READY").length;
@@ -264,14 +293,27 @@ export function composeReadinessModel(inp: ComposeInputs): PayrollReadinessModel
     !connecteamOk ? "UNAVAILABLE" : "PASS",
     !connecteamOk ? "Connecteam time source is unreachable — hours could not be pulled." : `${review.hours ?? 0}h pulled from Connecteam.`);
 
+  // A worker approved in the app (Zoe) SATISFIES this gate — Zoe is the approval authority for this business.
+  // Those workers are no longer counted as unapproved/unverified; their count + the Connecteam-finalize outcome
+  // drive an HONEST label (approved in Zoe, N locked in Connecteam, K finalize failed) — never a false claim
+  // that Connecteam's own admin-approval ran. Because the Zoe approval resolves the gate, the period-level
+  // "approval never exposed" (`!approvalKnown`) check below keys off the REMAINING unverified workers, so a
+  // fully Zoe-approved period passes even though this business doesn't use Connecteam's approval column.
   const unapprovedCount = workers.filter((w) => w.approvalState === "UNAPPROVED").length;
   const unverifiedApprovalCount = workers.filter((w) => w.approvalState === "UNVERIFIED").length;
+  const zoeApprovedWorkers = workers.filter((w) => w.approvalState === "APPROVED_IN_ZOE");
+  const ctLockedCount = zoeApprovedWorkers.filter((w) => w.ctLockStatus === "LOCKED").length;
+  const ctLockFailedCount = zoeApprovedWorkers.filter((w) => w.ctLockStatus === "FAILED").length;
+  const zoeApprovedSuffix = zoeApprovedWorkers.length > 0
+    ? `${zoeApprovedWorkers.length} approved in Zoe${ctLockedCount ? `, ${ctLockedCount} locked in Connecteam` : ""}${ctLockFailedCount ? `; ${ctLockFailedCount} Connecteam finalize failed — retry` : ""}.`
+    : "";
   const approvalGate = gate("timesheetApproval",
-    !connecteamOk ? "UNAVAILABLE" : !approvalKnown ? "UNVERIFIED" : unapprovedCount > 0 ? "ACTION" : unverifiedApprovalCount > 0 ? "UNVERIFIED" : "PASS",
-    !approvalKnown ? "Connecteam did not expose timesheet approval — cannot confirm hours are approved."
-      : unapprovedCount > 0 ? `${unapprovedCount} worker${unapprovedCount === 1 ? "" : "s"} have unapproved time in Connecteam.`
-        : unverifiedApprovalCount > 0 ? `${unverifiedApprovalCount} worker${unverifiedApprovalCount === 1 ? "" : "s"} could not be confirmed as approved.`
-          : "All timesheets approved in Connecteam.",
+    !connecteamOk ? "UNAVAILABLE" : unapprovedCount > 0 ? "ACTION" : unverifiedApprovalCount > 0 ? "UNVERIFIED" : "PASS",
+    !connecteamOk ? "Connecteam time source is unreachable — hours could not be pulled."
+      : unapprovedCount > 0 ? `${unapprovedCount} worker${unapprovedCount === 1 ? "" : "s"} have unapproved time in Connecteam.${zoeApprovedSuffix ? ` ${zoeApprovedSuffix}` : ""}`
+        : unverifiedApprovalCount > 0 ? `${unverifiedApprovalCount} worker${unverifiedApprovalCount === 1 ? "" : "s"} could not be confirmed as approved in Connecteam.${zoeApprovedSuffix ? ` ${zoeApprovedSuffix}` : ""}`
+          : zoeApprovedSuffix ? zoeApprovedSuffix
+            : "All timesheets approved in Connecteam.",
     unapprovedCount + unverifiedApprovalCount);
 
   const unmapped = workers.filter((w) => w.issues.some((i) => i.gate === "gustoMapping" && i.severity === "blocker")).length;
@@ -304,7 +346,9 @@ export function composeReadinessModel(inp: ComposeInputs): PayrollReadinessModel
   else if (included === 0) status = "NO_DATA";
   else if (blocked > 0) status = "BLOCKED";
   else if (actionRequired > 0 || unapprovedCount > 0) status = "ACTION_REQUIRED";
-  else if (unverified > 0 || !approvalKnown || periodStale) status = "ACTION_REQUIRED";
+  // "approval never exposed" only holds the period when workers remain UNVERIFIED — a Zoe approval resolves
+  // them (approvalGate.state is then PASS), so a fully Zoe-approved period is not forced to ACTION_REQUIRED.
+  else if (unverified > 0 || approvalGate.state === "UNVERIFIED" || periodStale) status = "ACTION_REQUIRED";
   else if (pushedOk) status = "SUBMITTED";
   else if (approved) status = "APPROVED";
   else status = "READY";
@@ -334,6 +378,17 @@ export function composeReadinessModel(inp: ComposeInputs): PayrollReadinessModel
 
   // ── Needs-attention (prioritized, grouped) ──────────────────────────────────────────────────────────
   const attention = buildAttention(workers);
+  // Approved in Zoe but the Connecteam finalize failed — surfaced as an HONEST, NON-GATING follow-up (the
+  // worker IS approved; this is a retry, not a payroll blocker, so it never changes worker/gate status).
+  if (ctLockFailedCount > 0) {
+    attention.unshift({
+      code: "CT_LOCK_FAILED", severity: "setup", gate: "timesheetApproval",
+      title: "Connecteam finalize failed", count: ctLockFailedCount,
+      workers: zoeApprovedWorkers.filter((w) => w.ctLockStatus === "FAILED").map((w) => ({ key: w.key, name: w.name })),
+      action: { label: "Re-approve to retry", href: REVIEW_TAB },
+      detail: "Approved in Zoe, but locking the days in Connecteam failed. Re-approving retries the finalize (already-locked days are a safe no-op).",
+    });
+  }
 
   // ── Totals ───────────────────────────────────────────────────────────────────────────────────────
   const estVals = workers.map((w) => w.estPay);
