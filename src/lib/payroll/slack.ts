@@ -119,6 +119,17 @@ async function postCardDeduped(card: BotCard, dedupKey: string, force = false): 
   return result;
 }
 
+/**
+ * Post ANY payroll BotCard to the dedicated payroll channel, reusing the exact shared path the readiness
+ * cards use: the payroll channel resolution, the shared cardBlocks()/slackPostAs(), the ops-webhook fallback,
+ * and the content-hash dedup (so a retry with identical content never double-posts). This is the single
+ * reuse seam for other payroll notifications (e.g. the Mercury "wire sent" alert) — it does not create a new
+ * Slack client. Never throws. `dedupKey` scopes the dedup (e.g. `wire:<transactionId>`).
+ */
+export async function postPayrollCard(card: BotCard, dedupKey: string, opts?: { force?: boolean }): Promise<SlackResult & { skipped?: boolean }> {
+  return postCardDeduped(card, dedupKey, opts?.force);
+}
+
 function flattenCard(card: BotCard): string {
   const lines = [`${card.emoji ? `${card.emoji} ` : ""}${card.title}`.trim()];
   for (const f of card.fields ?? []) lines.push(`${f.label}: ${f.value}`);
