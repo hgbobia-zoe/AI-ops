@@ -12,6 +12,8 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, X, Check } from "lucide-react";
+import { StatusBadge } from "@/components/ui/status";
+import type { Tone } from "@/lib/tone";
 import type { NotifyNotice, NotifyDryRunRow, NotifySendResult } from "@/lib/scheduling/assignNotify";
 
 function keyOf(n: { shiftId: string; userId: number; kind: string }): string {
@@ -20,10 +22,16 @@ function keyOf(n: { shiftId: string; userId: number; kind: string }): string {
 
 type Phase = "loading" | "review" | "sending" | "done";
 
-const STATE_TONE: Record<NotifySendResult["state"], string> = {
-  sent: "text-positive",
-  skipped: "text-meta",
-  failed: "text-critical",
+// Send result → shared semantic tone (coloured indicator + crisp label).
+const STATE_TONE: Record<NotifySendResult["state"], Tone> = {
+  sent: "positive",
+  skipped: "neutral",
+  failed: "critical",
+};
+const STATE_LABEL: Record<NotifySendResult["state"], string> = {
+  sent: "Sent",
+  skipped: "Skipped",
+  failed: "Failed",
 };
 
 export function NotifyConfirm({
@@ -163,9 +171,9 @@ export function NotifyConfirm({
                         {r.phoneMasked && <span className="ml-1.5 text-[11px] text-meta">{r.phoneMasked}</span>}
                       </span>
                       {phase === "done" && result ? (
-                        <span className={`shrink-0 text-[11.5px] font-medium uppercase tracking-[0.05em] ${STATE_TONE[result.state]}`}>
-                          {result.state}
-                        </span>
+                        <StatusBadge tone={STATE_TONE[result.state]} size="sm" className="shrink-0">
+                          {STATE_LABEL[result.state]}
+                        </StatusBadge>
                       ) : r.sendable ? (
                         <button
                           type="button"
@@ -176,13 +184,13 @@ export function NotifyConfirm({
                           {on ? "Send" : "Skip"}
                         </button>
                       ) : (
-                        <span className="shrink-0 text-[11px] text-attention">not sent</span>
+                        <StatusBadge tone="attention" size="sm" className="shrink-0">Not sent</StatusBadge>
                       )}
                     </div>
                     {r.body ? (
                       <p className="mt-1.5 rounded bg-[var(--row-hover)]/40 px-2 py-1.5 text-[12px] leading-relaxed text-tertiary-text">{r.body}</p>
                     ) : null}
-                    {!r.sendable && r.reason && <p className="mt-1 text-[11px] text-attention">{r.reason}</p>}
+                    {!r.sendable && r.reason && <p className="mt-1 text-[11px] text-meta">{r.reason}</p>}
                     {phase === "done" && result?.reason && <p className="mt-1 text-[11px] text-meta">{result.reason}</p>}
                   </li>
                 );

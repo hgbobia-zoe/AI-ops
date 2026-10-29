@@ -19,6 +19,9 @@ import { SidePanelOverlay } from "@/components/SidePanelOverlay";
 import { ShiftEditor } from "@/components/scheduling/ShiftEditor";
 import { AddWorkerPanel } from "@/components/scheduling/AddWorkerPanel";
 import { OverridePanel } from "@/components/scheduling/OverridePanel";
+import { StatusBadge } from "@/components/ui/status";
+import { StatusMark } from "@/components/console-primitives";
+import { STATUS_DOT } from "@/lib/tone";
 import type { CrewMember } from "@/lib/connecteam";
 import { formatClockTime } from "@/lib/dates";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
@@ -100,21 +103,25 @@ function windowLabel(start: string | null, end: string | null, known: boolean): 
 // Column template shared by the header and every row, so the per-field columns line up exactly.
 const COLS = "grid grid-cols-[minmax(170px,1.5fr)_120px_118px_118px_96px_104px_132px] items-center gap-3";
 
-const READINESS_CHIP: Record<ShiftReadinessLevel, { label: string; cls: string }> = {
-  READY: { label: "Ready", cls: "border-positive/40 text-positive" },
-  BLOCKED: { label: "Blocked", cls: "border-critical/50 text-critical" },
-  UNVERIFIED: { label: "Unverified", cls: "border-attention/40 text-attention" },
+// Readiness level → shared StatusBadge tone. UNVERIFIED is "requires review" (attention), not a false red.
+const READINESS_BADGE: Record<ShiftReadinessLevel, { label: string; tone: "positive" | "critical" | "attention" }> = {
+  READY: { label: "Ready", tone: "positive" },
+  BLOCKED: { label: "Blocked", tone: "critical" },
+  UNVERIFIED: { label: "Unverified", tone: "attention" },
 };
 
-/** Render a RoleCount as compact role chips (driver + field), dimming a zero. */
-function RoleCounts({ counts, tone }: { counts: RoleCount; tone: "default" | "attention" }): React.JSX.Element {
+/** Render a RoleCount as compact role chips (driver + field). Counts stay FOREGROUND (never tinted); a
+ *  small attention indicator dot carries the "this is a gap" state when `attention` is set (Nocturne rule:
+ *  the number is a figure, the colour lives on an indicator). */
+function RoleCounts({ counts, attention = false }: { counts: RoleCount; attention?: boolean }): React.JSX.Element {
   const roles: ShiftRole[] = ["driver", "field"];
   const nonZero = roles.filter((r) => counts[r as "driver" | "field"] > 0);
   if (nonZero.length === 0) return <span className="text-[12px] text-meta">—</span>;
   return (
     <span className="flex flex-wrap items-center gap-1" title={nonZero.map((r) => `${counts[r as "driver" | "field"]} ${ROLE_LABEL[r]}`).join(", ")}>
+      {attention && <span className={`size-1.5 shrink-0 rounded-full ${STATUS_DOT.attention}`} aria-hidden />}
       {nonZero.map((r) => (
-        <span key={r} className={`tabular-nums text-[12.5px] ${tone === "attention" ? "text-attention" : "text-foreground"}`}>
+        <span key={r} className="tabular-nums text-[12.5px] text-foreground">
           {counts[r as "driver" | "field"]} {ROLE_SHORT[r]}
         </span>
       ))}
@@ -387,26 +394,24 @@ function RouteRow({
 
         {/* Window (ET) */}
         <span className="tabular-nums text-[12.5px]">
-          {win ? win : <span className="text-attention">Set time</span>}
+          {win ? win : <StatusMark tone="attention" label="Set time" />}
         </span>
 
         {/* Required (by role) */}
-        <RoleCounts counts={s.requiredByRole} tone="default" />
+        <RoleCounts counts={s.requiredByRole} />
 
         {/* Assigned (actual) */}
-        <RoleCounts counts={s.assignedByRole} tone="default" />
+        <RoleCounts counts={s.assignedByRole} />
 
         {/* Gap (unfilled) */}
         <span>
-          {s.totalGap > 0 ? <RoleCounts counts={s.gapByRole} tone="attention" /> : <span className="text-[12.5px] text-positive">None</span>}
+          {s.totalGap > 0 ? <RoleCounts counts={s.gapByRole} attention /> : <StatusMark tone="positive" label="None" />}
         </span>
 
         {/* Readiness (authoritative) */}
         <span>
           {card.readiness ? (
-            <span className={`inline-block rounded border px-1.5 py-px text-[10px] font-medium uppercase tracking-[0.06em] ${READINESS_CHIP[card.readiness].cls}`}>
-              {READINESS_CHIP[card.readiness].label}
-            </span>
+            <StatusBadge tone={READINESS_BADGE[card.readiness].tone} size="sm">{READINESS_BADGE[card.readiness].label}</StatusBadge>
           ) : (
             <span className="text-[11px] text-meta">—</span>
           )}
@@ -544,7 +549,7 @@ function RouteDetail({
                 <span className="ml-1.5 text-[11px] text-meta">{ROLE_LABEL[p.role]}{p.title ? ` · ${p.title}` : ""}</span>
               </span>
               <span className="flex shrink-0 items-center gap-1.5">
-                <span className="text-[11px] text-positive">Connecteam</span>
+                <StatusMark tone="positive" label="Connecteam" />
                 {p.status !== "draft" && (
                   <span className="rounded border border-border px-1.5 py-px text-[10px] uppercase tracking-[0.06em] text-meta">{p.status}</span>
                 )}
@@ -557,7 +562,7 @@ function RouteDetail({
                 <span className="font-medium text-foreground">{name}</span>
                 <span className="ml-1.5 text-[11px] text-meta">{ROLE_LABEL[role]}</span>
               </span>
-              <span className="shrink-0 text-[11px] text-positive">Connecteam · scheduled</span>
+              <span className="shrink-0"><StatusMark tone="positive" label="Connecteam · scheduled" /></span>
             </li>
           ))}
           {[...gigWorkers].map(([name, position]) => (
@@ -566,7 +571,7 @@ function RouteDetail({
                 <span className="font-medium text-foreground">{name}</span>
                 <span className="ml-1.5 text-[11px] text-meta">{position}</span>
               </span>
-              <span className="shrink-0 text-[11px] text-attention">Instawork · booked</span>
+              <span className="shrink-0"><StatusMark tone="attention" label="Instawork · booked" /></span>
             </li>
           ))}
         </ul>
@@ -590,16 +595,14 @@ function RouteDetail({
               >
                 {p.kind === "internal" ? (
                   <>
-                    <span className="text-positive">&#10003;</span>
-                    <span className="truncate text-foreground">{p.name}</span>
+                    <StatusMark tone="positive" label={p.name} />
                     <span className="text-[10.5px] uppercase tracking-[0.05em] text-meta">{ROLE_LABEL[p.role]}</span>
-                    {p.moved && <span className="text-[10.5px] text-attention">moved here</span>}
+                    {p.moved && <span className="text-[10.5px] text-meta">moved here</span>}
                   </>
                 ) : (
                   <>
-                    <span className="text-attention">&#9675;</span>
-                    <span className="text-meta">Open seat</span>
-                    <span className="text-[10.5px] uppercase tracking-[0.05em] text-attention">{ROLE_LABEL[p.role]} · Instawork</span>
+                    <StatusMark tone="attention" label="Open seat" />
+                    <span className="text-[10.5px] uppercase tracking-[0.05em] text-meta">{ROLE_LABEL[p.role]} · Instawork</span>
                   </>
                 )}
               </li>
@@ -614,15 +617,9 @@ function RouteDetail({
           {needByRole
             .filter((r) => r.gap > 0)
             .map((r) => (
-              <span key={r.role} className="rounded border border-attention/40 px-1.5 py-px text-[11px] text-attention">
-                needs {r.gap} more {ROLE_LABEL[r.role]}
-              </span>
+              <StatusBadge key={r.role} tone="attention" size="sm">needs {r.gap} more {ROLE_LABEL[r.role]}</StatusBadge>
             ))}
-          {totalGap > 0 && (
-            <span className="rounded border border-attention/40 px-1.5 py-px text-[11px] text-attention">
-              Gap → Instawork: {totalGap}
-            </span>
-          )}
+          {totalGap > 0 && <StatusBadge tone="attention" size="sm">Gap to Instawork: {totalGap}</StatusBadge>}
         </div>
       )}
 
@@ -630,8 +627,8 @@ function RouteDetail({
       {iwConfigured && card.gigs.length > 0 && (
         <p className="text-[11.5px] text-meta">
           Instawork (matched by day + role + time):{" "}
-          <span className="text-positive">{booked} booked</span>
-          {pending > 0 && <span className="text-attention"> · {pending} pending</span>}
+          <span className="text-foreground">{booked} booked</span>
+          {pending > 0 && <span className="text-foreground"> · {pending} pending</span>}
           {" "}across {card.gigs.length} gig{card.gigs.length === 1 ? "" : "s"}.
         </p>
       )}
@@ -667,10 +664,11 @@ function RouteDetail({
 // them to that route's field shift (creating it if needed). The moved person then renders on the route
 // card and drops out of this list, so pulling someone off warehouse shows as a prep shortfall here — the
 // honest tradeoff, surfaced rather than hidden.
-const FIT_TONE: Record<MoveFit, string> = {
-  "good-fit": "text-positive",
-  "exceeds-availability": "text-attention",
-  "qualification-mismatch": "text-meta",
+// Move-eligibility fit → shared StatusMark tone (coloured indicator + crisp label, never tinted text).
+const FIT_MARK: Record<MoveFit, "positive" | "attention" | "idle"> = {
+  "good-fit": "positive",
+  "exceeds-availability": "attention",
+  "qualification-mismatch": "idle",
 };
 
 function WarehousePrepSection({
@@ -767,7 +765,7 @@ function WarehousePrepSection({
               </span>
               <span className="flex shrink-0 items-center gap-2.5 text-[12px] text-meta">
                 <span className="tabular-nums">{p.window}</span>
-                <span className="text-positive">Connecteam · scheduled</span>
+                <StatusMark tone="positive" label="Connecteam · scheduled" />
                 {routeOptions.length > 0 && (
                   <button
                     type="button"
@@ -798,8 +796,8 @@ function WarehousePrepSection({
                         className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[12px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <TruckIcon className="size-3" /> {r.truckName}
-                        {need > 0 && <span className="text-attention">needs {need}</span>}
-                        {elig && <span className={FIT_TONE[elig.fit]}>{elig.label}</span>}
+                        {need > 0 && <span className="text-meta">needs {need}</span>}
+                        {elig && <StatusMark tone={FIT_MARK[elig.fit]} label={elig.label} />}
                       </button>
                     );
                   })}
@@ -813,7 +811,7 @@ function WarehousePrepSection({
             <span className="text-meta">
               {shortfall} more prep {shortfall === 1 ? "person" : "people"} needed on the ground today
             </span>
-            <span className="shrink-0 text-[12px] text-amber-300">unfilled</span>
+            <span className="shrink-0"><StatusMark tone="attention" label="Unfilled" /></span>
           </div>
         )}
       </div>
@@ -849,20 +847,21 @@ function OtherShiftRow({
           <span className="text-[11px] uppercase tracking-[0.06em] text-meta">{ROLE_LABEL[shift.role]}</span>
           <span className="text-[12px] tabular-nums text-meta">×{shift.headcount}</span>
         </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-[12px] text-meta">
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-meta">
           {win ? (
             <span className="tabular-nums">{win}</span>
           ) : (
-            <span className="rounded border border-attention/40 px-1.5 py-px text-[11px] uppercase tracking-[0.05em] text-attention">Set time</span>
+            <StatusMark tone="attention" label="Set time" />
           )}
-          {names.length > 0 && <span className="text-positive">{names.join(", ")}</span>}
+          {names.length > 0 && <span className="text-foreground">{names.join(", ")}</span>}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <span className={`text-[13px] tabular-nums ${covered >= shift.headcount ? "text-positive" : "text-foreground"}`}>
+        <span className="inline-flex items-center gap-1.5 text-[13px] tabular-nums text-foreground">
+          {covered >= shift.headcount && <span className={`size-1.5 shrink-0 rounded-full ${STATUS_DOT.positive}`} aria-hidden />}
           {covered}/{shift.headcount}
         </span>
-        {gap > 0 && <span className="rounded border border-attention/40 px-1.5 py-px text-[11px] text-attention">Instawork: {gap}</span>}
+        {gap > 0 && <StatusBadge tone="attention" size="sm">Instawork: {gap}</StatusBadge>}
       </div>
     </button>
   );

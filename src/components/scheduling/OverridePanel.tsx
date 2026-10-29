@@ -20,6 +20,7 @@ import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import { moveEligibility, type MoveFit } from "@/lib/scheduling/planView";
 import { type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
 import { NotifyConfirm } from "@/components/scheduling/NotifyConfirm";
+import { StatusMark } from "@/components/console-primitives";
 import type { NotifyNotice } from "@/lib/scheduling/assignNotify";
 import { ROLE_LABEL, type RouteCardData } from "@/components/scheduling/RouteStaffBoard";
 
@@ -30,10 +31,11 @@ const PRIMARY =
 const LABEL = "text-[11px] uppercase tracking-[0.08em] text-meta";
 const ROLES: ShiftRole[] = ["driver", "field", "prep"];
 
-const FIT_TONE: Record<MoveFit, string> = {
-  "good-fit": "text-positive",
-  "exceeds-availability": "text-attention",
-  "qualification-mismatch": "text-meta",
+// Move-eligibility fit → shared StatusMark tone (coloured indicator + crisp label, never tinted text).
+const FIT_MARK: Record<MoveFit, "positive" | "attention" | "idle"> = {
+  "good-fit": "positive",
+  "exceeds-availability": "attention",
+  "qualification-mismatch": "idle",
 };
 
 interface CrewEntry {
@@ -297,7 +299,7 @@ export function OverridePanel({
                                 className="inline-flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[12px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 <TruckIcon className="size-3" /> {r.truckName}
-                                <span className={FIT_TONE[elig.fit]}>{elig.label}</span>
+                                <StatusMark tone={FIT_MARK[elig.fit]} label={elig.label} />
                               </button>
                             );
                           })}

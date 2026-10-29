@@ -64,10 +64,10 @@ export function NeedsReviewPanel({ views }: { views: SyncConflictView[] }): Reac
   if (views.length === 0) return null;
 
   return (
-    <section className="mb-6 rounded-lg border border-critical/40 bg-critical/[0.04]">
-      <header className="flex items-center gap-2 border-b border-critical/30 px-4 py-2.5">
-        <AlertTriangle className="size-4 text-critical" />
-        <h2 className="text-[13px] font-medium">Sync conflicts to review</h2>
+    <section className="surface mb-6 border border-border border-l-2 border-l-status-blocked">
+      <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+        <AlertTriangle className="size-4 shrink-0 text-status-blocked" aria-hidden />
+        <h2 className="text-[13px] font-medium text-foreground">Sync conflicts to review</h2>
         <span className="text-[12px] text-meta">
           {views.length} shift{views.length === 1 ? "" : "s"} changed in both Dispatch and Connecteam and couldn{"’"}t be auto-resolved
         </span>
@@ -76,7 +76,7 @@ export function NeedsReviewPanel({ views }: { views: SyncConflictView[] }): Reac
         Pick which version to keep. Keeping Connecteam applies its version to Dispatch; keeping the app pushes
         the Dispatch version into Connecteam silently (no crew notified). Resolving clears the conflict.
       </p>
-      <ul className="divide-y divide-critical/15">
+      <ul className="divide-y divide-[var(--row-rule)]">
         {views.map((v) => (
           <li key={v.shiftId} className="px-4 py-3">
             {v.syncNote && <p className="mb-2 text-[12px] text-tertiary-text">{v.syncNote}</p>}

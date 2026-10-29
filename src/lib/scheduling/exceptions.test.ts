@@ -199,6 +199,59 @@ describe("scanShiftExceptions", () => {
     expect(out.find((x) => x.code === "assignee_unavailable")).toBeUndefined();
   });
 
+  // ── Worker identity in alerts (regression): never a bare "A worker"; name who, keep the count ──
+  it("names the unconfirmed worker instead of a generic 'A worker'", () => {
+    const out = scanShiftExceptions({
+      shifts: [shift({ id: "a", role: "driver", routeId: "a", truckId: "T1", startTime: FAR, endTime: FAR, assignees: [1] })],
+      coverage: cov({ a: 0 }),
+      now: NOW,
+      assignmentsByShift: new Map([["a", [asg({ connecteamUserId: 1, displayName: "Jordan Smith", confirmedAt: null })]]]),
+    });
+    const e = out.find((x) => x.code === "unconfirmed")!;
+    expect(e).toBeTruthy();
+    expect(e.detail).toContain("Jordan Smith");
+    expect(e.detail).not.toContain("A worker");
+    expect(e.detail).toContain("has not confirmed");
+  });
+
+  it("names the worker missing a packet, singular grammar for one person", () => {
+    const out = scanShiftExceptions({
+      shifts: [shift({ id: "a", role: "driver", routeId: "a", truckId: "T1", startTime: FAR, endTime: FAR, assignees: [1] })],
+      coverage: cov({ a: 0 }),
+      now: NOW,
+      assignmentsByShift: new Map([["a", [asg({ connecteamUserId: 1, displayName: "Alex Lee", packetSentAt: null, confirmedAt: "2026-10-19T00:00:00Z" })]]]),
+    });
+    const e = out.find((x) => x.code === "packet_undelivered")!;
+    expect(e.detail).toBe("Alex Lee has not received the shift packet");
+  });
+
+  it("lists multiple affected workers and keeps the true count (no lost evidence)", () => {
+    const names = ["Ann", "Bob", "Cy", "Dee", "Ed"];
+    const asgs = names.map((n, i) => asg({ connecteamUserId: i + 1, displayName: n, confirmedAt: null }));
+    const out = scanShiftExceptions({
+      shifts: [shift({ id: "a", role: "field", routeId: "a", truckId: "T1", headcount: 5, startTime: FAR, endTime: FAR, assignees: [1, 2, 3, 4, 5] })],
+      coverage: cov({ a: 0 }),
+      now: NOW,
+      assignmentsByShift: new Map([["a", asgs]]),
+    });
+    const e = out.find((x) => x.code === "unconfirmed")!;
+    expect(e.detail).toContain("Ann, Bob, Cy and 2 more"); // capped names + preserved count
+    expect(e.detail).toContain("have not confirmed"); // plural grammar
+  });
+
+  it("names the no-show worker on a replacement alert", () => {
+    const out = scanShiftExceptions({
+      shifts: [assignedShift()],
+      coverage: cov({ a: 0 }),
+      now: NOW,
+      assignmentsByShift: new Map([["a", [asg({ connecteamUserId: 7, displayName: "Pat Doe", state: "NO_SHOW" })]]]),
+    });
+    const e = out.find((x) => x.code === "replacement_needed")!;
+    expect(e.detail).toContain("Pat Doe");
+    expect(e.detail).toContain("is a no-show");
+    expect(e.detail).not.toContain("A worker");
+  });
+
   it("does NOT flag a non-live or instawork assignment", () => {
     const out = scanShiftExceptions({
       shifts: [assignedShift()],
