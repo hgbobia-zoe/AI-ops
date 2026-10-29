@@ -15,6 +15,7 @@ import {
   canSeeMarketing,
   canSeeCoaching,
   canManagePayroll,
+  canRunPayroll,
   marketingCanReachPage,
   marketingDenied,
 } from "./roles";
@@ -33,6 +34,15 @@ describe("access matrix", () => {
     }
     expect(canManageSettings("member")).toBe(false);
     expect(canManageUsers("member")).toBe(false);
+  });
+
+  it("running real payroll (submit + confirm wire) is administrator-level only", () => {
+    // The dedicated irreversible-action gate: owner/admin yes, everyone else no.
+    expect(canRunPayroll("owner")).toBe(true);
+    expect(canRunPayroll("admin")).toBe(true);
+    expect(canRunPayroll("member")).toBe(false);
+    expect(canRunPayroll("marketing")).toBe(false);
+    expect(canRunPayroll("guest")).toBe(false);
   });
 
   it("Owner manages everyone; Admin manages Members only; Member nobody", () => {

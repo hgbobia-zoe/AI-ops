@@ -63,6 +63,8 @@ const GUSTO_SYNC_WATCHDOG = "zoe-gusto-watchdog";
 const GUSTO_SYNC_TIMEOUT_MS = 120_000; // reap the dedicated on-demand Gusto tab if it never posts
 const GUSTO_PUSH_WATCHDOG = "zoe-gusto-push-watchdog";
 const GUSTO_PUSH_TIMEOUT_MS = 180_000; // reap the dedicated DRAFT-hours-push tab if it never reports done
+const GUSTO_SUBMIT_WATCHDOG = "zoe-gusto-submit-watchdog";
+const GUSTO_SUBMIT_TIMEOUT_MS = 180_000; // reap the dedicated SUBMIT / wire-CONFIRM tab if it never reports done
 
 // ── Badge ─────────────────────────────────────────────────────────────────────
 async function setBadge(text, color) {
@@ -310,6 +312,84 @@ async function startGustoPush(payload) {
     job: { entries, period: (payload && payload.period) || null, initiatedBy: (payload && payload.initiatedBy) || null },
   });
   chrome.alarms.create(GUSTO_PUSH_WATCHDOG, { delayInMinutes: GUSTO_PUSH_TIMEOUT_MS / 60000 });
+  return { ok: true, tabId: tab.id };
+}
+
+// ── On-demand Gusto SUBMIT + wire CONFIRM (the IRREVERSIBLE side; NOT on any loop) ───────────────────
+// REAL PAYROLL. The Zoe app (Admin, after the hard confirm) sends {type:"zoe-gusto-submit", payload:{...}}
+// or {type:"zoe-gusto-confirm-wire", payload:{...}}. We open ONE dedicated hidden app.gusto.com tab and arm
+// a job keyed to that exact tab (kind "submit" | "confirm_wire"). gusto-bridge.js (isolated) CLAIMS the job
+// for that tab and hands it to gusto-submit.js (MAIN), which does the one write (SubmitDraftPayroll WIRE
+// ONLY, or WireInInstructions→ConfirmWireIn) and ABORTS if signed out. On its "done" relay we close the exact
+// tab; a watchdog reaps it if it stalls. One submit/confirm at a time (guarded). Human-triggered only — no
+// alarm/loop ever starts one.
+async function getGustoSubmit() {
+  const { gustoSubmit } = await chrome.storage.local.get("gustoSubmit");
+  return gustoSubmit || null;
+}
+async function setGustoSubmit(v) {
+  if (v) await chrome.storage.local.set({ gustoSubmit: v });
+  else await chrome.storage.local.remove("gustoSubmit");
+}
+async function reapGustoSubmit(pending) {
+  try {
+    if (pending && pending.tabId != null) await chrome.tabs.remove(pending.tabId);
+  } catch (e) {
+    /* tab already gone */
+  }
+  await setGustoSubmit(null);
+  try {
+    await chrome.alarms.clear(GUSTO_SUBMIT_WATCHDOG);
+  } catch (e) {
+    /* no-op */
+  }
+}
+/** Clear the submit marker + watchdog WITHOUT closing the tab (signed-out reveal for sign-in). */
+async function detachGustoSubmit() {
+  await setGustoSubmit(null);
+  try {
+    await chrome.alarms.clear(GUSTO_SUBMIT_WATCHDOG);
+  } catch (e) {
+    /* no-op */
+  }
+}
+
+/** Trigger one on-demand submit OR wire-confirm. `kind` is "submit" | "confirm_wire". Guards against a
+ *  concurrent job (one marker, stale after the timeout). The job fields come from Zoe's Admin-gated
+ *  submit-payload builder + the confirm control — we only transport them. */
+async function startGustoSubmit(kind, payload) {
+  const k = kind === "confirm_wire" ? "confirm_wire" : "submit";
+  const pending = await getGustoSubmit();
+  if (pending) {
+    if (Date.now() - pending.startedAt > GUSTO_SUBMIT_TIMEOUT_MS) {
+      await reapGustoSubmit(pending); // stale — reap and start fresh below
+    } else {
+      return { ok: true, already: true };
+    }
+  }
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: GUSTO_HOME, pinned: false, active: false });
+  } catch (e) {
+    return { ok: false, reason: "no_tab" };
+  }
+  const p = payload || {};
+  await setGustoSubmit({
+    tabId: tab.id,
+    startedAt: Date.now(),
+    claimed: false,
+    job: {
+      kind: k,
+      period: p.period || null,
+      checkDate: p.checkDate || null,
+      expectedTotal: p.expectedTotal != null ? p.expectedTotal : null,
+      headcount: p.headcount != null ? p.headcount : null,
+      amount: p.amount != null ? p.amount : null,
+      wireDate: p.wireDate || null,
+      initiatedBy: p.initiatedBy || null,
+    },
+  });
+  chrome.alarms.create(GUSTO_SUBMIT_WATCHDOG, { delayInMinutes: GUSTO_SUBMIT_TIMEOUT_MS / 60000 });
   return { ok: true, tabId: tab.id };
 }
 
@@ -598,6 +678,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     getGustoPush().then((p) => {
       if (p && Date.now() - p.startedAt > GUSTO_PUSH_TIMEOUT_MS - 1000) reapGustoPush(p);
     });
+  } else if (alarm.name === GUSTO_SUBMIT_WATCHDOG) {
+    getGustoSubmit().then((p) => {
+      if (p && Date.now() - p.startedAt > GUSTO_SUBMIT_TIMEOUT_MS - 1000) reapGustoSubmit(p);
+    });
   }
 });
 
@@ -682,6 +766,46 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const p = await getGustoPush();
       if (p && sender.tab && sender.tab.id === p.tabId) {
         await detachGustoPush();
+        try { await chrome.tabs.update(p.tabId, { active: true }); } catch (e) { /* tab gone */ }
+        try { if (sender.tab.windowId != null) await chrome.windows.update(sender.tab.windowId, { focused: true }); } catch (e) { /* no window */ }
+      }
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  // gusto-submit.js (via the bridge) claims the SUBMIT / wire-CONFIRM job for ITS tab → return the job ONLY
+  // for the exact tab we opened, and only once (atomic claim).
+  if (msg.type === "zoe-gusto-submit-claim") {
+    (async () => {
+      const p = await getGustoSubmit();
+      if (p && sender.tab && sender.tab.id === p.tabId && !p.claimed) {
+        p.claimed = true;
+        await setGustoSubmit(p);
+        sendResponse({ job: p.job });
+      } else {
+        sendResponse({ job: null });
+      }
+    })();
+    return true;
+  }
+
+  // gusto-submit.js finished the write (via the bridge) → close the exact tab + clear the marker.
+  if (msg.type === "zoe-gusto-submit-done") {
+    (async () => {
+      const p = await getGustoSubmit();
+      if (p && sender.tab && sender.tab.id === p.tabId) await reapGustoSubmit(p);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  // gusto-submit.js hit a signed-out Gusto → reveal ITS hidden tab for sign-in + DETACH it from the watchdog.
+  if (msg.type === "zoe-gusto-submit-reveal") {
+    (async () => {
+      const p = await getGustoSubmit();
+      if (p && sender.tab && sender.tab.id === p.tabId) {
+        await detachGustoSubmit();
         try { await chrome.tabs.update(p.tabId, { active: true }); } catch (e) { /* tab gone */ }
         try { if (sender.tab.windowId != null) await chrome.windows.update(sender.tab.windowId, { focused: true }); } catch (e) { /* no window */ }
       }
@@ -794,6 +918,27 @@ chrome.runtime.onMessageExternal.addListener((msg, _sender, sendResponse) => {
     (async () => {
       const r = await startGustoPush(msg.payload).catch(() => ({ ok: false, reason: "error" }));
       sendResponse({ ok: true, push: r });
+    })();
+    return true;
+  }
+
+  // On-demand payroll SUBMIT (IRREVERSIBLE): the Zoe app (Admin, after the hard confirm) hands us the submit
+  // context. We open one hidden Gusto tab; gusto-submit.js runs SubmitDraftPayroll WIRE ONLY and never an
+  // ACH rail. Human-triggered only — nothing on a loop ever sends this.
+  if (msg.type === "zoe-gusto-submit") {
+    (async () => {
+      const r = await startGustoSubmit("submit", msg.payload).catch(() => ({ ok: false, reason: "error" }));
+      sendResponse({ ok: true, submit: r });
+    })();
+    return true;
+  }
+
+  // On-demand wire CONFIRM: after the human wired the funds from Mercury. We open one hidden Gusto tab;
+  // gusto-submit.js runs WireInInstructions then ConfirmWireIn. Human-triggered only.
+  if (msg.type === "zoe-gusto-confirm-wire") {
+    (async () => {
+      const r = await startGustoSubmit("confirm_wire", msg.payload).catch(() => ({ ok: false, reason: "error" }));
+      sendResponse({ ok: true, confirmWire: r });
     })();
     return true;
   }

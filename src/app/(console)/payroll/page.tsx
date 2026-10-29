@@ -15,7 +15,7 @@ import {
   ClipboardCheck, Plug, CalendarClock, BrainCircuit, Search,
 } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
-import { canManagePayroll } from "@/lib/auth/roles";
+import { canManagePayroll, canRunPayroll } from "@/lib/auth/roles";
 import { commandCenter } from "@/lib/command/service";
 import { connecteamConfigured } from "@/lib/connecteam";
 import { completedWeeksBack } from "@/lib/payroll/period";
@@ -41,6 +41,11 @@ import { SyncButton } from "@/components/payroll/SyncButton";
 import { SyncGustoButton } from "@/components/payroll/SyncGustoButton";
 import { PushGustoHoursButton } from "@/components/payroll/PushGustoHoursButton";
 import { gustoPushDisabled, readGustoPushResult } from "@/lib/payroll/gustoPushState";
+import { RunPayrollButton } from "@/components/payroll/RunPayrollButton";
+import { ConfirmWireButton } from "@/components/payroll/ConfirmWireButton";
+import { confirmWireGate, expectedCheckDate } from "@/lib/payroll/gustoSubmit";
+import { gustoSubmitDisabled, readGustoSubmitResult, readGustoConfirmWireResult, periodKey } from "@/lib/payroll/gustoSubmitState";
+import { listWireEvents } from "@/lib/payroll/wireEvent";
 import { ApproveButton } from "@/components/payroll/ApproveButton";
 import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 import { ExceptionActions } from "@/components/payroll/ExceptionActions";
@@ -592,6 +597,31 @@ async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
   const lastPush = readGustoPushResult();
   const canPushPeriod = weeksAgo === 1;
 
+  // ── Run payroll + Confirm wire (IRREVERSIBLE — Admin-only, last-completed-week only) ──────────────────
+  // The whole blade is canManagePayroll-gated; this trigger additionally requires canRunPayroll (the
+  // dedicated administrator-level gate for the real, irreversible run). Everything is read from the
+  // period-keyed submit/confirm ledger so the UI can never arm a second submit or a double-confirm.
+  const role = await viewerRole();
+  const canRun = canRunPayroll(role);
+  const submitDisabled = gustoSubmitDisabled();
+  const subKey = periodKey(period.start, period.end);
+  const lastSubmit = readGustoSubmitResult(subKey);
+  const lastConfirm = readGustoConfirmWireResult(subKey);
+  const payrollApproved = m.approval?.status === "APPROVED";
+  const confirmGate = confirmWireGate(
+    lastSubmit ? { ok: lastSubmit.ok, submitted: lastSubmit.submitted } : null,
+    lastConfirm ? { ok: lastConfirm.ok, confirmed: lastConfirm.confirmed } : null,
+  );
+  const wireCheckDate = expectedCheckDate(period.end, getPayrollConfig().payrollDay);
+  // Amount/date for the wire confirm: the Mercury "wire sent" event matched to THIS period if we have one,
+  // else the submit-time estimate / the review estimate (honest fallback). The extension still verifies the
+  // authoritative amount against Gusto and refuses on a mismatch.
+  const wireEvent = listWireEvents(50).find(
+    (w) => w.matchedPeriod?.periodStart === period.start && w.matchedPeriod?.periodEnd === period.end,
+  ) ?? null;
+  const wireAmount = wireEvent?.amountAbs ?? lastSubmit?.expectedTotal ?? m.totals.estGross ?? null;
+  const wireDate = (wireEvent?.createdAt ? wireEvent.createdAt.slice(0, 10) : null) ?? new Date().toISOString().slice(0, 10);
+
   return (
     <div className="flex flex-col gap-5">
       {/* Action summary — status + counts + the approval control (persistent, explains what approve does) */}
@@ -628,6 +658,29 @@ async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
             />
           ) : (
             <span className="max-w-[16rem] text-right text-[11px] text-meta">Push to Gusto runs on the last completed week (the period payroll runs for). Switch to that week to push hours.</span>
+          )}
+          {/* Run payroll + Confirm wire — IRREVERSIBLE, Admin-only, last-completed-week only. Human-triggered:
+              nothing here auto-submits. The ledger drives which (if any) control is shown. */}
+          {canPushPeriod && canRun && (
+            confirmGate.canConfirm ? (
+              <ConfirmWireButton
+                period={period}
+                checkDate={wireCheckDate}
+                amount={wireAmount}
+                wireDate={wireDate}
+                lastConfirm={lastConfirm ? { at: lastConfirm.at, ok: lastConfirm.ok, confirmed: lastConfirm.confirmed, aborted: lastConfirm.aborted } : null}
+              />
+            ) : lastConfirm?.ok && lastConfirm.confirmed ? (
+              <span className="max-w-[16rem] text-right text-[11px] text-positive">Payroll submitted and the wire is confirmed in Gusto for this period.</span>
+            ) : !payrollApproved ? (
+              <span className="max-w-[16rem] text-right text-[11px] text-meta">Run payroll unlocks after the Zoe approval is recorded.</span>
+            ) : (
+              <RunPayrollButton
+                which="previous"
+                disabled={submitDisabled}
+                lastSubmit={lastSubmit ? { at: lastSubmit.at, ok: lastSubmit.ok, submitted: lastSubmit.submitted, aborted: lastSubmit.aborted } : null}
+              />
+            )
           )}
         </div>
       </section>
