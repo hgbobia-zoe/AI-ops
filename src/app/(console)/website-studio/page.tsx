@@ -1,7 +1,9 @@
-// Website Studio (Phase 1) — the marketing team describes a website change in plain English and gets back a
-// PR. This page is a thin server shell; the worklist + prompt box live in the client component, which polls
-// /api/website/jobs. The blade is role-gated in the proxy (canUseWebsiteStudio); the actual edit happens on
-// the office machine (tools/website-studio-runner) and nothing goes live until a human merges the PR.
+// Website Studio — the marketing team describes a website change in plain English, reviews a rendered preview
+// of a non-master working branch, and on approval the change auto-merges into master (the Kinsta deploy
+// branch). This page is a thin server shell; the worklist + prompt box live in the client component, which
+// polls /api/website/jobs. The blade is role-gated in the proxy (canUseWebsiteStudio); the actual edit +
+// merge happen on the office machine (tools/website-studio-runner). Nothing reaches master until a human
+// approves the preview here.
 
 import { WebsiteStudio } from "@/components/website/WebsiteStudio";
 import { currentActor } from "@/lib/auth/getSession";

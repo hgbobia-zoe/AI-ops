@@ -1,7 +1,9 @@
 // Website Studio — a human approves or discards a job that is in `preview`. This flips the state the office
-// runner is WAITING on: approve → the runner pushes the branch + opens a PR; discard → the runner deletes
-// the branch + restores the local site. Role-gated (canUseWebsiteStudio) — the proxy enforces it coarsely
-// too. Approving opens a PR for a human to review+merge; it still does NOT put anything live.
+// runner is WAITING on: approve → the runner pushes the non-master working branch, opens a PR into the deploy
+// branch (master), and auto-merges it (GitHub native auto-merge — required checks still gate it), which
+// publishes the change to the live site (Kinsta); discard → the runner deletes the branch + restores the
+// local site. Role-gated (canUseWebsiteStudio) — the proxy enforces it coarsely too. Approval IS the go-live
+// decision: a non-engineer judges the rendered preview here, not code, and nothing reaches master without it.
 
 import { NextResponse } from "next/server";
 import { viewerRole, currentActor } from "@/lib/auth/getSession";

@@ -5,10 +5,12 @@
 // Local/Staging DevKinsta render via the environment toggle), and WHATEVER PAGE they're looking at becomes
 // the edit context: the prompt submits with the current address-bar URL + environment attached, so they
 // just type "change this" and the page they're on rides along. The office runner then edits the website
-// repo on a branch, renders it locally, screenshots it, and posts the shots back; the job shows a PREVIEW
-// (desktop/mobile screenshots + a summary + the changed files) with "Approve → open PR" and "Discard". A
-// non-technical team judges the RENDERED result, never code. Approving opens a PR for a human to review +
-// merge; nothing goes live from here.
+// repo on a NON-MASTER working branch (website-studio/<jobId>), renders THAT branch locally, screenshots it,
+// and posts the shots back; the job shows a PREVIEW (desktop/mobile screenshots + a summary + the changed
+// files + the working branch) with "Approve & publish to master" and "Discard". A non-technical team judges
+// the RENDERED result, never code. Approving opens a PR into master and AUTO-MERGES it (GitHub native
+// auto-merge, so required checks still gate it); the merge to master is what deploys to the live site
+// (Kinsta). Nothing reaches master until a human approves the preview here — discard throws the branch away.
 //
 // The Studio OWNS the address bar — the app always knows the current URL even on cross-origin pages where it
 // can't read the iframe. Many sites refuse framing (X-Frame-Options / CSP frame-ancestors): when that's
@@ -23,7 +25,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Globe, Send, Loader2, CheckCircle2, XCircle, Clock, ExternalLink, Info,
-  Monitor, Smartphone, Check, Trash2, Eye, FileCode2, ArrowLeft, ArrowRight, RotateCw, ShieldAlert,
+  Monitor, Smartphone, Check, Trash2, Eye, FileCode2, ArrowLeft, ArrowRight, RotateCw, ShieldAlert, GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { WebsiteJob, WebsiteJobStatus } from "@/lib/website/jobs";
@@ -33,13 +35,15 @@ const STATUS_META: Record<WebsiteJobStatus, { label: string; icon: React.Element
   pending: { label: "Queued", icon: Clock, cls: "text-meta" },
   running: { label: "Working", icon: Loader2, cls: "text-attention" },
   preview: { label: "Ready to review", icon: Eye, cls: "text-[var(--gold)]" },
-  approved: { label: "Opening PR", icon: Loader2, cls: "text-attention" },
-  done: { label: "PR ready", icon: CheckCircle2, cls: "text-positive" },
+  approved: { label: "Publishing", icon: Loader2, cls: "text-attention" },
+  done: { label: "Publishing to master", icon: CheckCircle2, cls: "text-positive" },
   discarded: { label: "Discarded", icon: XCircle, cls: "text-meta" },
   failed: { label: "Failed", icon: XCircle, cls: "text-critical" },
 };
 
-const ENV_LABEL: Record<WebsiteEnvironment, string> = { production: "Production", local: "Local / Staging" };
+// "Production" = the live site on master. "local" is the preview of the NON-master working branch the change
+// lands on (DevKinsta render), never master itself.
+const ENV_LABEL: Record<WebsiteEnvironment, string> = { production: "Production (master)", local: "Working-branch preview" };
 
 type Viewport = "desktop" | "mobile";
 
@@ -177,6 +181,16 @@ function JobCard({ job, onDecide }: { job: WebsiteJob; onDecide: (id: string, de
         </p>
       )}
 
+      {/* The non-master working branch this change lives on. The preview you review is this branch, never
+          master — master is only touched when you approve (then it auto-merges + deploys). */}
+      {(job.status === "running" || job.status === "preview" || job.status === "approved" || job.status === "done") && (
+        <p className="mt-1.5 flex items-center gap-1.5 text-[11.5px] text-meta">
+          <GitBranch className="size-3 shrink-0" />
+          <span className="truncate font-mono" title={job.branch}>{job.branch}</span>
+          <span className="shrink-0 text-[10.5px] uppercase tracking-[0.06em] text-meta/80">working branch · not master</span>
+        </p>
+      )}
+
       {job.summary && (job.status === "preview" || job.status === "done" || job.status === "approved") && (
         <p className="mt-2 border-t border-[var(--row-rule)] pt-2 text-[12.5px] text-tertiary-text">{job.summary}</p>
       )}
@@ -203,13 +217,13 @@ function JobCard({ job, onDecide }: { job: WebsiteJob; onDecide: (id: string, de
           <div className="mt-3 flex items-center gap-2 border-t border-[var(--row-rule)] pt-3">
             <Button onClick={() => void decide("approve")} disabled={busy !== null}>
               {busy === "approve" ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-              Approve → open PR
+              Approve &amp; publish to master
             </Button>
             <Button variant="outline" onClick={() => void decide("discard")} disabled={busy !== null}>
               {busy === "discard" ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
               Discard
             </Button>
-            <span className="text-[11px] text-meta">Approving opens a pull request for a teammate to review and merge. It still does not go live.</span>
+            <span className="text-[11px] text-meta">Approving opens a pull request and merges it into master once required checks pass — that publishes the change to the live site. Discard throws the working branch away.</span>
           </div>
         </>
       )}
@@ -218,7 +232,7 @@ function JobCard({ job, onDecide }: { job: WebsiteJob; onDecide: (id: string, de
         <span className="tabular-nums">{timeAgo(job.createdAt)}</span>
         {job.status === "done" && job.prUrl && (
           <a href={job.prUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-foreground transition-colors hover:text-[var(--gold)]">
-            Review the PR <ExternalLink className="size-3" />
+            View the PR <ExternalLink className="size-3" />
           </a>
         )}
         {job.decidedBy && (job.status === "approved" || job.status === "done" || job.status === "discarded") && (
@@ -507,7 +521,7 @@ export function WebsiteStudio({ initialJobs, envUrls }: { initialJobs: WebsiteJo
             <Globe className="size-[18px] text-meta" /> Website Studio
           </h1>
           <p className="mt-1 text-[12px] text-meta">
-            Browse to the page you want to change on the right, then describe the change in plain English. We make it on a private copy, show you a preview to review, and open a pull request once you approve. Nothing goes live until a teammate merges it.
+            Browse to the page you want to change on the right, then describe the change in plain English. We make it on a private working branch (never master), show you a rendered preview, and — once you approve — open a pull request and merge it into master, which publishes it to the live site. Nothing reaches master until you approve.
           </p>
         </header>
 
