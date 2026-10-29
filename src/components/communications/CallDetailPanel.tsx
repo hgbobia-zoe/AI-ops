@@ -8,7 +8,8 @@
 
 import { X, PhoneIncoming, PhoneOutgoing, MessageSquare, Clock, User, ArrowRightLeft } from "lucide-react";
 import { SidePanelOverlay } from "@/components/SidePanelOverlay";
-import { StatusMark, Provenance } from "@/components/console-primitives";
+import { Provenance } from "@/components/console-primitives";
+import { StatusBadge } from "@/components/ui/status";
 import { CALL_REASONS, REASON_LABEL } from "@/lib/comms/reasons";
 import type { CallCard, TranscriptTurn } from "@/lib/comms/types";
 import { ContextPackView } from "./ContextPackView";
@@ -37,8 +38,7 @@ export function CallDetailPanel({
 }): React.JSX.Element {
   const r = card.row;
   const Dir = r.channel === "sms" ? MessageSquare : r.direction === "outgoing" ? PhoneOutgoing : PhoneIncoming;
-  const idTone = IDENTITY_TONE[r.identityConfidence];
-  const idToneText = idTone === "positive" ? "text-positive" : idTone === "attention" ? "text-attention" : "text-critical";
+  const matchedCustomer = card.context.customer?.name ?? null;
 
   return (
     <SidePanelOverlay onClose={onClose} widthClass="max-w-[46rem]">
@@ -53,22 +53,35 @@ export function CallDetailPanel({
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-meta">
               <span>{r.channel === "sms" ? "SMS" : r.direction ?? "call"}</span>
               <span>· {fmtWhen(r.occurredAt ?? r.ts)}</span>
-              {r.channel !== "sms" && <span className="inline-flex items-center gap-1"><Clock className="size-3" /> {fmtDuration(r.durationSec)}</span>}
+              {r.channel !== "sms" && <span className="inline-flex items-center gap-1"><Clock className="size-3" aria-hidden /> {fmtDuration(r.durationSec)}</span>}
               <span>· {fmtPhoneDisplay(r.callerPhone)}</span>
             </div>
+            {/* Caller (who is on the line) vs the matched customer (a system fact) — kept distinct. */}
+            <p className="mt-1.5 text-[12px] text-meta">
+              {matchedCustomer
+                ? <>Matched to <span className="text-tertiary-text">{matchedCustomer}</span>{r.identityConfidence !== "CONFIRMED" ? " — treat as unverified" : ""}.</>
+                : "No customer matched — treat the caller as unidentified."}
+            </p>
           </div>
           <button onClick={onClose} aria-label="Close" className="flex size-8 shrink-0 items-center justify-center rounded border border-border text-meta transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
             <X className="size-4" />
           </button>
         </div>
 
-        {/* Status chips */}
+        {/* Status chips — shared StatusBadge (coloured indicator + crisp label). "Completed" is the call
+            state, never an outcome: disposition stays "Outcome unknown" unless we actually recorded one. */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-5 py-2.5">
-          <StatusMark tone={r.handledBy === "HUMAN" ? "positive" : r.handledBy === "TRANSFERRED" ? "attention" : "idle"} label={`Handled: ${r.handledBy === "AI" ? "AI" : r.handledBy === "HUMAN" ? "Human" : r.handledBy === "TRANSFERRED" ? "Transferred" : "Unknown"}`} />
-          <StatusMark tone={r.status === "COMPLETED" ? "positive" : r.status === "MISSED" ? "critical" : "attention"} label={r.status[0] + r.status.slice(1).toLowerCase()} />
-          <StatusMark tone={r.disposition === "ESCALATED" ? "critical" : "idle"} label={r.disposition === "ESCALATED" ? "Escalated" : "Disposition unknown"} />
+          <StatusBadge tone={r.handledBy === "HUMAN" ? "positive" : r.handledBy === "TRANSFERRED" ? "attention" : "neutral"} size="sm">
+            Handled: {r.handledBy === "AI" ? "AI" : r.handledBy === "HUMAN" ? "Human" : r.handledBy === "TRANSFERRED" ? "Transferred" : "Unknown"}
+          </StatusBadge>
+          <StatusBadge tone={r.status === "COMPLETED" ? "positive" : r.status === "MISSED" ? "critical" : "attention"} size="sm">
+            {r.status[0] + r.status.slice(1).toLowerCase().replace(/_/g, " ")}
+          </StatusBadge>
+          <StatusBadge tone={r.disposition === "ESCALATED" ? "critical" : "neutral"} size="sm">
+            {r.disposition === "ESCALATED" ? "Escalated" : "Outcome unknown"}
+          </StatusBadge>
           {r.sentiment && <span className={`text-[12px] capitalize ${SENTIMENT_TONE[r.sentiment] ?? "text-meta"}`}>Tone: {r.sentiment}</span>}
-          <span className={`inline-flex items-center gap-1 text-[12px] ${idToneText}`}><User className="size-3" /> {IDENTITY_LABEL[r.identityConfidence]}</span>
+          <StatusBadge tone={IDENTITY_TONE[r.identityConfidence]} size="sm" icon={User}>{IDENTITY_LABEL[r.identityConfidence]}</StatusBadge>
         </div>
 
         {/* Body */}
