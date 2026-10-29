@@ -74,6 +74,28 @@ export function aspectDimensions(ratio: AspectRatio): { w: number; h: number } {
   return map[ratio];
 }
 
+/** Short ratio label (no description) for dense chips/meta. */
+export const ASPECT_RATIO_SHORT: Record<AspectRatio, string> = {
+  "16:9": "16:9",
+  "4:3": "4:3",
+  "3:2": "3:2",
+  "1:1": "1:1",
+  "4:5": "4:5",
+  "9:16": "9:16",
+};
+
+/** CSS `aspect-ratio` value (e.g. "16 / 9") so a thumbnail frame is stable and shaped correctly per asset. */
+export function aspectCss(ratio: AspectRatio): string {
+  const { w, h } = aspectDimensions(ratio);
+  return `${w} / ${h}`;
+}
+
+/** Portrait ratios need a taller frame cap than landscape ones in a fixed grid. */
+export function isPortrait(ratio: AspectRatio): boolean {
+  const { w, h } = aspectDimensions(ratio);
+  return h > w;
+}
+
 // ── Lifecycle status ────────────────────────────────────────────────────────────────────────────────
 // The asset's position is ALWAYS visible. draft → queued → generating → qa → (needs_revision loop) →
 // awaiting_approval → approved → published. rejected is terminal (human killed it).

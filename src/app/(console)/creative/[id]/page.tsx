@@ -1,10 +1,12 @@
 // Job detail — the lifecycle cockpit for one asset. Server loads the job, its generations, and the
 // attributed event log; the client component drives generate / QC / review actions. The lifecycle position,
-// the stored Image Brief (WHY this image), and every QA report are all visible here.
+// the leading preview, the stored Image Brief (WHY this image), every QA evaluation, source provenance and
+// the full history are all visible here, in that hierarchy.
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getJob, listGenerations, listEvents, getImage } from "@/lib/creative/store";
+import { BladeMain } from "@/components/ui/layouts";
 import { JobDetail } from "@/components/creative/JobDetail";
 
 export const dynamic = "force-dynamic";
@@ -18,11 +20,16 @@ export default async function CreativeJobDetailPage({ params }: { params: Promis
   const sourceImage = job.sourceImageId ? getImage(job.sourceImageId) : null;
 
   return (
-    <main className="max-w-[1080px] p-6">
+    <BladeMain className="max-w-[1120px]">
       <div className="mb-4 text-[12px] text-meta">
-        <Link href="/creative" className="text-tertiary-text hover:text-foreground">Creative Engine</Link> / Jobs / <span className="text-tertiary-text">{job.title}</span>
+        <Link href="/creative" className="text-tertiary-text hover:text-foreground">Creative jobs</Link> / <span className="text-tertiary-text">{job.title}</span>
       </div>
-      <JobDetail initialJob={job} initialGenerations={generations} initialEvents={events} sourceImagePath={sourceImage?.path ?? null} />
-    </main>
+      <JobDetail
+        initialJob={job}
+        initialGenerations={generations}
+        initialEvents={events}
+        sourceImagePath={sourceImage?.path ?? null}
+      />
+    </BladeMain>
   );
 }
