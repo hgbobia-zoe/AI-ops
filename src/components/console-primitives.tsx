@@ -52,7 +52,7 @@ const FIG_DOT: Record<"critical" | "attention" | "positive", Tone> = {
 
 export function FigureStrip({ figures }: { figures: Figure[] }): React.JSX.Element {
   return (
-    <div className="flex items-center gap-6">
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
       {figures.map((f, i) => {
         const toned = f.tone && f.tone !== "default";
         return (
