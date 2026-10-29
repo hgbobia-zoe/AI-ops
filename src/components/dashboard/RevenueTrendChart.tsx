@@ -71,7 +71,7 @@ export function RevenueTrendChart({
   return (
     <section className="surface flex h-full flex-col border p-3 px-3.5">
       {/* Header: title + tabs (mockup puts the metric tabs in the header row) */}
-      <div className="mb-2 flex items-center gap-2">
+      <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
         <h2 className="flex items-center gap-1.5 text-[12.5px] font-medium uppercase tracking-[0.06em] text-tertiary-text">
           <TrendingUp className="size-[15px] text-meta" /> {curYear} Revenue performance
         </h2>
