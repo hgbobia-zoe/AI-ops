@@ -1,26 +1,31 @@
 "use client";
 
-// Sales OS worklist (Nocturne redesign): an action-queue table grouped Act now / Today / Monitor,
-// beside a 420px detail panel that previews the selected lead (state, next-best-action, evidence). Row
-// click selects into the panel (local state — no navigation); "Open full lead" opens the full board in
-// the modal. The analytical sub-views (Bid/Lost/Trends) and the Table/Board views render full-width.
-// All data is the existing QueueItem[]; nothing is fetched here.
+// Sales OS shell (Nocturne redesign). ONE consistent blade header — a "Sales OS" page title, a view-aware
+// scope line, and an aligned toolbar (view switcher · state filter · "Needs details" scope · search) —
+// sits above whichever view is active (Board / Worklist / Table). The compact AI-employee strip is placed
+// AFTER the heading and controls, so the work (not the bots) leads the page. The analytical sub-views
+// (Bid / Lost / Trends / Status / Outreach) render themselves full-width; the shell steps aside for them.
 //
-// A single project search bar lives in the shared header (next to the view toggle). Its query is held
-// in SalesSearchProvider and mirrored to ?q=, so it survives the Board/Worklist/Table toggle and is
-// shareable. Every view filters its own set with the same matchesQuery, so a query means the same thing
-// everywhere; here the worklist filters its queue and keeps the group/figure counts honest.
+// The Worklist is rendered by this shell: an action-queue table grouped Act now / Today / Monitor, whose
+// row click opens the full lead in the shared overlay side panel (local state — no navigation). The Board
+// and Table render as children under the same header.
+//
+// A single project search bar + the state filter + the "Needs details" (incomplete-record) scope live in
+// SalesSearchProvider and are mirrored to the URL, so they survive the Board/Worklist/Table toggle and are
+// shareable. Every view filters its own set with the same matchesQuery / matchesState / isIncompleteProject,
+// so a query, a state and the incomplete scope mean the same thing everywhere; counts stay honest.
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { List, Table2, Columns3 } from "lucide-react";
+import { List, Table2, Columns3, Target } from "lucide-react";
 import type { QueueItem } from "@/lib/salesos/commandCenter";
 import { NBA_LABEL } from "@/lib/salesos/nba";
-import { matchesQuery, matchesState } from "@/lib/salesos/search";
+import { matchesQuery, matchesState, isIncompleteProject, relativeEvent } from "@/lib/salesos/search";
 import { LeadSidePanel } from "@/components/LeadSidePanel";
-import { SalesSearchProvider, SalesSearchBar, StateFilterBar, SearchCount, useSalesSearch, withQuery } from "@/components/SalesSearch";
-import { FigureStrip, ActionVerb, tierBar, tierActionTone, tierValueText, tableCls, theadCls, thCls, type Tier, type Figure } from "@/components/console-primitives";
+import { SalesSearchProvider, SalesSearchBar, StateFilterBar, IncompleteToggle, SearchCount, useSalesSearch, withQuery } from "@/components/SalesSearch";
+import { PageHeader, Toolbar } from "@/components/ui/page-header";
+import { FigureStrip, ActionVerb, Provenance, tierBar, tierActionTone, tierValueText, tableCls, theadCls, thCls, type Tier, type Figure } from "@/components/console-primitives";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
 
@@ -30,13 +35,6 @@ function tierOf(it: QueueItem): Tier {
   if (p >= 80) return "now";
   if (p >= 45) return "today";
   return "passive";
-}
-function eventWhen(dte: number | null): { text: string; hot: boolean } {
-  if (dte == null) return { text: "no date", hot: false };
-  if (dte < 0) return { text: `${Math.abs(dte)}d ago`, hot: false };
-  if (dte === 0) return { text: "today", hot: true };
-  if (dte === 1) return { text: "tomorrow", hot: true };
-  return { text: `in ${dte}d`, hot: dte <= 14 };
 }
 function repliedLabel(mins: number | null): string | null {
   if (mins == null) return null;
@@ -59,12 +57,19 @@ const toSearchable = (it: QueueItem) => ({
 
 type ViewKey = "worklist" | "table" | "board";
 
+const SCOPE: Record<ViewKey, string> = {
+  board: "Pipeline by stage — drag a card, or use its Move control, to change a lead's stage.",
+  worklist: "Ranked action queue — the highest-value, most time-sensitive work first.",
+  table: "Every open project — sort any column, filter by status.",
+};
+
 export function SalesShell({
   queue,
   showMoney,
   justReplied,
   totalPotential,
   viewer,
+  agentStrip,
   children,
 }: {
   queue: QueueItem[];
@@ -73,6 +78,8 @@ export function SalesShell({
   justReplied: number;
   totalPotential: number | null;
   viewer: { name: string; quoUserId: string | null; initials: string };
+  /** The compact AI-employee strip, rendered by the (server) layout and placed AFTER the heading. */
+  agentStrip?: React.ReactNode;
   children: React.ReactNode;
 }): React.JSX.Element {
   const pathname = usePathname();
@@ -82,13 +89,14 @@ export function SalesShell({
 
   // Board is the default view (/salesos redirects to /salesos/board). The worklist is rendered by this
   // shell; every other path (board, table, a lead-id deep link) renders its own page as children under
-  // the shared view switcher + search bar.
+  // the shared header (view switcher + filters + search).
   const view: ViewKey = seg === "worklist" ? "worklist" : seg === "table" ? "table" : "board";
 
   return (
     <SalesSearchProvider>
       <div className="flex min-w-0 flex-1 flex-col">
         <SalesHeader active={view} />
+        {agentStrip && <div className="px-6 pt-3">{agentStrip}</div>}
         {view === "worklist" ? (
           <WorklistBody queue={queue} showMoney={showMoney} justReplied={justReplied} totalPotential={totalPotential} viewer={viewer} />
         ) : (
@@ -101,14 +109,18 @@ export function SalesShell({
 
 function SalesHeader({ active }: { active: ViewKey }): React.JSX.Element {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 px-6 pt-4">
-      <ViewSwitcher active={active} />
-      <div className="flex flex-wrap items-center gap-2">
-        {/* The Table view carries its own richer status chips (all five states + counts), so the shared
-            header filter would be redundant there; everywhere else it's the single state control. */}
-        {active !== "table" && <StateFilterBar />}
-        <SalesSearchBar />
-      </div>
+    <div className="px-6 pt-4">
+      <PageHeader title="Sales OS" icon={<Target className="size-5" />} subtitle={SCOPE[active]} className="mb-3" />
+      <Toolbar>
+        <ViewSwitcher active={active} />
+        <div className="flex flex-wrap items-center gap-2">
+          {/* The Table view carries its own richer status chips (all five states + counts), so the shared
+              header filter would be redundant there; everywhere else it's the single state control. */}
+          {active !== "table" && <StateFilterBar />}
+          <IncompleteToggle />
+          <SalesSearchBar />
+        </div>
+      </Toolbar>
     </div>
   );
 }
@@ -126,13 +138,20 @@ function WorklistBody({
   totalPotential: number | null;
   viewer: { name: string; quoUserId: string | null; initials: string };
 }): React.JSX.Element {
-  const { query, stateFilter } = useSalesSearch();
+  const { query, stateFilter, incompleteOnly } = useSalesSearch();
   const [selected, setSelected] = useState<string | null>(null);
 
-  // Search and state filter compose: a row must match the query AND (if set) the selected lead state.
+  // Search, state filter and the incomplete scope compose: a row must match the query AND (if set) the
+  // selected lead state AND (if the "Needs details" scope is on) be an incomplete record.
   const filtered = useMemo(
-    () => queue.filter((q) => matchesQuery(toSearchable(q), query) && matchesState(q.boardStatus, stateFilter)),
-    [queue, query, stateFilter],
+    () =>
+      queue.filter(
+        (q) =>
+          matchesQuery(toSearchable(q), query) &&
+          matchesState(q.boardStatus, stateFilter) &&
+          (!incompleteOnly || isIncompleteProject(q)),
+      ),
+    [queue, query, stateFilter, incompleteOnly],
   );
 
   const now = filtered.filter((q) => tierOf(q) === "now");
@@ -146,17 +165,14 @@ function WorklistBody({
     { label: "Today", value: today.length, tone: today.length ? "attention" : "default" },
     { label: "Replied 24h", value: justReplied },
     ...(showMoney
-      ? ([{ label: "Open", value: filtered.length, sep: true }, { label: "Pipeline", value: money(query.trim() ? filteredPotential : totalPotential) }] as Figure[])
+      ? ([{ label: "Open", value: filtered.length, sep: true }, { label: "Pipeline", value: money(query.trim() || incompleteOnly ? filteredPotential : totalPotential) }] as Figure[])
       : ([{ label: "Open", value: filtered.length, sep: true }] as Figure[])),
   ];
 
   return (
     <>
-      <div className="flex flex-wrap items-end justify-between gap-4 px-6 pt-4 pb-3">
-        <div className="flex items-baseline gap-3">
-          <h1 className="text-[22px] font-medium tracking-tight">Sales OS</h1>
-          <SearchCount shown={filtered.length} total={queue.length} />
-        </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 px-6 pt-4 pb-3">
+        <SearchCount shown={filtered.length} total={queue.length} />
         <FigureStrip figures={figures} />
       </div>
 
@@ -166,7 +182,13 @@ function WorklistBody({
           <p className="px-6 py-16 text-center text-[13.5px] text-muted-foreground">No active opportunities.</p>
         ) : filtered.length === 0 ? (
           <p className="px-6 py-16 text-center text-[13.5px] text-muted-foreground">
-            {query.trim() ? <>No projects match &ldquo;{query.trim()}&rdquo;{stateFilter ? " in this state" : ""}.</> : "No projects in this state."}
+            {query.trim() ? (
+              <>No projects match &ldquo;{query.trim()}&rdquo;{stateFilter ? " in this state" : ""}{incompleteOnly ? " needing details" : ""}.</>
+            ) : incompleteOnly ? (
+              "No incomplete projects in this scope."
+            ) : (
+              "No projects in this state."
+            )}
           </p>
         ) : (
           <table className={tableCls}>
@@ -176,7 +198,7 @@ function WorklistBody({
               <col style={{ width: "150px" }} />
               <col style={{ width: "180px" }} />
               <col style={{ width: "150px" }} />
-              <col style={{ width: "96px" }} />
+              <col style={{ width: "120px" }} />
             </colgroup>
             <thead className={theadCls}>
               <tr>
@@ -227,23 +249,28 @@ function Group({
       {items.map((it) => {
         const tier = it.nba.priority >= 80 ? "now" : it.nba.priority >= 45 ? "today" : ("passive" as Tier);
         const on = it.id === activeId;
-        const when = eventWhen(it.daysToEvent);
+        const when = relativeEvent(it.daysToEvent);
         const replied = repliedLabel(it.repliedMinutesAgo);
+        const title = it.eventName || it.clientName || `Project ${it.id}`;
         return (
           <tr
             key={it.id}
             onClick={() => onSelect(it.id)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(it.id); } }}
+            role="button"
+            tabIndex={0}
             aria-current={on ? "true" : undefined}
-            className={`cursor-pointer border-t border-[var(--row-rule)] transition-colors ${on ? "bg-lifted" : "hover:bg-[var(--row-hover)]"}`}
+            aria-label={`${title}, ${it.clientName || "unknown client"}, ${it.stateLabel}`}
+            className={`cursor-pointer border-t border-[var(--row-rule)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${on ? "bg-lifted" : "hover:bg-[var(--row-hover)]"}`}
           >
             <td className={`px-2.5 py-2.5 text-right text-[15px] font-medium tabular-nums ${tierValueText(tier)} ${tierBar(tier)}`}>{showMoney ? money(it.value) : "—"}</td>
             <td className="px-2.5 py-2.5">
-              <div className={`truncate text-[14px] font-medium ${tierValueText(tier)}`} title={it.eventName || it.clientName}>{it.eventName || it.clientName || `Project ${it.id}`}</div>
+              <div className={`truncate text-[14px] font-medium ${tierValueText(tier)}`} title={title}>{title}</div>
               <div className="truncate text-[12px] text-meta">{it.clientName || "Unknown client"}</div>
             </td>
             <td className="px-2.5 py-2.5">
               <div className="text-[13px] text-tertiary-text">{it.stateLabel}</div>
-              <div className="text-[12px] text-meta">{isInferred(it.state.source) ? `Inferred · ${it.state.confidence.toFixed(2)}` : "Verified"}</div>
+              <Provenance kind={isInferred(it.state.source) ? "inferred" : "verified"} detail={isInferred(it.state.source) ? it.state.confidence.toFixed(2) : undefined} />
             </td>
             <td className="px-2.5 py-2.5">
               {replied && it.lastReplyPreview ? (
@@ -259,7 +286,7 @@ function Group({
               <ActionVerb primary={NBA_LABEL[it.nba.action]} tone={tierActionTone(tier)} />
             </td>
             <td className="px-2.5 py-2.5">
-              <div className={`text-[13px] tabular-nums ${when.hot ? "text-critical" : "text-tertiary-text"}`}>{when.text}</div>
+              <div className={`text-[13px] tabular-nums ${when.urgent ? "text-critical" : "text-tertiary-text"}`}>{it.eventDate ? when.text : "no date"}</div>
             </td>
           </tr>
         );
@@ -269,19 +296,26 @@ function Group({
 }
 
 function ViewSwitcher({ active }: { active: ViewKey }): React.JSX.Element {
-  const { query, stateFilter } = useSalesSearch();
+  const { query, stateFilter, incompleteOnly } = useSalesSearch();
   const items: { key: ViewKey; label: string; href: string; icon: typeof List }[] = [
     { key: "board", label: "Board", href: "/salesos/board", icon: Columns3 },
     { key: "worklist", label: "Worklist", href: "/salesos/worklist", icon: List },
     { key: "table", label: "Table", href: "/salesos/table", icon: Table2 },
   ];
   return (
-    <div className="flex items-center gap-5">
+    <div role="tablist" aria-label="Sales OS view" className="flex items-center gap-5">
       {items.map((it) => {
         const on = active === it.key;
         const Icon = it.icon;
         return (
-          <Link key={it.key} href={withQuery(it.href, query, stateFilter)} aria-current={on ? "page" : undefined} className={`flex items-center gap-1.5 text-[13.5px] transition-colors ${on ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+          <Link
+            key={it.key}
+            href={withQuery(it.href, query, stateFilter, incompleteOnly)}
+            role="tab"
+            aria-selected={on}
+            aria-current={on ? "page" : undefined}
+            className={`flex items-center gap-1.5 text-[13.5px] transition-colors ${on ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+          >
             <Icon className="size-4" /> {it.label}
           </Link>
         );

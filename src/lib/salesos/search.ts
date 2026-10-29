@@ -52,6 +52,29 @@ export function filterProjects<T extends SearchableProject>(projects: T[], q: st
   return projects.filter((p) => matchesQuery(p, q));
 }
 
+/** A project is "incomplete" when it is missing the basic facts a sales rep needs to work it: an event
+ *  name OR an event date. These are the unnamed/undated drafts that crowd the "New" column — they are
+ *  REAL records (never auto-hidden or merged), surfaced only through the user-controlled "Needs details"
+ *  filter so a rep can choose to triage them. Pure + client-safe so every view agrees on what counts. */
+export function isIncompleteProject(p: { eventName?: string | null; eventDate?: string | null }): boolean {
+  const unnamed = !p.eventName || !p.eventName.trim();
+  const undated = !p.eventDate;
+  return unnamed || undated;
+}
+
+/** Relative event time + a DEFINED urgency condition shared by every view, so the board, worklist and
+ *  detail paint the same dates red and no others. Urgency (critical colour) means the event is imminent —
+ *  within the next 3 days — OR already past-due while the lead is still open; a quote for an event weeks
+ *  out is NOT urgent. `null` days (no date on file) is never urgent. */
+export function relativeEvent(daysToEvent: number | null): { text: string; urgent: boolean } {
+  const dte = daysToEvent;
+  if (dte == null) return { text: "no date", urgent: false };
+  if (dte < 0) return { text: `${Math.abs(dte)}d ago`, urgent: true };
+  if (dte === 0) return { text: "today", urgent: true };
+  if (dte === 1) return { text: "tomorrow", urgent: true };
+  return { text: `in ${dte}d`, urgent: dte <= 3 };
+}
+
 /** Match a row's lead state against the active single-select state filter. `null`/`""` (the default)
  *  matches everything. The status compared is the row's EXISTING board-status classification — the
  *  state filter never invents a state, it just selects one the code already computes. Composes with the

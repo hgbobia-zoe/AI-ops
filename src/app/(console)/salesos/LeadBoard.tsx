@@ -3,9 +3,10 @@
 // Details — tabbed directly underneath. One-tap contact lives in the header (the human initiates;
 // nothing sends automatically). Rendered by both the index (top lead) and /salesos/[id].
 
-import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, History, AlertTriangle, Radio } from "lucide-react";
+import { Phone, MessageSquare, Mail, ExternalLink, Sparkles, Clock, CalendarClock, FileText, EyeOff, History, AlertTriangle, Radio, Send, CheckCircle2, CircleDashed } from "lucide-react";
+import { StatusBadge, STATUS_ICON } from "@/components/ui/status";
+import type { Tone } from "@/lib/tone";
 import { OutreachPanel } from "@/components/OutreachPanel";
 import { ConversationFeed } from "@/components/ConversationFeed";
 import { CopyButton } from "@/components/CopyButton";
@@ -30,12 +31,21 @@ import { canSeeFinancials } from "@/lib/auth/roles";
 
 const money = (n: number | null): string => (n == null ? "—" : "$" + Math.round(n).toLocaleString("en-US"));
 
-const STAGE_STYLE: Record<SalesStage, string> = {
-  closing: "border-rose-500/40 bg-rose-500/10 text-rose-200",
-  unsent: "border-sky-500/40 bg-sky-500/10 text-sky-200",
-  follow_up: "border-amber-500/40 bg-amber-500/10 text-amber-200",
-  cold: "border-white/15 bg-white/5 text-muted-foreground",
-  awaiting: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+// Sales stage → shared status tone + a stage-shaped icon, so the detail header's stage reads in the one
+// console status vocabulary (coloured indicator + crisp label; never a pastel pill).
+const STAGE_TONE: Record<SalesStage, Tone> = {
+  closing: "critical", // hot — push to signed
+  unsent: "info", // a quote still to send
+  follow_up: "attention", // gone quiet
+  cold: "neutral", // dormant
+  awaiting: "info", // sent, awaiting the customer
+};
+const STAGE_ICON: Record<SalesStage, typeof STATUS_ICON[Tone]> = {
+  closing: STATUS_ICON.critical,
+  unsent: Send,
+  follow_up: Clock,
+  awaiting: CheckCircle2,
+  cold: CircleDashed,
 };
 
 const GS_PROJECT = (id: string): string => `https://pro.goodshuffle.com/app/project/detail?id=${id}`;
@@ -203,7 +213,7 @@ export async function LeadBoard({ id }: { id: string }): Promise<React.JSX.Eleme
             <h1 className="truncate text-2xl font-bold tracking-tight">{lead.eventName || lead.clientName || `Project ${lead.id}`}</h1>
             <p className="text-sm text-muted-foreground">{lead.clientName || "Unknown client"}</p>
           </div>
-          <span className={`shrink-0 border px-2 py-1 text-xs font-medium ${STAGE_STYLE[lead.stage]}`}>{STAGE_LABEL[lead.stage]}</span>
+          <StatusBadge tone={STAGE_TONE[lead.stage]} icon={STAGE_ICON[lead.stage]} size="sm" className="shrink-0">{STAGE_LABEL[lead.stage]}</StatusBadge>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <span className="flex items-center gap-1"><CalendarClock className="size-3.5" /> {lead.eventDate ? `${formatYmdLong(lead.eventDate)} · ${eventWhen}` : eventWhen}</span>
