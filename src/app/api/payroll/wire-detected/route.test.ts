@@ -132,16 +132,17 @@ describe("POST /api/payroll/wire-detected", () => {
     const j = (await r.json()) as { matchedPeriod: { expectedTotal: number } | null };
     expect(j.matchedPeriod).not.toBeNull();
     expect(j.matchedPeriod!.expectedTotal).toBe(5000);
-    expect(lastCard().body).toContain("expected about $5,000.00");
+    expect(lastCard().body).toContain("pay period"); // "... for the <period> pay period"
   });
 
-  it("still posts with the period unconfirmed when nothing correlates", async () => {
+  it("still posts, with the period line omitted (not 'unconfirmed'), when nothing correlates", async () => {
     reviewReady = 999999; // far from the wire → no match
     const r = await post(gustoWire({ transactionId: "tx_nomatch" }));
     const j = (await r.json()) as { posted: boolean; matchedPeriod: unknown };
     expect(j.posted).toBe(true);
     expect(j.matchedPeriod).toBeNull();
-    expect(lastCard().body).toContain("unconfirmed");
+    expect(lastCard().body).not.toContain("unconfirmed");
+    expect(lastCard().body).not.toContain("pay period");
   });
 
   it("the posted sent-alert carries no dashes or emoji (house style)", async () => {

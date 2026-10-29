@@ -147,15 +147,16 @@ describe("wire alert messages (house COMMS_STYLE: no dashes, no emoji; Viktor vo
     expect(fmtDate(null)).toBeNull();
   });
 
-  it("builds a sent-alert card with the Gusto confirm next step and no dashes/emoji", () => {
+  it("builds a sent-alert card; period line omitted (not 'unconfirmed') when not matched, no dashes/emoji", () => {
     const card = wireAlertCard(baseRec);
     expect(card.title).toBe("Wire to Gusto sent");
-    expect(card.body).toContain("Wire to Gusto sent.");
+    expect(card.body).toContain("Wire to Gusto sent");
     expect(card.body).toContain("$5,000.00");
     expect(card.body).toContain("on Oct 27, 2026");
-    expect(card.body).toContain("tx_abc123");
-    expect(card.body).toContain("confirm the wire inside Gusto");
-    expect(card.body).toContain("unconfirmed"); // no match on this record
+    expect(card.body).toContain("inside Gusto");
+    expect(card.body).not.toContain("unconfirmed"); // period omitted, never labeled "unconfirmed"
+    expect(card.fields?.some((f) => f.label === "Pay period")).toBe(false); // field omitted when unmatched
+    expect(card.fields?.some((f) => f.label === "Mercury ref" && f.value === "tx_abc123")).toBe(true);
     expect(card.link?.url).toBe("https://mercury.com/transactions/abc123");
     noDash(card.body!);
     noEmoji(card.body!);
@@ -163,10 +164,10 @@ describe("wire alert messages (house COMMS_STYLE: no dashes, no emoji; Viktor vo
     expect(card.emoji).toBeUndefined(); // no emoji decoration
   });
 
-  it("names the matched pay period when correlation succeeded", () => {
+  it("names the matched pay period (body + field) when correlation succeeded", () => {
     const card = wireAlertCard({ ...baseRec, matchedPeriod: { periodStart: "2026-10-20", periodEnd: "2026-10-26", periodLabel: "Oct 20 to Oct 26", expectedTotal: 5000, source: "current", deltaPct: 0 } });
-    expect(card.body).toContain("Oct 20 to Oct 26");
-    expect(card.body).toContain("expected about $5,000.00");
+    expect(card.body).toContain("for the Oct 20 to Oct 26 pay period");
+    expect(card.fields?.some((f) => f.label === "Pay period" && f.value === "Oct 20 to Oct 26")).toBe(true);
     noDash(card.body!);
   });
 
