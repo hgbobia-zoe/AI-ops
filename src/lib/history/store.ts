@@ -136,6 +136,31 @@ export function getRecentChanges(limit = 100): ChangeRow[] {
   return (getDb().prepare("SELECT * FROM history_changes ORDER BY ts DESC LIMIT ?").all(limit) as Record<string, unknown>[]).map(toChange);
 }
 
+/**
+ * Lifecycle history for a set of risks, keyed by their stable `signature` (the risk's entity_id in the
+ * change log). Returns a Map signature → changes (newest first) so the /risk detail panel can show a
+ * risk's own audit trail — detected / escalated / acknowledged / resolved — without inventing anything.
+ * Batched to one query so expanding rows never fans out into N round-trips.
+ */
+export function getRiskHistory(signatures: string[]): Map<string, ChangeRow[]> {
+  const out = new Map<string, ChangeRow[]>();
+  const sigs = [...new Set(signatures.filter(Boolean))];
+  if (sigs.length === 0) return out;
+  const placeholders = sigs.map(() => "?").join(",");
+  const rows = (
+    getDb()
+      .prepare(`SELECT * FROM history_changes WHERE entity = 'risk' AND entity_id IN (${placeholders}) ORDER BY ts DESC`)
+      .all(...sigs) as Record<string, unknown>[]
+  ).map(toChange);
+  for (const r of rows) {
+    if (!r.entityId) continue;
+    const list = out.get(r.entityId) ?? [];
+    list.push(r);
+    out.set(r.entityId, list);
+  }
+  return out;
+}
+
 export interface SnapshotRow {
   id: string;
   eventId: string;
