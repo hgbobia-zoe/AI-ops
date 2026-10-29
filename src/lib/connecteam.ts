@@ -808,6 +808,9 @@ export interface TimesheetUserDetail {
   approvalKnown: boolean;
   /** A shift/day with a clock-in but no clock-out (or an explicitly-open flag). */
   openPunch: boolean;
+  /** The `yyyy-MM-dd` dates this user has HOURS on in the range (dailyTotalHours > 0), unique + sorted.
+   *  This is exactly the set the finalize/lock write targets — days with no hours are NEVER locked. */
+  workedDates: string[];
 }
 
 export interface TimesheetDetailResult {
@@ -861,11 +864,16 @@ export function parseTimesheetUser(rawUser: Record<string, unknown>): TimesheetU
   let unapproved = 0;
   let sawApprovalField = false;
   let openPunch = false;
+  const workedDates = new Set<string>();
 
   for (const d of days) {
     const dayHours = num(d.dailyTotalHours ?? d.dailyTotalWorkHours) ?? 0;
     total += dayHours;
     if (isOpenPunch(d)) openPunch = true;
+    if (dayHours > 0) {
+      const ds = ymdOf(d.date ?? d.day ?? d.dateString ?? d.workDate ?? d.recordDate);
+      if (ds) workedDates.add(ds);
+    }
 
     const shifts = (d.shifts ?? d.shiftsData ?? d.entries) as unknown;
     if (Array.isArray(shifts) && shifts.length > 0) {
@@ -904,7 +912,26 @@ export function parseTimesheetUser(rawUser: Record<string, unknown>): TimesheetU
     unapprovedHours: sawApprovalField ? round(unapproved) : null,
     approvalKnown: sawApprovalField,
     openPunch,
+    workedDates: [...workedDates].sort(),
   };
+}
+
+/** Coerce a daily-record date field to `yyyy-MM-dd`. Connecteam daily records carry a plain `date` string;
+ *  numeric/other forms are handled defensively (never fabricated — unparseable ⇒ null, so a day we can't
+ *  place is simply not locked). */
+function ymdOf(v: unknown): string | null {
+  if (typeof v === "string") {
+    const m = v.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1];
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  }
+  if (typeof v === "number" && Number.isFinite(v)) {
+    const ms = v < 1e12 ? v * 1000 : v;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  }
+  return null;
 }
 
 const _tsDetailCache = ttlCache<TimesheetDetailResult>(5 * 60_000, (r) => r.ok);
@@ -938,6 +965,7 @@ async function getTimesheetDetailUncached(startDate: string, endDate: string): P
           unapprovedHours: prev.unapprovedHours == null && d.unapprovedHours == null ? null : (prev.unapprovedHours ?? 0) + (d.unapprovedHours ?? 0),
           approvalKnown: prev.approvalKnown || d.approvalKnown,
           openPunch: prev.openPunch || d.openPunch,
+          workedDates: [...new Set([...prev.workedDates, ...d.workedDates])].sort(),
         });
       }
     }
@@ -1176,6 +1204,72 @@ function extractErr(json: unknown): string | null {
   const o = json as Record<string, unknown>;
   const m = o.message ?? o.error ?? (o.data as Record<string, unknown> | undefined)?.message;
   return typeof m === "string" ? m : null;
+}
+
+/** Pull a machine error CODE out of a Connecteam error body, if any (e.g. DAYS_IN_APPROVED_PERIOD,
+ *  HAS_LOCKED_DAYS). Shape-tolerant across the common key names. */
+function extractCode(json: unknown): string | undefined {
+  if (!json || typeof json !== "object") return undefined;
+  const o = json as Record<string, unknown>;
+  const c = o.errorCode ?? o.code ?? (o.data as Record<string, unknown> | undefined)?.code ?? (o.error as Record<string, unknown> | undefined)?.code;
+  return typeof c === "string" && c.trim() ? c : undefined;
+}
+
+// ── Time-clock day LOCK (the ONLY timesheet finalization write Connecteam exposes) ─────────────────────
+// Connecteam has NO endpoint to set admin "approval" on a timesheet; the only finalization write is locking
+// days. Locking a day finalizes it for payroll (prevents further edits). This is how "approve payroll in the
+// app" propagates into Connecteam. Verified request shape (developer.connecteam.com):
+//   PUT /time-clock/v1/time-clocks/{timeClockId}/users/{userId}/lock-days
+//   body: { dates: ["yyyy-MM-dd", …] (1–50 unique), isLocked: true }   (isLocked:false unlocks)
+// Unlocking a day inside an already-approved payroll period returns 409 DAYS_IN_APPROVED_PERIOD — surfaced,
+// never crashed. Writes ride the same per-account rate-limit breaker as every other call. Needs the API key's
+// time-clock write scope; a 403 is surfaced honestly. Key-gated: a no-op when Connecteam isn't configured.
+
+/** A thin PUT helper mirroring ctGet (JSON body, same rate-limit/breaker handling via ctWrite, never throws).
+ *  Returns {ok,status,json}; ok is a real 2xx only. */
+async function ctPut(path: string, body: unknown): Promise<{ ok: boolean; status: number; json: unknown | null }> {
+  if (!connecteamConfigured()) return { ok: false, status: 0, json: null };
+  const r = await ctWrite("PUT", path, body);
+  return { ok: r.status >= 200 && r.status < 300, status: r.status, json: r.json };
+}
+
+export interface LockDaysResult {
+  ok: boolean;
+  status: number; // HTTP status of the last call (0 = not configured / network); 200 when there was nothing to do
+  code?: string; // Connecteam error code when it failed (e.g. DAYS_IN_APPROVED_PERIOD)
+  error?: string; // human message when it failed
+  dates: string[]; // the unique, valid dates acted on (across all batches)
+}
+
+/**
+ * Lock (finalize) or unlock a user's days on a time clock. Dedupes + validates the dates (yyyy-MM-dd),
+ * batches them ≤50 per call (Connecteam's cap), and stops on the first non-2xx — surfacing the status/code
+ * (never fakes success). Re-locking already-locked days is a safe no-op on Connecteam's side, so this is
+ * idempotent. Returns ok:true with status 200 (and no call) when there are no valid dates to act on.
+ */
+export async function lockUserDays(timeClockId: number, userId: number, dates: string[], isLocked = true): Promise<LockDaysResult> {
+  if (!connecteamConfigured()) return { ok: false, status: 0, error: "Connecteam not configured", dates: [] };
+  if (!(timeClockId > 0) || !(userId > 0)) return { ok: false, status: 0, error: "invalid timeClockId/userId", dates: [] };
+  const unique = [...new Set(dates.filter((d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)))].sort();
+  if (unique.length === 0) return { ok: true, status: 200, dates: [] }; // nothing to lock — don't call
+  for (let i = 0; i < unique.length; i += 50) {
+    const chunk = unique.slice(i, i + 50);
+    const r = await ctPut(`/time-clock/v1/time-clocks/${timeClockId}/users/${userId}/lock-days`, { dates: chunk, isLocked });
+    if (!r.ok) {
+      return { ok: false, status: r.status, code: extractCode(r.json), error: extractErr(r.json) || `Connecteam HTTP ${r.status || "error"}`, dates: unique };
+    }
+  }
+  return { ok: true, status: 200, dates: unique };
+}
+
+/** The primary time clock's numeric id (Connecteam day-lock is addressed per time clock). Honors
+ *  CONNECTEAM_TIME_CLOCK_ID when set, else the first non-archived clock. Null when none is reachable. */
+export async function getPrimaryTimeClockId(): Promise<number | null> {
+  const envId = Number(process.env.CONNECTEAM_TIME_CLOCK_ID);
+  if (Number.isFinite(envId) && envId > 0) return envId;
+  const clocks = await getTimeClocks();
+  const id = Number(clocks[0]?.id);
+  return Number.isFinite(id) && id > 0 ? id : null;
 }
 
 // ── User provisioning: create + archive (the REAL People-Lifecycle automation) ─────────────────────

@@ -18,6 +18,20 @@ describe("parseTimesheetUser", () => {
     expect(d.approvedHours).toBeNull(); // never 0 when unknown
     expect(d.unapprovedHours).toBeNull();
     expect(d.openPunch).toBe(false);
+    expect(d.workedDates).toEqual(["2026-10-05", "2026-10-06"]); // both days have hours
+  });
+
+  it("captures worked dates ONLY for days with hours (never a zero-hour day), unique + sorted", () => {
+    const d = parseTimesheetUser({
+      userId: 7,
+      dailyRecords: [
+        { date: "2026-10-07", dailyTotalHours: 0 }, // no hours → never locked
+        { date: "2026-10-06", dailyTotalHours: 4 },
+        { date: "2026-10-05", dailyTotalHours: 8 },
+        { date: "2026-10-05", dailyTotalHours: 2 }, // duplicate date → deduped
+      ],
+    })!;
+    expect(d.workedDates).toEqual(["2026-10-05", "2026-10-06"]);
   });
 
   it("reads a day-level boolean approval flag", () => {

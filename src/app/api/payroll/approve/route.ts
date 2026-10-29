@@ -16,6 +16,7 @@ import { commandCenter } from "@/lib/command/service";
 import { resolvePeriod, namedPeriod, completedWeeksBack } from "@/lib/payroll/period";
 import { derivePayrollReadiness, payrollApprovability } from "@/lib/payroll/readinessModel";
 import { upsertApproval } from "@/lib/payroll/store";
+import { finalizeApprovedTimesheets, unlockApprovedTimesheets, type LockTarget } from "@/lib/payroll/timesheetLock";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export async function POST(req: Request): Promise<Response> {
 
   // Payroll targets a COMPLETED week: the UI sends the exact period (start/end). `which` is a back-compat alias;
   // with nothing given we default to the last completed week (never the in-progress one).
-  const body = (await req.json().catch(() => ({}))) as { which?: "current" | "previous"; start?: string; end?: string; acknowledge?: boolean };
+  const body = (await req.json().catch(() => ({}))) as { which?: "current" | "previous"; start?: string; end?: string; acknowledge?: boolean; action?: "approve" | "unapprove" };
   const today = await safeToday();
   const period =
     body.start && body.end
@@ -34,6 +35,19 @@ export async function POST(req: Request): Promise<Response> {
       : body.which === "current" || body.which === "previous"
         ? namedPeriod(today, body.which)
         : completedWeeksBack(today, 1);
+
+  // ── UNAPPROVE: revert the Zoe sign-off AND unlock the finalized days in Connecteam (tolerating a 409 when a
+  // day sits inside an already-approved Connecteam payroll period — surfaced, never crashed). Reversible. ──
+  if (body.action === "unapprove") {
+    const actor = await currentActor();
+    const unlock = await unlockApprovedTimesheets(period);
+    upsertApproval({ periodStart: period.start, periodEnd: period.end, status: "DRAFT", approvedBy: null, approvedAt: null, readyWorkerCount: null, estApprovedAmount: null, snapshot: { unapprovedBy: actor.label, unapprovedAt: new Date().toISOString(), unlocked: unlock.unlocked, lockConflicts: unlock.conflicts } });
+    try {
+      const { insertAudit } = await import("@/lib/db/repo");
+      insertAudit({ actor: actor.label, action: "payroll.unapprove", entity: "hr_payroll_approval", entityId: `${period.start}..${period.end}`, after: { unlocked: unlock.unlocked, lockConflicts: unlock.conflicts } });
+    } catch { /* audit is best-effort */ }
+    return NextResponse.json({ period, status: "DRAFT", unlock });
+  }
 
   const model = await derivePayrollReadiness(period);
   const acknowledge = body.acknowledge === true;
@@ -73,17 +87,25 @@ export async function POST(req: Request): Promise<Response> {
     },
   });
 
+  // FINALIZE IN CONNECTEAM: approving in the app locks each approved worker's worked days in Connecteam (the
+  // only finalization write it exposes), which clears the "Unapproved timesheet" blocker — the owner's intent
+  // of managing payroll from one place. Honest: each worker's outcome (locked / failed / nothing-to-lock) is
+  // recorded so the gate is satisfied by the REAL recorded Zoe approval and the UI shows the true result. A
+  // Connecteam failure NEVER blocks the approval (the sign-off stands); it surfaces as a retryable warning.
+  const lockTargets: LockTarget[] = approvedWorkers.map((w) => ({ workerKey: w.key, name: w.name, connecteamUserId: w.connecteamUserId }));
+  const finalize = await finalizeApprovedTimesheets(period, lockTargets, actor.label);
+
   try {
     const { insertAudit } = await import("@/lib/db/repo");
     insertAudit({
       actor: actor.label, action: "payroll.approve", entity: "hr_payroll_approval", entityId: `${period.start}..${period.end}`,
-      after: { readyWorkers: approvedWorkers.length, estApproved, acknowledgedUnverified: ackedCount, excludedBlocked: model.counts.blocked },
+      after: { readyWorkers: approvedWorkers.length, estApproved, acknowledgedUnverified: ackedCount, excludedBlocked: model.counts.blocked, ctLocked: finalize.locked, ctLockFailed: finalize.failed, ctNothingToLock: finalize.na },
     });
   } catch {
     /* audit is best-effort */
   }
 
-  return NextResponse.json({ period, approval, readyCount: approvedWorkers.length, estReady: estApproved, acknowledgedUnverified: ackedCount });
+  return NextResponse.json({ period, approval, readyCount: approvedWorkers.length, estReady: estApproved, acknowledgedUnverified: ackedCount, finalize });
 }
 
 async function safeToday(): Promise<string> {

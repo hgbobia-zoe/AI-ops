@@ -8,7 +8,7 @@ import type {
   WorkerRecord, WorkerType, EmploymentStatus, PayType, GustoEntityType,
   PayrollException, ExceptionSeverity, ExceptionStatus,
   SyncRun, SyncTrigger, SyncStatus, HoursType, TimeEntryStatus,
-  PayrollApproval, PayrollApprovalStatus,
+  PayrollApproval, PayrollApprovalStatus, CtLockStatus,
 } from "./types";
 
 // ── hr_workers ─────────────────────────────────────────────────────────────────────────────────────
@@ -399,4 +399,64 @@ export function upsertApproval(p: {
     rc: p.readyWorkerCount ?? null, amt: p.estApprovedAmount ?? null, snap: p.snapshot != null ? JSON.stringify(p.snapshot) : null, now,
   });
   return getApproval(p.periodStart, p.periodEnd)!;
+}
+
+// ── hr_payroll_ct_locks (per-worker Connecteam day-lock outcome of a Zoe approval) ───────────────────
+// When payroll is approved IN THE APP for a worker, we finalize their worked days in Connecteam (the
+// lock-days write). This row records that per-worker outcome so the readiness model can (a) treat the
+// worker's timesheet-approval gate as satisfied by the recorded Zoe approval and (b) label HONESTLY whether
+// the Connecteam finalize actually succeeded. Keyed by the review worker key (ct:<userId> | hw:<id>); one
+// pay period. Idempotent. lock_status: LOCKED (Connecteam finalize succeeded) | FAILED (approved in Zoe but
+// the Connecteam lock failed — retry) | NA (nothing to lock: no Connecteam id / no worked days) | UNLOCKED
+// (the approval was reverted and the days were unlocked again). Presence with a non-UNLOCKED status = the
+// worker is approved in Zoe for this period. CtLockStatus is defined in ./types (shared with the model).
+export interface TimesheetLockRecord {
+  workerKey: string;
+  connecteamUserId: number | null;
+  approvedBy: string | null;
+  approvedAt: string;
+  lockStatus: CtLockStatus;
+  lockDetail: string | null;
+  lockedDates: string[];
+  updatedAt: string;
+}
+interface LockRow {
+  period_start: string; period_end: string; worker_key: string; connecteam_user_id: number | null;
+  approved_by: string | null; approved_at: string; lock_status: string; lock_detail: string | null;
+  locked_dates: string | null; updated_at: string;
+}
+function toLock(r: LockRow): TimesheetLockRecord {
+  let dates: string[] = [];
+  try { dates = r.locked_dates ? (JSON.parse(r.locked_dates) as string[]) : []; } catch { dates = []; }
+  return {
+    workerKey: r.worker_key, connecteamUserId: r.connecteam_user_id, approvedBy: r.approved_by,
+    approvedAt: r.approved_at, lockStatus: r.lock_status as CtLockStatus, lockDetail: r.lock_detail,
+    lockedDates: dates, updatedAt: r.updated_at,
+  };
+}
+/** All per-worker Connecteam lock records for a period, keyed by worker_key. Empty when none. */
+export function listTimesheetLocks(periodStart: string, periodEnd: string): Map<string, TimesheetLockRecord> {
+  const rows = getDb().prepare("SELECT * FROM hr_payroll_ct_locks WHERE period_start=? AND period_end=?")
+    .all(periodStart, periodEnd) as LockRow[];
+  const m = new Map<string, TimesheetLockRecord>();
+  for (const r of rows) m.set(r.worker_key, toLock(r));
+  return m;
+}
+/** Idempotent upsert of a per-worker lock outcome (re-approving refreshes the status/dates/actor). */
+export function upsertTimesheetLock(p: {
+  periodStart: string; periodEnd: string; workerKey: string; connecteamUserId?: number | null;
+  approvedBy?: string | null; approvedAt?: string | null; lockStatus: CtLockStatus;
+  lockDetail?: string | null; lockedDates?: string[];
+}): void {
+  const now = new Date().toISOString();
+  getDb().prepare(
+    `INSERT INTO hr_payroll_ct_locks (period_start, period_end, worker_key, connecteam_user_id, approved_by, approved_at, lock_status, lock_detail, locked_dates, updated_at)
+     VALUES (@ps, @pe, @key, @cuid, @by, @at, @status, @detail, @dates, @now)
+     ON CONFLICT(period_start, period_end, worker_key) DO UPDATE SET
+       connecteam_user_id=@cuid, approved_by=@by, approved_at=@at, lock_status=@status, lock_detail=@detail, locked_dates=@dates, updated_at=@now`,
+  ).run({
+    ps: p.periodStart, pe: p.periodEnd, key: p.workerKey, cuid: p.connecteamUserId ?? null,
+    by: p.approvedBy ?? null, at: p.approvedAt ?? now, status: p.lockStatus, detail: p.lockDetail ?? null,
+    dates: JSON.stringify(p.lockedDates ?? []), now,
+  });
 }

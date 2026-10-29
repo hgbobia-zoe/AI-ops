@@ -612,7 +612,14 @@ async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
           </div>
         </div>
         <div className="flex flex-col items-stretch gap-2 sm:items-end">
-          <ApproveButton period={period} readyCount={appr.readyKeys.length} acknowledgeableCount={appr.acknowledgeableKeys.length} ackReason={appr.ackReason} />
+          <ApproveButton
+            period={period}
+            readyCount={appr.readyKeys.length}
+            acknowledgeableCount={appr.acknowledgeableKeys.length}
+            ackReason={appr.ackReason}
+            approved={m.approval?.status === "APPROVED"}
+            approvedCount={m.workers.filter((w) => w.approvalState === "APPROVED_IN_ZOE").length}
+          />
           {canPushPeriod ? (
             <PushGustoHoursButton
               which="previous"
@@ -661,9 +668,17 @@ function rateCell(w: UnifiedWorkerRow): React.JSX.Element {
 }
 const APPROVAL_UI: Record<UnifiedWorkerRow["approvalState"], { label: string; cls: string }> = {
   APPROVED: { label: "Approved", cls: "text-positive" },
+  APPROVED_IN_ZOE: { label: "Approved in Zoe", cls: "text-positive" },
   UNAPPROVED: { label: "Unapproved", cls: "text-attention" },
   UNVERIFIED: { label: "Unverified", cls: "text-attention" },
   NA: { label: "—", cls: "text-meta" },
+};
+// Honest sub-label for the Connecteam day-lock outcome of a Zoe approval (only shown when Approved in Zoe).
+const CT_LOCK_UI: Record<NonNullable<UnifiedWorkerRow["ctLockStatus"]>, { label: string; cls: string }> = {
+  LOCKED: { label: "locked in Connecteam", cls: "text-meta" },
+  FAILED: { label: "Connecteam finalize failed — retry", cls: "text-attention" },
+  NA: { label: "nothing to lock in Connecteam", cls: "text-meta" },
+  UNLOCKED: { label: "unlocked in Connecteam", cls: "text-meta" },
 };
 
 function ReviewTable({ rows, filter, period, gustoMembers }: {
@@ -701,7 +716,12 @@ function ReviewTable({ rows, filter, period, gustoMembers }: {
                   <td className="px-3 py-2.5 text-right tabular-nums text-secondary-text">{w.hours == null ? "—" : w.hours.toLocaleString("en-US")}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums text-secondary-text">{rateCell(w)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums text-secondary-text">{money(w.estPay, w.currency)}</td>
-                  <td className="px-3 py-2.5"><span className={`text-[11.5px] ${ap.cls}`}>{excluded ? "—" : ap.label}</span></td>
+                  <td className="px-3 py-2.5">
+                    <span className={`text-[11.5px] ${ap.cls}`}>{excluded ? "—" : ap.label}</span>
+                    {!excluded && w.approvalState === "APPROVED_IN_ZOE" && w.ctLockStatus && (
+                      <span className={`block text-[10px] ${CT_LOCK_UI[w.ctLockStatus].cls}`} title={w.ctLockDetail ?? undefined}>· {CT_LOCK_UI[w.ctLockStatus].label}</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2.5"><span className={w.gustoMapped ? "text-secondary-text" : "text-attention"}>{MAPPING_STATUS_LABEL[w.mappingStatus]}</span></td>
                   <td className="px-3 py-2.5">
                     {excluded ? (

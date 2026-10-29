@@ -3,6 +3,7 @@
 
 import { describe, it, expect } from "vitest";
 import { composeReadinessModel, payrollApprovability, type ComposeInputs } from "./readinessModel";
+import type { TimesheetLockRecord } from "./store";
 import type {
   ReviewWorker, ReadinessWorker, ReadinessException, PayrollReviewResult, PayrollReadiness, PayPeriod,
   IssueTag, PayrollReadinessModel,
@@ -43,6 +44,7 @@ function compose(opts: {
   approval?: ComposeInputs["approval"];
   pushedOk?: boolean;
   rate?: ComposeInputs["rate"];
+  timesheetLocks?: Map<string, TimesheetLockRecord>;
 }): PayrollReadinessModel {
   const connecteamOk = opts.connecteamOk ?? true;
   const review: PayrollReviewResult = {
@@ -68,7 +70,19 @@ function compose(opts: {
     snapshotAt: "2026-10-27T12:00:00.000Z", activity: [],
     sources: { connecteam: true, gusto: true, gustoSnapshotAt: "2026-10-27T11:00:00.000Z", gustoFresh: !opts.gustoStale, instaworkOk: false, instaworkAsOf: null },
     schedule: { deadlineLabel: "Tuesdays 9:00 AM ET", precheckLabel: null, autoSyncLabel: null },
+    timesheetLocks: opts.timesheetLocks ?? new Map(),
   });
+}
+
+function lock(o: Partial<TimesheetLockRecord> & { workerKey: string }): TimesheetLockRecord {
+  return {
+    workerKey: o.workerKey, connecteamUserId: o.connecteamUserId ?? 1, approvedBy: o.approvedBy ?? "Lisa",
+    approvedAt: o.approvedAt ?? "2026-10-27T12:00:00.000Z", lockStatus: o.lockStatus ?? "LOCKED",
+    lockDetail: o.lockDetail ?? null, lockedDates: o.lockedDates ?? ["2026-10-20"], updatedAt: o.updatedAt ?? "2026-10-27T12:00:00.000Z",
+  };
+}
+function locks(...recs: TimesheetLockRecord[]): Map<string, TimesheetLockRecord> {
+  return new Map(recs.map((r) => [r.workerKey, r]));
 }
 
 const BLOCKER: IssueTag = { kind: "BLOCKING", code: "NO_GUSTO_MAPPING", label: "No Gusto mapping" };
@@ -158,6 +172,65 @@ describe("composeReadinessModel — states", () => {
   it("gusto snapshot stale → never silently READY (ACTION_REQUIRED)", () => {
     const m = compose({ workers: [rv({ key: "ct:1", name: "A" })], readiness: [rdw({ key: "ct:1", name: "A" })], gustoStale: true });
     expect(m.status).toBe("ACTION_REQUIRED");
+  });
+
+  it("APPROVE-LOCKS: a recorded Zoe approval SATISFIES the timesheet gate for an unapproved worker (locked)", () => {
+    // Same worker as THE CONTRADICTION FIX above (unapproved timesheet) — but now approved in Zoe + locked in
+    // Connecteam. The unapproved-timesheet item is cleared, the gate passes, and the label is HONEST.
+    const m = compose({
+      workers: [rv({ key: "ct:1", name: "A" })],
+      readiness: [rdw({ key: "ct:1", name: "A", unapprovedHours: 4, issues: [UNAPPROVED] })],
+      timesheetLocks: locks(lock({ workerKey: "ct:1", lockStatus: "LOCKED", lockDetail: "Locked 1 day in Connecteam." })),
+    });
+    expect(m.workers[0].approvalState).toBe("APPROVED_IN_ZOE");
+    expect(m.workers[0].ctLockStatus).toBe("LOCKED");
+    expect(m.workers[0].status).toBe("READY");
+    expect(m.workers[0].issues.some((i) => i.code === "UNAPPROVED_TIMESHEET")).toBe(false);
+    expect(m.counts.ready).toBe(1);
+    expect(m.counts.actionRequired).toBe(0);
+    const gate = m.gates.find((g) => g.key === "timesheetApproval")!;
+    expect(gate.state).toBe("PASS");
+    expect(gate.detail).toContain("approved in Zoe");
+    expect(gate.detail).toContain("locked in Connecteam");
+  });
+
+  it("APPROVE-LOCKS: Zoe approval clears the gate even when Connecteam never exposed approval (UNVERIFIED)", () => {
+    const m = compose({
+      workers: [rv({ key: "ct:1", name: "A" })],
+      readiness: [rdw({ key: "ct:1", name: "A", issues: [APPROVAL_UNVERIFIED] })],
+      approvalKnown: false,
+      timesheetLocks: locks(lock({ workerKey: "ct:1", lockStatus: "LOCKED" })),
+    });
+    expect(m.workers[0].approvalState).toBe("APPROVED_IN_ZOE");
+    expect(m.counts.unverified).toBe(0);
+    expect(m.gates.find((g) => g.key === "timesheetApproval")?.state).toBe("PASS");
+    // The period is no longer forced to ACTION_REQUIRED just because Connecteam never exposed approval.
+    expect(m.status).toBe("READY");
+  });
+
+  it("APPROVE-LOCKS: a FAILED Connecteam finalize keeps an HONEST warning but does not block (worker stays ready)", () => {
+    const m = compose({
+      workers: [rv({ key: "ct:1", name: "A" })],
+      readiness: [rdw({ key: "ct:1", name: "A", unapprovedHours: 4, issues: [UNAPPROVED] })],
+      timesheetLocks: locks(lock({ workerKey: "ct:1", lockStatus: "FAILED", lockDetail: "Approved in Zoe, but the Connecteam finalize failed (HTTP 403). Retry." })),
+    });
+    expect(m.workers[0].approvalState).toBe("APPROVED_IN_ZOE");
+    expect(m.workers[0].ctLockStatus).toBe("FAILED");
+    expect(m.workers[0].status).toBe("READY"); // approved in Zoe; the failed lock is a non-gating retry
+    const attn = m.attention.find((a) => a.code === "CT_LOCK_FAILED");
+    expect(attn).toBeDefined();
+    expect(attn?.count).toBe(1);
+    expect(m.gates.find((g) => g.key === "timesheetApproval")?.detail).toContain("finalize failed");
+  });
+
+  it("APPROVE-LOCKS: an UNLOCKED record (approval reverted) does NOT satisfy the gate", () => {
+    const m = compose({
+      workers: [rv({ key: "ct:1", name: "A" })],
+      readiness: [rdw({ key: "ct:1", name: "A", unapprovedHours: 4, issues: [UNAPPROVED] })],
+      timesheetLocks: locks(lock({ workerKey: "ct:1", lockStatus: "UNLOCKED" })),
+    });
+    expect(m.workers[0].approvalState).toBe("UNAPPROVED");
+    expect(m.gates.find((g) => g.key === "timesheetApproval")?.state).toBe("ACTION");
   });
 
   it("excluded workers are kept out of the payable counts but accessible", () => {
