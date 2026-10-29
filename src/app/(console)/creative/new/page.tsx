@@ -1,30 +1,30 @@
 // New Creative Job — the definition form. Server shell loads the pickable Zoe images (for the "use
-// existing" source mode) and renders the client form. Creating the job runs the Art Director to produce
-// the Image Brief before the user lands on the detail.
+// existing" source mode) and renders the client form. Creating the job composes the Image Brief (the
+// Art Director's structured read of the inputs) — it does NOT generate or publish an image; that happens
+// afterward on the job detail.
 
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { listSelectableImages } from "@/lib/creative/store";
 import { NewJobForm } from "@/components/creative/NewJobForm";
+import { BladeMain } from "@/components/ui/layouts";
+import { PageHeader } from "@/components/ui/page-header";
 
 export const dynamic = "force-dynamic";
 
 export default function NewCreativeJobPage(): React.JSX.Element {
   const images = listSelectableImages();
   return (
-    <main className="max-w-[900px] p-6">
-      <div className="mb-4 text-[12px] text-meta">
-        <Link href="/creative" className="text-tertiary-text hover:text-foreground">Creative Engine</Link> / New Job
-      </div>
-      <header className="mb-5">
-        <h1 className="flex items-center gap-2 text-[22px] font-medium tracking-tight">
-          <Plus className="size-5 text-meta" /> New creative job
-        </h1>
-        <p className="mt-1 text-[12.5px] text-meta">
-          Define WHAT to create. The system determines HOW, for consistency. This is not a prompt box: your inputs feed the Art Director.
-        </p>
-      </header>
+    <BladeMain className="max-w-[1100px]">
+      <nav className="mb-3 text-[12px] text-meta" aria-label="Breadcrumb">
+        <Link href="/creative" className="text-tertiary-text hover:text-foreground">Creative Engine</Link> / New job
+      </nav>
+      <PageHeader
+        title="New creative job"
+        icon={<Plus className="size-5" />}
+        subtitle="Pick a source, say what you're making, and write the brief. Creating the job composes its Image Brief — no image is generated or published at this step."
+      />
       <NewJobForm selectableImages={images} />
-    </main>
+    </BladeMain>
   );
 }
