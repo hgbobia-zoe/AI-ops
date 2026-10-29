@@ -4,15 +4,21 @@
 // current state (the machine's legal moves): HIRE→Start onboarding; ONBOARD→Advance to Ready (guarded) +
 // Offboard; READY→Activate + Offboard; ACTIVE→Offboard; OFFBOARD→Mark offboarded. The server re-checks
 // every guard — this only triggers the transition.
+//
+// Offboarding is destructive, so it opens an inline CONFIRMATION with the person's name, the effective
+// date, and the honest reminder that manual revokes stay open afterwards — no private data is exposed.
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { LogOut, AlertTriangle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
-export function LifecycleActions({ id, state }: { id: string; state: string }): React.JSX.Element {
+export function LifecycleActions({ id, state, name, openRevokes }: { id: string; state: string; name: string; openRevokes: number }): React.JSX.Element {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; tone: "ok" | "bad" } | null>(null);
   const [effectiveDate, setEffectiveDate] = useState("");
+  const [confirmOff, setConfirmOff] = useState(false);
 
   async function run(action: string, extra: Record<string, unknown> = {}): Promise<void> {
     setBusy(action);
@@ -25,7 +31,7 @@ export function LifecycleActions({ id, state }: { id: string; state: string }): 
       });
       const data = (await res.json().catch(() => null)) as { ok?: boolean; message?: string; error?: string } | null;
       if (!res.ok || !data?.ok) setMsg({ text: data?.message ?? data?.error ?? "Failed.", tone: "bad" });
-      else { setMsg({ text: data.message ?? "Done.", tone: "ok" }); router.refresh(); }
+      else { setMsg({ text: data.message ?? "Done.", tone: "ok" }); setConfirmOff(false); router.refresh(); }
     } catch {
       setMsg({ text: "Network error.", tone: "bad" });
     } finally {
@@ -33,30 +39,48 @@ export function LifecycleActions({ id, state }: { id: string; state: string }): 
     }
   }
 
-  const primary = "inline-flex h-8 items-center rounded-md bg-foreground px-3 text-[12.5px] font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-60";
-  const secondary = "inline-flex h-8 items-center rounded-md border border-border px-3 text-[12.5px] font-medium text-secondary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-60";
-  const danger = "inline-flex h-8 items-center rounded-md border border-critical/40 px-3 text-[12.5px] font-medium text-critical transition-colors hover:bg-critical/10 disabled:opacity-60";
-
   const canOffboard = state === "HIRE" || state === "ONBOARD" || state === "READY" || state === "ACTIVE";
+  const disabled = busy !== null;
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        {state === "HIRE" && <button onClick={() => run("start_onboarding")} disabled={busy !== null} className={primary}>Start onboarding</button>}
-        {state === "ONBOARD" && <button onClick={() => run("advance_ready")} disabled={busy !== null} className={primary}>Advance to Ready</button>}
-        {state === "READY" && <button onClick={() => run("activate")} disabled={busy !== null} className={primary}>Activate</button>}
-        {state === "OFFBOARD" && <button onClick={() => run("complete_offboarding")} disabled={busy !== null} className={secondary}>Mark offboarded</button>}
-        {canOffboard && (
-          <div className="flex items-center gap-1.5">
-            <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} aria-label="Effective termination date"
-              className="h-8 rounded-md border border-border bg-[var(--panel)] px-2 text-[12px] text-foreground" />
-            <button onClick={() => run("start_offboarding", { effectiveDate: effectiveDate || null })} disabled={busy !== null} className={danger}>
-              Offboard{effectiveDate ? ` (on ${effectiveDate})` : " now"}
-            </button>
-          </div>
+    <div className="flex flex-col items-stretch gap-2 sm:items-end">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {state === "HIRE" && <Button size="lg" onClick={() => run("start_onboarding")} disabled={disabled}>Start onboarding</Button>}
+        {state === "ONBOARD" && <Button size="lg" onClick={() => run("advance_ready")} disabled={disabled}>Advance to Ready</Button>}
+        {state === "READY" && <Button size="lg" onClick={() => run("activate")} disabled={disabled}>Activate</Button>}
+        {state === "OFFBOARD" && <Button variant="outline" size="lg" onClick={() => run("complete_offboarding")} disabled={disabled}>Mark offboarded</Button>}
+        {canOffboard && !confirmOff && (
+          <Button variant="destructive" size="lg" onClick={() => { setConfirmOff(true); setMsg(null); }} disabled={disabled}>
+            <LogOut className="size-4" aria-hidden /> Offboard
+          </Button>
         )}
       </div>
-      {msg && <span className={`text-[12px] ${msg.tone === "ok" ? "text-positive" : "text-critical"}`}>{msg.text}</span>}
+
+      {/* Offboarding confirmation — name + effective date + honest consequence, no private data */}
+      {canOffboard && confirmOff && (
+        <div className="w-full max-w-sm rounded-md border border-critical/40 bg-[var(--panel)] p-3 text-left">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-status-blocked" aria-hidden />
+            <div className="min-w-0 text-[12px] text-secondary-text">
+              <p>Start offboarding for <span className="font-medium text-foreground">{name}</span>? This begins the HR process and generates the access-revoke checklist.</p>
+              <p className="mt-1 text-meta">Access is not removed automatically — each manual revoke stays open until a human confirms it.{openRevokes > 0 ? ` ${openRevokes} revoke${openRevokes === 1 ? "" : "s"} already open.` : ""}</p>
+            </div>
+          </div>
+          <label className="mt-2.5 flex items-center gap-2 text-[11.5px] text-meta">
+            <span className="whitespace-nowrap">Effective date (optional)</span>
+            <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} aria-label="Effective termination date"
+              className="h-8 flex-1 rounded-md border border-input bg-[var(--panel)] px-2 text-[12px] text-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50" />
+          </label>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setConfirmOff(false)} disabled={disabled}>Cancel</Button>
+            <Button variant="destructive" size="sm" onClick={() => run("start_offboarding", { effectiveDate: effectiveDate || null })} disabled={disabled}>
+              {busy === "start_offboarding" ? "Offboarding…" : effectiveDate ? `Offboard on ${effectiveDate}` : "Offboard now"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {msg && <span className={`text-[12px] ${msg.tone === "ok" ? "text-positive" : "text-critical"}`} role={msg.tone === "bad" ? "alert" : undefined}>{msg.text}</span>}
     </div>
   );
 }

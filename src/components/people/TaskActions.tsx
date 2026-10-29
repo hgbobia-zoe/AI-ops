@@ -7,6 +7,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
 
 export interface TaskView {
   id: string;
@@ -42,31 +43,29 @@ export function TaskActions({ task }: { task: TaskView }): React.JSX.Element {
 
   const done = task.status === "completed" || task.status === "skipped";
   const isAutomated = task.mode === "automated";
-  const btn = "inline-flex h-7 items-center rounded px-2.5 text-[11.5px] font-medium transition-colors disabled:opacity-50";
   const verb = task.kind === "provision" ? "provision" : "revoke";
+  const disabled = busy !== null;
 
   if (done) {
     return <span className="text-[11.5px] text-meta">{task.status === "skipped" ? "Skipped" : "Done"}</span>;
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex flex-wrap items-center justify-end gap-1.5">
       {isAutomated ? (
-        <button onClick={() => run("approve_execute")} disabled={busy !== null}
-          className={`${btn} bg-foreground text-background hover:opacity-90`}>
+        <Button size="xs" onClick={() => run("approve_execute")} disabled={disabled}>
           {busy === "approve_execute" ? "Running…" : `Approve & ${verb}`}
-        </button>
+        </Button>
       ) : (
-        <button onClick={() => run("mark_complete")} disabled={busy !== null}
-          className={`${btn} border border-border text-secondary-text hover:bg-[var(--row-hover)] hover:text-foreground`}>
+        <Button variant="outline" size="xs" onClick={() => run("mark_complete")} disabled={disabled}>
           {busy === "mark_complete" ? "Saving…" : "Mark complete"}
-        </button>
+        </Button>
       )}
       {task.status === "failed" && (
-        <button onClick={() => run("retry")} disabled={busy !== null} className={`${btn} border border-border text-attention hover:bg-[var(--row-hover)]`}>Retry</button>
+        <Button variant="outline" size="xs" onClick={() => run("retry")} disabled={disabled}>Retry</Button>
       )}
       {!task.required && (
-        <button onClick={() => run("skip")} disabled={busy !== null} className={`${btn} text-meta hover:text-foreground`}>Skip</button>
+        <Button variant="ghost" size="xs" onClick={() => run("skip")} disabled={disabled}>Skip</Button>
       )}
       {msg && <span className={`text-[11px] ${msg.tone === "ok" ? "text-positive" : "text-critical"}`}>{msg.text}</span>}
     </div>
