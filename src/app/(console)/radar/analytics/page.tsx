@@ -2,7 +2,6 @@
 // contacted → in Sales OS → won) plus breakdowns by source, jurisdiction and type. All deterministic
 // from stored state. The pipeline figure is an INDICATIVE range sum, never presented as booked revenue.
 
-import { RadarTabs } from "@/components/RadarTabs";
 import { FigureStrip, tableCls, theadCls, thCls, type Figure } from "@/components/console-primitives";
 import { opportunityAnalytics, type Breakdown } from "@/lib/opportunity/analytics";
 import { seedOpportunitiesIfEmpty, refreshOpportunities } from "@/lib/opportunity/seed";
@@ -61,8 +60,7 @@ export default async function AnalyticsPage(): Promise<React.JSX.Element> {
 
   return (
     <main className="p-6">
-      <header className="mb-4"><h1 className="text-[22px] font-medium tracking-tight">Opportunity Radar</h1><p className="text-[12.5px] text-meta">Analytics — the pipeline from signal to revenue.</p></header>
-      <RadarTabs />
+      <header className="mb-4"><h1 className="text-[22px] font-medium tracking-tight">Analytics</h1><p className="text-[12.5px] text-meta">Analytics — the pipeline from signal to revenue.</p></header>
 
       <div className="mb-6"><FigureStrip figures={figures} /></div>
 

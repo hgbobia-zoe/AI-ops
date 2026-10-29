@@ -13,7 +13,7 @@ import { OpportunityInterpret } from "@/components/OpportunityInterpret";
 import { RouteToProspecting } from "@/components/RouteToProspecting";
 import { ProspectTaskActions } from "@/components/ProspectTaskActions";
 import { VerificationBadge, TierBadge, ScorePill, SeedTag } from "@/components/radar-badges";
-import { opportunityDetail } from "@/lib/opportunity/service";
+import { opportunityDetail, pastEventRationale } from "@/lib/opportunity/service";
 import { getOpportunityChanges } from "@/lib/opportunity/store";
 import { getCachedInterpretation } from "@/lib/opportunity/interpret";
 import { findRelated } from "@/lib/opportunity/fusion";
@@ -151,7 +151,7 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
               </ul>
               {q.unknowns.length > 0 && <div className="mt-2 border-t border-[var(--row-rule)] pt-2 text-meta">{q.unknowns.map((s) => <div key={s.key}>? {s.label} <span className="text-[11px]">— unknown, not counted</span></div>)}</div>}
               <div className="mt-2 flex items-center justify-between border-t border-[var(--row-rule)] pt-2"><span className="font-medium">Relevance</span><span><ScorePill score={q.relevanceScore} tier={q.tier} /> <span className="text-meta">/ 100 · {q.tier}</span></span></div>
-              <p className="mt-2 text-[12px] text-meta">Estimated value: <span className="text-tertiary-text">{fmtRange(value)}</span>{value?.indicative ? " (indicative range, not a prediction)" : value ? " (from the source)" : " — need attendance or scope"}.</p>
+              <p className="mt-2 text-[12px] text-meta">Estimated Zoe rental value: <span className="text-tertiary-text">{value?.indicative ? "~" : ""}{fmtRange(value)}</span>{value?.indicative ? " — indicative Zoe-addressable rental range (what Zoe could rent into this), not the total event budget or a revenue prediction" : value ? " — from the source" : " — need attendance or scope to estimate"}.</p>
             </div>
           </Section>
 
@@ -216,6 +216,7 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
               <Field label="To event">{maturity.daysToEvent != null ? `${maturity.daysToEvent}d` : "—"}</Field>
               <Field label="To deadline">{maturity.daysToDeadline != null ? `${maturity.daysToDeadline}d` : "—"}</Field>
             </div>
+            {pastEventRationale(d) && <p className="mt-2 text-[12px] text-meta">{pastEventRationale(d)}</p>}
           </Section>
 
           {/* Change history */}

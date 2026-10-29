@@ -3,7 +3,6 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { RadarTabs } from "@/components/RadarTabs";
 import { CampaignAutoMatch } from "@/components/CampaignControls";
 import { FigureStrip, type Figure } from "@/components/console-primitives";
 import { SeedTag, ScorePill, TierBadge } from "@/components/radar-badges";
@@ -40,7 +39,6 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
         </div>
         <div className="flex items-center gap-3"><FigureStrip figures={figures} /><CampaignAutoMatch campaignId={c.campaign.id} /></div>
       </header>
-      <RadarTabs />
 
       {c.members.length === 0 ? (
         <p className="text-[13px] text-meta">No opportunities in this campaign yet. Use auto-match to pull in matching opportunities.</p>

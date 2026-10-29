@@ -4,7 +4,6 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { RadarTabs } from "@/components/RadarTabs";
 import { SeedTag, VerificationBadge, ScorePill, TierBadge } from "@/components/radar-badges";
 import { getEntity, getOpportunitiesForEntity } from "@/lib/opportunity/store";
 import { singleView } from "@/lib/opportunity/service";
@@ -33,7 +32,6 @@ export default async function EntityDetailPage({ params }: { params: Promise<{ i
         </div>
         <p className="text-[13px] text-meta">{ENTITY_KIND_LABEL[entity.kind as EntityKind] ?? entity.kind}{entity.email ? ` · ${entity.email}` : ""}{entity.phone ? ` · ${entity.phone}` : ""}{entity.website ? ` · ${entity.website}` : ""}</p>
       </header>
-      <RadarTabs />
 
       {memo.matched && memo.customer && (
         <section className="mb-5 rounded border border-attention/30 bg-attention/[0.05] p-3 text-[13px]">

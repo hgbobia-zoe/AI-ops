@@ -2,7 +2,6 @@
 // and measure signal → outreach → revenue per campaign.
 
 import Link from "next/link";
-import { RadarTabs } from "@/components/RadarTabs";
 import { CampaignCreate } from "@/components/CampaignControls";
 import { tableCls, theadCls, thCls } from "@/components/console-primitives";
 import { SeedTag } from "@/components/radar-badges";
@@ -24,10 +23,9 @@ export default async function CampaignsPage(): Promise<React.JSX.Element> {
   return (
     <main className="p-6">
       <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
-        <div><h1 className="text-[22px] font-medium tracking-tight">Opportunity Radar</h1><p className="text-[12.5px] text-meta">Campaigns — group opportunities and track signal → outreach → revenue.</p></div>
+        <div><h1 className="text-[22px] font-medium tracking-tight">Campaigns</h1><p className="text-[12.5px] text-meta">Campaigns — group opportunities and track signal → outreach → revenue.</p></div>
         <CampaignCreate />
       </header>
-      <RadarTabs />
 
       {campaigns.length === 0 ? (
         <p className="text-[13px] text-meta">No campaigns yet. Create one with target criteria (type, jurisdiction, min score) and it auto-populates from matching opportunities.</p>
