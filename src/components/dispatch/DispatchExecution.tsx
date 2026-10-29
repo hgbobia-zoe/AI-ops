@@ -8,7 +8,6 @@
 
 import { useCallback, useRef, useState } from "react";
 import {
-  AlertTriangle,
   ChevronDown,
   ChevronRight,
   CircleCheck,
@@ -24,6 +23,9 @@ import { ResyncRouteButton } from "@/components/ResyncRouteButton";
 import { ReopenRouteButton } from "@/components/ReopenRouteButton";
 import { DriverAssign } from "@/components/DriverAssign";
 import { QuoteReviewButton } from "@/components/QuoteReviewButton";
+import { StatusBadge } from "@/components/ui/status";
+import { STATUS_DOT } from "@/lib/tone";
+import { stopStateTone, routeStatusView, staffingTone } from "@/lib/dispatch/boardView";
 import { STATE_VISUAL } from "@/lib/stateVisual";
 import { DISPLAY_TZ, formatClockTime } from "@/lib/dates";
 import type { StopState, RouteStatus } from "@/lib/types";
@@ -103,31 +105,26 @@ function packLanes(xs: number[]): { lanes: number[]; count: number } {
   return { lanes, count: Math.max(1, laneEnds.length) };
 }
 
+// Stop-state badge — the shared Spectrum indicator model (coloured icon + crisp label), keeping the
+// state-specific icon (clock / truck / pin / …) from the shared visual table so each state still reads
+// at a glance. Tone comes from the one dispatch tone map.
 function StateBadge({ state }: { state: StopState }): React.JSX.Element {
-  const v = STATE_VISUAL[state];
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-[var(--row-hover)] px-2 py-0.5 text-[11px] font-medium">
-      <span className={`size-2 rounded-full ${v.dot}`} />
-      {v.label}
-    </span>
+    <StatusBadge tone={stopStateTone(state)} icon={STATE_VISUAL[state].icon} size="sm">
+      {STATE_VISUAL[state].label}
+    </StatusBadge>
   );
 }
 
-// Staffing tone → dot + text (text label always present, never color-only).
-function staffingTone(s: RouteStaffingState): { dot: string; text: string } {
-  if (!s.requiresCrew) return { dot: "bg-[var(--bar)]", text: "text-meta" };
-  if (s.status === "ok") return { dot: "bg-positive", text: "text-tertiary-text" };
-  if (s.nobody) return { dot: "bg-critical", text: "text-critical" };
-  return { dot: "bg-attention", text: "text-attention" };
-}
-
-function routeStatusLabel(status: RouteStatus, done: number, total: number): string {
-  if (status === "done") return "Closed";
-  if (status === "scraping") return "Loading route…";
-  if (status === "failed") return "Route failed — manual entry";
-  if (total === 0) return "Ready to start";
-  if (done === total) return "Route complete";
-  return "In progress";
+// Staffing cell — a small status dot (colour on the indicator only) + the neutral label. Never a
+// colour-only signal, never a tinted label.
+function StaffingCell({ s, className = "" }: { s: RouteStaffingState; className?: string }): React.JSX.Element {
+  return (
+    <span className={`inline-flex min-w-0 items-center gap-1.5 text-[12px] ${className}`}>
+      <span className={`size-2 shrink-0 rounded-full ${STATUS_DOT[staffingTone(s)]}`} aria-hidden />
+      <span className="truncate text-secondary-text">{s.label}</span>
+    </span>
+  );
 }
 
 // ── Timeline ──────────────────────────────────────────────────────────────────────────────────────────
@@ -187,13 +184,13 @@ function DispatchTimeline({
                 {hours.slice(1, -1).map((h) => (
                   <div key={h} className="absolute inset-y-0 w-px bg-[var(--grid-rule)]" style={{ left: `${((h - BOARD_START) / BOARD_HOURS) * 100}%` }} />
                 ))}
-                {nowPct != null && <div className="absolute inset-y-0 z-10 w-px bg-[#cfd3e5]/70" style={{ left: `${nowPct}%` }} />}
+                {nowPct != null && <div className="absolute inset-y-0 z-10 w-px bg-foreground/60" style={{ left: `${nowPct}%` }} />}
                 {positioned.map(({ s, timed, leftPct }, i) => {
                   const finished = s.state === "Completed" || s.state === "Returned";
                   const exception = s.state === "Exception";
                   const pickup = s.kind === "pickup";
-                  const fill = finished ? "bg-[#244a35] text-[#e9e9ed] ring-1 ring-inset ring-positive/70" : exception ? "bg-[#4a2a2e] text-[#e9e9ed] ring-1 ring-inset ring-critical" : "bg-[#3f424d] text-[#e9e9ed]";
-                  const ring = !finished && !exception && pickup ? "ring-1 ring-inset ring-attention/60" : "";
+                  const fill = finished ? "bg-row text-secondary-text ring-1 ring-inset ring-status-ready" : exception ? "bg-row text-secondary-text ring-1 ring-inset ring-status-blocked" : "bg-lifted text-secondary-text";
+                  const ring = !finished && !exception && pickup ? "ring-1 ring-inset ring-status-warning" : "";
                   return (
                     <button
                       type="button"
@@ -203,7 +200,7 @@ function DispatchTimeline({
                       className={`absolute flex h-[22px] items-center gap-1 overflow-hidden rounded-[2px] px-1.5 text-[11px] ${fill} ${ring} ${timed ? "" : "border border-dashed border-meta/60"}`}
                       style={{ left: `${leftPct}%`, top: lanes[i] * LANE_H + 4, width: `max(${(0.7 / BOARD_HOURS) * 100}%, 72px)` }}
                     >
-                      <span className={`shrink-0 text-[9px] font-semibold uppercase ${pickup ? "text-attention" : "text-tertiary-text"}`}>{pickup ? "P" : "D"}</span>
+                      <span className={`shrink-0 text-[9px] font-semibold uppercase ${pickup ? "text-status-warning" : "text-tertiary-text"}`}>{pickup ? "P" : "D"}</span>
                       <span className="truncate">{s.custName}</span>
                     </button>
                   );
@@ -215,12 +212,12 @@ function DispatchTimeline({
       </div>
 
       <div className="flex flex-wrap items-center gap-4 border-t border-[var(--row-rule)] px-3 py-2 text-[11.5px] text-meta">
-        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#3f424d]" /> Scheduled</span>
-        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#3f424d] ring-1 ring-inset ring-attention/60" /> Pickup (P)</span>
-        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#244a35] ring-1 ring-inset ring-positive/70" /> Done</span>
-        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-[#4a2a2e] ring-1 ring-inset ring-critical" /> Exception</span>
+        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-lifted" /> Scheduled</span>
+        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-lifted ring-1 ring-inset ring-status-warning" /> Pickup (P)</span>
+        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-row ring-1 ring-inset ring-status-ready" /> Done</span>
+        <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] bg-row ring-1 ring-inset ring-status-blocked" /> Exception</span>
         <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] border border-dashed border-meta/60" /> No scheduled time</span>
-        {isToday && <span className="flex items-center gap-1.5"><span className="h-3 w-px bg-[#cfd3e5]/70" /> Now</span>}
+        {isToday && <span className="flex items-center gap-1.5"><span className="h-3 w-px bg-foreground/60" /> Now</span>}
       </div>
     </section>
   );
@@ -315,7 +312,7 @@ function RouteDetail({ route, canSupervise }: { route: DispatchRouteView; canSup
           )}
           <div className="flex justify-between gap-2">
             <dt className="text-meta">Staffing</dt>
-            <dd className={staffingTone(s).text}><span className={`mr-1.5 inline-block size-2 rounded-full align-middle ${staffingTone(s).dot}`} />{s.label}</dd>
+            <dd><StaffingCell s={s} /></dd>
           </div>
           <div className="flex justify-between gap-2">
             <dt className="text-meta">Confirmations</dt>
@@ -354,7 +351,6 @@ function RouteDetail({ route, canSupervise }: { route: DispatchRouteView; canSup
 const GRID = "grid grid-cols-[1.9fr_1fr_1.9fr_1.7fr_1.7fr_1.8fr] items-center gap-2";
 
 function RouteRow({ route, expanded, onToggle, canSupervise, rowRef }: { route: DispatchRouteView; expanded: boolean; onToggle: () => void; canSupervise: boolean; rowRef: (el: HTMLDivElement | null) => void }): React.JSX.Element {
-  const tone = staffingTone(route.staffing);
   const exec = route.executionExceptions;
   const routeDone = route.status === "done";
   return (
@@ -370,23 +366,28 @@ function RouteRow({ route, expanded, onToggle, canSupervise, rowRef }: { route: 
           <span className="flex size-7 shrink-0 items-center justify-center rounded border border-border text-tertiary-text"><TruckIcon className="size-3.5" /></span>
           <span className="min-w-0">
             <span className="block truncate text-[13px] font-medium">{route.truckName}</span>
-            <span className="block truncate text-[11px] text-meta">{routeStatusLabel(route.status, route.done, route.total)}</span>
+            <span className="block truncate text-[11px] text-meta">{routeStatusView(route.status, route.done, route.total).label}</span>
           </span>
         </button>
 
         <div className="text-[13px] tabular-nums"><span className="font-medium">{route.done}/{route.total}</span></div>
 
         <div className="min-w-0 truncate text-[12.5px]">
-          {route.driverName ? <span className="inline-flex items-center gap-1"><Users className="size-3 text-meta" />{route.driverName}</span> : <span className="text-attention">No driver</span>}
+          {route.driverName ? (
+            <span className="inline-flex items-center gap-1"><Users className="size-3 text-meta" />{route.driverName}</span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5"><span className={`size-2 shrink-0 rounded-full ${STATUS_DOT.attention}`} aria-hidden /><span className="text-secondary-text">No driver</span></span>
+          )}
         </div>
 
-        <div className={`flex min-w-0 items-center gap-1.5 text-[12px] ${tone.text}`}>
-          <span className={`size-2 shrink-0 rounded-full ${tone.dot}`} />
-          <span className="truncate">{route.staffing.label}</span>
-        </div>
+        <StaffingCell s={route.staffing} />
 
         <div className="text-[12px]">
-          {exec > 0 ? <span className="inline-flex items-center gap-1 text-critical"><AlertTriangle className="size-3.5" />{exec} exception{exec === 1 ? "" : "s"}</span> : <span className="text-meta">On track</span>}
+          {exec > 0 ? (
+            <StatusBadge tone="critical" size="sm">{exec} exception{exec === 1 ? "" : "s"}</StatusBadge>
+          ) : (
+            <span className="text-meta">On track</span>
+          )}
         </div>
 
         <div className="flex items-center justify-end gap-2">
@@ -432,43 +433,46 @@ export function DispatchExecution({
     <div className="space-y-5">
       {hasTimed && <DispatchTimeline routes={routes} isToday={isToday} selectedRouteId={selected} onSelect={selectRoute} />}
 
-      {/* Compact route execution list */}
-      <section aria-label="Route execution list" className="border border-border">
-        <div className={`${GRID} border-b border-border bg-background px-3 py-2 text-[10.5px] font-medium uppercase tracking-[0.08em] text-meta`}>
-          <span>Vehicle / route</span>
-          <span>Stops</span>
-          <span>Driver</span>
-          <span>Staffing</span>
-          <span>Execution</span>
-          <span className="text-right">Actions</span>
-        </div>
-        {routes.length === 0 && noRouteTrucks.length === 0 && (
-          <div className="px-3 py-4 text-[13px] text-meta">No routes scheduled.</div>
-        )}
-        {routes.map((r) => (
-          <RouteRow
-            key={r.routeId}
-            route={r}
-            expanded={selected === r.routeId}
-            onToggle={() => toggle(r.routeId)}
-            canSupervise={canSupervise}
-            rowRef={(el) => { if (el) rowRefs.current.set(r.routeId, el); else rowRefs.current.delete(r.routeId); }}
-          />
-        ))}
-        {/* Trucks with no route — keep the full fleet visible */}
-        {noRouteTrucks.map((t) => (
-          <div key={t.truckId} className={`${GRID} border-b border-[var(--row-rule)] px-3 py-2.5 last:border-b-0`}>
-            <span className="flex items-center gap-2 text-[13px] text-meta">
-              <span className="flex size-7 shrink-0 items-center justify-center rounded border border-border text-meta"><TruckIcon className="size-3.5" /></span>
-              {t.truckName}
-            </span>
-            <span className="text-[12px] text-meta">—</span>
-            <span className="text-[12px] text-meta">—</span>
-            <span className="text-[12px] text-meta">No route</span>
-            <span className="text-[12px] text-meta">—</span>
-            <span />
+      {/* Compact route execution list — scrolls horizontally in its OWN bounded box on narrow screens
+          (like the timeline above), so the dense column grid never forces document-wide overflow. */}
+      <section aria-label="Route execution list" className="overflow-x-auto border border-border">
+        <div className="min-w-[720px]">
+          <div className={`${GRID} border-b border-border bg-background px-3 py-2 text-[10.5px] font-medium uppercase tracking-[0.08em] text-meta`}>
+            <span>Vehicle / route</span>
+            <span>Stops</span>
+            <span>Driver</span>
+            <span>Staffing</span>
+            <span>Execution</span>
+            <span className="text-right">Actions</span>
           </div>
-        ))}
+          {routes.length === 0 && noRouteTrucks.length === 0 && (
+            <div className="px-3 py-4 text-[13px] text-meta">No routes scheduled.</div>
+          )}
+          {routes.map((r) => (
+            <RouteRow
+              key={r.routeId}
+              route={r}
+              expanded={selected === r.routeId}
+              onToggle={() => toggle(r.routeId)}
+              canSupervise={canSupervise}
+              rowRef={(el) => { if (el) rowRefs.current.set(r.routeId, el); else rowRefs.current.delete(r.routeId); }}
+            />
+          ))}
+          {/* Trucks with no route — keep the full fleet visible */}
+          {noRouteTrucks.map((t) => (
+            <div key={t.truckId} className={`${GRID} border-b border-[var(--row-rule)] px-3 py-2.5 last:border-b-0`}>
+              <span className="flex items-center gap-2 text-[13px] text-meta">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded border border-border text-meta"><TruckIcon className="size-3.5" /></span>
+                {t.truckName}
+              </span>
+              <span className="text-[12px] text-meta">—</span>
+              <span className="text-[12px] text-meta">—</span>
+              <span className="text-[12px] text-meta">No route</span>
+              <span className="text-[12px] text-meta">—</span>
+              <span />
+            </div>
+          ))}
+        </div>
       </section>
 
       {superseded.length > 0 && (
@@ -476,7 +480,8 @@ export function DispatchExecution({
           <summary className="cursor-pointer select-none px-3 py-2.5 text-[12.5px] text-meta transition-colors hover:text-foreground">
             {superseded.length} earlier closed route{superseded.length === 1 ? "" : "s"} today · replaced by a newer route — show
           </summary>
-          <div className="border-t border-border">
+          <div className="overflow-x-auto border-t border-border">
+            <div className="min-w-[720px]">
             {superseded.map((r) => (
               <RouteRow
                 key={r.routeId}
@@ -487,6 +492,7 @@ export function DispatchExecution({
                 rowRef={(el) => { if (el) rowRefs.current.set(r.routeId, el); else rowRefs.current.delete(r.routeId); }}
               />
             ))}
+            </div>
           </div>
         </details>
       )}
