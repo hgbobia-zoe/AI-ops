@@ -13,7 +13,7 @@ import { getPayrollConfig } from "./config";
 import { getTimesheetDetail, getPlannedHours, type TimesheetUserDetail } from "@/lib/connecteam";
 import { gustoConfigured } from "./gusto";
 import { gustoSnapshotFresh } from "./gustoSnapshot";
-import { upsertException, listExceptions, resolveException, getWorkerByConnecteamId } from "./store";
+import { upsertException, listExceptions, resolveException, getWorkerByConnecteamId, listPeriodExclusions } from "./store";
 import type {
   PayPeriod, PayrollReadiness, ReadinessException, ReadinessStatus, ReadinessWorker,
   ReadinessIssueKind, ExceptionSeverity, UnifiedWorker,
@@ -242,6 +242,12 @@ function buildSummary(
 
 // ── Live assessment + persistence ─────────────────────────────────────────────────────────────────────
 
+/** Is this worker pulled out of the run? True when permanently excluded (hr_workers.excluded) OR skipped for
+ *  THIS period (a key in the per-period exclusions). Such a worker is never a readiness blocker. Pure. */
+export function isExcludedFromRun(excluded: boolean | undefined, key: string, periodExclusions: Map<string, unknown>): boolean {
+  return !!excluded || periodExclusions.has(key);
+}
+
 /** Gather the live facts for a period and classify readiness. Reads only; never mutates hours or payroll. */
 export async function assessReadiness(period: PayPeriod, opts?: Partial<ReadinessOptions>): Promise<PayrollReadiness> {
   const cfg = getPayrollConfig();
@@ -256,7 +262,13 @@ export async function assessReadiness(period: PayPeriod, opts?: Partial<Readines
     getPlannedHours(period.start, period.end),
   ]);
 
-  const facts: ReadinessFacts[] = workers.map((w: UnifiedWorker) => {
+  // Drop workers the human pulled out of this run on the Review tab (permanent hr_workers.excluded, OR a
+  // per-period skip). An excluded worker is not being paid, so it must not surface as a readiness blocker
+  // (e.g. "not mapped to Gusto" / "unapproved time"). Everything else below is unchanged.
+  const periodExclusions = listPeriodExclusions(period.start, period.end);
+  const included = workers.filter((w) => !isExcludedFromRun(w.excluded, w.key, periodExclusions));
+
+  const facts: ReadinessFacts[] = included.map((w: UnifiedWorker) => {
     const detail: TimesheetUserDetail | undefined = w.connecteamUserId != null ? tsDetail.byUser.get(w.connecteamUserId) : undefined;
     const plannedHours = w.connecteamUserId != null && planned.ok ? planned.hours.get(w.connecteamUserId) ?? null : null;
     return {
