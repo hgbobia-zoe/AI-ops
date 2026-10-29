@@ -11,20 +11,6 @@ import { GripVertical } from "lucide-react";
 import { BOARD_STAGES, STAGE_META, canTransition } from "@/lib/seo/stages";
 import type { SeoOpportunity, SeoStage } from "@/lib/seo/types";
 
-const ACTION_TONE: Record<string, string> = {
-  CREATE: "text-[color:var(--positive,#16a34a)]",
-  IMPROVE: "text-attention",
-  CONSOLIDATE: "text-foreground",
-  SKIP: "text-meta",
-};
-
-function priorityTone(n: number | null): string {
-  if (n == null) return "text-meta";
-  if (n >= 70) return "text-critical";
-  if (n >= 40) return "text-attention";
-  return "text-meta";
-}
-
 export function SeoBoard({ initial, onOpen }: { initial: SeoOpportunity[]; onOpen: (id: string) => void }): React.JSX.Element {
   const router = useRouter();
   const [cards, setCards] = useState<SeoOpportunity[]>(initial);
@@ -85,8 +71,8 @@ export function SeoBoard({ initial, onOpen }: { initial: SeoOpportunity[]; onOpe
                     className={`group cursor-pointer border border-border bg-card p-2.5 transition-colors hover:border-foreground/25 ${dragId === c.id ? "opacity-40" : ""}`}
                   >
                     <div className="flex items-start gap-2">
-                      {c.recommendedAction && <span className={`shrink-0 text-[10.5px] font-medium uppercase tracking-[0.06em] ${ACTION_TONE[c.recommendedAction] ?? "text-meta"}`}>{c.recommendedAction}</span>}
-                      <span className={`ml-auto shrink-0 text-[12px] tabular-nums ${priorityTone(c.priority)}`}>{c.priority ?? "—"}</span>
+                      {c.recommendedAction && <span className="shrink-0 text-[10.5px] font-medium uppercase tracking-[0.06em] text-secondary-text">{c.recommendedAction}</span>}
+                      <span className="ml-auto shrink-0 text-[12px] tabular-nums text-foreground">{c.priority ?? "—"}</span>
                     </div>
                     <div className="mt-1 line-clamp-2 text-[13px] font-medium text-foreground">{c.keyword}</div>
                     <div className="mt-1 flex items-center gap-1.5">
