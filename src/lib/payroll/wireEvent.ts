@@ -310,21 +310,23 @@ export function fmtDate(iso: string | null): string | null {
 export function wireAlertCard(rec: WireEventRecord): BotCard {
   const amount = formatUsd(rec.amountAbs);
   const dateStr = fmtDate(rec.createdAt);
-  const periodLine = rec.matchedPeriod
-    ? `This matches the ${rec.matchedPeriod.periodLabel} pay period, expected about ${formatUsd(rec.matchedPeriod.expectedTotal)}.`
-    : `The pay period is unconfirmed, so please confirm this is the payroll wire.`;
+  // Show the pay period ONLY when we can actually tie the wire to one; when we can't, omit the line entirely
+  // rather than printing "unconfirmed" noise. The body is a short one-liner so the tile isn't doubled up with
+  // the fields below.
+  const periodLabel = rec.matchedPeriod?.periodLabel ?? null;
+  const fields = [
+    { label: "Amount", value: amount },
+    { label: "Counterparty", value: rec.counterpartyName ?? "unknown" },
+    { label: "Status", value: rec.status ?? "unknown" },
+    ...(periodLabel ? [{ label: "Pay period", value: periodLabel }] : []),
+    { label: "Mercury ref", value: rec.transactionId },
+  ];
   const body = humanize(
-    `Wire to Gusto sent. Amount ${amount}${dateStr ? ` on ${dateStr}` : ""}. Mercury ref ${rec.transactionId}. ${periodLine} Next step, confirm the wire inside Gusto.`,
+    `Wire to Gusto sent${amount ? `, ${amount}` : ""}${dateStr ? ` on ${dateStr}` : ""}${periodLabel ? ` for the ${periodLabel} pay period` : ""}. Confirm it inside Gusto.`,
   );
   return {
     title: "Wire to Gusto sent",
-    fields: [
-      { label: "Amount", value: amount },
-      { label: "Counterparty", value: rec.counterpartyName ?? "unknown" },
-      { label: "Status", value: rec.status ?? "unknown" },
-      { label: "Pay period", value: rec.matchedPeriod ? rec.matchedPeriod.periodLabel : "unconfirmed" },
-      { label: "Mercury ref", value: rec.transactionId },
-    ],
+    fields,
     body,
     link: { text: "Open in Mercury", url: rec.dashboardLink },
     context: "Payroll Bot. Next step, confirm the wire inside Gusto.",
