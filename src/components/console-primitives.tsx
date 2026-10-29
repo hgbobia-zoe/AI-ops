@@ -13,10 +13,10 @@ export function tierBar(tier: Tier): string {
   if (tier === "today" || tier === "attention") return "border-l-2 border-attention";
   return "border-l-2 border-transparent";
 }
-/** Row background by tier. */
+/** Row background by tier. Tokenised (was hard-coded dark hex) so it renders in both themes. */
 export function tierRowBg(tier: Tier): string {
-  if (tier === "now") return "bg-[#1b1d29]";
-  if (tier === "done") return "bg-[#191b26]";
+  if (tier === "now") return "bg-row";
+  if (tier === "done") return "bg-panel";
   return "";
 }
 /** Primary value / name text colour by tier. */
@@ -80,12 +80,24 @@ export function StatusMark({ tone, label }: { tone: "positive" | "attention" | "
   );
 }
 
-// ── Table class constants (fixed layout, sticky thead, hairline rules) ──────────
+// ── Table class constants ───────────────────────────────────────────────────────
+// Archetype A — the full-height DATA GRID: fixed layout, sticky thead on the canvas, hairline rules.
+// Use when the table is the page and the header should stay pinned while the body scrolls vertically.
 export const tableCls = "w-full table-fixed border-collapse text-[13.5px]";
 export const theadCls = "sticky top-0 z-10 bg-background";
 export const thCls = "px-2.5 py-2 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-meta";
 export const tdCls = "px-2.5 py-2.5 align-middle";
-export const rowCls = "border-t border-[var(--row-rule)] transition-colors hover:bg-[var(--row-hover)]";
+export const rowCls = "border-t border-rule transition-colors hover:bg-row-hover";
+
+// Archetype B — the COMPACT bounded table (as on Payroll): sits inside a bordered surface that
+// scrolls HORIZONTALLY in its own box, denser rows, small-caps header. Wrap the <table> in
+// `compactTableFrameCls` and give the <table> `compactTableCls` + a min-w so it scrolls, not squashes.
+export const compactTableFrameCls = "surface overflow-x-auto border border-border";
+export const compactTableCls = "w-full text-[12.5px]";
+export const compactTheadRowCls = "border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta";
+export const compactThCls = "px-3 py-2 font-medium";
+export const compactTdCls = "px-3 py-2 text-secondary-text";
+export const compactRowCls = "border-b border-rule/60 last:border-0 hover:bg-row-hover";
 
 // ── Verified / Inferred meta line ──────────────────────────────────────────────
 export function Provenance({ kind, detail }: { kind: "verified" | "inferred" | "unverified"; detail?: string }): React.JSX.Element {

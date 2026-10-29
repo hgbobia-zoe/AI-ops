@@ -7,20 +7,30 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  /* Single typeface (Nocturne redesign): Inter everywhere. Hierarchy = size + colour + weight. */
+  /* Single typeface (Nocturne redesign): Inter everywhere. Hierarchy = size + colour + weight.
+     --font-heading is an explicit alias of the body font so the `font-heading` utility (used by the
+     Card/Dialog titles) resolves to Inter instead of silently falling back to the browser default. */
   --font-sans: var(--font-body), system-ui, -apple-system, sans-serif;
+  --font-heading: var(--font-body), system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  /* Semantic + surface tokens exposed as Tailwind utilities (text-positive, bg-panel, text-meta, …). */
+  /* Semantic + surface tokens exposed as Tailwind utilities (text-positive, bg-panel, text-meta, …).
+     These now resolve in BOTH themes — see the :root (light) and .dark (dark) blocks below. */
   --color-positive: var(--positive);
   --color-attention: var(--attention);
   --color-critical: var(--critical);
+  --color-info: var(--info);
   --color-panel: var(--panel);
   --color-row: var(--row);
+  --color-row-hover: var(--row-hover);
   --color-lifted: var(--lifted);
   --color-meta: var(--text-meta);
   --color-secondary-text: var(--text-secondary);
   --color-tertiary-text: var(--text-tertiary);
   --color-rule: var(--row-rule);
+  --color-grid-rule: var(--grid-rule);
+  --color-bar: var(--bar);
+  --color-bar-2: var(--bar-2);
+  --color-gold: var(--gold);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -60,7 +70,9 @@
 }
 
 :root {
-  /* Monochrome — black on white (Uber style). No hue anywhere. */
+  /* Neutral base — ink on white (Uber style): the canvas, surfaces, borders and text tiers stay
+     monochrome. Hue appears only in the semantic status layer (added at the end of this block),
+     because status colour carries meaning. */
   --background: oklch(1 0 0);
   --foreground: oklch(0.16 0 0);
   --card: oklch(1 0 0);
@@ -94,6 +106,31 @@
   --sidebar-accent-foreground: oklch(0.16 0 0);
   --sidebar-border: oklch(0.9 0 0);
   --sidebar-ring: oklch(0.16 0 0);
+
+  /* Extended Nocturne tokens for LIGHT. These mirror the dark set below so the one design system
+     renders in every supported theme (previously they existed only under .dark, which left the
+     light theme's surfaces, text tiers and statuses undefined). The neutral base above stays
+     monochrome "ink on white"; the semantic statuses carry hue because their whole job is meaning.
+     All foreground/background pairs below are measured ≥ WCAG AA — see docs/DESIGN_SYSTEM.md. */
+  --panel: oklch(0.985 0 0);      /* section/card surface, a hair off the white canvas */
+  --row: oklch(0.97 0 0);         /* table rows / inset wells */
+  --row-hover: oklch(0.955 0 0);  /* row hover */
+  --lifted: oklch(1 0 0);         /* raised surface (popovers/menus) — white, lifted by its border */
+  --row-rule: oklch(0.90 0 0);    /* hairline between rows */
+  --grid-rule: oklch(0.925 0 0);  /* chart/table gridlines */
+  --text-secondary: oklch(0.32 0 0); /* 12.7:1 on white */
+  --text-tertiary: oklch(0.42 0 0);  /* 8.5:1 */
+  --text-meta: oklch(0.50 0 0);      /* 6.0:1 — muted but readable, never "disabled" */
+  --bar: oklch(0.80 0 0);
+  --bar-2: oklch(0.70 0 0);
+  /* Semantic statuses — darkened for AA on white (text ≥5.3:1; on the /10 tint chips ≥4.6:1). */
+  --positive: #147a43;
+  --attention: #8a5a00;
+  --critical: #bf2d1c;
+  --info: #2060c0;
+  /* Zoe gold on light — deep bronze-gold so it is legible as a mark AND as text (6.2:1 on white).
+     Scope stays the Command Center per the handoff; do not propagate to other screens. */
+  --gold: #7a5c12;
 }
 
 .dark {
@@ -140,12 +177,18 @@
   --grid-rule: #22242f;
   --text-secondary: #cfd3e5;
   --text-tertiary: #b2b6ca;
-  --text-meta: #75798c;
+  /* Muted metadata tier. Lightened from the earlier #75798c (which measured ~3.8–4.1:1 on the
+     panel/row surfaces — under AA, and the source of the "controls look disabled" audit note) to
+     #8a8ea2, which clears 4.5:1 on canvas/panel/row/lifted while keeping the same bluish-gray role. */
+  --text-meta: #8a8ea2;
   --bar: #3f424d;
   --bar-2: #595d6c;
   --positive: #86c3a2;
   --attention: #d4b36b;
   --critical: #df837a;
+  /* Informational status (neutral "FYI" — distinct from positive/attention/critical). Light blue,
+     ~8:1 on the canvas; kept separate from the categorical chart ramp. */
+  --info: #8ab4f0;
   /* Zoe gold — the Command Center accent (handoff v3 spec: #d4b36b, same as --attention). Scoped to the
      dashboard content (KPI bars, chart marks, active range/tabs, primary row buttons); do not propagate to
      other screens per the handoff. */
