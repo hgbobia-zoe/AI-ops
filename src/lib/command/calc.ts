@@ -120,6 +120,59 @@ export function capacityLevel(verdict: string | null | undefined): CapacityLevel
   return "NORMAL"; // AVAILABLE or unknown-but-no-pressure
 }
 
+/** A short word for a capacity level (the status that FOLLOWS the real verdict rule — no invented tiers). */
+export const CAPACITY_LEVEL_LABEL: Record<CapacityLevel, string> = {
+  NORMAL: "Open",
+  TIGHT: "Tight",
+  CONSTRAINED: "At limit",
+  UNVERIFIED: "Unverified",
+};
+
+/** Explicit crew capacity label — "available vs required", never an unexplained "X / Y" ratio. When no
+ *  routes need crewing that day, there is nothing to staff, so we say so (or show the event load). Returns
+ *  a `fill` 0–100 for a progress bar and whether a real crew ratio was known. */
+export function capacityCrewLabel(inp: {
+  driversScheduled: number | null;
+  driversNeeded: number | null;
+  jobs: number;
+}): { label: string; sub: string | null; fill: number; hasRatio: boolean } {
+  const { driversScheduled, driversNeeded, jobs } = inp;
+  const hasRatio = driversNeeded != null && driversNeeded > 0 && driversScheduled != null;
+  if (hasRatio) {
+    const fill = Math.min(100, Math.round((driversScheduled! / driversNeeded!) * 100));
+    return {
+      label: `${driversScheduled} of ${driversNeeded} crew`,
+      sub: `${driversScheduled} available · ${driversNeeded} required`,
+      fill,
+      hasRatio: true,
+    };
+  }
+  if (jobs > 0) {
+    return { label: `${jobs} event${jobs === 1 ? "" : "s"}`, sub: "no crew assigned yet", fill: 100, hasRatio: false };
+  }
+  return { label: "Clear", sub: "nothing scheduled", fill: 8, hasRatio: false };
+}
+
+/** When an attention item is affecting operations — a plain phrase, never a bare number. null = no date. */
+export function attentionTiming(daysUntil: number | null | undefined): string | null {
+  if (daysUntil == null) return null;
+  if (daysUntil < 0) {
+    const n = Math.abs(daysUntil);
+    return `${n} day${n === 1 ? "" : "s"} overdue`;
+  }
+  if (daysUntil === 0) return "Today";
+  if (daysUntil === 1) return "Tomorrow";
+  return `In ${daysUntil} days`;
+}
+
+/** The owning area for an attention source — the "owner if known" the queue shows (the responsible blade). */
+export const ATTENTION_OWNER: Record<"risk" | "sales" | "finance" | "customer", string> = {
+  risk: "Event Risk",
+  sales: "Sales",
+  finance: "Finance",
+  customer: "Customer",
+};
+
 /** How many times the open pipeline covers the remaining target gap (one decimal), or null when the gap
  *  is already closed / unknown. Drives the "open pipeline is X× the remaining target gap" insight. */
 export function pipelineCoverageMultiple(openValue: number | null, remainingGap: number | null): number | null {
