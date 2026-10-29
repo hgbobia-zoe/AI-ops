@@ -19,10 +19,11 @@
 //   6. Screenshot the changed page(s) at desktop (1280w) + mobile (390w) with Playwright, upload them +
 //      the summary + the changed-file list, and set the job to `preview`  (POST .../runner/artifact, .../runner/update)
 //   7. WAIT for the human decision (poll GET .../runner/job?id=<jobId>):
-//        approved  → push the working branch + `gh pr create` (base = deploy branch), then AUTO-MERGE to the
-//                    deploy branch: enable GitHub native auto-merge (merge when checks pass) and fall back to
-//                    an immediate merge if the repo has no auto-merge/required checks. The merge to master is
-//                    what triggers the Kinsta deploy. → set `done` with the PR url.
+//        approved  → push the working branch + `gh pr create` (base = deploy branch), then merge to the deploy
+//                    branch. DEFAULT = an IMMEDIATE squash-merge (in-app approval is the only gate). Set
+//                    WEBSITE_AUTO_MERGE=1 to instead enable GitHub native auto-merge (merge when required
+//                    checks pass), falling back to an immediate merge if the repo has no auto-merge/required
+//                    checks. The merge to master is what triggers the Kinsta deploy. → set `done` with the PR url.
 //        discarded → delete the local branch, restore the local site to a clean deploy branch → (already `discarded`)
 //
 // GUARDRAILS (this edits real website code driven by non-engineers):
@@ -32,8 +33,8 @@
 //     (whose env holds ANTHROPIC_API_KEY + WEBSITE_RUNNER_TOKEN). The RUNNER owns git, the build/preview
 //     deploy, PRs, and the merge — the agent just edits website source under cwd=WEBSITE_REPO_PATH.
 //   • The runner NEVER commits to / pushes the deploy branch directly. The ONLY way a change reaches master is
-//     a human APPROVING the preview in the app, which lets the runner open the PR and merge it (preferring
-//     GitHub auto-merge so required checks still gate the deploy). Discarded/queued jobs never touch master.
+//     a human APPROVING the preview in the app, which lets the runner open the PR and merge it (immediately by
+//     default; WEBSITE_AUTO_MERGE=1 instead gates the merge on GitHub checks). Discarded/queued jobs never touch master.
 //   • One job at a time. One job failing never crashes the loop — it is marked `failed` and the loop continues.
 //   • Secrets (ANTHROPIC_API_KEY, WEBSITE_RUNNER_TOKEN) are read from the environment, never hardcoded.
 //
@@ -73,10 +74,12 @@ const REPO_SLUG = (process.env.WEBSITE_REPO_SLUG || "hgbobia-zoe/zoe-event-renta
 const DEPLOY_BRANCH = (process.env.WEBSITE_DEPLOY_BRANCH || "master").trim();
 // The clearly-non-master working-branch prefix; full name = `${prefix}${jobId}`.
 const WORKING_BRANCH_PREFIX = ((process.env.WEBSITE_WORKING_BRANCH_PREFIX || "website-studio").trim().replace(/\/+$/, "")) + "/";
-// On approval, prefer GitHub native auto-merge (merge when required checks pass); the immediate-merge fallback
-// is used only when the repo has no auto-merge/required-check setup. Set WEBSITE_AUTO_MERGE=0 to force the
-// immediate merge. WEBSITE_MERGE_METHOD is squash|merge|rebase.
-const AUTO_MERGE = !/^(0|false|no)$/i.test(process.env.WEBSITE_AUTO_MERGE || "");
+// On approval, the DEFAULT (WEBSITE_AUTO_MERGE unset) is an IMMEDIATE squash-merge to the deploy branch — the
+// in-app approval is the ONLY gate, so the approved change goes live right away. Opt INTO GitHub native
+// auto-merge (the PR merges itself once required checks pass) by setting WEBSITE_AUTO_MERGE to a truthy value
+// (1/true/yes/on). Parsing is opt-in-truthy so "unset" NEVER means auto-merge — this mirrors websiteAutoMerge()
+// in src/lib/website/config.ts exactly. WEBSITE_MERGE_METHOD is squash|merge|rebase.
+const AUTO_MERGE = /^(1|true|yes|on)$/i.test((process.env.WEBSITE_AUTO_MERGE || "").trim());
 const MERGE_METHOD = (() => {
   const m = (process.env.WEBSITE_MERGE_METHOD || "squash").trim().toLowerCase();
   return ["squash", "merge", "rebase"].includes(m) ? m : "squash";
@@ -379,8 +382,9 @@ function mergeToDeployBranch(branch, base) {
     }
   }
   try {
-    // Immediate merge (repo has no auto-merge / no required checks, or WEBSITE_AUTO_MERGE=0). This merges to
-    // the deploy branch now, which triggers the Kinsta deploy.
+    // Immediate merge — the DEFAULT path (WEBSITE_AUTO_MERGE unset), or the fallback when auto-merge was
+    // requested but the repo has no auto-merge / required checks. This merges to the deploy branch now, which
+    // triggers the Kinsta deploy.
     gh(["pr", "merge", branch, method], { capture: false });
     log(`job: merged ${branch} → ${base} immediately (deploy triggered)`);
     return `Merged into \`${base}\` — the live-site (Kinsta) deploy is triggered.`;
@@ -445,10 +449,11 @@ async function processJob(job) {
       return;
     }
 
-    // Auto-merge into the deploy branch. The human already approved the rendered preview in the app, so the
-    // approval IS the go-live decision. Prefer GitHub NATIVE auto-merge (merge when required checks pass) so
-    // the repo's branch protection / CI still gates the actual deploy; fall back to an immediate merge only
-    // when the repo has no auto-merge or required checks configured (gh errors in that case).
+    // Merge into the deploy branch. The human already approved the rendered preview in the app, so the
+    // approval IS the go-live decision. DEFAULT: merge immediately (approval is the only gate). With
+    // WEBSITE_AUTO_MERGE=1, instead prefer GitHub NATIVE auto-merge (merge when required checks pass) so the
+    // repo's branch protection / CI gates the actual deploy, falling back to an immediate merge only when the
+    // repo has no auto-merge or required checks configured (gh errors in that case).
     const mergeNote = mergeToDeployBranch(branch, base);
 
     await postUpdate({ id: job.id, status: "done", summary: `${summary}\n\n${mergeNote}`.trim(), prUrl });

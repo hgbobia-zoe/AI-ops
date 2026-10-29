@@ -280,6 +280,172 @@ export interface PayrollReadiness {
   summary: string; // one-line human readout
 }
 
+// ── Unified payroll readiness model (the single authoritative snapshot the UI reads) ─────────────────
+// One typed object that COMPOSES the two deterministic engines (review.ts mapping/anomaly/config + the
+// readiness.ts source-approval/punch/discrepancy/stale pre-check) plus the stored Zoe approval and the
+// draft-push result into a SINGLE answer for a (period, data-snapshot). Every panel, count, badge and
+// action in the blade reads from THIS object, so they can never disagree for the same period (spec §3).
+//
+// The reconciliation it encodes: payroll is a PIPELINE of explicitly-labeled gates, not one flat "ready".
+// Each gate is its own labeled state; the overall status is the worst gate; the next action resolves the
+// EARLIEST unsatisfied gate. Nothing unknown/unavailable/stale/unverified is ever silently READY (spec §4).
+
+// A pipeline gate's key — the ordered stages a period passes through before payroll is transmitted.
+export type GateKey = "hours" | "timesheetApproval" | "gustoMapping" | "zoeReview" | "gustoSubmission";
+// A gate's state. PASS = satisfied; ACTION = a human must act; BLOCKED = hard stop (can't export); UNVERIFIED
+// = a required source couldn't confirm (never treated as clean); UNAVAILABLE = the source is down; PENDING =
+// not yet done but not failing; NA = not applicable yet (e.g. submission before approval).
+export type GateState = "PASS" | "ACTION" | "BLOCKED" | "UNVERIFIED" | "UNAVAILABLE" | "PENDING" | "NA";
+export const GATE_LABEL: Record<GateKey, string> = {
+  hours: "Hours synced",
+  timesheetApproval: "Timesheets approved (Connecteam)",
+  gustoMapping: "Mapped to Gusto",
+  zoeReview: "Reviewed & approved (Zoe)",
+  gustoSubmission: "Sent to Gusto",
+};
+export interface PayrollGate {
+  key: GateKey;
+  label: string;
+  state: GateState;
+  detail: string; // one-line human readout of why it's in this state
+  affected: number; // workers this gate flags (0 when it passes / is period-level)
+}
+
+// The single overall status. Distinct from both the old review ReviewStatus and readiness ReadinessStatus:
+// it is their reconciliation. NO_DATA = nothing to pay; UNAVAILABLE = source down; BLOCKED = hard blocker;
+// ACTION_REQUIRED = something (approval/review/unverified) must be resolved; READY = every gate clean, not yet
+// signed off; APPROVED = Zoe sign-off recorded; SUBMITTED = pushed to the Gusto draft.
+export type UnifiedPayrollStatus = "NO_DATA" | "UNAVAILABLE" | "BLOCKED" | "ACTION_REQUIRED" | "READY" | "APPROVED" | "SUBMITTED";
+export const UNIFIED_STATUS_LABEL: Record<UnifiedPayrollStatus, string> = {
+  NO_DATA: "No data", UNAVAILABLE: "Source unavailable", BLOCKED: "Blocked",
+  ACTION_REQUIRED: "Action required", READY: "Ready to approve", APPROVED: "Approved", SUBMITTED: "Sent to Gusto",
+};
+// Semantic tone for a status/severity — paired ALWAYS with text/icon in the UI, never colour alone (spec §Visual).
+export type PayrollTone = "critical" | "attention" | "positive" | "neutral";
+
+// Per-worker row in the unified model — the one row every table/count derives from.
+export type UnifiedWorkerStatus = "READY" | "ACTION_REQUIRED" | "BLOCKED" | "UNVERIFIED" | "EXCLUDED";
+// Where an issue sits in the pipeline + how severe. `blocker` stops export; `review` is an anomaly to accept
+// or fix; `setup` is incomplete config (non-blocking); `unverified` means a source couldn't confirm.
+export type UnifiedIssueSeverity = "blocker" | "review" | "setup" | "unverified";
+export interface UnifiedIssue {
+  code: string;
+  label: string;
+  severity: UnifiedIssueSeverity;
+  gate: GateKey;
+  detail?: string; // the evidence + resolution, when available
+}
+// A worker's source-timesheet approval posture (Connecteam) — kept distinct from Zoe review approval.
+export type ApprovalState = "APPROVED" | "UNAPPROVED" | "UNVERIFIED" | "NA";
+export interface UnifiedWorkerRow {
+  key: string;
+  name: string;
+  workerType: WorkerType;
+  hours: number | null;
+  payRate: number | null;
+  rateSource: RateSource | null;
+  currency: string;
+  estPay: number | null;
+  mappingStatus: MappingStatus;
+  gustoMapped: boolean;
+  approvalState: ApprovalState;
+  approvedHours: number | null;
+  unapprovedHours: number | null;
+  status: UnifiedWorkerStatus;
+  accepted: boolean; // a REQUIRES_REVIEW worker the human accepted into this run
+  acceptedBy: string | null;
+  issues: UnifiedIssue[];
+  excludeMode?: ExcludeMode;
+  excludeReason?: string | null;
+  // passthrough for the inline editor + controls
+  recordId: string | null;
+  connecteamUserId: number | null;
+  gustoId: string | null;
+  country: string | null;
+  payType: PayType | null;
+  gustoRate: number | null;
+  gustoRateUnit: string | null;
+  connecteamRate: number | null;
+}
+
+// A prioritized "needs attention" group — repeated issues (e.g. several unapproved timesheets) folded into
+// one row with a count + the specific resolution. Counts come from the same worker rows above.
+export interface AttentionGroup {
+  code: string;
+  severity: UnifiedIssueSeverity;
+  gate: GateKey;
+  title: string; // plain-language issue
+  count: number;
+  workers: { key: string; name: string }[];
+  action: { label: string; href: string | null };
+  detail: string;
+}
+
+// Payroll-scoped integration health (NOT the global status bar) — last successful retrieval + verify state.
+export interface PayrollSourceHealth {
+  key: "connecteam" | "gusto" | "instawork";
+  label: string;
+  role: string;
+  state: "ok" | "stale" | "unavailable" | "idle" | "off";
+  lastAt: string | null;
+  detail: string;
+  fixHref: string | null;
+}
+
+// A real audit/activity event (from the audit log + sync ledger) — actor, action, time, outcome.
+export type ActivityLayer = "sync" | "review" | "approval" | "submission" | "exclusion" | "rate";
+export interface PayrollActivityEvent {
+  id: string;
+  actor: string | null;
+  layer: ActivityLayer;
+  label: string; // plain-language action
+  at: string;
+  outcome: string | null;
+  tone: PayrollTone;
+}
+
+// The single next valid action (resolves the earliest unsatisfied gate).
+export interface PayrollNextAction {
+  label: string;
+  href: string | null; // null = not a navigation (e.g. external Connecteam / use the inline action)
+  explain: string;
+  gate: GateKey | null;
+}
+
+// Rate-comparison breakdown (fixes the "11 have no rate" + "every worker matches" contradiction) — three
+// DISTINCT populations so the UI never conflates "comparable + matching" with "complete".
+export interface RateComparison {
+  mapped: number; // mapped, active, in-run workers
+  verifiedMatch: number; // Gusto hourly rate present AND equals Connecteam (a real verified match)
+  differing: number; // Gusto hourly ≠ Connecteam (a proposal exists)
+  missingSourceRate: number; // mapped but NO rate in the Gusto pull — cannot be compared
+  incomparableSalaried: number; // Gusto comp is a salary (non-hourly) — cannot drive an hourly compare
+  asOf: string | null;
+}
+
+export interface PayrollReadinessModel {
+  period: PayPeriod;
+  snapshotAt: string | null; // when the underlying data was last verified (lastSync / pulls)
+  connecteamOk: boolean;
+  approvalKnown: boolean; // did Connecteam expose timesheet approval at all?
+  status: UnifiedPayrollStatus;
+  tone: PayrollTone;
+  headline: string; // short status sentence
+  explain: string; // one line on what it means / what unaffected workers can do
+  gates: PayrollGate[];
+  nextAction: PayrollNextAction;
+  counts: { included: number; ready: number; actionRequired: number; blocked: number; unverified: number; excluded: number };
+  totals: { hours: number | null; estGross: number | null; estGrossPartial: boolean; approvedHours: number | null };
+  workers: UnifiedWorkerRow[]; // included (payable) workers
+  excludedWorkers: UnifiedWorkerRow[]; // pulled out of the run, kept accessible
+  attention: AttentionGroup[];
+  sources: PayrollSourceHealth[];
+  activity: PayrollActivityEvent[];
+  approval: { status: PayrollApprovalStatus; approvedBy: string | null; approvedAt: string | null } | null;
+  schedule: { deadlineLabel: string; precheckLabel: string | null; autoSyncLabel: string | null };
+  rateComparison: RateComparison;
+}
+
 export type ExceptionSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 export type ExceptionStatus = "OPEN" | "IN_REVIEW" | "RESOLVED" | "IGNORED";
 

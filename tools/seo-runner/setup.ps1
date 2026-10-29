@@ -16,6 +16,6 @@ npm install
 
 Write-Host ""
 Write-Host "Setup done." -ForegroundColor Green
-Write-Host "  1) Edit .env (set SEO_INGEST_TOKEN; adjust SEO_BATCH if on a paid plan)."
-Write-Host "  2) Sign in ONCE (opens a browser for the Ubersuggest OAuth):  .\start.ps1"
-Write-Host "  3) Install the scheduled drip (headless thereafter):          .\install-service.ps1"
+Write-Host "  1) Edit .env (set SEO_INGEST_TOKEN, SEO_ZOE_DOMAIN, SEO_COMPETITOR_DOMAINS)."
+Write-Host "  2) Test one read in the foreground:        .\start.ps1"
+Write-Host "  3) Install the scheduled drip:             .\install-service.ps1"

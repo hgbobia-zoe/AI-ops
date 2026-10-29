@@ -4,7 +4,8 @@ This is the office-machine half of **Website Studio**. The AI-OPS app (Zoe Dispa
 plain-English website-change requests from the marketing team. This runner drains that queue, makes the
 change with the **Claude Agent SDK** against the **separate website repo** on a **non-master working branch**,
 renders + screenshots that branch on the **local DevKinsta site** for a human to preview, and — only after a
-human approves in the app — opens a PR into **master** and **auto-merges** it, which deploys to the live site.
+human approves in the app — opens a PR into **master** and **merges** it (immediately by default, since the
+in-app approval is the only gate), which deploys to the live site.
 
 It mirrors how the office machine already drains the Goodshuffle `gs_outbox` via the Auto-Pull: the server
 can't do this work, so a machine you control does.
@@ -18,7 +19,8 @@ can't do this work, so a machine you control does.
 - **Deploy branch:** `WEBSITE_DEPLOY_BRANCH` (default **`master`**) — the PR base. A push to `master`
   auto-deploys to **Kinsta** (GitHub Actions on push to master), so **master = production/live**.
 - **Approval = go-live.** The marketer approves the *rendered preview*; the runner then merges to master
-  (preferring GitHub native auto-merge, so required checks still gate the deploy).
+  **immediately** (the in-app approval is the only gate). Set `WEBSITE_AUTO_MERGE=1` to instead prefer GitHub
+  native auto-merge so required checks gate the deploy.
 
 ## What it does, one job at a time (single-flight)
 
@@ -32,10 +34,11 @@ can't do this work, so a machine you control does.
    the summary + the changed-file list, and set the job to **`preview`**.
 7. Wait for the human decision in the app:
    - **Approved** → push the working branch + `gh pr create --repo <slug> --base <deploy branch>`, then
-     **auto-merge** it into the deploy branch: `gh pr merge --auto --squash` (GitHub native auto-merge — the
-     PR merges once required checks pass). If the repo has no auto-merge / required checks configured, it
-     falls back to an immediate `gh pr merge --squash`. The merge to master is what triggers the Kinsta
-     deploy. → mark `done` with the PR URL + a merge note.
+     **merge** it into the deploy branch. **Default:** an immediate `gh pr merge --squash` (the in-app approval
+     is the only gate). With `WEBSITE_AUTO_MERGE=1` it instead does `gh pr merge --auto --squash` (GitHub
+     native auto-merge — the PR merges once required checks pass), falling back to an immediate
+     `gh pr merge --squash` if the repo has no auto-merge / required checks configured. The merge to master is
+     what triggers the Kinsta deploy. → mark `done` with the PR URL + a merge note.
    - **Discarded** → delete the local branch, restore the local site to a clean deploy branch.
 
 ### Edit context (browse-and-edit)
@@ -62,10 +65,10 @@ regardless of environment — the environment only tells the agent which page th
   the agent only edits website source under the repo dir. If a theme build step is ever needed for preview,
   the runner runs it as a fixed command in its deploy step — never the agent.
 - The runner **never commits to or pushes the deploy branch (master) directly.** The ONLY path to master is
-  a human **approving the rendered preview** in the app, which lets the runner open the PR and merge it
-  (preferring GitHub auto-merge so required checks still gate the deploy). Queued/discarded jobs never touch
-  master. Set `WEBSITE_AUTO_MERGE=0` if you want the runner to open the PR + merge immediately without the
-  auto-merge gate, or manage merging entirely by hand (then a human merges the PR the runner opened).
+  a human **approving the rendered preview** in the app, which lets the runner open the PR and merge it. By
+  default the merge is **immediate** (the in-app approval is the only gate). Queued/discarded jobs never touch
+  master. Set `WEBSITE_AUTO_MERGE=1` if you instead want the runner to prefer GitHub native auto-merge so
+  required checks still gate the deploy.
 - One job at a time. A single job failing is caught, marked `failed` in the app, and the loop continues.
 - Secrets come from the environment, never hardcoded.
 
@@ -83,7 +86,8 @@ regardless of environment — the environment only tells the agent which page th
    gh auth login
    ```
    The authenticated account needs **write access** to `hgbobia-zoe/zoe-event-rentals` (to merge into
-   `master`). For GitHub **native auto-merge** to be used, enable "Allow auto-merge" in that repo's settings
+   `master`). By default the runner merges immediately on approval. Only if you opt into GitHub **native
+   auto-merge** (`WEBSITE_AUTO_MERGE=1`) do you also need to enable "Allow auto-merge" in that repo's settings
    and configure at least one required status check / branch protection on `master`; otherwise the runner
    falls back to an immediate merge. The local checkout's `origin` must be the same repo as
    `WEBSITE_REPO_SLUG` (the runner warns on startup if they disagree).
@@ -106,7 +110,7 @@ regardless of environment — the environment only tells the agent which page th
 | `WEBSITE_REPO_SLUG` | `hgbobia-zoe/zoe-event-rentals` | The GitHub repo the PR + merge target (`--repo`). Keep in sync with the app's `WEBSITE_REPO_SLUG`. |
 | `WEBSITE_DEPLOY_BRANCH` | `master` | The PR base / deploy branch (push → Kinsta). Empty auto-detects the checkout's default branch. |
 | `WEBSITE_WORKING_BRANCH_PREFIX` | `website-studio` | Prefix for the non-master working branch (`<prefix>/<jobId>`). Must match the app's so the displayed branch is correct. |
-| `WEBSITE_AUTO_MERGE` | `1` (on) | Prefer GitHub native auto-merge (merge when required checks pass). `0`/`false` → immediate merge instead. |
+| `WEBSITE_AUTO_MERGE` | *(unset)* → immediate merge | **Default (unset): immediate `gh pr merge --squash` on approval** — the in-app approval is the only gate. Set to a truthy value (`1`/`true`/`yes`/`on`) to opt into GitHub native auto-merge (merge when required checks pass, falling back to immediate). `0`/`false`/`no`/`off` is the same as unset. |
 | `WEBSITE_MERGE_METHOD` | `squash` | Merge method for the PR: `squash`, `merge`, or `rebase`. |
 | `WEBSITE_PREVIEW_URL` | *(none)* | Base URL the local DevKinsta site is served at (e.g. `http://zoeeventsdmv.local`). **Needed for screenshots** — without it the preview has no images. |
 | `DEVKINSTA_CONTAINER` | *(none)* | Docker container name/id of the DevKinsta WordPress container. Used by the `docker cp` fallback **only if the website repo has no `sync.ps1`**. |
