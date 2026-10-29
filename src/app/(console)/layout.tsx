@@ -6,17 +6,15 @@ import { redirect } from "next/navigation";
 import { ConsoleNav } from "@/components/ConsoleNav";
 import { PullHealthBanner } from "@/components/PullHealthBanner";
 import { ExtensionSync } from "@/components/ExtensionSync";
-import { StatusBar, type StatusIntegration } from "@/components/StatusBar";
+import { AppHeader } from "@/components/shell/AppHeader";
 import { GuestShellBar } from "@/components/GuestShellBar";
 import { viewerRole, currentActor, getSession } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 import { getShiftPass, touchShiftPass } from "@/lib/db/repo";
 import { isPassLive, passIdFromUid } from "@/lib/auth/pass";
 import { pullBannerState } from "@/lib/pull/state";
-import { computeConnections, type ConnStatus } from "@/lib/health/connections";
+import { computeConnections, type Connection } from "@/lib/health/connections";
 import { refreshConnecteamHealth } from "@/lib/connecteam";
-
-const TONE: Record<ConnStatus, StatusIntegration["tone"]> = { ok: "ok", idle: "idle", attention: "warn", off: "idle" };
 
 export default async function ConsoleLayout({ children }: { children: React.ReactNode }) {
   const role = await viewerRole();
@@ -41,29 +39,24 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
   const canManage = canManageSettings(role);
   const banner = canManage ? pullBannerState() : null;
 
-  // Status-bar integrations — a curated few from the connections health.
-  let integrations: StatusIntegration[] = [];
+  // Global integration summary data — the full connection list (connection health + data-pull freshness),
+  // computed once server-side and handed to the header, which splits + renders it compactly. Only staff who
+  // can act on it see it (members get an empty list → the summary renders nothing).
+  let connections: Connection[] = [];
   if (canManage) {
-    // Status dots render from the LAST probe (cached), never blocking this page on a live call. Connecteam's
+    // Status rows render from the LAST probe (cached), never blocking this page on a live call. Connecteam's
     // API can stall for ~24s (12s timeout × a retry); awaiting it here froze EVERY console page while it hung.
     // So we fire-and-forget the refresh (it's TTL-cached + single-flight + never-throws) and read whatever the
-    // previous probe left in the cache — a dot that's at most one render stale, never a hung page. Instawork is
-    // not probed here either: it's freshness-based off the browser-pull import ledger, not a server-side call.
+    // previous probe left in the cache — at most one render stale, never a hung page.
     void refreshConnecteamHealth();
-    const conns = computeConnections();
-    const pick = (key: string, name: string): StatusIntegration | null => {
-      const c = conns.find((x) => x.key === key);
-      if (!c) return null;
-      return { name, tone: TONE[c.status], note: c.status === "ok" ? undefined : c.headline.toLowerCase(), fixHref: c.fixHref ?? undefined };
-    };
-    integrations = [pick("routes", "Goodshuffle"), pick("openphone", "Quo"), pick("connecteam", "Connecteam"), pick("instawork", "Instawork"), pick("gps", "GPS"), pick("ignition", "Ignition")].filter((x): x is StatusIntegration => x !== null);
+    connections = computeConnections();
   }
 
   return (
     <div className="flex min-h-dvh flex-col lg:flex-row">
-      <ConsoleNav role={role} viewerName={actor.label} />
+      <ConsoleNav role={role} viewerName={actor.label} connections={connections} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <StatusBar integrations={integrations} />
+        <AppHeader role={role} connections={connections} />
         {canManage && <PullHealthBanner initial={banner} />}
         {canManage && <ExtensionSync stale={banner != null} />}
         <div className="min-w-0 flex-1">{children}</div>

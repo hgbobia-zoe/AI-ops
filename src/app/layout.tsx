@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
+import { ThemeProvider } from "@/components/theme/ThemeProvider";
 
 // Single typeface across the console (Nocturne redesign): Inter, self-hosted by
 // next/font (no runtime request to Google — works offline on the truck tablets).
@@ -32,14 +33,22 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // No hardcoded theme class here: next-themes' ThemeProvider injects a blocking inline script that sets
+  // the `.dark` class on <html> before first paint from the stored/`system`/default-dark preference, so
+  // there is no flash of the wrong theme. `suppressHydrationWarning` lets that pre-hydration class edit
+  // stand without a React mismatch warning (the script, not React, owns the class).
   return (
     <html
       lang="en"
-      className={`dark ${sans.variable} h-full antialiased`}
+      className={`${sans.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
-        {children}
-        <Toaster theme="dark" position="top-center" />
+        <ThemeProvider>
+          {children}
+          {/* Toaster inherits the active theme via next-themes' useTheme (see components/ui/sonner). */}
+          <Toaster position="top-center" />
+        </ThemeProvider>
       </body>
     </html>
   );
