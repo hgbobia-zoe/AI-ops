@@ -16,12 +16,19 @@ export default async function SalesOsLayout({ children }: { children: React.Reac
   const showMoney = canSeeFinancials(await viewerRole());
   const cc = salesCommandCenter();
   const viewer = await viewerForPanel();
+  // The AI-employee strip is handed to the shell as a node so the shell can place it AFTER the Sales OS
+  // heading + toolbar (the work leads the page), and omit it entirely on the full-width analytical sub-views.
   return (
-    <>
-      <BladeAgents blade="salesos" className="mx-6 mt-4" />
-      <SalesShell queue={cc.items} showMoney={showMoney} needAttention={cc.needAttention} justReplied={cc.justReplied} totalPotential={cc.totalPotential} viewer={viewer}>
-        {children}
-      </SalesShell>
-    </>
+    <SalesShell
+      queue={cc.items}
+      showMoney={showMoney}
+      needAttention={cc.needAttention}
+      justReplied={cc.justReplied}
+      totalPotential={cc.totalPotential}
+      viewer={viewer}
+      agentStrip={<BladeAgents blade="salesos" />}
+    >
+      {children}
+    </SalesShell>
   );
 }

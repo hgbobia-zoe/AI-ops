@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchesQuery, matchesState, filterProjects, normalizeQuery, type SearchableProject } from "./search";
+import { matchesQuery, matchesState, filterProjects, normalizeQuery, isIncompleteProject, relativeEvent, type SearchableProject } from "./search";
 
 const carter: SearchableProject = {
   id: "101",
@@ -200,5 +200,39 @@ describe("salesos search — normalizeQuery", () => {
   });
   it("collapses a whitespace-only query to empty", () => {
     expect(normalizeQuery("   \t\n ")).toBe("");
+  });
+});
+
+describe("salesos search — isIncompleteProject", () => {
+  it("flags a project missing an event name", () => {
+    expect(isIncompleteProject({ eventName: null, eventDate: "2026-11-01" })).toBe(true);
+    expect(isIncompleteProject({ eventName: "   ", eventDate: "2026-11-01" })).toBe(true);
+  });
+  it("flags a project missing an event date", () => {
+    expect(isIncompleteProject({ eventName: "Carter Wedding", eventDate: null })).toBe(true);
+  });
+  it("does not flag a project with both a name and a date", () => {
+    expect(isIncompleteProject({ eventName: "Carter Wedding", eventDate: "2026-11-01" })).toBe(false);
+  });
+  it("flags a project missing both", () => {
+    expect(isIncompleteProject({ eventName: null, eventDate: null })).toBe(true);
+  });
+});
+
+describe("salesos search — relativeEvent urgency is a DEFINED condition (not any nearby date)", () => {
+  it("has no date and is never urgent when days is null", () => {
+    expect(relativeEvent(null)).toEqual({ text: "no date", urgent: false });
+  });
+  it("is urgent today, tomorrow, and within 3 days", () => {
+    expect(relativeEvent(0)).toEqual({ text: "today", urgent: true });
+    expect(relativeEvent(1)).toEqual({ text: "tomorrow", urgent: true });
+    expect(relativeEvent(3)).toEqual({ text: "in 3d", urgent: true });
+  });
+  it("is NOT urgent for events further out (4+ days) — no red on distant dates", () => {
+    expect(relativeEvent(4)).toEqual({ text: "in 4d", urgent: false });
+    expect(relativeEvent(21)).toEqual({ text: "in 21d", urgent: false });
+  });
+  it("is urgent (and shows how long ago) for a past-due open event", () => {
+    expect(relativeEvent(-2)).toEqual({ text: "2d ago", urgent: true });
   });
 });
