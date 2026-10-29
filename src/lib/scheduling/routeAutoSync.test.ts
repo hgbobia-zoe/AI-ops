@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PublishShiftInput, PublishShiftResult, Scheduler } from "@/lib/connecteam";
+import type { CrewMember, CrewShift, PublishShiftInput, PublishShiftResult, Scheduler } from "@/lib/connecteam";
 import type { Route } from "@/lib/types";
 
 // Throwaway DB so staff_shifts + shift_assignments migrations run end-to-end (mirrors connecteamReconcile.test).
@@ -36,28 +36,53 @@ function route(routeId: string, truckId = "E450"): Route {
   return { routeId, date: DATE, truckId, status: "planned", stops: [] } as unknown as Route;
 }
 
+const START_UNIX = Math.floor(Date.parse(START) / 1000);
+const END_UNIX = Math.floor(Date.parse(END) / 1000);
+
+function ctMember(userId: number): CrewMember {
+  return { userId, name: `U${userId}`, role: "other" };
+}
+
+/** A live Connecteam shift for the push-matcher tests. Defaults: the START..END window, one assignee. */
+function crewShift(assigneeIds: number[], over: Partial<CrewShift> = {}): CrewShift {
+  return {
+    id: "ct-x",
+    schedulerId: 7,
+    schedulerName: "Job Scheduler",
+    startUnix: START_UNIX,
+    endUnix: END_UNIX,
+    timezone: "America/New_York",
+    isOpen: false,
+    title: "Zoe Event Rentals",
+    assignees: assigneeIds.map(ctMember),
+    ...over,
+  };
+}
+
 describe("planRouteConnecteamCreate (pure)", () => {
-  it("CREATES for a route shift whose crew are NOT in Connecteam; SKIPS when all already are", async () => {
+  it("CREATES for a route shift whose crew are NOT in Connecteam; ADOPTS the worker's existing shift", async () => {
     const { createShift, getShiftsForDate, planRouteConnecteamCreate } = await mods();
     createShift({ date: DATE, role: "driver", headcount: 1, startTime: START, endTime: END, windowKnown: true, routeId: "rA", truckId: "E450", assignees: [500], source: "manual" });
     createShift({ date: DATE, role: "field", headcount: 1, startTime: START, endTime: END, windowKnown: true, routeId: "rB", truckId: "E450", assignees: [600], source: "manual" });
     const shifts = getShiftsForDate(DATE);
 
-    // 600 is in Connecteam, 500 is not.
-    const plan = planRouteConnecteamCreate({ appShifts: shifts, connecteamUserIds: [600] });
-    const createdIds = plan.creates.map((c) => c.shiftId);
+    // 600 already has a Connecteam shift that day; 500 does not.
+    const plan = planRouteConnecteamCreate({ appShifts: shifts, crew: [crewShift([600], { id: "ct-600" })] });
     const shift500 = shifts.find((s) => s.assignees.includes(500))!;
     const shift600 = shifts.find((s) => s.assignees.includes(600))!;
-    expect(createdIds).toContain(shift500.id); // nobody in Connecteam -> create
-    expect(createdIds).not.toContain(shift600.id); // already in Connecteam -> skip
-    expect(plan.skipped).toBe(1);
+    expect(plan.creates.map((c) => c.shiftId)).toContain(shift500.id); // nobody in Connecteam -> create
+    expect(plan.creates.map((c) => c.shiftId)).not.toContain(shift600.id); // already in Connecteam -> adopt, never create a duplicate
+    expect(plan.adopts.map((a) => a.shiftId)).toContain(shift600.id);
+    expect(plan.adopts.find((a) => a.shiftId === shift600.id)!.connecteamShiftId).toBe("ct-600");
   });
 
   it("FLAGS a mixed-presence route shift instead of auto-writing (uncertain -> record-only)", async () => {
     const { createShift, getShiftsForDate, planRouteConnecteamCreate } = await mods();
     const s = createShift({ date: DATE, role: "field", headcount: 2, startTime: START, endTime: END, windowKnown: true, routeId: "rMix", truckId: "E450", assignees: [700, 701], source: "manual" });
-    const plan = planRouteConnecteamCreate({ appShifts: getShiftsForDate(DATE).filter((x) => x.id === s.id), connecteamUserIds: [700] });
+    // 700 is on a Connecteam shift but 701 is not — no single shift holds both, so it stays mixed (flagged).
+    const plan = planRouteConnecteamCreate({ appShifts: getShiftsForDate(DATE).filter((x) => x.id === s.id), crew: [crewShift([700], { id: "ct-700" })] });
     expect(plan.creates).toHaveLength(0);
+    expect(plan.adopts).toHaveLength(0);
     expect(plan.flags).toHaveLength(1);
     expect(plan.flags[0].shiftId).toBe(s.id);
   });
@@ -68,9 +93,43 @@ describe("planRouteConnecteamCreate (pure)", () => {
     const linked = createShift({ date: DATE, role: "driver", headcount: 1, startTime: START, endTime: END, windowKnown: true, routeId: "rLinked", truckId: "E450", assignees: [801], source: "manual" });
     updateShift(linked.id, { connecteamShiftId: "ct-existing" });
     const dayLevel = createShift({ date: DATE, role: "prep", headcount: 1, startTime: START, endTime: END, windowKnown: true, assignees: [802], source: "manual" }); // no routeId
-    const plan = planRouteConnecteamCreate({ appShifts: [getShiftById(noWin.id)!, getShiftById(linked.id)!, getShiftById(dayLevel.id)!], connecteamUserIds: [] });
+    const plan = planRouteConnecteamCreate({ appShifts: [getShiftById(noWin.id)!, getShiftById(linked.id)!, getShiftById(dayLevel.id)!], crew: [] });
     expect(plan.deferred.map((d) => d.shiftId)).toEqual([noWin.id]);
     expect(plan.creates).toHaveLength(0); // linked skipped, day-level (no route) skipped
+    expect(plan.adopts).toHaveLength(0);
+  });
+
+  it("ADOPTS + no-shrink: UPDATES the worker's longer existing Connecteam shift instead of creating a truncated duplicate", async () => {
+    const { createShift, getShiftById, planRouteConnecteamCreate, applyRouteConnecteamCreate } = await mods();
+    // The app's per-route window is a truncated leg (14:00–18:00Z); the worker's real Connecteam shift runs
+    // longer (14:00–21:30Z), like Lisa's "9:00a–3:30p Zoe Event Rentals" vs the app's "Field — …" leg.
+    const CT_END = Math.floor(Date.parse(`${DATE}T21:30:00.000Z`) / 1000);
+    const s = createShift({ date: DATE, role: "field", headcount: 1, startTime: START, endTime: END, windowKnown: true, routeId: "rDup", truckId: "E450", assignees: [2000], source: "manual" });
+    const existing = crewShift([2000], { id: "ct-existing-9", startUnix: START_UNIX, endUnix: CT_END });
+
+    const plan = planRouteConnecteamCreate({ appShifts: [getShiftById(s.id)!], crew: [existing] });
+    expect(plan.creates).toHaveLength(0); // NOT duplicated
+    expect(plan.adopts).toHaveLength(1);
+    expect(plan.adopts[0].connecteamShiftId).toBe("ct-existing-9");
+    expect(plan.adopts[0].startUnix).toBe(START_UNIX); // same start
+    expect(plan.adopts[0].endUnix).toBe(CT_END); // union keeps the LONGER human end (no-shrink / wrong-time fix)
+
+    const publishUpdate = vi.fn(async (): Promise<PublishShiftResult> => ({ ok: true, shiftId: "ct-existing-9" }));
+    const publish = vi.fn(async (): Promise<PublishShiftResult> => ({ ok: true, shiftId: "SHOULD-NOT-HAPPEN" }));
+    const res = await applyRouteConnecteamCreate(plan, { scheduler: SCHEDULER, truckNameOf: () => "Truck", publish, publishUpdate });
+
+    expect(res.adopted).toBe(1);
+    expect(res.created).toBe(0);
+    expect(publish).not.toHaveBeenCalled(); // never creates a second Connecteam shift
+    expect(publishUpdate).toHaveBeenCalledOnce();
+    const arg = publishUpdate.mock.calls[0][0] as PublishShiftInput & { shiftId: string };
+    expect(arg.shiftId).toBe("ct-existing-9");
+    expect(arg.endUnix).toBe(CT_END); // pushed the unioned (longer) window, not the truncated app end
+    const linked = getShiftById(s.id)!;
+    expect(linked.connecteamShiftId).toBe("ct-existing-9"); // app shift now LINKED to the existing one
+    expect(linked.status).toBe("sent");
+    expect(Date.parse(linked.endTime!)).toBe(CT_END * 1000); // and extended to the unioned end
+    expect(linked.syncStatus).toBe("synced"); // re-baselined -> won't re-flag as a conflict
   });
 });
 
@@ -192,9 +251,9 @@ describe("applyRouteConnecteamCreate (silent + honest)", () => {
     const { createShift, getShiftById, applyRouteConnecteamCreate } = await mods();
     const s = createShift({ date: DATE, role: "driver", headcount: 1, startTime: START, endTime: END, windowKnown: true, routeId: "rCreate", truckId: "E450", assignees: [1000], source: "manual" });
 
-    const publish = vi.fn(async (_input: PublishShiftInput): Promise<PublishShiftResult> => ({ ok: true, shiftId: "ct-new-1" }));
+    const publish = vi.fn(async (): Promise<PublishShiftResult> => ({ ok: true, shiftId: "ct-new-1" }));
     const res = await applyRouteConnecteamCreate(
-      { creates: [{ shiftId: s.id }], flags: [], deferred: [], skipped: 0 },
+      { creates: [{ shiftId: s.id }], adopts: [], flags: [], deferred: [], skipped: 0 },
       { scheduler: SCHEDULER, truckNameOf: () => "Truck", publish },
     );
     expect(res.created).toBe(1);
@@ -209,7 +268,7 @@ describe("applyRouteConnecteamCreate (silent + honest)", () => {
     const { createShift, getShiftById, applyRouteConnecteamCreate } = await mods();
     const s = createShift({ date: DATE, role: "driver", headcount: 1, startTime: START, endTime: END, windowKnown: true, routeId: "rFail", truckId: "E450", assignees: [1100], source: "manual" });
     const publish = vi.fn(async (): Promise<PublishShiftResult> => ({ ok: false, error: "Connecteam HTTP 500" }));
-    const res = await applyRouteConnecteamCreate({ creates: [{ shiftId: s.id }], flags: [], deferred: [], skipped: 0 }, { scheduler: SCHEDULER, truckNameOf: () => "Truck", publish });
+    const res = await applyRouteConnecteamCreate({ creates: [{ shiftId: s.id }], adopts: [], flags: [], deferred: [], skipped: 0 }, { scheduler: SCHEDULER, truckNameOf: () => "Truck", publish });
     expect(res.failed).toBe(1);
     expect(res.created).toBe(0);
     expect(getShiftById(s.id)!.connecteamShiftId).toBeNull();
@@ -218,7 +277,7 @@ describe("applyRouteConnecteamCreate (silent + honest)", () => {
   it("applies mixed-presence FLAGS as needs_review", async () => {
     const { createShift, getShiftById, applyRouteConnecteamCreate } = await mods();
     const s = createShift({ date: DATE, role: "field", headcount: 2, startTime: START, endTime: END, windowKnown: true, routeId: "rFlag", truckId: "E450", assignees: [1200, 1201], source: "manual" });
-    const res = await applyRouteConnecteamCreate({ creates: [], flags: [{ shiftId: s.id, note: "mixed" }], deferred: [], skipped: 0 }, { scheduler: SCHEDULER, truckNameOf: () => "Truck", publish: vi.fn() });
+    const res = await applyRouteConnecteamCreate({ creates: [], adopts: [], flags: [{ shiftId: s.id, note: "mixed" }], deferred: [], skipped: 0 }, { scheduler: SCHEDULER, truckNameOf: () => "Truck", publish: vi.fn() });
     expect(res.flagged).toBe(1);
     expect(getShiftById(s.id)!.syncStatus).toBe("needs_review");
   });

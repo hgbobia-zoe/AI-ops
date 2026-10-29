@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CrewShift, CrewMember } from "@/lib/connecteam";
 import type { StaffShift } from "./types";
-import { contentHashOf, normalizeForImport, planReconcile, shiftRoleFromCrewRole } from "./connecteamImport";
+import { contentHashOf, matchConnecteamShiftForPush, normalizeForImport, planReconcile, shiftRoleFromCrewRole, unionPushWindowUnix } from "./connecteamImport";
 
 const DATE = "2026-11-07";
 // 2026-11-07T14:00:00Z / 18:00:00Z in Unix seconds.
@@ -94,6 +94,52 @@ describe("contentHashOf", () => {
     const base = contentHashOf({ startTime: "x", endTime: "y", title: "T", assignees: [1], isOpen: false });
     expect(contentHashOf({ startTime: "x", endTime: "y", title: "T", assignees: [1, 2], isOpen: false })).not.toBe(base);
     expect(contentHashOf({ startTime: "z", endTime: "y", title: "T", assignees: [1], isOpen: false })).not.toBe(base);
+  });
+});
+
+describe("matchConnecteamShiftForPush (the push de-dup matcher)", () => {
+  const app = (assignees: number[], startTime: string | null = `${DATE}T14:00:00.000Z`, endTime: string | null = `${DATE}T18:00:00.000Z`) =>
+    ({ assignees, startTime, endTime });
+
+  it("matches on the assignee set regardless of title/role/window (worker-day is the stable key)", () => {
+    // The app pushes a "Field" leg; the worker already has a "Zoe Event Rentals" shift. Different title, same person.
+    const existing = crewShift({ id: "ct-human", title: "Zoe Event Rentals", assignees: [member(101, "other")] });
+    expect(matchConnecteamShiftForPush(app([101]), [existing])?.id).toBe("ct-human");
+  });
+
+  it("returns null when no Connecteam shift holds all the app assignees (then the caller CREATES)", () => {
+    const existing = crewShift({ id: "ct-a", assignees: [member(101, "driver")] });
+    expect(matchConnecteamShiftForPush(app([999]), [existing])).toBeNull(); // different worker -> no match
+    expect(matchConnecteamShiftForPush(app([101, 102]), [existing])).toBeNull(); // 102 not on it -> no match
+    expect(matchConnecteamShiftForPush(app([]), [existing])).toBeNull(); // nobody to match
+  });
+
+  it("never matches an OPEN (unassigned) shift", () => {
+    const open = crewShift({ id: "ct-open", isOpen: true, assignees: [] });
+    expect(matchConnecteamShiftForPush(app([101]), [open])).toBeNull();
+  });
+
+  it("prefers a window-overlapping shift, then the earliest start (deterministic)", () => {
+    const early = crewShift({ id: "ct-early", startUnix: START - 36_000, endUnix: START - 3_600, assignees: [member(101, "driver")] }); // no overlap
+    const overlapping = crewShift({ id: "ct-overlap", startUnix: START, endUnix: END, assignees: [member(101, "driver")] });
+    expect(matchConnecteamShiftForPush(app([101]), [early, overlapping])?.id).toBe("ct-overlap");
+  });
+});
+
+describe("unionPushWindowUnix (no-shrink window)", () => {
+  it("keeps the broadest of the app and Connecteam windows (never truncates a longer human shift)", () => {
+    const ct = { startUnix: 1000, endUnix: 9000 };
+    const appStart = new Date(2000 * 1000).toISOString();
+    const appEnd = new Date(5000 * 1000).toISOString();
+    expect(unionPushWindowUnix(appStart, appEnd, ct)).toEqual({ startUnix: 1000, endUnix: 9000 });
+  });
+  it("extends when the app window runs later/earlier than Connecteam", () => {
+    const ct = { startUnix: 3000, endUnix: 4000 };
+    expect(unionPushWindowUnix(new Date(1000 * 1000).toISOString(), new Date(9000 * 1000).toISOString(), ct)).toEqual({ startUnix: 1000, endUnix: 9000 });
+  });
+  it("falls back to the Connecteam window when the app window is unknown (never fabricates a time)", () => {
+    const ct = { startUnix: 3000, endUnix: 4000 };
+    expect(unionPushWindowUnix(null, null, ct)).toEqual({ startUnix: 3000, endUnix: 4000 });
   });
 });
 

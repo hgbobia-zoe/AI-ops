@@ -125,3 +125,42 @@ To make Dispatch a true two-way mirror (Lisa's real workflow) while keeping app�
 
 Until those are decided, this change ships the safe, clearly-correct half: **everything Lisa scheduled in
 Connecteam is now surfaced accurately in Dispatch**, with the honest gap and the publish path intact.
+
+## 7. Follow-up fix (2026-10-29): duplicate shifts + truncated windows on PUSH
+
+Reported live (Lisa): Connecteam ends up with **both** her shift (e.g. "9:00a–3:30p Zoe Event Rentals") **and**
+an app-pushed shift (blue, "9:00a–1:35p Field — Isuzu NPR") for the same person/day, the app one's time is
+wrong, and the "Sync conflicts to review" list is long.
+
+**Root cause — duplication.** Pushing app → Connecteam was idempotent **only** on the app shift's own stored
+`connecteam_shift_id`. Nothing matched an app shift against a worker's **pre-existing** Connecteam shift. So
+the human publish route (`src/app/api/scheduling/shift/[id]/publish/route.ts`, which created whenever
+`!shift.connecteamShiftId`) and the route auto-create (`routeAutoSync.planRouteConnecteamCreate`, which only
+coarsely `skip`ped a worker already in Connecteam and left the app shift **unlinked**) both produced a second,
+parallel Connecteam shift instead of updating the one the worker already had.
+
+**Root cause — wrong time.** The pushed window is the route's own stop-derived window
+(`risk/engine.routeWindow`: `min(stop arrival)−loadBuffer .. max(stop arrival)+returnBuffer`). For a worker
+whose real day spans several of a truck's routes (or a longer human-entered Connecteam shift), a single route's
+window is a **truncated leg** (the 1:35p end), shorter than the true 3:30p shift.
+
+**Root cause — conflict spam.** Because the app shift and the human Connecteam shift stayed two **unlinked**
+records, the reconciler surfaced them as conflicts to resolve by hand.
+
+**The fix (this change).** A stable **worker + day** match — `matchConnecteamShiftForPush` (assignee-set match,
+title/role/window-agnostic) — plus a **no-shrink union** window (`unionPushWindowUnix`), both pure + unit-tested
+in `src/lib/scheduling/connecteamImport.ts`. When a worker already has a matching Connecteam shift the app now
+**ADOPTS** it: `updatePublishedShift` in place, links the app shift to its id, pushes the **unioned** window (so
+3:30p is never shortened to 1:35p), and re-baselines so the importer doesn't re-flag it. Wired into both the
+route auto-create (`applyRouteConnecteamCreate`, new `adopts`) and the human publish route. Result: no duplicate
+Connecteam shift, correct (not truncated) hours, and — because the two sides are now linked — the conflict list
+shrinks on its own.
+
+**Existing bad rows.** Duplicates already in Connecteam from before this fix are **not** retroactively merged
+(the app won't delete a Connecteam shift — house law). Going forward the app adopts the surviving shift; Lisa
+should delete any leftover app-created duplicate in Connecteam once, and resolve any already-flagged
+`needs_review` rows via Keep-Connecteam. A one-shot reconcile could auto-link pre-existing matches but is
+**not** included here (it would need the live account to verify matches before writing).
+
+**Unverified against live data:** the exact Connecteam shift payload (whether one worker legitimately holds two
+same-day shifts that should stay separate), and the real GSPRO route windows behind the 1:35p vs 3:30p gap.
