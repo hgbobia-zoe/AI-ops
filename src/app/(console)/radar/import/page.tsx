@@ -3,7 +3,6 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { RadarTabs } from "@/components/RadarTabs";
 import { ImportOpportunities } from "@/components/ImportOpportunities";
 import { IMPORT_TEMPLATE } from "@/lib/opportunity/import";
 import { viewerRole } from "@/lib/auth/getSession";
@@ -15,8 +14,8 @@ export default async function ImportPage(): Promise<React.JSX.Element> {
   if (!canManageSettings(await viewerRole())) redirect("/radar");
   return (
     <main className="max-w-[1000px] p-6">
-      <header className="mb-4"><h1 className="text-[22px] font-medium tracking-tight">Opportunity Radar</h1><p className="text-[12.5px] text-meta">Import real opportunities — the fastest way to start. No API key or scraper needed.</p></header>
-      <RadarTabs />
+      <div className="mb-4 text-[12px] text-meta"><Link href="/radar" className="hover:text-foreground">Opportunity Radar</Link> / Import</div>
+      <header className="mb-4"><h1 className="text-[22px] font-medium tracking-tight">Import opportunities</h1><p className="text-[12.5px] text-meta">Import real opportunities — the fastest way to start. No API key or scraper needed.</p></header>
 
       <section className="mb-4 rounded border border-border p-3 text-[12.5px] text-meta">
         <p className="mb-1"><span className="font-medium text-foreground">How to feed real data:</span></p>

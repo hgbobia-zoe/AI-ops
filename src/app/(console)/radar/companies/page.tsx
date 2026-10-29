@@ -3,7 +3,6 @@
 // existing customer history (§17) so a rep re-engages instead of cold-contacting.
 
 import Link from "next/link";
-import { RadarTabs } from "@/components/RadarTabs";
 import { tableCls, theadCls, thCls } from "@/components/console-primitives";
 import { SeedTag, VerificationBadge } from "@/components/radar-badges";
 import { getEntities, getEntityOpportunityCounts } from "@/lib/opportunity/store";
@@ -24,8 +23,7 @@ export default async function CompaniesPage(): Promise<React.JSX.Element> {
 
   return (
     <main className="p-6">
-      <header className="mb-4"><h1 className="text-[22px] font-medium tracking-tight">Opportunity Radar</h1><p className="text-[12.5px] text-meta">Companies &amp; contacts across all opportunities. {entities.length} total, {withRelationship} with an existing Zoe relationship.</p></header>
-      <RadarTabs />
+      <header className="mb-4"><h1 className="text-[22px] font-medium tracking-tight">Companies &amp; contacts</h1><p className="text-[12.5px] text-meta">Companies &amp; contacts across all opportunities. {entities.length} total, {withRelationship} with an existing Zoe relationship.</p></header>
 
       <div className="overflow-x-auto border border-border">
         <table className={tableCls}>

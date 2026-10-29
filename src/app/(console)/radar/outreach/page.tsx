@@ -3,7 +3,6 @@
 // touched here; a reply moves the opportunity to ENGAGED for a human to convert.
 
 import Link from "next/link";
-import { RadarTabs } from "@/components/RadarTabs";
 import { ProspectTaskActions } from "@/components/ProspectTaskActions";
 import { ProspectExportButton } from "@/components/ProspectExportButton";
 import { FigureStrip, type Figure } from "@/components/console-primitives";
@@ -60,10 +59,9 @@ export default async function OutreachWorklistPage(): Promise<React.JSX.Element>
   return (
     <main className="p-6">
       <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
-        <div><h1 className="text-[22px] font-medium tracking-tight">Opportunity Radar</h1><p className="text-[12.5px] text-meta">Prospecting worklist — cold outreach before Goodshuffle. Tier A = call first, Tier B = email sequence.</p></div>
+        <div><h1 className="text-[22px] font-medium tracking-tight">Outreach worklist</h1><p className="text-[12.5px] text-meta">Prospecting worklist — cold outreach before Goodshuffle. Tier A = call first, Tier B = email sequence.</p></div>
         <div className="flex items-center gap-3"><FigureStrip figures={figures} /><ProspectExportButton /></div>
       </header>
-      <RadarTabs />
 
       <div className="mb-4 flex flex-wrap gap-3 text-[11.5px] text-meta">
         <span>Contact enrichment (Apify): <span className={apifyConfigured() ? "text-positive" : "text-meta"}>{apifyConfigured() ? "connected" : "off"}</span></span>

@@ -134,11 +134,30 @@ const ACTIVE_STAGES = new Set<LifecycleStage>(["CONTACTED", "ENGAGED", "OPPORTUN
 
 export function laneOf(v: OpportunityView): Lane {
   if (v.opp.salesStatus !== "NONE" || ACTIVE_STAGES.has(v.stage)) return "ACTIVE";
+
+  // A past-dated signal is never "act-now" Outreach Ready, even if a person left it at an outreach
+  // stage — the timing it would imply (the deadline/event is still ahead) is false. We DON'T delete it:
+  // a past event with an existing Zoe relationship is a legitimate repeat / relationship lead (re-engage
+  // for the next cycle), so it becomes an Early Signal (build the relationship early); otherwise it drops
+  // to New Signals for honest re-triage. See deriveMaturity (PAST) + the past-event tests.
+  if (v.maturity.maturity === "PAST") {
+    if (v.score.tier !== "UNQUALIFIED" && v.hasExistingRelationship) return "EARLY_SIGNALS";
+    return "NEW_SIGNALS";
+  }
+
   const outreachStage = v.stage === "TARGET_IDENTIFIED" || v.stage === "OUTREACH_READY";
   const readyMaturity = v.maturity.maturity === "IMMEDIATE" || v.maturity.maturity === "OPERATIONALLY_ACTIVE" || v.maturity.maturity === "PROCUREMENT_WINDOW";
   if (v.score.tier !== "UNQUALIFIED" && (outreachStage || (v.primaryTarget && readyMaturity))) return "OUTREACH_READY";
   if (v.maturity.maturity === "EARLY_SIGNAL" || v.maturity.maturity === "PLANNING") return "EARLY_SIGNALS";
   return "NEW_SIGNALS";
+}
+
+/** Why a past-dated opportunity is still surfaced (not deleted) — drives the honest timing explanation
+ *  on the dashboard row. Returns null when the opportunity's date has not passed. */
+export function pastEventRationale(v: OpportunityView): string | null {
+  if (v.maturity.maturity !== "PAST") return null;
+  if (v.hasExistingRelationship) return "Date has passed — existing Zoe relationship; re-engage for the next cycle.";
+  return "Date has passed — needs re-triage (no live timing).";
 }
 
 export interface OpportunityBoard {
