@@ -22,6 +22,7 @@ export interface PayrollConfig {
   precheckHour: number; // 0–23 ET the pre-check runs (default 8am)
   scheduleDiscrepancyPct: number; // |actual−planned|/planned ≥ this % flags a schedule discrepancy (default 25)
   slackChannel: string | null; // dedicated payroll Slack channel NAME/ID; null = resolve from env/none (never hard-coded)
+  wireMatchPattern: string | null; // regex source matching the Gusto wire counterparty/description; null = default (/gusto|zenpayroll/i). Env PAYROLL_WIRE_MATCH_PATTERN wins.
 }
 
 const KEY = "payroll.config";
@@ -42,6 +43,7 @@ export const DEFAULT_PAYROLL_CONFIG: PayrollConfig = {
   precheckHour: 8,
   scheduleDiscrepancyPct: 25,
   slackChannel: null,
+  wireMatchPattern: null,
 };
 
 export const DOW_LABEL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -74,6 +76,7 @@ export function savePayrollConfig(patch: Partial<PayrollConfig>): PayrollConfig 
     precheckHour: clampInt(patch.precheckHour, 0, 23, cur.precheckHour),
     scheduleDiscrepancyPct: clampInt(patch.scheduleDiscrepancyPct, 1, 100, cur.scheduleDiscrepancyPct),
     slackChannel: patch.slackChannel === undefined ? cur.slackChannel : (patch.slackChannel?.toString().trim() || null),
+    wireMatchPattern: patch.wireMatchPattern === undefined ? cur.wireMatchPattern : (patch.wireMatchPattern?.toString().trim() || null),
   };
   setJson(KEY, next);
   return next;
