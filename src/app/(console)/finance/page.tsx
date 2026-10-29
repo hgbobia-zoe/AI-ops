@@ -1,11 +1,20 @@
 // Financial Intelligence — Nocturne. Operational control, not accounting: "ahead or behind plan?
 // revenue or labor?" Every number is deterministic or explicitly UNAVAILABLE (never invented, never a
-// zeroed cost, never an estimate shown as an actual). FI-Phase 1–5: the labor ledger now carries the
+// zeroed cost, never an estimate shown as an actual). FI-Phase 1–5: the labor ledger carries the
 // internal/temp split, non-customer buckets (travel/warehouse/unallocated), the measured Instawork
 // premium, three reconciling period dimensions (week / operational cycle / project), a route bridge
 // level, the reconciliation view, and per-number data lineage.
+//
+// Redesign (prompt 09_FINANCE): one clear header + one compact period control; the 11 views grouped
+// into Overview / Analysis / Reconciliation (every ?view= deep link preserved, incl. the week/cycle
+// Overview aliases); consistent metric cards that state label · amount · scope · basis · date basis ·
+// freshness · verification state; signed revenue, planned labor, actual labor, attributed labor and
+// contribution-after-labor each explicitly distinguished (contribution is NOT called net profit); the
+// blade's local StatusBadge migrated onto the shared @/components/ui/status renderer. Presentation
+// only — no formula, source-of-truth, rounding, cents or date change (those live in the FI engine).
 
 import Link from "next/link";
+import { DollarSign } from "lucide-react";
 import { financeForPeriod, projectFinancials, projectHandlingEstimate, financeInsights } from "@/lib/finance/service";
 import type { ProjectSnapshot } from "@/lib/finance/projectSnapshot";
 import type { ItemHandlingEstimate } from "@/lib/finance/itemIntelligence";
@@ -14,64 +23,38 @@ import type { RevenueComponents } from "@/lib/finance/revenueModel";
 import { getPeriod, PERIOD_KEYS, priorWeek, priorCycle, customRange, priorRange, type Period, type PeriodKey } from "@/lib/finance/periods";
 import { opsCycleConfig } from "@/lib/finance/config";
 import { getRouteLaborCosts, getInstaworkLedger, getLaborReconciliation, getProjectLaborLineage, getLaborLedgerSummary, getVisitReconciliation, getReconciliationRuns, getRecentReconciliationRuns, type ReconciliationRunRow } from "@/lib/db/repo";
-import type { RunPhase, VarianceReason } from "@/lib/finance/reconciliationRun";
+import type { VarianceReason } from "@/lib/finance/reconciliationRun";
 import { reconcileVisit, type VisitWindow } from "@/lib/finance/visitReconcile";
 import { visitReconcileConfig } from "@/lib/finance/config";
 import { formatClockTime } from "@/lib/dates";
 import { listFinanceSavedViews } from "@/lib/finance/savedViews";
-import type { Variance } from "@/lib/finance/calc";
 import { FigureStrip, tableCls, theadCls, thCls, type Figure } from "@/components/console-primitives";
+import { PageHeader } from "@/components/ui/page-header";
+import { BladeMain } from "@/components/ui/layouts";
+import { StatusBanner } from "@/components/ui/states";
 import { BladeAgents } from "@/components/aiorg/BladeAgents";
 import { FinanceDateRange } from "./FinanceDateRange";
 import { FinanceSavedViews } from "./FinanceSavedViews";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 import { ManualCostEntry } from "./ManualCostEntry";
+import {
+  money, hrs, pct,
+  VIEW_LABEL, VIEW_NAV_GROUPS, navKeyForView, isOverviewView, isViewKey, laborHeadline,
+  type ViewKey,
+} from "./viewModel";
+import {
+  Unavail, MetricCard, Block, BRow, VarianceValue, ContributionValue, DeltaValue,
+  SnapshotStatus, PhaseTag, MethodTag,
+} from "./FinanceCards";
 
 export const dynamic = "force-dynamic";
-
-const money = (n: number | null | undefined): string => (n == null ? "—" : (n < 0 ? "-$" : "$") + Math.abs(Math.round(n)).toLocaleString("en-US"));
-const hrs = (n: number | null): string => (n == null ? "—" : `${n} h`);
-const pct = (n: number | null): string => (n == null ? "—" : `${Math.round(n * 100)}%`);
-
-const VIEWS = ["overview", "week", "cycle", "routes", "projects", "labor", "instawork", "variance", "reconciliation", "visits", "insights"] as const;
-type ViewKey = (typeof VIEWS)[number];
-const VIEW_LABEL: Record<ViewKey, string> = {
-  overview: "Overview",
-  week: "Week",
-  cycle: "Operational Cycle",
-  routes: "Routes",
-  projects: "Projects",
-  labor: "Labor",
-  instawork: "Instawork",
-  variance: "Variance",
-  reconciliation: "Reconciliation",
-  visits: "Visits (GPS vs dispatch)",
-  insights: "Insights",
-};
-
-function VarianceTag({ v, kind }: { v: Variance; kind: "money" | "hours" }): React.JSX.Element {
-  if (v.variance == null) return <span className="text-meta">—</span>;
-  const cls = v.favorable == null ? "text-meta" : v.favorable ? "text-positive" : "text-critical";
-  const val = kind === "money" ? money(v.variance) : hrs(v.variance);
-  const sign = v.variance > 0 ? "+" : "";
-  return <span className={`tabular-nums ${cls}`}>{sign}{val}{v.variancePct != null ? ` (${sign}${pct(v.variancePct).replace("%", "")}%)` : ""}</span>;
-}
-
-const Unavail = (): React.JSX.Element => <span className="text-meta">Unavailable</span>;
-
-function MethodBadge({ method, confidence }: { method: string | null; confidence: string | null }): React.JSX.Element {
-  if (!method) return <span className="text-meta">—</span>;
-  const tone = method === "ACTUAL_STOP" ? "text-positive" : method === "DERIVED_STOP" ? "text-foreground" : "text-attention";
-  const label = method === "ACTUAL_STOP" ? "Actual" : method === "DERIVED_STOP" ? "Derived" : method === "PLANNED" ? "Planned" : method === "UNALLOCATED" ? "Unalloc" : "Est.";
-  return <span className={`text-[11px] uppercase tracking-[0.06em] ${tone}`}>{label}{confidence ? ` · ${confidence[0]}` : ""}</span>;
-}
 
 export default async function FinancePage({ searchParams }: { searchParams: Promise<{ period?: string; view?: string; lineage?: string; project?: string; start?: string; end?: string }> }): Promise<React.JSX.Element> {
   const sp = await searchParams;
   const cycle = opsCycleConfig();
   const key: PeriodKey = (PERIOD_KEYS as string[]).includes(sp?.period ?? "") ? (sp!.period as PeriodKey) : "thisWeek";
-  const view: ViewKey = (VIEWS as readonly string[]).includes(sp?.view ?? "") ? (sp!.view as ViewKey) : "overview";
+  const view: ViewKey = isViewKey(sp?.view) ? (sp!.view as ViewKey) : "overview";
   const selectedProject = sp?.project?.trim() || null;
   // Stage 7b: an explicit ?start=&end= range (validated deterministically; a bad range → null → fall back to
   // the preset, never a throw). When present+valid it drives the whole blade exactly like a preset would.
@@ -124,7 +107,11 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   const projectHandling = selectedProject ? projectHandlingEstimate(selectedProject) : null;
   // Stage 7c: deterministic insight facts (+ dormant-safe AI interpretation) for the Insights view.
   const insights = !selectedProject && view === "insights" ? await financeInsights(period) : null;
-  const canEditCost = canSeeFinancials(await viewerRole()); // owner/admin may add/edit/delete manual costs
+  // $ redaction: the whole blade is owner/admin (proxy + nav gate on canSeeFinancials); this is the SAME
+  // gate, re-checked here, that also governs who may add/edit/delete a manual cost. A non-financial role
+  // never reaches this page, so every figure below is already behind the financial permission.
+  const canSee = canSeeFinancials(await viewerRole());
+  const canEditCost = canSee;
 
   const tempHourShare = L.totalHours != null && L.totalHours > 0 && L.tempHours != null ? L.tempHours / L.totalHours : null;
 
@@ -136,24 +123,28 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   ];
 
   return (
-    <main className="p-6">
-      <header className="mb-4 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-[22px] font-medium tracking-tight">Financial</h1>
-          <p className="text-[12.5px] text-meta">{period.label} · {period.start} → {period.end}</p>
-        </div>
-        <FigureStrip figures={figures} />
-      </header>
+    <BladeMain>
+      <PageHeader
+        icon={<DollarSign className="size-5" />}
+        title="Financial Intelligence"
+        subtitle={<>{period.label} · {period.start} → {period.end}</>}
+        actions={<div className="min-w-0 max-w-full overflow-x-auto"><FigureStrip figures={figures} /></div>}
+      />
 
       <BladeAgents blade="finance" className="mb-5" />
 
-      {/* Period presets (dimension A week + dimension B operational cycle + month) + custom range + saved views */}
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border pb-2">
-        <nav className="flex flex-wrap items-center gap-4">
+      {/* One compact period control: presets + custom range + saved views, on a single row. */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border pb-3">
+        <nav aria-label="Period presets" className="flex flex-wrap items-center gap-1">
           {PERIOD_KEYS.map((k) => {
             const active = !customActive && k === key;
             return (
-              <Link key={k} href={href({ period: k })} className={`text-[13.5px] transition-colors ${active ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+              <Link
+                key={k}
+                href={href({ period: k })}
+                aria-current={active ? "true" : undefined}
+                className={`rounded px-2.5 py-1 text-[12.5px] transition-colors ${active ? "bg-panel font-medium text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-row-hover"}`}
+              >
                 {getPeriod(k, undefined, cycle).label}
               </Link>
             );
@@ -165,30 +156,47 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         </div>
       </div>
       {rangeInvalid && (
-        <p className="mb-3 text-[12.5px] text-attention">That date range wasn&apos;t valid (check the order and bounds), so {getPeriod(key, undefined, cycle).label} is shown instead.</p>
+        <p className="mb-3 text-[12.5px] text-meta">That date range wasn&apos;t valid (check the order and bounds), so {getPeriod(key, undefined, cycle).label} is shown instead.</p>
       )}
 
-      {/* View tabs */}
-      <nav className="mb-5 flex flex-wrap gap-3">
-        {VIEWS.map((v) => {
-          const active = v === view;
-          return (
-            <Link key={v} href={href({ view: v })} className={`rounded px-2 py-1 text-[12.5px] transition-colors ${active ? "bg-panel font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
-              {VIEW_LABEL[v]}
-            </Link>
-          );
-        })}
-      </nav>
+      {/* Grouped view nav — Overview / Analysis / Reconciliation, not one undifferentiated dashboard.
+          Every item is a working ?view= deep link; week/cycle aliases light the Overview tab. */}
+      {!selectedProject && (
+        <nav aria-label="Finance views" className="mb-5 flex flex-wrap items-center gap-x-6 gap-y-3">
+          {VIEW_NAV_GROUPS.map((g) => (
+            <div key={g.label} className="flex items-center gap-2">
+              <span className="text-[10.5px] font-medium uppercase tracking-[0.1em] text-meta">{g.label}</span>
+              <div className="flex flex-wrap items-center gap-1">
+                {g.items.map((v) => {
+                  const active = navKeyForView(view) === v;
+                  return (
+                    <Link
+                      key={v}
+                      href={href({ view: v })}
+                      aria-current={active ? "page" : undefined}
+                      className={`rounded px-2 py-1 text-[12.5px] transition-colors ${active ? "bg-panel font-medium text-foreground" : "text-muted-foreground hover:text-foreground hover:bg-row-hover"}`}
+                    >
+                      {VIEW_LABEL[v]}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </nav>
+      )}
 
       {!s.laborVerified && (
-        <p className="mb-5 text-[12.5px] text-attention">Connecteam labor data is unavailable, so planned labor figures are marked unavailable — not zero. Actual hours are unknown, not zero.</p>
+        <StatusBanner tone="attention" title="Connecteam labor data is unavailable" className="mb-5">
+          Planned labor figures are marked unavailable — not zero. Actual hours are unknown, not zero, until the Connecteam pull succeeds.
+        </StatusBanner>
       )}
 
       {selectedProject ? (
         <ProjectDetail snap={projectSnap} id={selectedProject} runs={projectRuns} handling={projectHandling} backHref={href({ view: "projects", project: undefined })} canEdit={canEditCost} />
       ) : (
         <>
-          {(view === "overview" || view === "week" || view === "cycle") && <Overview s={s} L={L} tempHourShare={tempHourShare} href={href} />}
+          {isOverviewView(view) && <Overview s={s} L={L} tempHourShare={tempHourShare} href={href} />}
           {view === "routes" && <Routes rows={getRouteLaborCosts(period.start, period.end)} href={href} />}
           {view === "projects" && <ProjectsTable events={s.events} href={href} />}
           {view === "labor" && <LaborView L={L} s={s} tempHourShare={tempHourShare} />}
@@ -201,7 +209,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
           {sp?.lineage && <Lineage eventId={sp.lineage} label={s.events.find((e) => e.eventId === sp.lineage)?.label ?? sp.lineage} />}
         </>
       )}
-    </main>
+    </BladeMain>
   );
 }
 
@@ -211,38 +219,79 @@ function priorLaborCost(period: Period, cycle: ReturnType<typeof opsCycleConfig>
   return { label: prior.label, cost: getLaborLedgerSummary(prior.start, prior.end).totalCost };
 }
 
-// ── Overview (3 blocks + labor-ledger block + events) ──────────────────────────────────────────────
+// ── Overview ───────────────────────────────────────────────────────────────────────────────────────
 function Overview({ s, L, tempHourShare, href }: { s: Awaited<ReturnType<typeof financeForPeriod>>; L: Awaited<ReturnType<typeof financeForPeriod>>["laborLedger"]; tempHourShare: number | null; href: (p: Partial<{ view: string; lineage: string; project: string }>) => string }): React.JSX.Element {
+  const lh = laborHeadline(s.labor);
+  const dateBasis = s.period.label;
   return (
     <>
-      <section className="mb-6 grid gap-px overflow-hidden border border-border bg-border md:grid-cols-3">
-        <Block title="Revenue" tag="signed" headline={s.revenue.signed == null ? <Unavail /> : money(s.revenue.signed)}>
+      {/* Primary scorecard — signed revenue, labor (honest basis), contribution after labor. Each card
+          states its accounting basis + verification state so no figure is mistaken for another. */}
+      <section className="mb-6 grid gap-3 md:grid-cols-3">
+        <MetricCard
+          label="Signed revenue"
+          value={s.revenue.signed == null ? <Unavail /> : money(s.revenue.signed)}
+          scope={`${s.revenue.events || 0} signed event${s.revenue.events === 1 ? "" : "s"}`}
+          basis="Signed contracts (booked)"
+          dateBasis={dateBasis}
+          state={s.revenue.signed == null ? { tone: "neutral", label: "Unavailable" } : { tone: "positive", label: "Signed" }}
+        >
           <BRow label="Target">{s.revenue.target == null ? <span className="text-meta">Not configured</span> : money(s.revenue.target)}</BRow>
-          <BRow label="Vs target"><VarianceTag v={s.revenue.vsTarget} kind="money" /></BRow>
-          <BRow label="Signed events">{s.revenue.events || "—"}</BRow>
-          <BRow label="Pipeline">{s.revenue.pipeline == null ? "—" : <span className="text-tertiary-text">{money(s.revenue.pipeline)} · {s.revenue.pipelineCount}</span>}</BRow>
-        </Block>
+          <BRow label="Vs target"><VarianceValue v={s.revenue.vsTarget} kind="money" /></BRow>
+          <BRow label="Pipeline (unsigned)">{s.revenue.pipeline == null ? "—" : <span className="text-tertiary-text">{money(s.revenue.pipeline)} · {s.revenue.pipelineCount}</span>}</BRow>
+        </MetricCard>
 
-        <Block title="Labor (planned)" tag={s.labor.rateStatus === "UNAVAILABLE" ? "hours only" : "connecteam"} headline={s.labor.actualCost == null ? (s.labor.plannedCost == null ? <Unavail /> : money(s.labor.plannedCost)) : money(s.labor.actualCost)}>
+        <MetricCard
+          label="Labor"
+          value={lh.amount == null ? <Unavail /> : money(lh.amount)}
+          scope={lh.basis === "actual" ? hrs(s.labor.actualHours) + " actual" : lh.basis === "planned" ? hrs(s.labor.plannedHours) + " planned" : "hours unknown"}
+          basis={`${lh.basisLabel} — ${lh.basisDetail}`}
+          dateBasis={dateBasis}
+          state={lh.state}
+        >
           <BRow label="Planned">{money(s.labor.plannedCost)}</BRow>
           <BRow label="Actual">{money(s.labor.actualCost)}</BRow>
-          <BRow label="Cost var."><VarianceTag v={s.labor.costVariance} kind="money" /></BRow>
-          <BRow label="Hours p/a">{hrs(s.labor.plannedHours)} / {hrs(s.labor.actualHours)}</BRow>
-        </Block>
+          <BRow label="Cost variance"><VarianceValue v={s.labor.costVariance} kind="money" /></BRow>
+          <BRow label="Hours planned / actual">{hrs(s.labor.plannedHours)} / {hrs(s.labor.actualHours)}</BRow>
+        </MetricCard>
 
-        <Block title="Margin" tag="projected" headline={s.contribution.value == null ? <Unavail /> : money(s.contribution.value)}>
-          <BRow label="Margin">{s.contribution.marginPct == null ? <Unavail /> : pct(s.contribution.marginPct)}</BRow>
+        <MetricCard
+          label="Contribution after labor"
+          value={<ContributionValue value={s.contribution.value} />}
+          scope="Signed revenue − actual labor"
+          basis="Projected (labor-only)"
+          dateBasis={dateBasis}
+          state={s.contribution.value == null ? { tone: "neutral", label: "Unavailable" } : { tone: "info", label: "Projected" }}
+          footnote="Contribution after LABOR only — not net profit. It excludes vehicle, fuel, sub-rental, subcontractor and other direct costs. Open a project for its full direct-cost profitability."
+        >
+          <BRow label="Margin (of signed)">{s.contribution.marginPct == null ? <Unavail /> : pct(s.contribution.marginPct)}</BRow>
           <BRow label="Signed − labor">{s.contribution.value == null ? <span className="text-meta">needs revenue + labor</span> : money(s.contribution.value)}</BRow>
-        </Block>
+        </MetricCard>
       </section>
 
-      <LedgerBlocks L={L} tempHourShare={tempHourShare} />
+      <AttributedLaborSection L={L} tempHourShare={tempHourShare} />
 
       <section className="mt-8">
-        <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Projects this period</h2>
+        <div className="mb-2 flex items-baseline justify-between gap-3">
+          <h2 className="text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Projects this period</h2>
+          <Link href={href({ view: "projects" })} className="text-[12px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">Open Projects view →</Link>
+        </div>
         <ProjectsTable events={s.events} href={href} />
       </section>
     </>
+  );
+}
+
+// Attributed labor = what the deterministic worker→route→stop→project cascade REALIZED from the ledger.
+// Distinct from the Connecteam planned/actual scorecard above (that is the whole-period plan vs clock;
+// this is the share actually attributed down to customers/buckets). The header says so to keep them apart.
+function AttributedLaborSection({ L, tempHourShare }: { L: Awaited<ReturnType<typeof financeForPeriod>>["laborLedger"]; tempHourShare: number | null }): React.JSX.Element {
+  return (
+    <section>
+      <h2 className="mb-1 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Attributed labor <span className="text-[11px] normal-case tracking-normal text-meta">realized ledger, not the plan above</span></h2>
+      <p className="mb-2 text-[12px] text-meta">The cost the worker → route → stop → project cascade actually attributed this period, split by workforce and bucket. Figures are planned-grain today (labeled), never a fabricated actual.</p>
+      <LedgerBlocks L={L} tempHourShare={tempHourShare} />
+    </section>
   );
 }
 
@@ -260,7 +309,7 @@ function LedgerBlocks({ L, tempHourShare }: { L: Awaited<ReturnType<typeof finan
         <BRow label="Customer">{money(L.byBucket.customer)}</BRow>
         <BRow label="Travel (est.)">{money(L.byBucket.travel)}</BRow>
         <BRow label="Warehouse/prep">{money(L.byBucket.warehouse)}</BRow>
-        <BRow label="Unallocated">{L.byBucket.unallocated > 0 ? <span className="text-attention">{money(L.byBucket.unallocated)}</span> : money(L.byBucket.unallocated)}</BRow>
+        <BRow label="Unallocated">{L.byBucket.unallocated > 0 ? <span className="inline-flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-status-warning" aria-hidden />{money(L.byBucket.unallocated)}</span> : money(L.byBucket.unallocated)}</BRow>
       </Block>
 
       <Block title="Temp premium" tag="measured, not hardcoded" headline={L.tempPremium == null ? <Unavail /> : money(L.tempPremium)}>
@@ -272,13 +321,13 @@ function LedgerBlocks({ L, tempHourShare }: { L: Awaited<ReturnType<typeof finan
   );
 }
 
-// ── Projects table (per-event economics, with method badge + lineage link) ─────────────────────────
+// ── Projects table (per-event economics, with method tag + lineage link) ────────────────────────────
 function ProjectsTable({ events, href }: { events: Awaited<ReturnType<typeof financeForPeriod>>["events"]; href: (p: Partial<{ view: string; lineage: string; project: string }>) => string }): React.JSX.Element {
   if (events.length === 0) return <p className="text-[13.5px] text-muted-foreground">No projects with financial data in this period yet.</p>;
   return (
     <>
       <div className="overflow-x-auto border border-border">
-        <table className={tableCls}>
+        <table className={tableCls} style={{ minWidth: "760px" }}>
           <thead className={theadCls}>
             <tr>
               <th className={thCls}>Project</th>
@@ -295,27 +344,22 @@ function ProjectsTable({ events, href }: { events: Awaited<ReturnType<typeof fin
               <tr key={e.eventId} className="border-t border-[var(--row-rule)] hover:bg-[var(--row-hover)]">
                 <td className="px-2.5 py-2.5"><Link href={href({ view: "projects", project: e.eventId })} className="hover:underline">{e.label || `Project ${e.eventId}`}</Link></td>
                 <td className="px-2.5 py-2.5 text-meta">{e.date}</td>
-                <td className="px-2.5 py-2.5 text-right tabular-nums">{e.revenue == null ? <Unavail /> : money(e.revenue)}</td>
-                <td className="px-2.5 py-2.5 text-right tabular-nums">{e.labor != null ? money(e.labor) : <span className="text-meta">{e.laborStatus === "UNAVAILABLE" ? "unavailable" : "—"}</span>}</td>
+                <td className="px-2.5 py-2.5 text-right tabular-nums text-foreground">{e.revenue == null ? <Unavail /> : money(e.revenue)}</td>
+                <td className="px-2.5 py-2.5 text-right tabular-nums text-foreground">{e.labor != null ? money(e.labor) : <span className="text-meta">{e.laborStatus === "UNAVAILABLE" ? "unavailable" : "—"}</span>}</td>
                 <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{e.internalLabor == null && e.tempLabor == null ? "—" : `${money(e.internalLabor)} / ${money(e.tempLabor)}`}</td>
-                <td className="px-2.5 py-2.5"><MethodBadge method={e.method} confidence={e.confidence} /></td>
-                <td className="px-2.5 py-2.5 text-right tabular-nums">{e.contribution != null ? <span className={e.contribution >= 0 ? "text-positive" : "text-critical"}>{money(e.contribution)}{e.contribStatus === "ESTIMATED" ? <span className="ml-1 text-[10px] uppercase text-meta">est</span> : null}</span> : <span className="text-meta">—</span>}</td>
+                <td className="px-2.5 py-2.5"><MethodTag method={e.method} confidence={e.confidence} /></td>
+                <td className="px-2.5 py-2.5 text-right"><span className="inline-flex justify-end"><ContributionValue value={e.contribution} estimated={e.contribStatus === "ESTIMATED"} /></span></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <p className="mt-3 text-[12px] text-meta">Project labor is attributed from the labor ledger down worker → route → stop → project. Today it is planned-grain (method PLANNED/Derived), labeled — never a fake ACTUAL. A project carries labor for BOTH its delivery and pickup visits (real labor, not double-counted). Click a project for its full profitability snapshot and data lineage.</p>
+      <p className="mt-3 text-[12px] text-meta">Contribution here is revenue − attributed labor only (not full profit). Project labor is attributed from the labor ledger down worker → route → stop → project; today it is planned-grain (method PLANNED/Derived), labeled — never a fake ACTUAL. A project carries labor for BOTH its delivery and pickup visits (real labor, not double-counted). Click a project for its full direct-cost profitability snapshot and data lineage.</p>
     </>
   );
 }
 
-// ── Per-project profitability snapshot (compute-on-read) ───────────────────────────────────────────
-const SNAP_STATUS_TONE: Record<ProjectSnapshot["status"], string> = {
-  RECONCILED: "text-positive",
-  ESTIMATED: "text-foreground",
-  PROVISIONAL: "text-attention",
-};
+// ── Per-project profitability snapshot (compute-on-read) ─────────────────────────────────────────────
 const COST_FAMILY_LABEL: Record<string, string> = {
   labor: "Labor",
   vehicle: "Vehicle",
@@ -327,17 +371,6 @@ const COST_FAMILY_LABEL: Record<string, string> = {
   other: "Other",
 };
 
-function StatusBadge({ status }: { status: ProjectSnapshot["status"] }): React.JSX.Element {
-  return <span className={`text-[11px] font-medium uppercase tracking-[0.08em] ${SNAP_STATUS_TONE[status]}`}>{status}</span>;
-}
-
-// ── Reconciliation-run lifecycle (Stage 7a) labels ──────────────────────────────────────────────────
-const PHASE_TONE: Record<RunPhase, string> = {
-  snapshot: "text-muted-foreground",
-  revision: "text-attention",
-  final: "text-positive",
-};
-const PHASE_LABEL: Record<RunPhase, string> = { snapshot: "Snapshot", revision: "Revision", final: "Final" };
 // A reason tag is a DERIVED FACT (which input moved), never an inferred motive.
 const REASON_LABEL: Record<VarianceReason, string> = {
   late_timesheet: "Late timesheet",
@@ -349,14 +382,6 @@ const REASON_LABEL: Record<VarianceReason, string> = {
   new_estimate: "New estimate",
   cost_removed: "Cost removed",
 };
-
-function PhaseBadge({ phase }: { phase: RunPhase }): React.JSX.Element {
-  return <span className={`text-[11px] font-medium uppercase tracking-[0.08em] ${PHASE_TONE[phase]}`}>{PHASE_LABEL[phase]}</span>;
-}
-
-function signedMoney(n: number): string {
-  return (n > 0 ? "+" : n < 0 ? "-" : "") + "$" + Math.abs(Math.round(n)).toLocaleString("en-US");
-}
 
 /** Per-project revision history — the snapshot→revision→final runs with the variance-vs-prior per line. */
 function RevisionHistory({ runs }: { runs: ReconciliationRunRow[] }): React.JSX.Element {
@@ -377,14 +402,14 @@ function RevisionHistory({ runs }: { runs: ReconciliationRunRow[] }): React.JSX.
           <li key={run.id} className="border border-border bg-panel px-4 py-3">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px]">
               <span className="font-medium">Run {run.seq}</span>
-              <PhaseBadge phase={run.phase} />
-              <StatusBadge status={run.status} />
+              <PhaseTag phase={run.phase} />
+              <SnapshotStatus status={run.status} />
               <span className="text-meta">{run.capturedAt.slice(0, 16).replace("T", " ")}</span>
               <span className="ml-auto flex flex-wrap items-center gap-x-4 tabular-nums">
                 <span className="text-meta">Rev <span className="text-foreground">{money(run.revenue)}</span></span>
                 <span className="text-meta">Cost <span className="text-foreground">{money(run.directCost)}</span></span>
-                <span className="text-meta">Contrib <span className={run.contribution == null ? "text-foreground" : run.contribution >= 0 ? "text-positive" : "text-critical"}>{money(run.contribution)}</span></span>
-                {!run.balanced && <span className="text-critical">UNBALANCED</span>}
+                <span className="text-meta">Contrib <ContributionValue value={run.contribution} /></span>
+                {!run.balanced && <span className="inline-flex items-center gap-1.5 text-status-label"><span className="size-1.5 rounded-full bg-status-blocked" aria-hidden />Unbalanced</span>}
               </span>
             </div>
             {run.variance && run.variance.lines.length > 0 ? (
@@ -393,8 +418,8 @@ function RevisionHistory({ runs }: { runs: ReconciliationRunRow[] }): React.JSX.
                   <li key={ln.line} className="flex flex-wrap items-center gap-x-3">
                     <span className="min-w-[150px] text-meta">{ln.label}</span>
                     <span className="tabular-nums text-tertiary-text">{money(ln.prior)} → {money(ln.current)}</span>
-                    <span className={`tabular-nums ${ln.delta > 0 ? "text-positive" : ln.delta < 0 ? "text-critical" : "text-meta"}`}>{signedMoney(ln.delta)}</span>
-                    <span className="text-[11px] uppercase tracking-[0.06em] text-attention">{REASON_LABEL[ln.reason]}</span>
+                    <span className="tabular-nums"><DeltaValue delta={ln.delta} /></span>
+                    <span className="text-[11px] uppercase tracking-[0.06em] text-meta">{REASON_LABEL[ln.reason]}</span>
                   </li>
                 ))}
               </ul>
@@ -420,34 +445,53 @@ function ProjectDetail({ snap, id, runs, handling, backHref, canEdit }: { snap: 
     );
   }
   const r = snap.revenue;
+  const freshness = snap.revenueAsOf ? `revenue as of ${snap.revenueAsOf.slice(0, 16).replace("T", " ")}` : undefined;
   return (
     <section>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="mb-1 text-[12.5px]"><Link href={backHref} className="text-muted-foreground underline hover:text-foreground">← Back to projects</Link></p>
-          <h2 className="text-[17px] font-medium tracking-tight">{snap.label}</h2>
-          <p className="text-[12px] text-meta">Project <span className="font-mono">{snap.projectId}</span>{snap.eventDate ? ` · ${snap.eventDate}` : ""} · <StatusBadge status={snap.status} /></p>
+          <h2 className="text-[18px] font-medium tracking-tight">{snap.label}</h2>
+          <p className="flex flex-wrap items-center gap-2 text-[12px] text-meta">Project <span className="font-mono">{snap.projectId}</span>{snap.eventDate ? ` · ${snap.eventDate}` : ""} · <SnapshotStatus status={snap.status} /></p>
         </div>
       </div>
 
       {/* Headline economics */}
-      <section className="mb-6 grid gap-px overflow-hidden border border-border bg-border md:grid-cols-3">
-        <Block title="Revenue" tag={r.contractedStatus.toLowerCase()} headline={r.contracted == null ? <Unavail /> : money(r.contracted)}>
+      <section className="mb-6 grid gap-3 md:grid-cols-3">
+        <MetricCard
+          label="Revenue"
+          value={r.contracted == null ? <Unavail /> : money(r.contracted)}
+          scope="Contracted total"
+          basis={r.signed ? "Signed contract" : "Quote (unsigned)"}
+          freshness={freshness}
+          state={r.contracted == null ? { tone: "neutral", label: "Unavailable" } : r.signed ? { tone: "positive", label: "Signed" } : { tone: "attention", label: "Unsigned quote" }}
+        >
           <BRow label="Subtotal (pre-discount)">{r.subtotal == null ? <Unavail /> : money(r.subtotal)}</BRow>
           <BRow label="Collected">{r.collected == null ? <Unavail /> : money(r.collected)}</BRow>
           <BRow label="Due">{r.due == null ? <Unavail /> : money(r.due)}</BRow>
-          <BRow label="Signed">{r.signed ? "Yes" : <span className="text-attention">Quote (unsigned)</span>}</BRow>
-        </Block>
-        <Block title="Direct cost" tag={snap.directCostStatus.toLowerCase()} headline={snap.directCost == null ? <Unavail /> : money(snap.directCost)}>
+        </MetricCard>
+        <MetricCard
+          label="Direct cost"
+          value={snap.directCost == null ? <Unavail /> : money(snap.directCost)}
+          scope="All tracked cost families"
+          basis={snap.directCostStatus === "ACTUAL" ? "Actual" : snap.directCostStatus === "ESTIMATED" ? "Estimated" : "Unavailable"}
+          state={snap.directCost == null ? { tone: "neutral", label: "Unavailable" } : snap.directCostStatus === "ACTUAL" ? { tone: "positive", label: "Actual" } : { tone: "attention", label: "Estimated" }}
+        >
           {snap.costFamilies.filter((f) => f.tracked).map((f) => (
             <BRow key={f.type} label={COST_FAMILY_LABEL[f.type] ?? f.type}>{money(f.amount)}{f.status === "ESTIMATED" ? <span className="ml-1 text-[10px] uppercase text-meta">est</span> : null}</BRow>
           ))}
           {snap.costFamilies.every((f) => !f.tracked) && <BRow label="Tracked families"><span className="text-meta">None yet</span></BRow>}
-        </Block>
-        <Block title="Contribution" tag={snap.contributionStatus.toLowerCase()} headline={snap.contribution == null ? <Unavail /> : <span className={snap.contribution >= 0 ? "text-positive" : "text-critical"}>{money(snap.contribution)}</span>}>
+        </MetricCard>
+        <MetricCard
+          label="Contribution"
+          value={<ContributionValue value={snap.contribution} />}
+          scope="Revenue − direct cost"
+          basis="Full direct-cost profitability"
+          state={snap.contribution == null ? { tone: "neutral", label: "Unavailable" } : snap.status === "RECONCILED" ? { tone: "positive", label: "Reconciled" } : { tone: "info", label: "Settling" }}
+          footnote="This is full direct-cost contribution (every tracked cost family), unlike the overview's labor-only figure. Overhead is excluded by design."
+        >
           <BRow label="Margin">{snap.marginPct == null ? <Unavail /> : pct(snap.marginPct)}</BRow>
-          <BRow label="Basis">{snap.contribution == null ? <span className="text-meta">needs revenue + cost</span> : <span className="text-meta">revenue − direct cost</span>}</BRow>
-        </Block>
+        </MetricCard>
       </section>
 
       {/* Revenue components (Stage 3) — quoted→contracted→collected, discounts, tax, fees, refunds. Shown
@@ -462,7 +506,7 @@ function ProjectDetail({ snap, id, runs, handling, backHref, canEdit }: { snap: 
       {/* Cost-family rollup — tracked AND not-yet-tracked (never shown as 0) */}
       <h3 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Cost families</h3>
       <div className="overflow-x-auto border border-border">
-        <table className={tableCls}>
+        <table className={tableCls} style={{ minWidth: "640px" }}>
           <thead className={theadCls}>
             <tr>
               <th className={thCls}>Family</th>
@@ -476,9 +520,9 @@ function ProjectDetail({ snap, id, runs, handling, backHref, canEdit }: { snap: 
             {snap.costFamilies.map((f) => (
               <tr key={f.type} className="border-t border-[var(--row-rule)]">
                 <td className="px-2.5 py-2.5">{COST_FAMILY_LABEL[f.type] ?? f.type}</td>
-                <td className="px-2.5 py-2.5 text-right tabular-nums">{f.amount == null ? <span className="text-meta">unavailable</span> : money(f.amount)}</td>
+                <td className="px-2.5 py-2.5 text-right tabular-nums text-foreground">{f.amount == null ? <span className="text-meta">unavailable</span> : money(f.amount)}</td>
                 <td className="px-2.5 py-2.5">{f.tracked ? <span className="text-[11px] uppercase tracking-[0.06em] text-meta">{f.status.toLowerCase()}</span> : <span className="text-[11px] uppercase tracking-[0.06em] text-meta">not tracked</span>}</td>
-                <td className="px-2.5 py-2.5"><MethodBadge method={f.method} confidence={f.confidence} /></td>
+                <td className="px-2.5 py-2.5"><MethodTag method={f.method} confidence={f.confidence} /></td>
                 <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{f.leafCount || "—"}</td>
               </tr>
             ))}
@@ -489,10 +533,12 @@ function ProjectDetail({ snap, id, runs, handling, backHref, canEdit }: { snap: 
       {/* Reconciliation — the family parts sum back to the direct-cost total */}
       <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-1 border border-border bg-panel px-4 py-3 text-[12.5px]">
         <span className="text-meta">Reconciliation</span>
-        <span>Family sum <span className="tabular-nums">{money(snap.reconciliation.familySum)}</span></span>
-        <span>Direct cost <span className="tabular-nums">{money(snap.reconciliation.directCostTotal)}</span></span>
-        <span>Residual <span className="tabular-nums">{snap.reconciliation.residual == null ? "—" : money(snap.reconciliation.residual)}</span></span>
-        <span className={snap.reconciliation.balanced ? "text-positive" : "text-critical"}>{snap.reconciliation.balanced ? "Balanced" : "UNBALANCED"}</span>
+        <span className="text-meta">Family sum <span className="tabular-nums text-foreground">{money(snap.reconciliation.familySum)}</span></span>
+        <span className="text-meta">Direct cost <span className="tabular-nums text-foreground">{money(snap.reconciliation.directCostTotal)}</span></span>
+        <span className="text-meta">Residual <span className="tabular-nums text-foreground">{snap.reconciliation.residual == null ? "—" : money(snap.reconciliation.residual)}</span></span>
+        {snap.reconciliation.balanced
+          ? <span className="inline-flex items-center gap-1.5 text-status-label"><span className="size-1.5 rounded-full bg-status-ready" aria-hidden />Balanced</span>
+          : <span className="inline-flex items-center gap-1.5 text-status-label"><span className="size-1.5 rounded-full bg-status-blocked" aria-hidden />Unbalanced</span>}
       </div>
 
       {/* Stage 6: item-level handling-time intelligence — PROVISIONAL, inferred from line-item titles only.
@@ -502,7 +548,7 @@ function ProjectDetail({ snap, id, runs, handling, backHref, canEdit }: { snap: 
       {/* Honest gaps */}
       <div className="mt-4">
         <h3 className="mb-1 text-[12px] font-medium uppercase tracking-[0.1em] text-tertiary-text">How to read this</h3>
-        <p className="mb-2 text-[12.5px] text-meta">{snap.statusReason}{snap.revenueAsOf ? ` · revenue as of ${snap.revenueAsOf.slice(0, 16).replace("T", " ")}` : ""}</p>
+        <p className="mb-2 text-[12.5px] text-meta">{snap.statusReason}{freshness ? ` · ${freshness}` : ""}</p>
         <ul className="list-disc space-y-1 pl-5 text-[12px] text-meta">
           {snap.notes.map((n, i) => <li key={i}>{n}</li>)}
         </ul>
@@ -520,14 +566,14 @@ function ProjectDetail({ snap, id, runs, handling, backHref, canEdit }: { snap: 
   );
 }
 
-// ── Routes bridge view ─────────────────────────────────────────────────────────────────────────────
+// ── Routes bridge view ───────────────────────────────────────────────────────────────────────────────
 function Routes({ rows, href }: { rows: ReturnType<typeof getRouteLaborCosts>; href: (p: Partial<{ view: string; lineage: string }>) => string }): React.JSX.Element {
   if (rows.length === 0) return <p className="text-[13.5px] text-muted-foreground">No route labor attributed in this period yet.</p>;
   return (
     <section>
       <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Route profitability (the bridge level)</h2>
       <div className="overflow-x-auto border border-border">
-        <table className={tableCls}>
+        <table className={tableCls} style={{ minWidth: "880px" }}>
           <thead className={theadCls}>
             <tr>
               <th className={thCls}>Route</th>
@@ -547,12 +593,12 @@ function Routes({ rows, href }: { rows: ReturnType<typeof getRouteLaborCosts>; h
                 <td className="px-2.5 py-2.5 font-mono text-[12px]">{r.routeId}</td>
                 <td className="px-2.5 py-2.5 text-meta">{r.date}</td>
                 <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{r.projectIds.length || "—"}</td>
-                <td className="px-2.5 py-2.5 text-right tabular-nums">{money(r.customer)}</td>
+                <td className="px-2.5 py-2.5 text-right tabular-nums text-foreground">{money(r.customer)}</td>
                 <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{money(r.travel)}</td>
                 <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{money(r.warehouse)}</td>
-                <td className="px-2.5 py-2.5 text-right tabular-nums">{r.unallocated > 0 ? <span className="text-attention">{money(r.unallocated)}</span> : money(r.unallocated)}</td>
+                <td className="px-2.5 py-2.5 text-right tabular-nums">{r.unallocated > 0 ? <span className="inline-flex items-center justify-end gap-1.5 text-foreground"><span className="size-1.5 rounded-full bg-status-warning" aria-hidden />{money(r.unallocated)}</span> : <span className="text-foreground">{money(r.unallocated)}</span>}</td>
                 <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{money(r.internal)} / {money(r.temp)}</td>
-                <td className="px-2.5 py-2.5 text-right tabular-nums">{money(r.cost)}</td>
+                <td className="px-2.5 py-2.5 text-right tabular-nums text-foreground">{money(r.cost)}</td>
               </tr>
             ))}
           </tbody>
@@ -564,11 +610,11 @@ function Routes({ rows, href }: { rows: ReturnType<typeof getRouteLaborCosts>; h
   );
 }
 
-// ── Labor (workforce) view ───────────────────────────────────────────────────────────────────────
+// ── Labor (workforce) view ─────────────────────────────────────────────────────────────────────────
 function LaborView({ L, s, tempHourShare }: { L: Awaited<ReturnType<typeof financeForPeriod>>["laborLedger"]; s: Awaited<ReturnType<typeof financeForPeriod>>; tempHourShare: number | null }): React.JSX.Element {
   return (
     <>
-      <LedgerBlocks L={L} tempHourShare={tempHourShare} />
+      <AttributedLaborSection L={L} tempHourShare={tempHourShare} />
       <section className="mt-6 grid gap-px overflow-hidden border border-border bg-border md:grid-cols-2">
         <Block title="Internal workforce" tag="connecteam" headline={`${L.internalWorkers}`}>
           <BRow label="Workers">{L.internalWorkers || "—"}</BRow>
@@ -588,7 +634,7 @@ function LaborView({ L, s, tempHourShare }: { L: Awaited<ReturnType<typeof finan
   );
 }
 
-// ── Instawork view ───────────────────────────────────────────────────────────────────────────────
+// ── Instawork view ───────────────────────────────────────────────────────────────────────────────────
 function InstaworkView({ rows, L }: { rows: ReturnType<typeof getInstaworkLedger>; L: Awaited<ReturnType<typeof financeForPeriod>>["laborLedger"] }): React.JSX.Element {
   return (
     <section>
@@ -597,7 +643,7 @@ function InstaworkView({ rows, L }: { rows: ReturnType<typeof getInstaworkLedger
         <p className="text-[13.5px] text-muted-foreground">No Instawork labor attributed to routes in this period.</p>
       ) : (
         <div className="overflow-x-auto border border-border">
-          <table className={tableCls}>
+          <table className={tableCls} style={{ minWidth: "640px" }}>
             <thead className={theadCls}>
               <tr>
                 <th className={thCls}>Worker / gig</th>
@@ -614,7 +660,7 @@ function InstaworkView({ rows, L }: { rows: ReturnType<typeof getInstaworkLedger
                   <td className="px-2.5 py-2.5">{r.name || r.workerRef}</td>
                   <td className="px-2.5 py-2.5 text-right tabular-nums">{hrs(r.hours)}</td>
                   <td className="px-2.5 py-2.5 text-right tabular-nums">{money(r.rate)}</td>
-                  <td className="px-2.5 py-2.5 text-right tabular-nums">{money(r.cost)}</td>
+                  <td className="px-2.5 py-2.5 text-right tabular-nums text-foreground">{money(r.cost)}</td>
                   <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{r.routeIds.length}</td>
                   <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{r.projectIds.length}</td>
                 </tr>
@@ -633,7 +679,7 @@ function InstaworkView({ rows, L }: { rows: ReturnType<typeof getInstaworkLedger
   );
 }
 
-// ── Variance view ───────────────────────────────────────────────────────────────────────────────
+// ── Variance view ─────────────────────────────────────────────────────────────────────────────────────
 function VarianceView({ s, L, priorCost }: { s: Awaited<ReturnType<typeof financeForPeriod>>; L: Awaited<ReturnType<typeof financeForPeriod>>["laborLedger"]; priorCost: { label: string; cost: number | null } }): React.JSX.Element {
   const delta = L.totalCost != null && priorCost.cost != null ? Math.round((L.totalCost - priorCost.cost) * 100) / 100 : null;
   return (
@@ -642,15 +688,15 @@ function VarianceView({ s, L, priorCost }: { s: Awaited<ReturnType<typeof financ
         <Block title="Planned vs actual" tag="connecteam" headline={money(s.labor.actualCost)}>
           <BRow label="Planned">{money(s.labor.plannedCost)}</BRow>
           <BRow label="Actual">{money(s.labor.actualCost)}</BRow>
-          <BRow label="Cost var."><VarianceTag v={s.labor.costVariance} kind="money" /></BRow>
-          <BRow label="Hours var."><VarianceTag v={s.labor.hoursVariance} kind="hours" /></BRow>
+          <BRow label="Cost var."><VarianceValue v={s.labor.costVariance} kind="money" /></BRow>
+          <BRow label="Hours var."><VarianceValue v={s.labor.hoursVariance} kind="hours" /></BRow>
         </Block>
         <Block title="Internal / temp (attributed)" tag="ledger" headline={money(L.totalCost)}>
           <BRow label="Internal">{money(L.internalCost)}</BRow>
           <BRow label="Temp">{money(L.tempCost)}</BRow>
           <BRow label="Premium">{money(L.tempPremium)}</BRow>
         </Block>
-        <Block title={`Vs ${priorCost.label}`} tag="week-over-week" headline={delta == null ? <Unavail /> : <span className={delta > 0 ? "text-critical" : "text-positive"}>{delta > 0 ? "+" : ""}{money(delta)}</span>}>
+        <Block title={`Vs ${priorCost.label}`} tag="week-over-week" headline={<DeltaValue delta={delta} lowerIsBetter />}>
           <BRow label="Prior labor">{money(priorCost.cost)}</BRow>
           <BRow label="This labor">{money(L.totalCost)}</BRow>
         </Block>
@@ -659,7 +705,7 @@ function VarianceView({ s, L, priorCost }: { s: Awaited<ReturnType<typeof financ
         <div className="mt-6">
           <h3 className="mb-2 text-[12px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Labor trajectory (plan → actual)</h3>
           <div className="overflow-x-auto border border-border">
-            <table className={tableCls}>
+            <table className={tableCls} style={{ minWidth: "480px" }}>
               <thead className={theadCls}><tr><th className={thCls}>Captured</th><th className={`${thCls} text-right`}>Planned $</th><th className={`${thCls} text-right`}>Actual $</th></tr></thead>
               <tbody>
                 {s.laborTrajectory.map((t, i) => (
@@ -675,7 +721,7 @@ function VarianceView({ s, L, priorCost }: { s: Awaited<ReturnType<typeof financ
   );
 }
 
-// ── Reconciliation view ─────────────────────────────────────────────────────────────────────────
+// ── Reconciliation view ───────────────────────────────────────────────────────────────────────────────
 function Reconciliation({ rows, runs, href }: { rows: ReturnType<typeof getLaborReconciliation>; runs: ReconciliationRunRow[]; href: (p: Partial<{ view: string; project: string }>) => string }): React.JSX.Element {
   if (rows.length === 0 && runs.length === 0) return <p className="text-[13.5px] text-muted-foreground">No labor leaves to reconcile in this period.</p>;
   return (
@@ -688,7 +734,7 @@ function Reconciliation({ rows, runs, href }: { rows: ReturnType<typeof getLabor
         ) : (
           <>
             <div className="overflow-x-auto border border-border">
-              <table className={tableCls}>
+              <table className={tableCls} style={{ minWidth: "900px" }}>
                 <thead className={theadCls}>
                   <tr>
                     <th className={thCls}>Project</th>
@@ -708,13 +754,13 @@ function Reconciliation({ rows, runs, href }: { rows: ReturnType<typeof getLabor
                     return (
                       <tr key={run.id} className="border-t border-[var(--row-rule)] hover:bg-[var(--row-hover)]">
                         <td className="px-2.5 py-2.5"><Link href={href({ view: "projects", project: run.projectId })} className="underline decoration-dotted underline-offset-2">{run.snapshot.label}</Link></td>
-                        <td className="px-2.5 py-2.5"><PhaseBadge phase={run.phase} /></td>
-                        <td className="px-2.5 py-2.5"><StatusBadge status={run.status} /></td>
+                        <td className="px-2.5 py-2.5"><PhaseTag phase={run.phase} /></td>
+                        <td className="px-2.5 py-2.5"><SnapshotStatus status={run.status} /></td>
                         <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{run.seq}</td>
-                        <td className="px-2.5 py-2.5 text-right tabular-nums">{money(run.revenue)}</td>
-                        <td className="px-2.5 py-2.5 text-right tabular-nums">{money(run.directCost)}</td>
-                        <td className="px-2.5 py-2.5 text-right tabular-nums">{run.contribution == null ? <span className="text-meta">—</span> : <span className={run.contribution >= 0 ? "text-positive" : "text-critical"}>{money(run.contribution)}</span>}</td>
-                        <td className="px-2.5 py-2.5 text-[11.5px]">{topLine ? <span><span className="text-attention uppercase tracking-[0.06em]">{REASON_LABEL[topLine.reason]}</span> <span className="tabular-nums text-meta">{signedMoney(topLine.delta)}</span></span> : <span className="text-meta">baseline</span>}</td>
+                        <td className="px-2.5 py-2.5 text-right tabular-nums text-foreground">{money(run.revenue)}</td>
+                        <td className="px-2.5 py-2.5 text-right tabular-nums text-foreground">{money(run.directCost)}</td>
+                        <td className="px-2.5 py-2.5 text-right"><span className="inline-flex justify-end"><ContributionValue value={run.contribution} /></span></td>
+                        <td className="px-2.5 py-2.5 text-[11.5px]">{topLine ? <span className="inline-flex items-center gap-2"><span className="text-meta uppercase tracking-[0.06em]">{REASON_LABEL[topLine.reason]}</span> <DeltaValue delta={topLine.delta} /></span> : <span className="text-meta">baseline</span>}</td>
                         <td className="px-2.5 py-2.5 text-meta">{run.capturedAt.slice(0, 16).replace("T", " ")}</td>
                       </tr>
                     );
@@ -731,7 +777,7 @@ function Reconciliation({ rows, runs, href }: { rows: ReturnType<typeof getLabor
       <div>
       <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Reconciliation — per worker / day</h2>
       <div className="overflow-x-auto border border-border">
-        <table className={tableCls}>
+        <table className={tableCls} style={{ minWidth: "760px" }}>
           <thead className={theadCls}>
             <tr>
               <th className={thCls}>Worker</th>
@@ -750,11 +796,11 @@ function Reconciliation({ rows, runs, href }: { rows: ReturnType<typeof getLabor
                 <td className="px-2.5 py-2.5">{r.name || r.workerRef}</td>
                 <td className="px-2.5 py-2.5 text-meta">{r.kind}</td>
                 <td className="px-2.5 py-2.5 text-meta">{r.day}</td>
-                <td className="px-2.5 py-2.5 text-right tabular-nums">{money(r.customer)}</td>
+                <td className="px-2.5 py-2.5 text-right tabular-nums text-foreground">{money(r.customer)}</td>
                 <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{money(r.travel)}</td>
                 <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{money(r.warehouse)}</td>
-                <td className="px-2.5 py-2.5 text-right tabular-nums">{r.unallocated > 0 ? <span className="text-attention">{money(r.unallocated)}</span> : money(r.unallocated)}</td>
-                <td className="px-2.5 py-2.5 text-right tabular-nums font-medium">{money(r.total)}</td>
+                <td className="px-2.5 py-2.5 text-right tabular-nums">{r.unallocated > 0 ? <span className="inline-flex items-center justify-end gap-1.5 text-foreground"><span className="size-1.5 rounded-full bg-status-warning" aria-hidden />{money(r.unallocated)}</span> : <span className="text-foreground">{money(r.unallocated)}</span>}</td>
+                <td className="px-2.5 py-2.5 text-right tabular-nums font-medium text-foreground">{money(r.total)}</td>
               </tr>
             ))}
           </tbody>
@@ -767,20 +813,20 @@ function Reconciliation({ rows, runs, href }: { rows: ReturnType<typeof getLabor
   );
 }
 
-// ── Visit reconciliation (GPS vs dispatch) view (FI Stage 4) ───────────────────────────────────────
-const VISIT_LABEL_TONE: Record<string, string> = {
-  GPS_DISPATCH: "text-positive",
-  GPS_CONFIRMED: "text-positive",
-  DISPATCH_FLAGGED: "text-critical",
-  DISPATCH_ONLY: "text-attention",
-  NONE: "text-meta",
-};
+// ── Visit reconciliation (GPS vs dispatch) view (FI Stage 4) ───────────────────────────────────────────
 const VISIT_LABEL_TEXT: Record<string, string> = {
   GPS_DISPATCH: "GPS + dispatch",
   GPS_CONFIRMED: "GPS only",
   DISPATCH_FLAGGED: "Flagged",
   DISPATCH_ONLY: "Dispatch only",
   NONE: "No evidence",
+};
+const VISIT_LABEL_DOT: Record<string, string> = {
+  GPS_DISPATCH: "bg-status-ready",
+  GPS_CONFIRMED: "bg-status-ready",
+  DISPATCH_FLAGGED: "bg-status-blocked",
+  DISPATCH_ONLY: "bg-status-warning",
+  NONE: "bg-status-neutral",
 };
 const win = (enter: string | null, exit: string | null): string => {
   const a = enter ? formatClockTime(enter) : "—";
@@ -815,10 +861,10 @@ function VisitReconciliationView({ rows }: { rows: ReturnType<typeof getVisitRec
           <div className="mb-3 flex flex-wrap gap-x-6 gap-y-1 text-[12.5px]">
             <span className="text-meta">Stops with evidence <span className="tabular-nums text-foreground">{rows.length}</span></span>
             <span className="text-meta">GPS-confirmed <span className="tabular-nums text-foreground">{gpsCount}</span></span>
-            <span className="text-meta">Flagged for review <span className={`tabular-nums ${flagged ? "text-critical" : "text-foreground"}`}>{flagged}</span></span>
+            <span className="text-meta">Flagged for review <span className="tabular-nums text-foreground">{flagged}</span></span>
           </div>
           <div className="overflow-x-auto border border-border">
-            <table className={tableCls}>
+            <table className={tableCls} style={{ minWidth: "860px" }}>
               <thead className={theadCls}>
                 <tr>
                   <th className={thCls}>Stop</th>
@@ -840,7 +886,7 @@ function VisitReconciliationView({ rows }: { rows: ReturnType<typeof getVisitRec
                     <td className="px-2.5 py-2.5 tabular-nums">{v.dispatch ? win(v.dispatch.enterTs, v.dispatch.exitTs) : <span className="text-meta">—</span>}</td>
                     <td className="px-2.5 py-2.5 tabular-nums">{v.authoritative ? `${win(v.authoritative.enterTs, v.authoritative.exitTs)}` : <span className="text-meta">—</span>}{v.authoritative ? <span className="ml-1 text-[10px] uppercase text-meta">{v.authoritative.source}</span> : null}</td>
                     <td className="px-2.5 py-2.5 text-right tabular-nums">{v.discrepancyMinutes == null ? "—" : Math.round(v.discrepancyMinutes)}</td>
-                    <td className="px-2.5 py-2.5"><span className={`text-[11px] uppercase tracking-[0.06em] ${VISIT_LABEL_TONE[v.label] ?? "text-meta"}`}>{VISIT_LABEL_TEXT[v.label] ?? v.label}</span></td>
+                    <td className="px-2.5 py-2.5"><span className="inline-flex items-center gap-1.5 text-[12px] text-status-label"><span className={`size-1.5 shrink-0 rounded-full ${VISIT_LABEL_DOT[v.label] ?? "bg-status-neutral"}`} aria-hidden />{VISIT_LABEL_TEXT[v.label] ?? v.label}</span></td>
                     <td className="px-2.5 py-2.5 text-meta">{v.confidence}</td>
                   </tr>
                 ))}
@@ -854,7 +900,7 @@ function VisitReconciliationView({ rows }: { rows: ReturnType<typeof getVisitRec
   );
 }
 
-// ── Item-level handling-time estimate (FI Stage 6) — PROVISIONAL, titles-only, no money ─────────────
+// ── Item-level handling-time estimate (FI Stage 6) — PROVISIONAL, titles-only, no money ───────────────
 function fmtMinutes(min: number): string {
   if (min < 60) return `${Math.round(min)} min`;
   const h = Math.floor(min / 60);
@@ -865,7 +911,7 @@ function fmtMinutes(min: number): string {
 function HandlingEstimatePanel({ h }: { h: ItemHandlingEstimate | null }): React.JSX.Element {
   return (
     <div className="mt-6">
-      <h3 className="mb-1 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Estimated handling time <span className="text-[11px] normal-case tracking-normal text-attention">provisional, from item titles</span></h3>
+      <h3 className="mb-1 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Estimated handling time <span className="text-[11px] normal-case tracking-normal text-meta">provisional, from item titles</span></h3>
       {!h || !h.available ? (
         <p className="text-[12.5px] text-meta">No line-item titles captured for this project yet, so an operational-time estimate is unavailable (not zero). Titles populate on the Goodshuffle pull.</p>
       ) : (
@@ -875,7 +921,7 @@ function HandlingEstimatePanel({ h }: { h: ItemHandlingEstimate | null }): React
             <span className="text-meta">Breakdown <span className="tabular-nums text-foreground">{fmtMinutes(h.breakdownMinutes)}</span></span>
             <span className="text-meta">Total crew-minutes <span className="tabular-nums text-foreground">{fmtMinutes(h.totalMinutes)}</span></span>
             <span className="text-meta">Items <span className="tabular-nums text-foreground">{h.itemCount}</span></span>
-            <span className="ml-auto text-[11px] uppercase tracking-[0.06em] text-attention">Confidence {h.confidence}</span>
+            <span className="ml-auto text-[11px] uppercase tracking-[0.06em] text-meta">Confidence {h.confidence}</span>
           </div>
           <p className="mt-2 text-[12px] text-meta">Inferred from item titles only (no quantities or prices exist in the data), using the configurable keyword-to-minutes map. This is an operational-time estimate shown for context. It is never a dollar cost and does not affect the profitability figures above.{h.keywords.length > 0 ? ` Keywords matched: ${h.keywords.join(", ")}.` : " No heavier-handling keywords matched, so only the per-item baseline applies."}</p>
         </>
@@ -904,7 +950,7 @@ function InsightsView({ insights, href }: { insights: InsightsResult; href: (p: 
       <section className="grid gap-px overflow-hidden border border-border bg-border md:grid-cols-3">
         <Block title="Margin" tag="computed" headline={o.avgMarginPct == null ? <Unavail /> : pct(o.avgMarginPct)}>
           <BRow label="Projects with margin">{o.marginProjectCount || "—"}</BRow>
-          <BRow label={`Low margin (≤ ${pct(o.lowMarginPct)})`}>{o.marginProjectCount ? <span className={o.lowMarginCount ? "text-attention" : undefined}>{o.lowMarginCount}</span> : "—"}</BRow>
+          <BRow label={`Low margin (≤ ${pct(o.lowMarginPct)})`}>{o.marginProjectCount ? <span className={o.lowMarginCount ? "text-foreground" : undefined}>{o.lowMarginCount}</span> : "—"}</BRow>
         </Block>
         <Block title="Labor grain" tag="estimated vs actual" headline={o.laborProjectCount ? `${o.estimatedLaborCount}/${o.laborProjectCount}` : <Unavail />}>
           <BRow label="Estimated grain">{o.estimatedLaborCount}</BRow>
@@ -926,7 +972,7 @@ function InsightsView({ insights, href }: { insights: InsightsResult; href: (p: 
             {insights.facts.map((f) => (
               <li key={f.id} className="flex items-start gap-3 border border-border bg-panel px-4 py-2.5 text-[12.5px]">
                 <span className="mt-[1px] min-w-[96px] text-[11px] uppercase tracking-[0.06em] text-meta">{INSIGHT_CATEGORY_LABEL[f.category]}</span>
-                <span className="flex-1">{f.text}{f.thin ? <span className="ml-2 text-[10px] uppercase tracking-[0.06em] text-attention">thin</span> : null}</span>
+                <span className="flex-1">{f.text}{f.thin ? <span className="ml-2 text-[10px] uppercase tracking-[0.06em] text-meta">thin</span> : null}</span>
               </li>
             ))}
           </ul>
@@ -935,7 +981,7 @@ function InsightsView({ insights, href }: { insights: InsightsResult; href: (p: 
 
       {/* AI interpretation (clearly secondary + labeled) */}
       <div>
-        <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">AI interpretation <span className="ml-1 text-[11px] normal-case tracking-normal text-attention">reads the facts above, adds no numbers</span></h2>
+        <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">AI interpretation <span className="ml-1 text-[11px] normal-case tracking-normal text-meta">reads the facts above, adds no numbers</span></h2>
         {insights.interpretation ? (
           <div className="border border-border bg-panel px-4 py-3">
             {insights.interpretation.summary && <p className="mb-3 text-[13px]">{insights.interpretation.summary}</p>}
@@ -958,7 +1004,7 @@ function InsightsView({ insights, href }: { insights: InsightsResult; href: (p: 
   );
 }
 
-// ── Data lineage panel (per-number) ────────────────────────────────────────────────────────────
+// ── Data lineage panel (per-number) ────────────────────────────────────────────────────────────────
 function Lineage({ eventId, label }: { eventId: string; label: string }): React.JSX.Element {
   const leaves = getProjectLaborLineage(eventId);
   return (
@@ -969,7 +1015,7 @@ function Lineage({ eventId, label }: { eventId: string; label: string }): React.
         <p className="text-[13px] text-muted-foreground">No labor leaves attributed to this project yet.</p>
       ) : (
         <div className="overflow-x-auto border border-border">
-          <table className={tableCls}>
+          <table className={tableCls} style={{ minWidth: "720px" }}>
             <thead className={theadCls}>
               <tr>
                 <th className={thCls}>Day</th>
@@ -989,8 +1035,8 @@ function Lineage({ eventId, label }: { eventId: string; label: string }): React.
                   <td className="px-2.5 py-2 font-mono text-[11px]">{l.routeId}</td>
                   <td className="px-2.5 py-2 text-right tabular-nums">{money(l.rate)}</td>
                   <td className="px-2.5 py-2 text-right tabular-nums">{hrs(l.hours)}</td>
-                  <td className="px-2.5 py-2 text-right tabular-nums">{l.amount == null ? <span className="text-meta">unavail</span> : money(l.amount)}</td>
-                  <td className="px-2.5 py-2"><MethodBadge method={l.method} confidence={l.confidence} /> <span className="text-[10px] uppercase text-meta">{l.amountStatus}</span></td>
+                  <td className="px-2.5 py-2 text-right tabular-nums text-foreground">{l.amount == null ? <span className="text-meta">unavail</span> : money(l.amount)}</td>
+                  <td className="px-2.5 py-2"><span className="inline-flex items-center gap-2"><MethodTag method={l.method} confidence={l.confidence} /> <span className="text-[10px] uppercase text-meta">{l.amountStatus}</span></span></td>
                 </tr>
               ))}
             </tbody>
@@ -1006,7 +1052,7 @@ function RevRow({ label, value, sub, tone }: { label: string; value: number | nu
   return (
     <div className="flex items-baseline justify-between gap-3 border-t border-[var(--row-rule)] px-3 py-2 first:border-t-0">
       <span className="text-[12.5px] text-tertiary-text">{label}{sub ? <span className="ml-1 text-[11px] text-meta">{sub}</span> : null}</span>
-      <span className={`tabular-nums text-[13px] ${tone ?? ""}`}>{value == null ? <span className="text-meta">—</span> : money(value)}</span>
+      <span className={`tabular-nums text-[13px] ${tone ?? "text-foreground"}`}>{value == null ? <span className="text-meta">—</span> : money(value)}</span>
     </div>
   );
 }
@@ -1043,26 +1089,5 @@ function RevenueComponentsPanel({ c }: { c: RevenueComponents }): React.JSX.Elem
         </div>
       </div>
     </section>
-  );
-}
-
-function Block({ title, tag, headline, children }: { title: string; tag: string; headline: React.ReactNode; children?: React.ReactNode }): React.JSX.Element {
-  return (
-    <div className="bg-panel p-4">
-      <div className="mb-2 flex items-baseline gap-2">
-        <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-tertiary-text">{title}</span>
-        <span className="text-[10.5px] uppercase tracking-[0.08em] text-meta">{tag}</span>
-      </div>
-      <div className="text-[28px] font-medium leading-none tabular-nums">{headline}</div>
-      {children && <dl className="mt-3">{children}</dl>}
-    </div>
-  );
-}
-function BRow({ label, children }: { label: string; children: React.ReactNode }): React.JSX.Element {
-  return (
-    <div className="flex items-center justify-between gap-3 border-t border-[var(--row-rule)] py-1.5 text-[13px] first:border-t-0">
-      <dt className="text-meta">{label}</dt>
-      <dd className="tabular-nums">{children}</dd>
-    </div>
   );
 }
