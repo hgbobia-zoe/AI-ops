@@ -7,6 +7,9 @@ import { TrendingUp } from "lucide-react";
 import { syncPostEvent } from "@/lib/postevent/engine";
 import { computeMetrics, agingByStage, closureBreakdown, issueBreakdown, employeeActivity } from "@/lib/postevent/metrics";
 import { CLOSURE_REASON_LABEL, isClosureReason, type Rate } from "@/lib/postevent/types";
+import { BladeMain } from "@/components/ui/layouts";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatusBanner } from "@/components/ui/states";
 
 export const dynamic = "force-dynamic";
 
@@ -45,21 +48,17 @@ export default function PostEventAnalyticsPage(): React.JSX.Element {
   const funnelMax = Math.max(1, ...m.funnel.map((f) => f.count));
 
   return (
-    <main className="max-w-[1000px] p-6">
-      <div className="mb-4 text-[12px] text-meta">
-        <span className="text-tertiary-text">Post-Event</span> / Analytics
-      </div>
-      <header className="mb-4">
-        <h1 className="flex items-center gap-2 text-[22px] font-medium tracking-tight">
-          <TrendingUp className="size-5 text-meta" /> Analytics
-        </h1>
-        <p className="mt-1 text-[12.5px] text-meta">All-time, computed from real records. Every percentage shows its numerator and denominator.</p>
-      </header>
+    <BladeMain className="max-w-[1000px]">
+      <PageHeader
+        icon={<TrendingUp className="size-5" />}
+        title="Analytics"
+        subtitle="All time, computed from real records. Every percentage shows its numerator and denominator."
+      />
 
       {m.bottleneck && (
-        <div className="mb-4 rounded border border-attention/40 bg-attention/[0.05] px-3 py-2 text-[12.5px] text-attention">
-          Where the process is breaking down: {m.bottleneck.headline}
-        </div>
+        <StatusBanner tone="neutral" edge={false} title="Biggest drop-off" className="mb-4">
+          {m.bottleneck.headline} This is where follow-up most often stalls, not a measure of customer satisfaction.
+        </StatusBanner>
       )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -182,6 +181,6 @@ export default function PostEventAnalyticsPage(): React.JSX.Element {
       </div>
 
       <p className="mt-3 text-[11px] text-meta">Counts real, attributed actions only. Auto-imported contacts and system moves are excluded from employee credit. Unknown values render as Unavailable, never fabricated.</p>
-    </main>
+    </BladeMain>
   );
 }

@@ -1,36 +1,89 @@
 "use client";
 
-// Post-Event management view — the current-period funnel with REAL counts, the metrics (each with its
-// absolute numerator/denominator), and a prominent "Where are we losing customers?" bottleneck. This is
-// operational, not a generic analytics dashboard. Deterministic; a rate over an empty denominator shows
-// "Unavailable", never a fabricated percentage.
+// Post-Event overview — service-first. It opens with the live service worklist ("what to do next"),
+// then prominent access to the board and issue recovery, and only then the period funnel + a small set
+// of headline rates. RULES CALCULATE: every count is a real record count and every rate carries its
+// numerator and denominator; a rate over an empty denominator explains the MISSING denominator instead
+// of showing "0%" or a fabricated success. A customer whose experience is not yet confirmed is work in
+// progress, never framed as dissatisfied or lost. Methodology lives in contextual help, not the daily
+// summary.
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { HeartHandshake, Loader2, AlertTriangle, ArrowRight } from "lucide-react";
-import type { PostEventMetrics, Rate } from "@/lib/postevent/types";
+import {
+  HeartHandshake,
+  Loader2,
+  ArrowRight,
+  LifeBuoy,
+  Columns3,
+  ListChecks,
+  HelpCircle,
+} from "lucide-react";
+import type { PostEventMetrics, Rate, BoardColumns, PostEventCard, PostEventState } from "@/lib/postevent/types";
+import { POSTEVENT_STATE_ORDER } from "@/lib/postevent/types";
+import { buildServiceWorklist, type WorklistGroup } from "@/lib/postevent/worklist";
+import { PageHeader } from "@/components/ui/page-header";
+import { BladeMain } from "@/components/ui/layouts";
+import { Surface } from "@/components/ui/surface";
+import { Metric, MetricGrid } from "@/components/ui/metric";
+import { StatusBadge } from "@/components/ui/status";
+import { EmptyState } from "@/components/ui/states";
 import { PostEventSettings } from "@/components/postevent/PostEventSettings";
 
-const PERIODS: { key: string; label: string }[] = [
-  { key: "7", label: "7 days" },
-  { key: "30", label: "30 days" },
-  { key: "90", label: "90 days" },
-  { key: "all", label: "All time" },
+const PERIODS: { key: string; label: string; heading: string }[] = [
+  { key: "7", label: "7 days", heading: "Last 7 days" },
+  { key: "30", label: "30 days", heading: "Last 30 days" },
+  { key: "90", label: "90 days", heading: "Last 90 days" },
+  { key: "all", label: "All time", heading: "All time" },
 ];
 
-function pctText(r: Rate): string {
-  return r.pct == null ? "Unavailable" : `${r.pct}%`;
+// A rate shows its percentage only when the denominator exists; otherwise it explains WHICH denominator
+// is missing (never "0%" or a fabricated success). The explanations name the real backend denominator.
+const RATE_UNAVAILABLE: Record<string, string> = {
+  confirmation: "No customers have been reached yet, so there is nothing to confirm.",
+  issue: "No experiences are confirmed yet, so an issue rate cannot be computed.",
+  overall: "No completed events in this period yet.",
+};
+
+function CountLink({ href, children }: { href: string; children: React.ReactNode }): React.JSX.Element {
+  return (
+    <Link
+      href={href}
+      className="inline-flex items-center gap-1 rounded border border-border px-2.5 py-1 text-[12px] text-tertiary-text transition-colors hover:bg-row-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {children}
+    </Link>
+  );
 }
 
-function RateTile({ label, r, help }: { label: string; r: Rate; help: string }): React.JSX.Element {
+function HeadlineMetric({ label, r, unavailableKey, tone }: { label: string; r: Rate; unavailableKey: string; tone?: "positive" | "attention" | "neutral" }): React.JSX.Element {
+  if (r.pct == null) {
+    return <Metric label={label} value="Unavailable" sub={RATE_UNAVAILABLE[unavailableKey]} />;
+  }
+  return <Metric label={label} value={`${r.pct}%`} sub={`${r.num} of ${r.den}`} tone={r.num > 0 && tone === "attention" ? "attention" : undefined} />;
+}
+
+// ── Service worklist (the operational "what to do next"; built from the LIVE board, not the period) ───
+function WorklistRow({ g, primary }: { g: WorklistGroup; primary?: boolean }): React.JSX.Element {
   return (
-    <div className="rounded border border-border p-3">
-      <div className="text-[10.5px] uppercase tracking-[0.08em] text-meta">{label}</div>
-      <div className={`mt-1 text-[20px] font-medium tabular-nums ${r.pct == null ? "text-meta" : "text-foreground"}`}>{pctText(r)}</div>
-      <div className="text-[11.5px] tabular-nums text-tertiary-text">
-        {r.num} of {r.den}
+    <div className={`flex flex-wrap items-center justify-between gap-3 ${primary ? "" : "border-t border-rule pt-3"}`}>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <StatusBadge tone={g.tone} size={primary ? "md" : "sm"}>
+            {g.label}
+          </StatusBadge>
+          <span className={`tabular-nums font-semibold text-foreground ${primary ? "text-[20px]" : "text-[15px]"}`}>{g.count}</span>
+          {g.overdue > 0 && (
+            <span className="text-[11px] tabular-nums text-meta" title="Past the stage SLA">
+              {g.overdue} overdue
+            </span>
+          )}
+        </div>
+        <p className={`mt-1 text-meta ${primary ? "text-[12.5px]" : "text-[11.5px]"}`}>{g.description}</p>
       </div>
-      <div className="mt-0.5 text-[11px] text-meta">{help}</div>
+      <CountLink href={g.href}>
+        {g.actionLabel} <ArrowRight className="size-3.5" />
+      </CountLink>
     </div>
   );
 }
@@ -38,8 +91,12 @@ function RateTile({ label, r, help }: { label: string; r: Rate; help: string }):
 export function PostEventOverview(): React.JSX.Element {
   const [period, setPeriod] = useState("30");
   const [data, setData] = useState<PostEventMetrics | null>(null);
+  const [board, setBoard] = useState<BoardColumns | null>(null);
   const [loading, setLoading] = useState(true);
+  const [boardErr, setBoardErr] = useState(false);
 
+  // Period-scoped funnel + rates. `loading` is flipped on by the period control (not in this effect) so
+  // the effect only syncs state in from the fetch callbacks.
   useEffect(() => {
     let alive = true;
     fetch(`/api/postevent/overview?days=${period}`)
@@ -58,115 +115,207 @@ export function PostEventOverview(): React.JSX.Element {
     };
   }, [period]);
 
+  // Live active work (NOT period-scoped) → the service worklist. Fetched once.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/postevent/board")
+      .then((r) => r.json())
+      .then((j: { columns: BoardColumns }) => {
+        if (alive) setBoard(j.columns);
+      })
+      .catch(() => {
+        if (alive) setBoardErr(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const periodHeading = PERIODS.find((p) => p.key === period)?.heading ?? "";
   const maxFunnel = data ? Math.max(1, ...data.funnel.map((f) => f.count)) : 1;
 
+  const activeCards: PostEventCard[] = board ? POSTEVENT_STATE_ORDER.flatMap((s: PostEventState) => board[s]) : [];
+  const worklist = board ? buildServiceWorklist(activeCards) : null;
+  // Open issue RECORDS across active projects (matches the Issues list), distinct from the count of
+  // projects in service recovery (which can also include an identified problem with no issue logged yet).
+  const openIssues = activeCards.reduce((n, c) => n + c.openIssues, 0);
+
+  const periodSelector = (
+    <div className="flex items-center gap-0.5 rounded border border-border p-0.5" role="group" aria-label="Reporting period">
+      {PERIODS.map((p) => (
+        <button
+          key={p.key}
+          onClick={() => {
+            if (p.key !== period) setLoading(true);
+            setPeriod(p.key);
+          }}
+          aria-pressed={period === p.key}
+          className={`rounded px-2.5 py-1 text-[12px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${period === p.key ? "bg-row-hover text-foreground" : "text-meta hover:text-foreground"}`}
+        >
+          {p.label}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
-    <main className="max-w-[1100px] p-6">
-      <header className="mb-5 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-[22px] font-medium tracking-tight">
-            <HeartHandshake className="size-5 text-meta" /> Post-Event
-          </h1>
-          <p className="mt-1 max-w-[640px] text-[13px] text-meta">
-            Human-first follow-up after every completed event. Understand the experience, resolve issues, and only then, when it&apos;s genuinely warranted, invite a review. The review is an outcome of good service, never the goal.
-          </p>
+    <BladeMain>
+      <PageHeader
+        icon={<HeartHandshake className="size-5" />}
+        title="Post-Event"
+        subtitle="Human-first follow-up after every completed event: understand the experience, resolve any issue, and only then, when it is genuinely warranted, invite a review."
+        actions={periodSelector}
+      />
+
+      {/* ── Service worklist: the next actionable customer-service task, from the live board ───────── */}
+      <section className="mb-5" aria-labelledby="pe-worklist-h">
+        <div className="mb-2 flex items-center gap-2">
+          <h2 id="pe-worklist-h" className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+            <ListChecks className="size-4 text-meta" aria-hidden /> Open work
+          </h2>
+          <span className="text-[11.5px] text-meta">Live, across all active projects</span>
         </div>
-        <div className="flex items-center gap-1 rounded border border-border p-0.5">
-          {PERIODS.map((p) => (
-            <button
-              key={p.key}
-              onClick={() => {
-                setLoading(true);
-                setPeriod(p.key);
-              }}
-              className={`rounded px-2.5 py-1 text-[12px] transition-colors ${period === p.key ? "bg-foreground/[0.08] text-foreground" : "text-meta hover:text-foreground"}`}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-      </header>
+        {!board ? (
+          boardErr ? (
+            <Surface pad="md" className="text-[12.5px] text-meta">
+              The board could not be loaded. Open the board to see current work.
+            </Surface>
+          ) : (
+            <Surface pad="md" className="flex items-center gap-2 text-[12.5px] text-meta">
+              <Loader2 className="size-4 animate-spin" aria-hidden /> Loading current work…
+            </Surface>
+          )
+        ) : worklist && worklist.groups.length > 0 ? (
+          <Surface pad="md" className="space-y-3">
+            <WorklistRow g={worklist.groups[0]} primary />
+            {worklist.groups.slice(1).map((g) => (
+              <WorklistRow key={g.key} g={g} />
+            ))}
+          </Surface>
+        ) : (
+          <EmptyState
+            icon={<ListChecks className="size-6" />}
+            title="No active follow-up work"
+            body="Every eligible project has been worked through. New completed events appear here once their pickup is done."
+          />
+        )}
+      </section>
+
+      {/* ── Prominent access: work the board + issue recovery (BEFORE analytics) ──────────────────── */}
+      <div className="mb-6 flex flex-wrap gap-2 text-[12.5px]">
+        <Link
+          href="/postevent/kanban"
+          className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 font-medium text-foreground transition-colors hover:bg-row-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Columns3 className="size-4 text-meta" aria-hidden /> Work the board <ArrowRight className="size-3.5" />
+        </Link>
+        <Link
+          href="/postevent/issues"
+          className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-tertiary-text transition-colors hover:bg-row-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <LifeBuoy className="size-4 text-meta" aria-hidden /> Issues / recovery
+          {board && <span className="tabular-nums text-meta">({openIssues} open)</span>}
+        </Link>
+      </div>
 
       {loading || !data ? (
         <div className="flex items-center gap-2 text-[13px] text-meta">
-          <Loader2 className="size-4 animate-spin" /> Loading…
+          <Loader2 className="size-4 animate-spin" aria-hidden /> Loading metrics…
         </div>
       ) : (
         <>
-          {/* Where are we losing customers? */}
-          <section className="mb-5 rounded border border-attention/40 bg-attention/[0.04] p-4">
-            <div className="mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.1em] text-attention">
-              <AlertTriangle className="size-3.5" /> Where are we losing customers?
+          {/* ── Period funnel: distinct counts, conversion/drop-off, named denominators ──────────── */}
+          <section className="mb-6" aria-labelledby="pe-funnel-h">
+            <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+              <h2 id="pe-funnel-h" className="text-[13px] font-medium text-foreground">
+                Follow-up funnel
+              </h2>
+              <span className="text-[11.5px] text-meta">{periodHeading}</span>
             </div>
-            {data.bottleneck ? (
-              <p className="text-[15px] text-foreground">{data.bottleneck.headline}</p>
-            ) : (
-              <p className="text-[13px] text-meta">
-                {data.counts.completed === 0 ? "No completed events in this period yet." : "No drop-off to flag: every eligible project is progressing."}
-              </p>
-            )}
-            <p className="mt-1 text-[11px] text-meta">Computed deterministically from the funnel. AI interpretation is a Phase 2 add-on and would be clearly labelled.</p>
-          </section>
-
-          {/* Funnel with real counts */}
-          <section className="mb-6">
-            <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Current period funnel</h2>
-            <div className="rounded border border-border p-3">
-              <ul className="space-y-2">
+            <Surface pad="sm">
+              <ul className="space-y-2.5">
                 {data.funnel.map((f, i) => {
-                  const prev = i > 0 ? data.funnel[i - 1].count : null;
-                  const drop = prev != null && prev > 0 ? prev - f.count : 0;
+                  const prev = i > 0 ? data.funnel[i - 1] : null;
+                  // Conversion = this step / previous step. The previous step IS the named denominator
+                  // for each rate (coverage/contact/confirmation/positive-subset/request/receipt).
+                  const conv = prev && prev.count > 0 ? Math.round((f.count / prev.count) * 1000) / 10 : null;
+                  // Drop-off is only meaningful when this step is a subset of the previous one; the
+                  // review-request step is counted independently, so a negative "drop" is suppressed.
+                  const drop = prev ? prev.count - f.count : 0;
                   return (
                     <li key={f.key}>
-                      <div className="flex items-center justify-between text-[13px]">
-                        <span className="text-foreground">{f.label}</span>
-                        <span className="tabular-nums text-tertiary-text">
-                          {f.count}
-                          {drop > 0 && <span className="ml-2 text-[11px] text-meta">-{drop}</span>}
+                      <div className="flex items-baseline justify-between gap-2 text-[13px]">
+                        <Link
+                          href="/postevent/kanban"
+                          className="text-foreground transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          aria-label={`${f.label}: ${f.count} projects. View on the board.`}
+                        >
+                          {f.label}
+                        </Link>
+                        <span className="flex items-baseline gap-2">
+                          <span className="tabular-nums text-foreground">{f.count}</span>
+                          {prev &&
+                            (conv == null ? (
+                              <span className="w-[120px] text-right text-[11px] text-meta">No {prev.label.toLowerCase()}</span>
+                            ) : (
+                              <span className="w-[120px] text-right text-[11px] tabular-nums text-meta">
+                                {conv}% of {prev.label.toLowerCase()}
+                                {drop > 0 ? ` · -${drop}` : ""}
+                              </span>
+                            ))}
                         </span>
                       </div>
-                      <div className="mt-1 h-1.5 w-full overflow-hidden rounded bg-[var(--bar)]">
-                        <div className="h-full bg-positive" style={{ width: `${Math.round((f.count / maxFunnel) * 100)}%` }} />
+                      <div className="mt-1 h-1.5 w-full overflow-hidden rounded bg-bar" role="presentation">
+                        <div className="h-full bg-bar-2" style={{ width: `${Math.round((f.count / maxFunnel) * 100)}%` }} />
                       </div>
                     </li>
                   );
                 })}
               </ul>
-              <p className="mt-3 border-t border-[var(--row-rule)] pt-2 text-[11px] text-meta">
-                Completed events, review requests, and reviews received are different numbers on purpose. {data.counts.completed} completed does not mean {data.counts.completed} review requests.
+              <p className="mt-3 border-t border-rule pt-2 text-[11px] text-meta">
+                These are distinct metrics, not the same projects counted again. {data.counts.completed} completed events does not mean {data.counts.completed} review requests: a review is invited only after a confirmed positive experience, and review requests are recorded independently of disposition.
               </p>
-            </div>
+            </Surface>
           </section>
 
-          {/* Rates — each with its absolute numerator/denominator */}
-          <section className="mb-6">
-            <h2 className="mb-2 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Metrics</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              <RateTile label="Follow-up coverage" r={data.rates.followUpCoverage} help="initiated / completed" />
-              <RateTile label="Contact rate" r={data.rates.contactRate} help="reached / initiated" />
-              <RateTile label="Experience confirmed" r={data.rates.experienceConfirmationRate} help="confirmed / reached" />
-              <RateTile label="Issue rate" r={data.rates.issueRate} help="issues / confirmed" />
-              <RateTile label="Review-request rate" r={data.rates.reviewRequestRate} help="requests / positive" />
-              <RateTile label="Review conversion" r={data.rates.reviewConversion} help="received / requested" />
-              <RateTile label="Overall review rate" r={data.rates.overallReviewRate} help="received / completed" />
-            </div>
+          {/* ── Headline rates (reduced; each names its denominator or explains the missing one) ──── */}
+          <section className="mb-6" aria-labelledby="pe-rates-h">
+            <h2 id="pe-rates-h" className="mb-2 text-[13px] font-medium text-foreground">
+              Headline rates
+            </h2>
+            <MetricGrid className="lg:grid-cols-3">
+              <HeadlineMetric label="Experiences confirmed" r={data.rates.experienceConfirmationRate} unavailableKey="confirmation" />
+              <HeadlineMetric label="Issue rate" r={data.rates.issueRate} unavailableKey="issue" tone="attention" />
+              <HeadlineMetric label="Overall review rate" r={data.rates.overallReviewRate} unavailableKey="overall" />
+            </MetricGrid>
           </section>
 
-          <div className="flex flex-wrap gap-2 text-[12.5px]">
-            <Link href="/postevent/kanban" className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
-              Work the board <ArrowRight className="size-3.5" />
-            </Link>
-            <Link href="/postevent/issues" className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
-              Issues / recovery ({data.counts.issues})
-            </Link>
-            <Link href="/postevent/closures" className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
-              Closure reasons
-            </Link>
+          <div className="mb-6 flex flex-wrap gap-2 text-[12.5px]">
+            <CountLink href="/postevent/analytics">
+              Full analytics <ArrowRight className="size-3.5" />
+            </CountLink>
+            <CountLink href="/postevent/closures">Closure reasons</CountLink>
           </div>
+
+          {/* ── Contextual help: methodology lives here, out of the daily workflow ─────────────────── */}
+          <details className="mb-6 rounded border border-border">
+            <summary className="flex cursor-pointer items-center gap-2 px-3 py-2.5 text-[12px] font-medium text-tertiary-text">
+              <HelpCircle className="size-3.5 text-meta" aria-hidden /> How this is measured
+            </summary>
+            <div className="space-y-2 border-t border-rule p-3 text-[12px] text-meta">
+              <p>
+                Every number here is a count of real records. Follow-up is a human-first service process: completed events, outreach attempts, customers reached, experiences confirmed, issues, review requests and published reviews are kept as separate facts and are never collapsed into one another.
+              </p>
+              <p>
+                Rates are computed deterministically and always show their numerator and denominator. When a denominator is empty the rate is reported as unavailable with the reason, never as 0% or a success. A customer whose experience is not yet confirmed is counted as work in progress, not as a lost or unhappy customer.
+              </p>
+              <p>Any interpretive, non-deterministic layer would be labelled as such; nothing on this page is inferred or generated.</p>
+            </div>
+          </details>
 
           <PostEventSettings />
         </>
       )}
-    </main>
+    </BladeMain>
   );
 }
