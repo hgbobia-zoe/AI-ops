@@ -51,6 +51,8 @@ import { createShift, getShiftById, getShiftsForDate, updateShift } from "./stor
 import { syncInternalAssignments } from "./assignments";
 import { routeAssignWindow, requiredCrewForRoute, assignedCrewForRoute, computeRouteGap, type RouteCrewRole } from "./preCheck";
 import { scheduledUnroutedForDate } from "./scheduledUnrouted";
+import { matchConnecteamShiftForPush, unionPushWindowUnix } from "./connecteamImport";
+import type { CrewShift } from "@/lib/connecteam";
 import { planRouteAutoAssign, type RouteAutoAssignPlan, type AutoAssignDecision } from "./routeAutoAssign";
 import { resolveDriverSeniority, type SeniorityRouteMeta } from "./driverSeniority";
 import { routeSpecialty } from "./routeSpecialty";
@@ -172,14 +174,30 @@ export function applyRouteAutoAssign(plan: RouteAutoAssignPlan, deps: AutoAssign
 
 // ── 2. App route -> Connecteam auto-create (plan + apply) ──────────────────────────────────────────────
 
+/** A route app shift whose worker ALREADY has a matching Connecteam shift today -> UPDATE that shift in place
+ *  (adopt its id, union the window) instead of creating a duplicate. This is the duplication + wrong-time fix. */
+export interface AdoptDecision {
+  shiftId: string;
+  connecteamShiftId: string;
+  schedulerId: number;
+  timezone: string;
+  /** The existing Connecteam shift's title — preserved so an auto-adopt never stomps the human's label. */
+  title: string | null;
+  startUnix: number; // union (no-shrink) window
+  endUnix: number;
+  assignees: number[]; // union of the Connecteam shift's assignees and the app shift's (never drops people)
+}
+
 export interface RouteCreatePlan {
   /** Route app shifts with NO assignee in Connecteam today -> create one silent Connecteam shift for all. */
   creates: { shiftId: string }[];
+  /** Worker already has a matching Connecteam shift -> UPDATE it in place (no duplicate), window unioned. */
+  adopts: AdoptDecision[];
   /** Mixed presence (some assignees in Connecteam, some not) -> flag needs_review, never auto-write. */
   flags: { shiftId: string; note: string }[];
   /** Eligible to create but no time window yet -> retry a later cycle (never a fabricated window). */
   deferred: { shiftId: string; reason: string }[];
-  /** All assignees already in Connecteam (invariant satisfied) or not a route seat. */
+  /** All assignees already in Connecteam across other shifts (invariant satisfied) or not a route seat. */
   skipped: number;
 }
 
@@ -189,14 +207,19 @@ const MIXED_NOTE =
   "Dispatch to push it deliberately.";
 
 /**
- * PURE. Decide, per route app shift, whether to auto-create its Connecteam copy. A "route seat" is a shift
- * with a routeId and a driver/field role. `connecteamUserIds` is the set of users who have ANY Connecteam
- * shift that day (their real Connecteam presence). Idempotent: an already-linked shift (connecteam_shift_id
- * set) or an already-needs_review shift is skipped.
+ * PURE. Decide, per route app shift, whether to CREATE its Connecteam copy, ADOPT (update) an existing one,
+ * flag, or defer. A "route seat" is a shift with a routeId and a driver/field role. `crew` is the day's live
+ * Connecteam shifts (the worker's real Connecteam presence). Idempotent: an already-linked shift
+ * (connecteam_shift_id set) or an already-needs_review shift is skipped.
+ *
+ * ADOPT-BEFORE-CREATE is the duplication fix: if the worker already has a Connecteam shift that holds all of
+ * this shift's assignees, we UPDATE that shift in place (adopting its id, unioning the window so a longer
+ * human shift is never truncated) rather than creating a parallel duplicate.
  */
-export function planRouteConnecteamCreate(input: { appShifts: StaffShift[]; connecteamUserIds: number[] }): RouteCreatePlan {
-  const ct = new Set(input.connecteamUserIds);
-  const plan: RouteCreatePlan = { creates: [], flags: [], deferred: [], skipped: 0 };
+export function planRouteConnecteamCreate(input: { appShifts: StaffShift[]; crew: CrewShift[] }): RouteCreatePlan {
+  const ctUserIds = new Set<number>();
+  for (const c of input.crew) for (const a of c.assignees) ctUserIds.add(a.userId);
+  const plan: RouteCreatePlan = { creates: [], adopts: [], flags: [], deferred: [], skipped: 0 };
 
   for (const s of input.appShifts) {
     if (!s.routeId || (s.role !== "driver" && s.role !== "field")) continue; // not a route seat
@@ -205,9 +228,28 @@ export function planRouteConnecteamCreate(input: { appShifts: StaffShift[]; conn
     if (s.status === "cancelled") continue; // a called-off shift is not pushed to Connecteam
     if (s.assignees.length === 0) continue; // nothing to push
 
-    const present = s.assignees.filter((u) => ct.has(u)).length;
+    // ROBUST MATCH (worker + day): the worker already has a Connecteam shift holding all these assignees ->
+    // UPDATE it in place, never duplicate. Union the window so Connecteam keeps the broader hours.
+    const match = matchConnecteamShiftForPush(s, input.crew);
+    if (match) {
+      const win = unionPushWindowUnix(s.startTime, s.endTime, match);
+      const assignees = [...new Set([...match.assignees.map((a) => a.userId), ...s.assignees])].sort((a, b) => a - b);
+      plan.adopts.push({
+        shiftId: s.id,
+        connecteamShiftId: String(match.id),
+        schedulerId: match.schedulerId,
+        timezone: match.timezone,
+        title: match.title || null,
+        startUnix: win.startUnix,
+        endUnix: win.endUnix,
+        assignees,
+      });
+      continue;
+    }
+
+    const present = s.assignees.filter((u) => ctUserIds.has(u)).length;
     if (present === s.assignees.length) {
-      plan.skipped += 1; // everyone is already in Connecteam — invariant already satisfied
+      plan.skipped += 1; // everyone is in Connecteam (across other shifts) — invariant satisfied, no dup risk
       continue;
     }
     if (present > 0) {
@@ -232,11 +274,15 @@ export interface RouteCreateApplyDeps {
   nameOf?: (userId: number) => string | null;
   /** Injectable publisher (defaults to the real silent create). Tests pass a fake to assert notifyUsers. */
   publish?: (input: PublishShiftInput) => Promise<PublishShiftResult>;
+  /** Injectable updater for ADOPT (defaults to the real silent update). Tests pass a fake to assert the id. */
+  publishUpdate?: (input: PublishShiftInput & { shiftId: string }) => Promise<PublishShiftResult>;
   actor?: string;
 }
 
 export interface RouteCreateApplyResult {
   created: number;
+  /** Existing Connecteam shifts UPDATED in place (worker already had one) instead of duplicated. */
+  adopted: number;
   flagged: number;
   deferred: number;
   /** Connecteam rejected/unreachable, or no scheduler -> left unlinked, retried next cycle (honest). */
@@ -252,7 +298,9 @@ export interface RouteCreateApplyResult {
 export async function applyRouteConnecteamCreate(plan: RouteCreatePlan, deps: RouteCreateApplyDeps): Promise<RouteCreateApplyResult> {
   const actor = deps.actor ?? "connecteam-route-sync";
   const publish = deps.publish ?? ((input: PublishShiftInput) => createPublishedShift(input, { notifyUsers: false }));
+  const publishUpdate = deps.publishUpdate ?? ((input: PublishShiftInput & { shiftId: string }) => updatePublishedShift(input, { notifyUsers: false }));
   let created = 0;
+  let adopted = 0;
   let flagged = 0;
   let failed = 0;
 
@@ -260,6 +308,68 @@ export async function applyRouteConnecteamCreate(plan: RouteCreatePlan, deps: Ro
     updateShift(f.shiftId, { syncStatus: "needs_review", syncNote: f.note });
     flagged += 1;
     audit(actor, "ROUTE_SYNC_NEEDS_REVIEW", f.shiftId, { reason: "mixed_connecteam_presence" });
+  }
+
+  // ADOPT: the worker already has a matching Connecteam shift -> UPDATE it in place (silent), link the app
+  // shift to it, and store the unioned (never-shrunk) window. This is the de-dup: no second Connecteam shift
+  // is created, and the app shift becomes linked so the importer baselines it (no conflict, no flap).
+  for (const a of plan.adopts) {
+    const shift = getShiftById(a.shiftId);
+    if (!shift) {
+      failed += 1;
+      continue;
+    }
+    if (shift.connecteamShiftId) continue; // raced with another write — already linked
+    if (!a.startUnix || !a.endUnix || a.endUnix <= a.startUnix) {
+      failed += 1;
+      continue;
+    }
+    const truckName = shift.truckId ? deps.truckNameOf(shift.truckId) : shift.date;
+    const title = a.title || `${ROLE_LABEL[shift.role]} — ${shift.eventLabel || `${truckName} ${shift.date}`}`;
+    const res = await publishUpdate({
+      schedulerId: a.schedulerId,
+      shiftId: a.connecteamShiftId,
+      title,
+      startUnix: a.startUnix,
+      endUnix: a.endUnix,
+      timezone: a.timezone,
+      assignedUserIds: a.assignees,
+    });
+    if (!res.ok) {
+      failed += 1; // Connecteam rejected/unreachable -> leave unlinked, retry (never a fake link)
+      continue;
+    }
+    const nowIso = new Date().toISOString();
+    updateShift(a.shiftId, {
+      status: "sent",
+      startTime: new Date(a.startUnix * 1000).toISOString(),
+      endTime: new Date(a.endUnix * 1000).toISOString(),
+      windowKnown: true,
+      assignees: a.assignees,
+      connecteamShiftId: a.connecteamShiftId,
+      connecteamSchedulerId: a.schedulerId,
+      connecteamPublishedAt: nowIso,
+      connecteamContentHash: null, // re-baselined by the next import -> no conflict, no flap
+      connecteamSyncedAt: nowIso,
+      syncStatus: "synced",
+      syncNote: null,
+    });
+    adopted += 1;
+    audit(actor, "ROUTE_SYNC_CONNECTEAM_ADOPTED", a.shiftId, { connecteamShiftId: a.connecteamShiftId, schedulerId: a.schedulerId, assignees: a.assignees.length, notifyUsers: false });
+    const whoNames = a.assignees.map((u) => deps.nameOf?.(u) || `#${u}`).join(", ") || "the crew";
+    void botAnnounce("scheduling", {
+      emoji: "🗓️",
+      title: "Matched an existing Connecteam shift",
+      fields: [
+        { label: "Who", value: whoNames },
+        { label: "Truck", value: truckName },
+        { label: "Role", value: ROLE_WORD[shift.role] },
+        { label: "Window", value: `${hhmm(new Date(a.startUnix * 1000).toISOString())}–${hhmm(new Date(a.endUnix * 1000).toISOString())}` },
+      ],
+      body: "Linked to the shift they already had so the route doesn't create a duplicate.",
+      link: { text: "View in Scheduling", url: appUrl("/scheduling") },
+      context: "Scheduling Bot · reply here if that's wrong",
+    }).catch(() => {});
   }
 
   for (const c of plan.creates) {
@@ -332,7 +442,7 @@ export async function applyRouteConnecteamCreate(plan: RouteCreatePlan, deps: Ro
     }).catch(() => {});
   }
 
-  return { created, flagged, deferred: plan.deferred.length, failed };
+  return { created, adopted, flagged, deferred: plan.deferred.length, failed };
 }
 
 // ── Route-row driver reconcile (make route.driverId agree with the driver staff_shift) ──────────────────
@@ -437,6 +547,7 @@ export interface RouteAutoSyncDayResult {
   windowsExpanded: number;
   promptOnly: number; // ambiguous people left for the one-click prompt
   ctCreated: number;
+  ctAdopted: number; // existing Connecteam shifts UPDATED in place instead of duplicated (de-dup fix)
   mixedFlagged: number; // route shifts flagged needs_review (mixed presence / no id)
   createDeferred: number; // eligible to create but no window yet
   createFailed: number; // Connecteam rejected/unreachable this cycle
@@ -456,6 +567,7 @@ const EMPTY_DAY = (date: string): RouteAutoSyncDayResult => ({
   windowsExpanded: 0,
   promptOnly: 0,
   ctCreated: 0,
+  ctAdopted: 0,
   mixedFlagged: 0,
   createDeferred: 0,
   createFailed: 0,
@@ -708,16 +820,15 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   //    read it, skip (we must not create blind — that is how duplicates happen).
   const crew = await getCrewForDateSafe(date);
   if (!crew.ok) return out; // reachable for auto-assign (cache) but can't confirm presence now — skip create
-  const ctUserIds = new Set<number>();
-  for (const s of crew.shifts) for (const a of s.assignees) ctUserIds.add(a.userId);
 
   const appShifts = getShiftsForDate(date);
-  const createPlan = planRouteConnecteamCreate({ appShifts, connecteamUserIds: [...ctUserIds] });
+  const createPlan = planRouteConnecteamCreate({ appShifts, crew: crew.shifts });
   out.alreadyInCt = createPlan.skipped;
   out.createDeferred = createPlan.deferred.length;
 
   const applied = await applyRouteConnecteamCreate(createPlan, { scheduler, truckNameOf, nameOf, actor });
   out.ctCreated = applied.created;
+  out.ctAdopted = applied.adopted;
   out.mixedFlagged = applied.flagged;
   out.createFailed = applied.failed;
 
@@ -738,6 +849,8 @@ export interface RouteAutoSyncTickResult {
   /** Shift windows grown because their route got longer (expand-only ratchet). */
   windowsExpanded: number;
   ctCreated: number;
+  /** Existing Connecteam shifts UPDATED in place instead of duplicated (de-dup fix), across the sweep. */
+  ctAdopted: number;
   flagged: number;
   unreachableDays: number;
   /** Route rows whose driver was backfilled from a driver staff_shift this sweep. */
@@ -768,6 +881,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
       seniorityAssigned: 0,
       windowsExpanded: 0,
       ctCreated: 0,
+      ctAdopted: 0,
       flagged: 0,
       unreachableDays: 0,
       driverRowsSet: 0,
@@ -780,6 +894,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
   let seniorityAssigned = 0;
   let windowsExpanded = 0;
   let ctCreated = 0;
+  let ctAdopted = 0;
   let flagged = 0;
   let unreachable = 0;
   let reachableDays = 0;
@@ -797,6 +912,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
       seniorityAssigned += r.seniorityAssigned;
       windowsExpanded += r.windowsExpanded;
       ctCreated += r.ctCreated;
+      ctAdopted += r.ctAdopted;
       flagged += r.mixedFlagged;
       driverRowsSet += r.driverRowsSet;
       driverlessRequiredRoutes += r.driverlessRequiredRoutes;
@@ -827,8 +943,9 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
   const expandedNote = windowsExpanded ? `, ${windowsExpanded} shift${windowsExpanded === 1 ? "" : "s"} adjusted to the route` : "";
   const driverRowNote = driverRowsSet ? `, ${driverRowsSet} route driver${driverRowsSet === 1 ? "" : "s"} reconciled` : "";
   const driverlessNote = driverlessRequiredRoutes ? `, ${driverlessRequiredRoutes} route${driverlessRequiredRoutes === 1 ? "" : "s"} still need a driver` : "";
+  const adoptedNote = ctAdopted ? `, ${ctAdopted} matched to an existing Connecteam shift` : "";
   const detail = reachableDays === 0
     ? `Connecteam unreachable (${unreachable}/${dates.length} days) — skipped, nothing written`
-    : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned${seniorityNote}${expandedNote}${driverRowNote}, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent), ${flagged} flagged${driverlessNote}${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
-  return { ok, detail, days: reachableDays, autoAssigned, seniorityAssigned, windowsExpanded, ctCreated, flagged, unreachableDays: unreachable, driverRowsSet, driverlessRequiredRoutes };
+    : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned${seniorityNote}${expandedNote}${driverRowNote}, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent)${adoptedNote}, ${flagged} flagged${driverlessNote}${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
+  return { ok, detail, days: reachableDays, autoAssigned, seniorityAssigned, windowsExpanded, ctCreated, ctAdopted, flagged, unreachableDays: unreachable, driverRowsSet, driverlessRequiredRoutes };
 }

@@ -163,16 +163,23 @@ staffing gate (`preCheck.ts`) stays honest — a Connecteam schedule is never cr
 clears only because an actual assignment now exists. **This is not locked:** a dispatcher can move/remove the
 person afterward and #48's reconcile + last-edit-wins apply as before.
 
-### 8.2 App route → Connecteam: AUTO-CREATE, **silently**
+### 8.2 App route → Connecteam: AUTO-CREATE / ADOPT, **silently**
 Enforces the invariant *"nobody on a Dispatch route without being in Connecteam."* For each **route** app
-shift (has `routeId`, role driver/field, ≥1 assignee), the pure `planRouteConnecteamCreate` decides using the
-set of users who have **any** Connecteam shift that day (`connecteamUserIds`, from the live crew read):
+shift (has `routeId`, role driver/field, ≥1 assignee), the pure `planRouteConnecteamCreate` decides against
+the day's **live Connecteam shifts** (`crew`, from the live read):
 
-| Presence of the shift's assignees in Connecteam | Action |
+| The shift's assignees in Connecteam | Action |
 | --- | --- |
+| A single Connecteam shift holds **all** of them | **ADOPT** — `updatePublishedShift` that shift in place (`notifyUsers=false`), link the app shift to its id, and store the **unioned** (never-shrunk) window. No duplicate is created. (`matchConnecteamShiftForPush`) |
 | **None** are in Connecteam | **CREATE** one Connecteam shift for the shift (all its assignees), **`notifyUsers=false`** |
-| **All** are already in Connecteam | **skip** — the invariant is already satisfied (no duplicate shift) |
-| **Mixed** (some are, some aren't) | **flag `needs_review`** — creating one shift could duplicate or drop people; a human decides |
+| **All** are in Connecteam but spread across different shifts | **skip** — the invariant is already satisfied (no duplicate risk) |
+| **Mixed** (some are, some aren't; no single shift holds all) | **flag `needs_review`** — creating one shift could duplicate or drop people; a human decides |
+
+The **ADOPT** branch is the duplication fix (2026-10-29): pushing was previously idempotent only on the app
+shift's own `connecteam_shift_id`, so a worker who already had a Connecteam shift (one built directly in
+Connecteam, or one from another of the truck's routes) got a **second** shift pushed from the app. Matching on
+the **assignee set** (worker + day, regardless of title/role/window) links to the existing shift and updates it
+in place instead. The same match runs on the human **publish** path (`/api/scheduling/shift/[id]/publish`).
 
 Already-linked shifts (`connecteam_shift_id` set), `needs_review` shifts, and cancelled shifts are skipped
 (idempotent). A create with **no time window** is **deferred** (retried later; never a fabricated time). The

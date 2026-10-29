@@ -8,7 +8,8 @@ import { NextResponse } from "next/server";
 import { viewerRole, currentActor } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 import { getShiftById, updateShift } from "@/lib/scheduling/store";
-import { createPublishedShift, updatePublishedShift, getDefaultScheduler, getSchedulers, getUsers, connecteamShiftNotesEnabled } from "@/lib/connecteam";
+import { createPublishedShift, updatePublishedShift, getCrewForDateSafe, getDefaultScheduler, getSchedulers, getUsers, connecteamShiftNotesEnabled } from "@/lib/connecteam";
+import { matchConnecteamShiftForPush, unionPushWindowUnix } from "@/lib/scheduling/connecteamImport";
 import { insertAudit } from "@/lib/db/repo";
 import { assembleShiftDebriefContext } from "@/lib/scheduling/packetDispatch";
 import { buildShiftDebriefNote } from "@/lib/scheduling/shiftDebrief";
@@ -38,8 +39,6 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const shift = getShiftById(id);
   if (!shift) return fail(404, "NOT_FOUND", { error: "not_found" });
 
-  const isUpdate = Boolean(shift.connecteamShiftId);
-
   // Human-approval + data gates (apply to both first publish and re-publish of an edited shift).
   if (shift.status !== "confirmed") {
     return fail(409, "CONFIRM_FIRST", { error: "confirm_first", message: "Confirm the shift before sending it to the crew." });
@@ -51,16 +50,43 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     return fail(400, "NO_ASSIGNEES", { error: "no_assignees", message: "Assign internal crew before publishing (the Instawork gap is sent separately)." });
   }
 
-  // On an update, stay on the scheduler the shift was first published to; else pick the default.
-  const scheduler = isUpdate && shift.connecteamSchedulerId
-    ? (await getSchedulers()).find((s) => s.schedulerId === shift.connecteamSchedulerId) ?? (await getDefaultScheduler())
+  // DE-DUP THE PUSH. Idempotency was keyed ONLY on this app shift's own connecteam_shift_id, so publishing a
+  // shift the app had not itself linked created a SECOND Connecteam shift even when the worker already had one
+  // that day (one Lisa built directly in Connecteam, or one from another route) — the reported duplicate.
+  // Before creating, match the worker's EXISTING Connecteam shift and UPDATE it in place instead, unioning the
+  // window so a longer human shift is never truncated. Honest: only when the day's Connecteam read succeeds
+  // (we won't match blind on an outage — then we fall back to the previous create, unchanged).
+  let targetShiftId = shift.connecteamShiftId;
+  let targetSchedulerId = shift.connecteamSchedulerId;
+  let pushStartIso: string = shift.startTime;
+  let pushEndIso: string = shift.endTime;
+  let pushAssignees = shift.assignees;
+  if (!targetShiftId) {
+    const crew = await getCrewForDateSafe(shift.date);
+    if (crew.ok) {
+      const m = matchConnecteamShiftForPush(shift, crew.shifts);
+      if (m) {
+        const win = unionPushWindowUnix(shift.startTime, shift.endTime, m);
+        targetShiftId = String(m.id);
+        targetSchedulerId = m.schedulerId;
+        pushStartIso = new Date(win.startUnix * 1000).toISOString();
+        pushEndIso = new Date(win.endUnix * 1000).toISOString();
+        pushAssignees = [...new Set([...m.assignees.map((a) => a.userId), ...shift.assignees])].sort((a, b) => a - b);
+      }
+    }
+  }
+  const isUpdate = Boolean(targetShiftId);
+
+  // On an update, stay on the scheduler the shift was first published to (or the matched shift's); else default.
+  const scheduler = isUpdate && targetSchedulerId
+    ? (await getSchedulers()).find((s) => s.schedulerId === targetSchedulerId) ?? (await getDefaultScheduler())
     : await getDefaultScheduler();
   if (!scheduler) {
     return fail(400, "NO_SCHEDULER", { error: "no_scheduler", message: "No Connecteam scheduler is reachable." });
   }
 
-  const startUnix = Math.floor(Date.parse(shift.startTime) / 1000);
-  const endUnix = Math.floor(Date.parse(shift.endTime) / 1000);
+  const startUnix = Math.floor(Date.parse(pushStartIso) / 1000);
+  const endUnix = Math.floor(Date.parse(pushEndIso) / 1000);
   if (!startUnix || !endUnix || endUnix <= startUnix) {
     return fail(400, "BAD_TIME", { error: "bad_time", message: "The shift's time window is invalid." });
   }
@@ -84,24 +110,34 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     startUnix,
     endUnix,
     timezone: scheduler.timezone,
-    assignedUserIds: shift.assignees,
+    assignedUserIds: pushAssignees,
     note,
   };
   const result = isUpdate
-    ? await updatePublishedShift({ ...input, shiftId: shift.connecteamShiftId! })
+    ? await updatePublishedShift({ ...input, shiftId: targetShiftId! })
     : await createPublishedShift(input);
 
   if (!result.ok) {
     return fail(502, "CONNECTEAM_FAILED", { error: "connecteam_failed", message: result.error ?? "Connecteam rejected the shift.", schedulerId: scheduler.schedulerId });
   }
 
-  const connecteamShiftId = shift.connecteamShiftId ?? result.shiftId ?? `ct-${Date.now()}`;
+  const connecteamShiftId = targetShiftId ?? result.shiftId ?? `ct-${Date.now()}`;
   updateShift(id, {
     status: "sent",
-    // Keep the original id on update; set it on first publish.
+    // Keep the original/matched id on update; set it on first publish.
     connecteamShiftId,
     connecteamSchedulerId: scheduler.schedulerId,
     connecteamPublishedAt: new Date().toISOString(),
+    // Persist the (possibly unioned) window + assignees we actually pushed, and re-baseline so the importer
+    // adopts this link instead of re-flagging it as a conflict.
+    startTime: pushStartIso,
+    endTime: pushEndIso,
+    windowKnown: true,
+    assignees: pushAssignees,
+    connecteamContentHash: null,
+    connecteamSyncedAt: new Date().toISOString(),
+    syncStatus: "synced",
+    syncNote: null,
   });
 
   try {
@@ -116,5 +152,5 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     /* audit must never block the response */
   }
 
-  return NextResponse.json({ ok: true, updated: isUpdate, connecteamShiftId: shift.connecteamShiftId ?? result.shiftId ?? null, notified: shift.assignees.length });
+  return NextResponse.json({ ok: true, updated: isUpdate, connecteamShiftId: targetShiftId ?? result.shiftId ?? null, notified: pushAssignees.length });
 }

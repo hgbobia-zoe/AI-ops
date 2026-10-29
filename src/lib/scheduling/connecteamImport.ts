@@ -95,6 +95,68 @@ function isoFromUnix(unix: number): string {
   return new Date(unix * 1000).toISOString();
 }
 
+// ── Push de-duplication: match an app shift to the worker's EXISTING Connecteam shift ─────────────────
+// THE DUPLICATION FIX. Pushing an app shift to Connecteam was idempotent ONLY on the app shift's own stored
+// connecteam_shift_id — so a route shift the app had not itself created-and-linked was pushed as a BRAND NEW
+// Connecteam shift even when the worker ALREADY had one that day (one Lisa built directly in Connecteam, or
+// one from another of the truck's routes). That is the reported duplicate: a real "9:00a–3:30p Zoe Event
+// Rentals" shift PLUS an app-pushed "Field — Isuzu NPR" shift on the same person/day.
+//
+// The stable key Connecteam actually models is WORKER + DAY ("this person works this window today"), not the
+// app's per-route title/role/window. So we match on the ASSIGNEE SET: an existing Connecteam shift that holds
+// every one of the app shift's assignees, on the same day, is the SAME real-world shift — update it in place.
+
+/**
+ * PURE. The existing Connecteam shift that represents the same worker-day as an app shift we are about to
+ * push, or null when there is none (then the caller CREATES). Matches on the assignee set (every app assignee
+ * is on the Connecteam shift) regardless of title/role/window, so a route shift links to a worker's
+ * pre-existing Connecteam shift instead of duplicating it. Deterministic: prefers a Connecteam shift whose
+ * window overlaps the app window (the same block of the day), else the earliest-starting, else by id. Open
+ * (unassigned) Connecteam shifts are never matched (they hold no worker to be the same person).
+ */
+export function matchConnecteamShiftForPush(
+  appShift: Pick<StaffShift, "assignees" | "startTime" | "endTime">,
+  crew: CrewShift[],
+): CrewShift | null {
+  if (appShift.assignees.length === 0) return null;
+  const want = appShift.assignees;
+  const candidates = crew.filter(
+    (c) => !c.isOpen && c.assignees.length > 0 && want.every((u) => c.assignees.some((a) => a.userId === u)),
+  );
+  if (candidates.length === 0) return null;
+  const aStart = appShift.startTime ? Math.floor(Date.parse(appShift.startTime) / 1000) : NaN;
+  const aEnd = appShift.endTime ? Math.floor(Date.parse(appShift.endTime) / 1000) : NaN;
+  const overlaps = (c: CrewShift): boolean =>
+    Number.isFinite(aStart) && Number.isFinite(aEnd) ? c.startUnix < aEnd && aStart < c.endUnix : false;
+  return [...candidates].sort((x, y) => {
+    const ox = overlaps(x) ? 0 : 1;
+    const oy = overlaps(y) ? 0 : 1;
+    if (ox !== oy) return ox - oy;
+    if (x.startUnix !== y.startUnix) return x.startUnix - y.startUnix;
+    return String(x.id).localeCompare(String(y.id));
+  })[0];
+}
+
+/**
+ * PURE, NO-SHRINK. The window to push when ADOPTING an existing Connecteam shift: the UNION of the app
+ * (route-derived) window and the existing Connecteam window — [min start, max end] in Unix seconds. This is
+ * the WRONG-TIME fix: a per-route app window (e.g. a truncated 9:00a–1:35p delivery leg) can never shorten a
+ * worker's broader known Connecteam hours (9:00a–3:30p), and a route that now runs later still extends them.
+ * When the app window is unknown the Connecteam window stands (information gain, never a fabricated time).
+ */
+export function unionPushWindowUnix(
+  appStartIso: string | null,
+  appEndIso: string | null,
+  ct: { startUnix: number; endUnix: number },
+): { startUnix: number; endUnix: number } {
+  const aS = appStartIso ? Math.floor(Date.parse(appStartIso) / 1000) : NaN;
+  const aE = appEndIso ? Math.floor(Date.parse(appEndIso) / 1000) : NaN;
+  return {
+    startUnix: Number.isFinite(aS) ? Math.min(aS, ct.startUnix) : ct.startUnix,
+    endUnix: Number.isFinite(aE) ? Math.max(aE, ct.endUnix) : ct.endUnix,
+  };
+}
+
 /**
  * Normalize the day's Connecteam shifts into importable shifts, PUBLISHED ONLY. A shift is treated as
  * published when isPublished is true OR absent (the endpoint may only return published shifts, and no
