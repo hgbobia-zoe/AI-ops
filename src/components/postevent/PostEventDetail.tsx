@@ -190,7 +190,7 @@ export function PostEventDetail({
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         {/* Experience disposition */}
         <Section title="Experience" icon={<CheckCircle2 className="size-3.5 text-meta" />}>
-          <p className="mb-2 text-[11.5px] text-meta">Set once you understand how it went. A human sets this. AI could suggest it from a real transcript (Phase 2), never invent it.</p>
+          <p className="mb-2 text-[11.5px] text-meta">Set once you understand how it went. A human sets this; it is never inferred or generated.</p>
           <div className="flex flex-wrap gap-1.5">
             {DISPOSITION_ORDER.map((d) => (
               <button

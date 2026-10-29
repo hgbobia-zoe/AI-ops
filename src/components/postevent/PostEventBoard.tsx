@@ -64,6 +64,11 @@ function matchesQueue(c: PostEventCard, k: QueueKey): boolean {
   }
 }
 
+const QUEUE_KEYS: QueueKey[] = ["due", "overdue", "awaiting", "issues", "reviews"];
+function isQueueKey(x: string | null): x is QueueKey {
+  return x != null && (QUEUE_KEYS as string[]).includes(x);
+}
+
 function ClosureDialog({ card, onClose, onConfirm }: { card: PostEventCard; onClose: () => void; onConfirm: (reason: ClosureReason, note: string) => void }): React.JSX.Element {
   const [reason, setReason] = useState<ClosureReason | "">("");
   const [note, setNote] = useState("");
@@ -131,7 +136,23 @@ export function PostEventBoard(): React.JSX.Element {
   const [requesting, setRequesting] = useState<PostEventCard | null>(null); // → Review Requested (channel + destination)
   const [recording, setRecording] = useState<PostEventCard | null>(null); // → Review Completed (rating)
   const [drawerId, setDrawerId] = useState<string | null>(null); // card detail opens in the shared side panel
-  const [filter, setFilter] = useState<QueueKey | null>(null); // My Queue quick-filter
+  // My Queue quick-filter. Deep-linkable (?queue=…) so the overview can land on a scoped view; the
+  // initial value is read from the URL (lazy, client-only — the filtered UI renders after data loads,
+  // so there is no hydration mismatch), and changes are reflected back into the URL without navigating.
+  const [filter, setFilterState] = useState<QueueKey | null>(() => {
+    if (typeof window === "undefined") return null;
+    const q = new URL(window.location.href).searchParams.get("queue");
+    return isQueueKey(q) ? q : null;
+  });
+
+  function setFilter(next: QueueKey | null): void {
+    setFilterState(next);
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (next) url.searchParams.set("queue", next);
+    else url.searchParams.delete("queue");
+    window.history.replaceState(null, "", url.toString());
+  }
 
   async function load(): Promise<void> {
     const j = (await (await fetch("/api/postevent/board")).json()) as { columns: BoardColumns; totals: Record<PostEventState, number> };
@@ -502,6 +523,8 @@ function PostEventCardView({
         <span>·</span>
         <span>Pickup {fmtDate(c.pickupAt)}</span>
       </div>
+      {/* Stage — explicit on the card so a deep-linked / filtered view still reads clearly. */}
+      <div className="mt-0.5 text-[10px] uppercase tracking-[0.06em] text-meta">{POSTEVENT_STATE_LABEL[c.state]}</div>
 
       {/* NEXT ACTION + due (active) or closure reason (closed) */}
       {!closed ? (
