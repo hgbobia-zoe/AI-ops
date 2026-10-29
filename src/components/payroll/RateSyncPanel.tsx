@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowRightLeft, Check } from "lucide-react";
+import type { RateComparison } from "@/lib/payroll/types";
 
 export interface RateProposalView {
   workerKey: string;
@@ -23,9 +24,10 @@ export interface RateProposalView {
 const money = (n: number | null, cur = "USD"): string =>
   n == null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency: cur || "USD" }).format(n);
 
-export function RateSyncPanel({ proposals, asOf, salaried, noGustoRate }: {
-  proposals: RateProposalView[]; asOf: string | null; salaried: number; noGustoRate: number;
+export function RateSyncPanel({ proposals, asOf, comparison }: {
+  proposals: RateProposalView[]; asOf: string | null; comparison: RateComparison;
 }): React.JSX.Element | null {
+  const { verifiedMatch, differing, missingSourceRate, incomparableSalaried, mapped } = comparison;
   const router = useRouter();
   const [done, setDone] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -49,28 +51,50 @@ export function RateSyncPanel({ proposals, asOf, salaried, noGustoRate }: {
     }
   }
 
-  if (proposals.length === 0 && salaried === 0 && noGustoRate === 0) return null;
+  if (mapped === 0 && proposals.length === 0) return null;
+
+  // Three DISTINCT populations — never conflated. "Comparable" = mapped workers with a Gusto HOURLY rate to
+  // check against Connecteam; of those, verifiedMatch already agree and `differing` need a write. The other
+  // two (no Gusto rate / salaried) CANNOT be compared at all, so they are reported separately — not folded
+  // into "everyone matches".
+  const comparable = verifiedMatch + differing;
+  const breakdown: { label: string; n: number; tone: string }[] = [
+    { label: "verified in sync", n: verifiedMatch, tone: "text-positive" },
+    { label: "differ (writable)", n: differing, tone: "text-attention" },
+    { label: "no Gusto rate — can't compare", n: missingSourceRate, tone: "text-meta" },
+    { label: "salaried — n/a", n: incomparableSalaried, tone: "text-meta" },
+  ].filter((b) => b.n > 0);
 
   return (
     <div>
-      <div className="mb-1 flex items-center gap-2">
+      <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
         <ArrowRightLeft className="size-3.5 text-tertiary-text" />
         <h3 className="text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tertiary-text">
-          Gusto → Connecteam rate sync <span className="text-meta">({proposals.length})</span>
+          Gusto → Connecteam rate sync
         </h3>
         <span className="text-[11px] text-meta">
-          — Gusto is the source of truth for pay. Approve to write a rate into Connecteam.
+          — Gusto is the authoritative pay rate. Approve a row to write it into Connecteam.
           {asOf && <span className="ml-1">Gusto pulled {new Date(asOf).toLocaleString("en-US")}.</span>}
         </span>
       </div>
-      {(salaried > 0 || noGustoRate > 0) && (
-        <p className="mb-1 pl-5 text-[11px] text-meta">
-          {salaried > 0 && <span>{salaried} mapped worker{salaried === 1 ? "" : "s"} are salaried in Gusto (no hourly rate to sync). </span>}
-          {noGustoRate > 0 && <span>{noGustoRate} mapped worker{noGustoRate === 1 ? "" : "s"} have no rate in the latest Gusto pull.</span>}
-        </p>
-      )}
+      {/* Honest breakdown of all mapped workers across the three populations (fixes the old "11 have no rate"
+          + "everyone matches" contradiction). */}
+      <p className="mb-1.5 pl-5 text-[11.5px] text-meta">
+        {comparable} of {mapped} mapped worker{mapped === 1 ? "" : "s"} comparable:{" "}
+        {breakdown.map((b, i) => (
+          <span key={b.label}>
+            {i > 0 && <span className="text-meta"> · </span>}
+            <span className={b.tone}>{b.n} {b.label}</span>
+          </span>
+        ))}
+        {breakdown.length === 0 && <span>none to compare.</span>}
+      </p>
       {proposals.length === 0 ? (
-        <p className="pl-5 text-[12px] text-meta">Every mapped worker&apos;s Connecteam rate already matches Gusto.</p>
+        <p className="pl-5 text-[12px] text-meta">
+          {missingSourceRate > 0 || incomparableSalaried > 0
+            ? `${verifiedMatch} comparable worker${verifiedMatch === 1 ? "" : "s"} already match Gusto; ${missingSourceRate + incomparableSalaried} could not be compared (see above).`
+            : "Every comparable worker's Connecteam rate already matches Gusto."}
+        </p>
       ) : (
         <div className="surface overflow-x-auto border">
           <table className="w-full min-w-[720px] text-[12.5px]">

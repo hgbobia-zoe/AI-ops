@@ -94,9 +94,12 @@ export function classifyReadinessWorker(f: ReadinessFacts, ctx: ReadinessContext
       "Map this worker to Gusto in the Workers tab.", "reconciliation"));
   }
   if ((hours ?? 0) > 0 && f.payRate == null) {
-    issues.push(mkException(ctx.period, who, "NO_PAY_RATE", "BLOCKING",
-      `${f.name} has hours but no pay rate on file.`,
-      "Set the pay rate in Connecteam/Gusto, then re-sync.", "reconciliation"));
+    // NOT a blocker (policy, aligned with review.ts): Gusto applies its OWN stored rate when the hours are
+    // pushed, so a missing app rate only means the in-app ESTIMATE is unavailable — it never stops payroll.
+    // Classed EXCEPTION (an anomaly to note) so readiness and review agree a missing rate does not block.
+    issues.push(mkException(ctx.period, who, "NO_PAY_RATE", "EXCEPTION",
+      `${f.name} has hours but no pay rate on file — the estimate is unavailable (Gusto applies its own rate on the push).`,
+      "Set the pay rate in Connecteam/Gusto if you want an in-app estimate.", "reconciliation"));
   }
   // Approval is the sync prerequisite: unapproved hours must NOT be exported.
   if (f.approvalKnownForWorker && (f.unapprovedHours ?? 0) > 0) {

@@ -78,10 +78,16 @@ describe("classifyReadiness — overall status", () => {
     expect(r.exceptions.some((e) => e.type === "MISSING_GUSTO_MAPPING")).toBe(true);
   });
 
-  it("BLOCKED when hours exist but no pay rate", () => {
+  it("a missing pay rate is a non-blocking anomaly (Gusto applies its own rate on the push), not a blocker", () => {
+    // Policy (aligned with review.ts): a missing app rate only means the in-app ESTIMATE is unavailable — it
+    // never blocks payroll, because Gusto pays its own stored rate. So the worker is ACTION_REQUIRED (an
+    // anomaly to note), NOT BLOCKED, and the NO_PAY_RATE exception is EXCEPTION-kind.
     const r = classifyReadiness([facts({ gustoMapped: true, payRate: null, actualHours: 10, approvedHours: 10, unapprovedHours: 0, approvalKnownForWorker: true })], ctx({}));
-    expect(r.status).toBe("BLOCKED");
-    expect(r.exceptions.some((e) => e.type === "NO_PAY_RATE")).toBe(true);
+    expect(r.status).toBe("ACTION_REQUIRED");
+    expect(r.blocking).toBe(0);
+    const e = r.exceptions.find((x) => x.type === "NO_PAY_RATE");
+    expect(e).toBeDefined();
+    expect(e?.kind).toBe("EXCEPTION");
   });
 });
 
