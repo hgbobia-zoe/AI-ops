@@ -197,10 +197,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               <Search className="size-[15px] shrink-0" aria-hidden />
               <span className="truncate">Search…</span>
             </span>
-            <nav aria-label="Date range" className="flex max-w-full items-center overflow-x-auto rounded-md border border-border">
+            {/* Wraps to a second line on narrow viewports (min-w-0 lets it shrink), so the header never
+                forces a horizontal document scroll. Divider rules only between in-line neighbours. */}
+            <nav aria-label="Date range" className="flex min-w-0 flex-wrap items-center overflow-hidden rounded-md border border-border">
               {RANGES.map((r) => (
                 <Link key={r.key} href={r.key === "today" ? "/dashboard" : `/dashboard?range=${r.key}`} aria-current={range === r.key ? "page" : undefined}
-                  className={`shrink-0 px-2.5 py-1.5 text-[12px] font-medium transition-colors ${range === r.key ? "bg-[var(--gold)]/15 text-[var(--gold)]" : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"}`}>
+                  className={`px-2.5 py-1.5 text-[12px] font-medium transition-colors ${range === r.key ? "bg-[var(--gold)]/15 text-[var(--gold)]" : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"}`}>
                   {r.label}
                 </Link>
               ))}
