@@ -416,7 +416,7 @@ function computeNextAction(a: {
   if (a.approvalGate.state === "ACTION" || a.approvalGate.state === "UNVERIFIED") return { label: "Approve timesheets in Connecteam", href: null, explain: a.approvalGate.detail, gate: "timesheetApproval" };
   if (a.reviewGate.state === "ACTION") return { label: "Review payroll", href: REVIEW_TAB, explain: a.reviewGate.detail, gate: "zoeReview" };
   if (a.status === "READY") return { label: "Approve payroll", href: REVIEW_TAB, explain: "Every gate is clean — record the Zoe approval.", gate: "zoeReview" };
-  if (a.status === "APPROVED") return { label: "Push hours to Gusto (draft)", href: SETTINGS_TAB, explain: "Approved — write the hours into the Gusto draft.", gate: "gustoSubmission" };
+  if (a.status === "APPROVED") return { label: "Push hours to Gusto (draft)", href: REVIEW_TAB, explain: "Approved — write the hours into the Gusto draft from the Review tab.", gate: "gustoSubmission" };
   if (a.status === "SUBMITTED") return { label: "Submit in Gusto", href: null, explain: "Hours are in the Gusto draft — submit payroll inside Gusto to finish.", gate: "gustoSubmission" };
   return { label: "Nothing to pay", href: null, explain: "No workers to pay in this period.", gate: null };
 }

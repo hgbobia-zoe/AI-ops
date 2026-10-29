@@ -585,6 +585,13 @@ async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
   const wQS = weeksAgo > 1 ? `&weeksAgo=${weeksAgo}` : "";
   const filterHref = (f: ReviewFilter): string => `/payroll?tab=review&status=${f}${wQS}`;
 
+  // Push hours to Gusto lives HERE next to approval so run → approve → push stays on one screen (it used to be
+  // buried on the Settings tab). The Gusto DRAFT covers the last completed week — the period payroll runs for —
+  // which is exactly weeksAgo === 1 (== the push's "previous" named period). Older weeks can't target the draft.
+  const pushDisabled = gustoPushDisabled();
+  const lastPush = readGustoPushResult();
+  const canPushPeriod = weeksAgo === 1;
+
   return (
     <div className="flex flex-col gap-5">
       {/* Action summary — status + counts + the approval control (persistent, explains what approve does) */}
@@ -604,7 +611,18 @@ async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
             {counts.excluded > 0 && <Count n={counts.excluded} label="excluded" tone="neutral" />}
           </div>
         </div>
-        <ApproveButton period={period} readyCount={appr.readyKeys.length} acknowledgeableCount={appr.acknowledgeableKeys.length} ackReason={appr.ackReason} />
+        <div className="flex flex-col items-stretch gap-2 sm:items-end">
+          <ApproveButton period={period} readyCount={appr.readyKeys.length} acknowledgeableCount={appr.acknowledgeableKeys.length} ackReason={appr.ackReason} />
+          {canPushPeriod ? (
+            <PushGustoHoursButton
+              which="previous"
+              disabled={pushDisabled}
+              lastPush={lastPush ? { at: lastPush.at, ok: lastPush.ok, aborted: lastPush.aborted, pushed: lastPush.pushed, skipped: lastPush.skipped, failed: lastPush.failed } : null}
+            />
+          ) : (
+            <span className="max-w-[16rem] text-right text-[11px] text-meta">Push to Gusto runs on the last completed week (the period payroll runs for). Switch to that week to push hours.</span>
+          )}
+        </div>
       </section>
 
       <RateSyncPanel proposals={ratePlan.proposals} asOf={ratePlan.asOf} comparison={m.rateComparison} />
