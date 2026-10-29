@@ -29,6 +29,21 @@
     } catch (e) { /* extension context gone */ }
   }
 
+  // SUBMIT / CONFIRM-WIRE (gusto-submit.js): same claim handshake as the push, but a DIFFERENT marker +
+  // channel so it never crosses wires with the hours push. The background only hands the job to the exact
+  // tab it opened for the submit, so a user's own Gusto tab never gets it.
+  function claimSubmitJob() {
+    try {
+      chrome.runtime.sendMessage({ type: "zoe-gusto-submit-claim" }, (resp) => {
+        try {
+          if (chrome.runtime && chrome.runtime.lastError) return;
+          const job = resp && resp.job;
+          if (job) window.postMessage({ __zoeGustoSubmit: true, type: "job", job }, location.origin);
+        } catch (e) { /* no-op */ }
+      });
+    } catch (e) { /* extension context gone */ }
+  }
+
   window.addEventListener("message", (e) => {
     try {
       // Only trust same-window messages carrying our markers (ignore anything else the page posts).
@@ -49,6 +64,13 @@
         // the operator can sign in to Gusto. Relay to the background, which owns chrome.tabs/windows.
         if (d.type === "reveal") { chrome.runtime.sendMessage({ type: "zoe-gusto-push-reveal" }); return; }
         if (d.type === "done") { chrome.runtime.sendMessage({ type: "zoe-gusto-push-done", ok: !!d.ok }); return; }
+      }
+
+      // SUBMIT / CONFIRM-WIRE handshakes (gusto-submit.js). Same shape as the push, separate channel.
+      if (d.__zoeGustoSubmit === true) {
+        if (d.type === "ready") { claimSubmitJob(); return; }
+        if (d.type === "reveal") { chrome.runtime.sendMessage({ type: "zoe-gusto-submit-reveal" }); return; }
+        if (d.type === "done") { chrome.runtime.sendMessage({ type: "zoe-gusto-submit-done", ok: !!d.ok }); return; }
       }
     } catch (err) {
       /* extension context gone / message channel closed — nothing to do */

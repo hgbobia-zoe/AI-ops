@@ -59,6 +59,16 @@ export function canManagePayroll(role: Role): boolean {
   return role === "owner" || role === "admin";
 }
 
+/** RUN REAL PAYROLL — the irreversible "submit payroll in Gusto + confirm the wire" trigger. This COMMITS
+ *  the run and creates a wire obligation (it does not move money, but it cannot be undone), so it is a
+ *  DEDICATED, administrator-level gate distinct from canManagePayroll: the whole /payroll blade is
+ *  canManagePayroll-gated (owner/admin), and the submit/confirm trigger additionally requires this. "Admin"
+ *  here means administrator-level (owner + admin, the people who run payroll); it is a SEPARATE predicate so
+ *  it can be tightened later without touching the blade gate. Members/marketing/guest never qualify. */
+export function canRunPayroll(role: Role): boolean {
+  return role === "owner" || role === "admin";
+}
+
 /** Marketing blade (/marketing) — demand-gen command center: campaigns, content, reviews, outreach. Open
  *  to the back-office staff that runs it (owner/admin/member) AND the scoped marketing role. NOT a guest.
  *  This is the Marketing-role's primary allowed surface; its hard scoping lives in the proxy (deny-by-default).*/
