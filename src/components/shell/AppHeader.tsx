@@ -10,9 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { Breadcrumbs } from "@/components/shell/Breadcrumbs";
-import { IntegrationSummary } from "@/components/shell/IntegrationSummary";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
-import type { Connection } from "@/lib/health/connections";
 import type { Role } from "@/lib/auth/roles";
 
 function Clock(): React.JSX.Element {
@@ -31,14 +29,16 @@ function Clock(): React.JSX.Element {
   );
 }
 
-export function AppHeader({ role, connections }: { role: Role; connections: Connection[] }): React.JSX.Element {
+// The per-integration connector chips now live in the always-visible StatusBar strip below this header
+// (restored after #162 folded them behind a click), so the header carries breadcrumbs, the clock and the
+// theme toggle only.
+export function AppHeader({ role }: { role: Role }): React.JSX.Element {
   return (
     <header className="hidden h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-4 lg:flex">
       <div className="min-w-0 flex-1">
         <Breadcrumbs role={role} />
       </div>
       <Clock />
-      <IntegrationSummary connections={connections} />
       <ThemeToggle />
     </header>
   );

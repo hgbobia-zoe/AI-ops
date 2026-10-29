@@ -71,7 +71,7 @@ export function RevenueTrendChart({
   return (
     <section className="surface flex h-full flex-col border p-3 px-3.5">
       {/* Header: title + tabs (mockup puts the metric tabs in the header row) */}
-      <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+      <div className="mb-2 flex items-center gap-2">
         <h2 className="flex items-center gap-1.5 text-[12.5px] font-medium uppercase tracking-[0.06em] text-tertiary-text">
           <TrendingUp className="size-[15px] text-meta" /> {curYear} Revenue performance
         </h2>
@@ -137,24 +137,14 @@ export function RevenueTrendChart({
       </div>
 
       {/* Legend (bottom, centered) */}
-      <div className="mt-1 flex flex-wrap justify-center gap-x-[22px] gap-y-1 text-[11.5px] text-tertiary-text">
+      <div className="mt-1 flex justify-center gap-[22px] text-[11.5px] text-tertiary-text">
         <span className="flex items-center gap-1.5"><span className="size-[9px] rounded-[1px]" style={{ background: PREV }} /> {prevYear} {isMoney ? "Revenue" : ""}</span>
         {targetPct != null && <span className="flex items-center gap-1.5"><span className="inline-block w-3.5 border-t border-dashed border-[#b2b6ca]" /> Target</span>}
         <span className="flex items-center gap-1.5"><span className="size-[9px] rounded-[1px]" style={{ background: GOLD }} /> {curYear} {isMoney ? "Revenue" : ""}</span>
       </div>
-      {/* Honest definition — bars are ACTUAL (signed) figures by event month, never future/open bookings.
-          Open unsigned quotes are shown separately in the Quote pipeline, not counted as revenue here. */}
-      <p className="mt-1.5 text-center text-[10.5px] text-meta">{DEFINITION[metric]}</p>
     </section>
   );
 }
-
-// What each metric's bars actually count — stated so a future (unsigned) booking is never read as revenue.
-const DEFINITION: Record<Metric, string> = {
-  revenue: "Actual signed (booked) revenue by event month. Open quotes are not counted here.",
-  quotes: "Quotes created per month (all statuses).",
-  events: "Signed events per month.",
-};
 
 function niceCeil(v: number): number {
   if (v <= 0) return 1;

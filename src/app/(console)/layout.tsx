@@ -7,14 +7,18 @@ import { ConsoleNav } from "@/components/ConsoleNav";
 import { PullHealthBanner } from "@/components/PullHealthBanner";
 import { ExtensionSync } from "@/components/ExtensionSync";
 import { AppHeader } from "@/components/shell/AppHeader";
+import { StatusBar, type StatusIntegration } from "@/components/StatusBar";
 import { GuestShellBar } from "@/components/GuestShellBar";
 import { viewerRole, currentActor, getSession } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 import { getShiftPass, touchShiftPass } from "@/lib/db/repo";
 import { isPassLive, passIdFromUid } from "@/lib/auth/pass";
 import { pullBannerState } from "@/lib/pull/state";
-import { computeConnections, type Connection } from "@/lib/health/connections";
+import { computeConnections, type Connection, type ConnStatus } from "@/lib/health/connections";
 import { refreshConnecteamHealth } from "@/lib/connecteam";
+
+// Connection health status → the connector strip's dot tone.
+const TONE: Record<ConnStatus, StatusIntegration["tone"]> = { ok: "ok", idle: "idle", attention: "warn", off: "idle" };
 
 export default async function ConsoleLayout({ children }: { children: React.ReactNode }) {
   const role = await viewerRole();
@@ -52,11 +56,25 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
     connections = computeConnections();
   }
 
+  // The always-visible connector strip — a curated six from the connection health (restored after #162
+  // folded the per-integration chips behind a click). Scannable green/amber/grey dots + freshness + Fix,
+  // on every page. Owner/admin only (members get an empty list → the strip renders nothing).
+  const pick = (key: string, name: string): StatusIntegration | null => {
+    const c = connections.find((x) => x.key === key);
+    if (!c) return null;
+    return { name, tone: TONE[c.status], note: c.status === "ok" ? undefined : c.headline.toLowerCase(), fixHref: c.fixHref ?? undefined };
+  };
+  const integrations = [
+    pick("routes", "Goodshuffle"), pick("openphone", "Quo"), pick("connecteam", "Connecteam"),
+    pick("instawork", "Instawork"), pick("gps", "GPS"), pick("ignition", "Ignition"),
+  ].filter((x): x is StatusIntegration => x !== null);
+
   return (
     <div className="flex min-h-dvh flex-col lg:flex-row">
       <ConsoleNav role={role} viewerName={actor.label} connections={connections} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <AppHeader role={role} connections={connections} />
+        <AppHeader role={role} />
+        <StatusBar integrations={integrations} />
         {canManage && <PullHealthBanner initial={banner} />}
         {canManage && <ExtensionSync stale={banner != null} />}
         <div className="min-w-0 flex-1">{children}</div>
