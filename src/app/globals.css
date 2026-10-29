@@ -31,6 +31,19 @@
   --color-bar: var(--bar);
   --color-bar-2: var(--bar-2);
   --color-gold: var(--gold);
+  /* Status INDICATOR palette (the small coloured icon in a status chip/mark). Full-opacity, exact
+     approved values in dark; a non-pastel darkened variant in light so the icon keeps ≥3:1 on a light
+     surface. Deliberately SEPARATE from the muted --positive/--attention/--critical/--info palette
+     (which drives charts + legacy text), per the status-system spec. --status-label is the crisp
+     label colour (white on dark, ink on light); --status-symbol is the internal symbol for the
+     exceptional filled badge. */
+  --color-status-ready: var(--status-ready);
+  --color-status-blocked: var(--status-blocked);
+  --color-status-warning: var(--status-warning);
+  --color-status-syncing: var(--status-syncing);
+  --color-status-neutral: var(--status-neutral);
+  --color-status-label: var(--status-label);
+  --color-status-symbol: var(--status-symbol);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -131,6 +144,18 @@
   /* Zoe gold on light — deep bronze-gold so it is legible as a mark AND as text (6.2:1 on white).
      Scope stays the Command Center per the handoff; do not propagate to other screens. */
   --gold: #7a5c12;
+
+  /* Status indicators for LIGHT. The exact dark-mode approved colours fail ≥3:1 as icons on a white
+     surface (amber 2.2:1, green 2.6:1), so light uses DARKENED same-hue variants — not pastel — which
+     is the spec's "resolve via surface/icon construction" route. Icon-on-white ≥3.97:1. The label is
+     dark ink (not white) on light, ~18:1. */
+  --status-ready: #2a7f28;
+  --status-blocked: #c0271c;
+  --status-warning: #8a6400;
+  --status-syncing: #4a52d6;
+  --status-neutral: #5b6070;
+  --status-label: oklch(0.16 0 0);
+  --status-symbol: #ffffff; /* white internal symbol/label on the darkened light fills (≥5:1) */
 }
 
 .dark {
@@ -189,6 +214,17 @@
   /* Informational status (neutral "FYI" — distinct from positive/attention/critical). Light blue,
      ~8:1 on the canvas; kept separate from the categorical chart ramp. */
   --info: #8ab4f0;
+
+  /* Status INDICATOR palette (dark) — the exact approved, full-opacity values. These drive the
+     shared status renderers (StatusBadge/StatusMark/FigureStrip indicator). Icon-on-dark ≥3:1 on
+     every surface; the crisp label is pure white (≥15:1). Separate from the muted --positive etc. */
+  --status-ready: #3DB838;
+  --status-blocked: #D13438;
+  --status-warning: #EAA300;
+  --status-syncing: #7F85F5;
+  --status-neutral: #9397ab;
+  --status-label: #ffffff;
+  --status-symbol: #161826; /* dark internal symbol for the exceptional filled badge */
   /* Zoe gold — the Command Center accent (handoff v3 spec: #d4b36b, same as --attention). Scoped to the
      dashboard content (KPI bars, chart marks, active range/tabs, primary row buttons); do not propagate to
      other screens per the handoff. */

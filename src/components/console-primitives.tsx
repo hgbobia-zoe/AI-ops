@@ -3,6 +3,8 @@
 // verb; table class constants give every data table the same sticky-thead / fixed-layout look.
 
 import type React from "react";
+import { type Tone, STATUS_INDICATOR, STATUS_LABEL, STATUS_DOT } from "@/lib/tone";
+import { STATUS_ICON } from "@/components/ui/status";
 
 // ── Tier ─────────────────────────────────────────────────────────────────────
 export type Tier = "now" | "today" | "attention" | "passive" | "stale" | "done";
@@ -41,20 +43,33 @@ export interface Figure {
   sep?: boolean;
 }
 
-const FIG_TONE: Record<string, string> = { critical: "text-critical", attention: "text-attention", positive: "text-positive", default: "text-foreground" };
+// Status colour lives on a small INDICATOR DOT, never on the figure itself — the value/count stays
+// the high-contrast foreground so money and counts never read as "warning numbers". The figure's own
+// label already names the state, so a dot (not a full icon) is enough disambiguation here.
+const FIG_DOT: Record<"critical" | "attention" | "positive", Tone> = {
+  critical: "critical", attention: "attention", positive: "positive",
+};
 
 export function FigureStrip({ figures }: { figures: Figure[] }): React.JSX.Element {
   return (
     <div className="flex items-center gap-6">
-      {figures.map((f, i) => (
-        <div key={f.label} className="flex items-center gap-6">
-          {f.sep && i > 0 && <span className="h-[30px] w-px bg-border" aria-hidden />}
-          <div className="whitespace-nowrap">
-            <div className={`text-[20px] font-medium leading-tight tabular-nums ${FIG_TONE[f.tone ?? "default"]}`}>{f.value}</div>
-            <div className="mt-0.5 text-[10.5px] uppercase tracking-[0.1em] text-meta">{f.label}</div>
+      {figures.map((f, i) => {
+        const toned = f.tone && f.tone !== "default";
+        return (
+          <div key={f.label} className="flex items-center gap-6">
+            {f.sep && i > 0 && <span className="h-[30px] w-px bg-border" aria-hidden />}
+            <div className="whitespace-nowrap">
+              <div className="flex items-center gap-1.5 text-[20px] font-medium leading-tight tabular-nums text-foreground">
+                {toned && (
+                  <span className={`size-2 shrink-0 rounded-full ${STATUS_DOT[FIG_DOT[f.tone as "critical" | "attention" | "positive"]]}`} aria-hidden />
+                )}
+                <span>{f.value}</span>
+              </div>
+              <div className="mt-0.5 text-[10.5px] uppercase tracking-[0.1em] text-meta">{f.label}</div>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -70,12 +85,18 @@ export function ActionVerb({ primary, secondary, tone = "text-foreground" }: { p
 }
 
 // ── StatusMark ────────────────────────────────────────────────────────────────
-const MARK_DOT: Record<string, string> = { positive: "bg-positive", attention: "bg-attention", critical: "bg-critical", idle: "bg-[var(--bar)]" };
+// Status = a distinct-shape coloured INDICATOR icon + a crisp white (ink on light) label on the
+// inherited surface. Colour is on the icon only; the label is never tinted. `idle` → neutral.
+const MARK_TONE: Record<"positive" | "attention" | "critical" | "idle", Tone> = {
+  positive: "positive", attention: "attention", critical: "critical", idle: "neutral",
+};
 export function StatusMark({ tone, label }: { tone: "positive" | "attention" | "critical" | "idle"; label: string }): React.JSX.Element {
+  const t = MARK_TONE[tone];
+  const Icon = STATUS_ICON[t];
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span className={`size-1.5 rounded-full ${MARK_DOT[tone]}`} />
-      <span className="text-[12px] text-tertiary-text">{label}</span>
+      <Icon className={`size-3.5 shrink-0 ${STATUS_INDICATOR[t]}`} aria-hidden />
+      <span className={`text-[12px] ${STATUS_LABEL}`}>{label}</span>
     </span>
   );
 }

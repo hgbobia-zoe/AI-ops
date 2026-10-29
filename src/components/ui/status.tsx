@@ -1,47 +1,84 @@
-// StatusBadge — the shared status chip (Nocturne). A tinted, bordered (or solid) pill whose TEXT
-// carries the state, so meaning survives without colour. Built on the semantic tone table
-// (src/lib/tone.ts), the one vocabulary the whole console shares.
+// StatusBadge — the shared status renderer (Nocturne, Spectrum-style).
 //
-// For a dot-plus-label marker, use StatusMark from console-primitives (it predates this file and is
-// already used across the blades). This chip fills the gap where a labelled, tinted badge is wanted.
+// A status is a small COLOURED INDICATOR (a distinct-shape icon) + a crisp label on the neutral
+// surface inherited from the row/panel. Colour lives on the indicator; the label is the high-contrast
+// label colour (white on dark, ink on light) and is never tinted to match. Meaning is carried by the
+// icon SHAPE + the text, so it survives colour-blindness and greyscale. No pill, no outline, no pastel
+// for the routine treatment — `filled` is the reserved exceptional case only.
+//
+// Icons come from the existing library (lucide), ~16px, with an 8px gap before the label. The syncing
+// spinner animates ONLY when genuinely active and only under motion-safe.
 // Server-component safe.
 
 import * as React from "react";
+import {
+  CheckCircle2,
+  CircleX,
+  AlertTriangle,
+  Loader2,
+  CircleDashed,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { type Tone, TONE_SOFT, TONE_SOLID } from "@/lib/tone";
+import { type Tone, STATUS_INDICATOR, STATUS_LABEL, STATUS_FILL } from "@/lib/tone";
+
+/** Default distinct-shape icon per tone. check / X-in-circle / triangle / spinner / dashed-circle. */
+export const STATUS_ICON: Record<Tone, LucideIcon> = {
+  positive: CheckCircle2,
+  critical: CircleX,
+  attention: AlertTriangle,
+  info: Loader2,
+  neutral: CircleDashed,
+};
 
 export function StatusBadge({
   tone,
-  variant = "soft",
-  icon,
   children,
-  uppercase,
+  icon,
+  filled = false,
+  animated = false,
+  size = "md",
   className,
 }: {
   tone: Tone;
-  /** "soft" (default): tinted chip + hairline border. "solid": denser tinted pill, no border. */
-  variant?: "soft" | "solid";
-  icon?: React.ReactNode;
   children: React.ReactNode;
-  /** Opt-in dense uppercase severity style; off by default (avoid widespread uppercase). */
-  uppercase?: boolean;
+  /** Override the default per-tone icon. */
+  icon?: LucideIcon;
+  /** Reserved EXCEPTIONAL case: a solid approved-colour fill. Not the routine table treatment. */
+  filled?: boolean;
+  /** Spin the indicator — honoured only for the syncing (info) tone and only under motion-safe. */
+  animated?: boolean;
+  size?: "sm" | "md";
   className?: string;
 }): React.JSX.Element {
-  const base =
-    variant === "solid"
-      ? "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium"
-      : "inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium";
+  const Icon = icon ?? STATUS_ICON[tone];
+  const iconSize = size === "sm" ? "size-3.5" : "size-4";
+  const labelSize = size === "sm" ? "text-[11.5px]" : "text-[12.5px]";
+  const spin = animated && tone === "info";
+
+  if (filled) {
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 font-medium",
+          labelSize,
+          STATUS_FILL[tone],
+          className
+        )}
+      >
+        <Icon className={cn(iconSize, spin && "motion-safe:animate-spin")} aria-hidden />
+        {children}
+      </span>
+    );
+  }
+
   return (
-    <span
-      className={cn(
-        base,
-        variant === "solid" ? TONE_SOLID[tone] : TONE_SOFT[tone],
-        uppercase && "uppercase tracking-wide",
-        className
-      )}
-    >
-      {icon}
-      {children}
+    <span className={cn("inline-flex items-center gap-2 font-medium", labelSize, className)}>
+      <Icon
+        className={cn(iconSize, "shrink-0", STATUS_INDICATOR[tone], spin && "motion-safe:animate-spin")}
+        aria-hidden
+      />
+      <span className={STATUS_LABEL}>{children}</span>
     </span>
   );
 }

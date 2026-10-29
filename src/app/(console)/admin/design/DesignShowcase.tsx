@@ -6,14 +6,14 @@
 // No product data: everything here is static fixture content.
 
 import * as React from "react";
-import { Tent, AlertTriangle, CheckCircle2, Inbox, Sun, Moon, Clock3 } from "lucide-react";
+import { Tent, Sun, Moon, Clock3, Inbox, Plug } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status";
 import { Surface } from "@/components/ui/surface";
 import { PageHeader, Toolbar } from "@/components/ui/page-header";
 import { Metric, MetricGrid } from "@/components/ui/metric";
-import { EmptyState, ErrorState, StaleBadge } from "@/components/ui/states";
+import { EmptyState, ErrorState, StatusBanner, StaleBadge } from "@/components/ui/states";
 import {
   OverviewLayout,
   WorkSurfaceLayout,
@@ -34,6 +34,7 @@ import {
   compactRowCls,
 } from "@/components/console-primitives";
 import { CHART_CATEGORY, CHART_STATUS, CHART_ACCENT } from "@/lib/chartTokens";
+import type { Tone } from "@/lib/tone";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -63,8 +64,16 @@ function Swatch({ name, varName, note }: { name: string; varName: string; note?:
   );
 }
 
+const WORKERS: { n: string; h: string; r: string; tone: Tone; s: string }[] = [
+  { n: "Marquis Alexander-Washington", h: "38.0", r: "$22/hr", tone: "positive", s: "Ready" },
+  { n: "Dana R.", h: "41.5", r: "$24/hr", tone: "attention", s: "Requires review" },
+  { n: "Theo P.", h: "—", r: "missing", tone: "critical", s: "Blocked" },
+  { n: "Priya N.", h: "12.0", r: "$20/hr", tone: "info", s: "Syncing" },
+];
+
 export function DesignShowcase(): React.JSX.Element {
   const [dark, setDark] = React.useState(true);
+  const [selected, setSelected] = React.useState("Marquis Alexander-Washington");
   React.useEffect(() => {
     const root = document.documentElement;
     const had = root.classList.contains("dark");
@@ -114,23 +123,48 @@ export function DesignShowcase(): React.JSX.Element {
           </Surface>
         </Section>
 
-        <Section title="Status colours (semantic, kept out of category charts)">
-          <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge tone="positive" icon={<CheckCircle2 className="size-3.5" />}>Ready</StatusBadge>
-            <StatusBadge tone="attention" icon={<AlertTriangle className="size-3.5" />}>Requires review</StatusBadge>
+        <Section title="Status — coloured indicator + crisp label (colour on the icon, never the label)">
+          <Surface className="flex flex-wrap items-center gap-x-6 gap-y-3">
+            <StatusBadge tone="positive">Ready</StatusBadge>
             <StatusBadge tone="critical">Blocked</StatusBadge>
-            <StatusBadge tone="info">Syncing</StatusBadge>
+            <StatusBadge tone="attention">Requires review</StatusBadge>
+            <StatusBadge tone="info" animated>Syncing</StatusBadge>
             <StatusBadge tone="neutral">No data</StatusBadge>
-            <StatusBadge tone="critical" variant="solid" uppercase>Critical</StatusBadge>
-            <StatusBadge tone="attention" variant="solid" uppercase>High</StatusBadge>
-          </div>
-          <div className="flex flex-wrap items-center gap-4">
+          </Surface>
+          <div className="flex flex-wrap items-center gap-6">
             <StatusMark tone="positive" label="Live" />
             <StatusMark tone="attention" label="Stale" />
             <StatusMark tone="critical" label="Down" />
             <StatusMark tone="idle" label="Idle" />
             <StaleBadge><Clock3 className="size-3" /> as of 2h ago</StaleBadge>
           </div>
+          <div className="space-y-2">
+            <div className="text-[12px] text-meta">Long label wraps cleanly; filled is the reserved exceptional case only:</div>
+            <div className="flex flex-wrap items-center gap-4">
+              <StatusBadge tone="attention">Requires review — unmatched Gusto worker on an international contract</StatusBadge>
+              <StatusBadge tone="critical" filled>SLA breached</StatusBadge>
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Blocking banner (states the problem once, with the next action)">
+          <StatusBanner
+            tone="critical"
+            title="2 workers blocked — payroll can't be approved"
+            action={<Button size="sm">Resolve in review</Button>}
+          >
+            A blocking issue (missing Gusto mapping) prevents this run. Map or exclude the blocked
+            workers, then re-check readiness. Colour stays on the icon + the hairline edge — the banner
+            itself is the neutral surface.
+          </StatusBanner>
+          <StatusBanner
+            tone="info"
+            title="Sync in progress"
+            icon={<span className="inline-flex size-5 items-center justify-center"><span className="size-2 rounded-full bg-status-syncing motion-safe:animate-pulse" /></span>}
+          >
+            Pulling Connecteam hours and reconciling workers. This updates the readiness state when it
+            finishes.
+          </StatusBanner>
         </Section>
 
         <Section title="Typography scale">
@@ -169,7 +203,7 @@ export function DesignShowcase(): React.JSX.Element {
           </div>
         </Section>
 
-        <Section title="Metric tiles">
+        <Section title="Metric tiles — values stay white; colour goes on the dot, not the number">
           <MetricGrid>
             <Metric label="Total hours" value="162.5 h" sub="actual · from Connecteam" />
             <Metric label="Est. ready payroll" value="$48,250" sub="12 ready workers" tone="positive" />
@@ -186,42 +220,61 @@ export function DesignShowcase(): React.JSX.Element {
           />
         </Section>
 
-        <Section title="Compact table (bounded horizontal scroll)">
+        <Section title="Compact table — hover, selected row, keyboard-focusable action">
           <div className={compactTableFrameCls}>
-            <table className={compactTableCls} style={{ minWidth: 560 }}>
+            <table className={compactTableCls} style={{ minWidth: 640 }}>
               <thead>
                 <tr className={compactTheadRowCls}>
                   <th className={compactThCls}>Worker</th>
                   <th className={`${compactThCls} text-right`}>Hours</th>
                   <th className={`${compactThCls} text-right`}>Rate</th>
                   <th className={compactThCls}>Status</th>
+                  <th className={`${compactThCls} text-right`}>Action</th>
                 </tr>
               </thead>
               <tbody>
-                {[
-                  { n: "Marquis A.", h: "38.0", r: "$22/hr", t: "positive" as const, s: "Ready" },
-                  { n: "Dana R.", h: "41.5", r: "$24/hr", t: "attention" as const, s: "Review" },
-                  { n: "Theo P.", h: "—", r: "missing", t: "critical" as const, s: "Blocked" },
-                ].map((w) => (
-                  <tr key={w.n} className={compactRowCls}>
-                    <td className={`${compactTdCls} font-medium text-foreground`}>{w.n}</td>
-                    <td className={`${compactTdCls} text-right tabular-nums`}>{w.h}</td>
-                    <td className={`${compactTdCls} text-right tabular-nums`}>{w.r}</td>
-                    <td className={compactTdCls}>
-                      <StatusBadge tone={w.t} variant="solid">{w.s}</StatusBadge>
-                    </td>
-                  </tr>
-                ))}
+                {WORKERS.map((w) => {
+                  const isSel = selected === w.n;
+                  return (
+                    <tr
+                      key={w.n}
+                      aria-selected={isSel}
+                      className={`${compactRowCls} ${isSel ? "bg-row-hover ring-1 ring-inset ring-ring/40" : ""}`}
+                    >
+                      <td className={`${compactTdCls} font-medium text-foreground`}>{w.n}</td>
+                      <td className={`${compactTdCls} text-right tabular-nums`}>{w.h}</td>
+                      <td className={`${compactTdCls} text-right tabular-nums`}>{w.r}</td>
+                      <td className={compactTdCls}>
+                        <StatusBadge tone={w.tone} animated={w.tone === "info"} size="sm">{w.s}</StatusBadge>
+                      </td>
+                      <td className={`${compactTdCls} text-right`}>
+                        <Button size="xs" variant="outline" onClick={() => setSelected(w.n)}>
+                          {isSel ? "Selected" : "Select"}
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
+          <p className="text-[11px] text-meta">Tab to the Select buttons to see the focus ring; the selected row keeps a subtle inset ring + row-hover fill.</p>
         </Section>
 
         <Section title="Empty / error states">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <EmptyState icon={<Inbox className="size-5" />} title="Nothing to review yet" body="No worker hours for this period. Run a sync to pull hours." action={<Button size="sm">Sync hours</Button>} />
-            <ErrorState icon={<AlertTriangle className="size-5" />} title="Connecteam unavailable" body="The time source did not respond. This is not an empty set — retry the pull." />
+            <ErrorState tone="attention" title="Connecteam unavailable" body="The time source did not respond. This is not an empty set — retry the pull." action={<Button size="sm" variant="outline">Retry</Button>} />
           </div>
+        </Section>
+
+        <Section title="Integration states">
+          <Surface className="flex flex-wrap items-center gap-x-8 gap-y-3">
+            <span className="inline-flex items-center gap-2"><Plug className="size-4 text-meta" /><StatusMark tone="positive" label="Goodshuffle — live" /></span>
+            <span className="inline-flex items-center gap-2"><Plug className="size-4 text-meta" /><StatusMark tone="attention" label="Connecteam — stale 2h" /></span>
+            <span className="inline-flex items-center gap-2"><Plug className="size-4 text-meta" /><StatusMark tone="critical" label="Gusto — disconnected" /></span>
+            <span className="inline-flex items-center gap-2"><Plug className="size-4 text-meta" /><StatusMark tone="idle" label="Instawork — idle" /></span>
+          </Surface>
         </Section>
 
         <Section title="Layout patterns">
@@ -269,7 +322,7 @@ export function DesignShowcase(): React.JSX.Element {
               </div>
             </div>
             <div>
-              <div className="mb-1.5 text-[12px] text-meta">Semantic status marks + accent</div>
+              <div className="mb-1.5 text-[12px] text-meta">Semantic status marks + accent (separate from the status-indicator palette)</div>
               <div className="flex gap-2">
                 {Object.entries(CHART_STATUS).map(([k, c]) => (
                   <div key={k} className="flex flex-col items-center gap-1">

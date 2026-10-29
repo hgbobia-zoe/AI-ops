@@ -60,11 +60,36 @@ appears only in the status layer**, because status colour means something.
 | Status: positive / attention / critical / info | `--positive` / `--attention` / `--critical` / `--info` | `text-positive`, `bg-attention/10`, … |
 | Chart bars / neutral marks | `--bar`, `--bar-2`, `--chart-1..5` | `bg-bar`, `bg-chart-1` |
 
-### Tone vocabulary (`src/lib/tone.ts`)
+### Status system (`src/lib/tone.ts`) — Spectrum-style indicators
 
-`Tone = "positive" | "attention" | "critical" | "info" | "neutral"`. Maps: `TONE_TEXT`, `TONE_DOT`,
-`TONE_SOFT` (bordered chip), `TONE_SOLID` (dense pill). Use these instead of re-typing the class
-strings so "blocked" reads the same everywhere.
+`Tone = "positive" | "attention" | "critical" | "info" | "neutral"`. **A status is a small coloured
+INDICATOR (a distinct-shape icon) + a crisp label on the neutral surface.** Colour lives on the
+indicator; the label is the high-contrast label colour and is **never tinted to the tone**. No pill
+background, no coloured outline, no pastel tint for the routine treatment. Meaning is carried by icon
+SHAPE + text, so it survives colour-blindness and greyscale.
+
+| Map | Use |
+| --- | --- |
+| `STATUS_INDICATOR[tone]` | `text-status-*` — colour the indicator icon/dot (the only place colour goes) |
+| `STATUS_DOT[tone]` | `bg-status-*` — the small dot for figure strips / metric tiles |
+| `STATUS_LABEL` | `text-status-label` — the crisp label (white on dark, ink on light); never tinted |
+| `STATUS_FILL[tone]` | reserved **exceptional** filled badge only (solid fill + internal symbol); not routine |
+
+Default icons (lucide, ~16px, 8px gap): Ready = `CheckCircle2`, Blocked = `CircleX`, Requires review =
+`AlertTriangle`, Syncing = `Loader2` (spins only when `animated` + motion-safe), No data = `CircleDashed`.
+
+**Status-indicator palette (`--status-*`) is separate from `--positive/--attention/--critical/--info`.**
+The `--status-*` tokens are the exact approved, full-opacity indicator colours; the muted `--positive`
+family keeps its own jobs (charts + legacy coloured text/chips in not-yet-migrated blades). Don't mix.
+
+| Tone | Dark (exact approved) | Light (darkened, non-pastel) |
+| --- | --- | --- |
+| Ready / positive | `#3DB838` | `#2a7f28` |
+| Blocked / critical | `#D13438` | `#c0271c` |
+| Requires review / attention | `#EAA300` | `#8a6400` |
+| Syncing / info | `#7F85F5` | `#4a52d6` |
+| No data / neutral | `#9397ab` | `#5b6070` |
+| Label | `#FFFFFF` | ink `oklch(0.16)` |
 
 ---
 
@@ -94,6 +119,15 @@ over their surface. Target: **4.5:1** normal text, **3:1** large text / meaningf
 | `positive #147a43` / `attention #8a5a00` / `critical #bf2d1c` / `info #2060c0` on white | 5.4 / 5.9 / 5.8 / 6.0 |
 | status text over its `/10` tint (chip) | 4.6–5.4 |
 | `gold #7a5c12` on white | 6.2 |
+
+**Status indicators** (icons are graphical objects → 3:1; labels are text → 4.5:1):
+
+| | Dark icon-on-surface | Dark white label | Light icon-on-white | Light ink label |
+| --- | --- | --- | --- | --- |
+| Ready / Blocked / Review / Syncing / No-data | 3.1–8.2 | 15–17.6 | 4.3–6.3 | 17.8–19.4 |
+
+Filled (exceptional) badge internal symbol/label: ≥4.9:1 every tone/theme (dark-mode blocked pins its
+label to white — its dark symbol would be only 3.57:1).
 
 Decorative hairlines (`--row-rule`, `--grid-rule`) are intentionally below 3:1 — they are not
 meaningful boundaries; the meaningful boundary token is `--border`.
@@ -133,8 +167,12 @@ reserve small-caps for column headers and short severity pills.
 - **`Toolbar`** `{ justify? }` — a wrapping control row.
 - **`Surface`** `{ pad?, raised?, border? }` — the flat `.surface border` panel.
 - **`Metric` / `MetricGrid`** — stat tiles; `tone` emphasises a value.
-- **`StatusBadge`** `{ tone, variant: "soft"|"solid", icon?, uppercase? }` — the status chip.
-- **`EmptyState` / `ErrorState` / `StaleBadge`** — ZERO vs UNAVAILABLE vs STALE, kept distinct.
+- **`StatusBadge`** `{ tone, icon?, filled?, animated?, size? }` — indicator icon + crisp label (the
+  routine status renderer; `filled` is the reserved exceptional case).
+- **`EmptyState` / `ErrorState` / `StatusBanner` / `StaleBadge`** — ZERO vs UNAVAILABLE vs BLOCKED vs
+  STALE, kept distinct. `StatusBanner` is the shared blocking banner (neutral surface + coloured icon +
+  white heading + explanation + next action + optional narrow status-coloured left edge; never a bright
+  fill).
 - **Layouts:** `BladeMain` (page container), `OverviewLayout`, `WorkSurfaceLayout`,
   `TimelineLayout` + `TimelineItem`, `FocusFormLayout`.
 - **From `console-primitives`:** `StatusMark` (dot + label), `FigureStrip`, `ActionVerb`,
@@ -194,5 +232,15 @@ the `@theme` utility mapping, Inter via `next/font`, the shadcn base-nova primit
    in light), added the compact-table constant set.
 6. The shared **console `not-found.tsx`** rebuilt on these primitives (the representative migration),
    and the **`/admin/design`** showcase.
+
+### Status-system refinement (follow-up)
+The routine status treatment is now the Spectrum-style **coloured indicator + crisp label on the neutral
+surface** (not pastel chips / coloured text / coloured numbers). The shared renderers were migrated so
+consumers inherit it: `StatusBadge` (indicator model), `StatusMark` (icon + white label, was a dot),
+`FigureStrip` + `Metric` (values stay white; colour moved to a small indicator dot). Added the
+`--status-*` indicator palette and `StatusBanner` (shared blocking banner). The muted `--positive`
+family and `CHART_STATUS` were left untouched (charts/legacy). Per-blade bespoke status styling (e.g.
+finance's local `StatusBadge`, payroll's inline `REVIEW_TONE`/`SEV_TONE`) is NOT migrated here — each
+blade's own prompt should adopt the shared renderers.
 
 Later prompts: consume these primitives and tokens; do not add competing ones or edit `globals.css`.
