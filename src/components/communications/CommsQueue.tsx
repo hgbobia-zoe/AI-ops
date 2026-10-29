@@ -165,7 +165,7 @@ export function CommsQueue({ showMoney }: { showMoney: boolean }): React.JSX.Ele
         }
       />
 
-      <div className="surface mb-4 border border-border p-3">
+      <div className="surface mb-4 overflow-x-auto border border-border p-3">
         <FigureStrip figures={figures} />
       </div>
 
