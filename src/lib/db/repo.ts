@@ -242,6 +242,16 @@ export function getTruckIdsWithRoutesOnDate(date: string): string[] {
   ).map((r) => r.truck_id);
 }
 
+/** The next calendar day strictly after `afterYmd` that has at least one route, or null if none is
+ *  scheduled ahead. Powers the Dispatch empty-day "next operational day" link — honest: it returns a
+ *  date only when one really exists in the pulled data. */
+export function getNextRouteDate(afterYmd: string): string | null {
+  const row = getDb()
+    .prepare("SELECT MIN(date) AS d FROM routes WHERE date > ?")
+    .get(afterYmd) as { d: string | null } | undefined;
+  return row?.d ?? null;
+}
+
 /** A stop on a route scheduled for a given calendar day — a precise delivery/pickup anchor for the
  *  route-aware delivery pricing engine (street address + planned window + truck). Only routes that are
  *  still live (not closed/done) are included; a closed route is history, not a shareable future trip. */
