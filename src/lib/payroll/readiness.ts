@@ -13,7 +13,7 @@ import { getPayrollConfig } from "./config";
 import { getTimesheetDetail, getPlannedHours, type TimesheetUserDetail } from "@/lib/connecteam";
 import { gustoConfigured } from "./gusto";
 import { gustoSnapshotFresh } from "./gustoSnapshot";
-import { upsertException, listExceptions, resolveException, getWorkerByConnecteamId } from "./store";
+import { upsertException, listExceptions, resolveException, getWorkerByConnecteamId, listPeriodExclusions } from "./store";
 import type {
   PayPeriod, PayrollReadiness, ReadinessException, ReadinessStatus, ReadinessWorker,
   ReadinessIssueKind, ExceptionSeverity, UnifiedWorker,
@@ -94,9 +94,12 @@ export function classifyReadinessWorker(f: ReadinessFacts, ctx: ReadinessContext
       "Map this worker to Gusto in the Workers tab.", "reconciliation"));
   }
   if ((hours ?? 0) > 0 && f.payRate == null) {
-    issues.push(mkException(ctx.period, who, "NO_PAY_RATE", "BLOCKING",
-      `${f.name} has hours but no pay rate on file.`,
-      "Set the pay rate in Connecteam/Gusto, then re-sync.", "reconciliation"));
+    // NOT a blocker (policy, aligned with review.ts): Gusto applies its OWN stored rate when the hours are
+    // pushed, so a missing app rate only means the in-app ESTIMATE is unavailable — it never stops payroll.
+    // Classed EXCEPTION (an anomaly to note) so readiness and review agree a missing rate does not block.
+    issues.push(mkException(ctx.period, who, "NO_PAY_RATE", "EXCEPTION",
+      `${f.name} has hours but no pay rate on file — the estimate is unavailable (Gusto applies its own rate on the push).`,
+      "Set the pay rate in Connecteam/Gusto if you want an in-app estimate.", "reconciliation"));
   }
   // Approval is the sync prerequisite: unapproved hours must NOT be exported.
   if (f.approvalKnownForWorker && (f.unapprovedHours ?? 0) > 0) {
@@ -242,6 +245,12 @@ function buildSummary(
 
 // ── Live assessment + persistence ─────────────────────────────────────────────────────────────────────
 
+/** Is this worker pulled out of the run? True when permanently excluded (hr_workers.excluded) OR skipped for
+ *  THIS period (a key in the per-period exclusions). Such a worker is never a readiness blocker. Pure. */
+export function isExcludedFromRun(excluded: boolean | undefined, key: string, periodExclusions: Map<string, unknown>): boolean {
+  return !!excluded || periodExclusions.has(key);
+}
+
 /** Gather the live facts for a period and classify readiness. Reads only; never mutates hours or payroll. */
 export async function assessReadiness(period: PayPeriod, opts?: Partial<ReadinessOptions>): Promise<PayrollReadiness> {
   const cfg = getPayrollConfig();
@@ -256,7 +265,13 @@ export async function assessReadiness(period: PayPeriod, opts?: Partial<Readines
     getPlannedHours(period.start, period.end),
   ]);
 
-  const facts: ReadinessFacts[] = workers.map((w: UnifiedWorker) => {
+  // Drop workers the human pulled out of this run on the Review tab (permanent hr_workers.excluded, OR a
+  // per-period skip). An excluded worker is not being paid, so it must not surface as a readiness blocker
+  // (e.g. "not mapped to Gusto" / "unapproved time"). Everything else below is unchanged.
+  const periodExclusions = listPeriodExclusions(period.start, period.end);
+  const included = workers.filter((w) => !isExcludedFromRun(w.excluded, w.key, periodExclusions));
+
+  const facts: ReadinessFacts[] = included.map((w: UnifiedWorker) => {
     const detail: TimesheetUserDetail | undefined = w.connecteamUserId != null ? tsDetail.byUser.get(w.connecteamUserId) : undefined;
     const plannedHours = w.connecteamUserId != null && planned.ok ? planned.hours.get(w.connecteamUserId) ?? null : null;
     return {

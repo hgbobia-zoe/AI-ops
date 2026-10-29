@@ -2,26 +2,44 @@
 
 This is the office-machine half of **Website Studio**. The AI-OPS app (Zoe Dispatch, on Fly) only *queues*
 plain-English website-change requests from the marketing team. This runner drains that queue, makes the
-change with the **Claude Agent SDK** against the **separate website repo**, renders + screenshots it on the
-**local DevKinsta site** for a human to preview, and — only after a human approves in the app — opens a PR.
+change with the **Claude Agent SDK** against the **separate website repo** on a **non-master working branch**,
+renders + screenshots that branch on the **local DevKinsta site** for a human to preview, and — only after a
+human approves in the app — opens a PR into **master** and **merges** it (immediately by default, since the
+in-app approval is the only gate), which deploys to the live site.
 
 It mirrors how the office machine already drains the Goodshuffle `gs_outbox` via the Auto-Pull: the server
 can't do this work, so a machine you control does.
 
+## Branch / merge model
+
+- **Target repo:** `WEBSITE_REPO_SLUG` (default **`hgbobia-zoe/zoe-event-rentals`**). Every `gh` call passes
+  `--repo <slug>`, so the PR + merge always act on this repo regardless of the local checkout's `origin`.
+- **Working branch:** `${WEBSITE_WORKING_BRANCH_PREFIX}${jobId}` (default **`website-studio/<jobId>`**) — a
+  deterministic, clearly-**non-master** branch. The app derives + displays the SAME name.
+- **Deploy branch:** `WEBSITE_DEPLOY_BRANCH` (default **`master`**) — the PR base. A push to `master`
+  auto-deploys to **Kinsta** (GitHub Actions on push to master), so **master = production/live**.
+- **Approval = go-live.** The marketer approves the *rendered preview*; the runner then merges to master
+  **immediately** (the in-app approval is the only gate). Set `WEBSITE_AUTO_MERGE=1` to instead prefer GitHub
+  native auto-merge so required checks gate the deploy.
+
 ## What it does, one job at a time (single-flight)
 
 1. Claim the next queued job from the app.
-2. In the website repo: fetch + hard-reset the default branch, then cut `website-studio/<jobId>`.
+2. In the website repo: fetch the deploy branch, then cut the working branch off `origin/<deploy branch>`.
 3. Run the Claude Agent SDK with the marketer's prompt **plus the edit context** to edit the repo (confined
    to the repo dir). See **Edit context** below.
-4. Commit the change **on the branch** (never on the default branch).
+4. Commit the change **on the working branch** (never on the deploy branch).
 5. Deploy the branch's working tree to the **local DevKinsta** WordPress site (local preview only).
 6. Screenshot the changed page(s) at **desktop (1280w)** and **mobile (390w)** with Playwright, upload them +
    the summary + the changed-file list, and set the job to **`preview`**.
 7. Wait for the human decision in the app:
-   - **Approved** → push the branch + `gh pr create` (base = the website repo's default branch) → mark `done`
-     with the PR URL.
-   - **Discarded** → delete the local branch, restore the local site to a clean default branch.
+   - **Approved** → push the working branch + `gh pr create --repo <slug> --base <deploy branch>`, then
+     **merge** it into the deploy branch. **Default:** an immediate `gh pr merge --squash` (the in-app approval
+     is the only gate). With `WEBSITE_AUTO_MERGE=1` it instead does `gh pr merge --auto --squash` (GitHub
+     native auto-merge — the PR merges once required checks pass), falling back to an immediate
+     `gh pr merge --squash` if the repo has no auto-merge / required checks configured. The merge to master is
+     what triggers the Kinsta deploy. → mark `done` with the PR URL + a merge note.
+   - **Discarded** → delete the local branch, restore the local site to a clean deploy branch.
 
 ### Edit context (browse-and-edit)
 
@@ -46,8 +64,11 @@ regardless of environment — the environment only tells the agent which page th
   `ANTHROPIC_API_KEY` + `WEBSITE_RUNNER_TOKEN`). The **runner** owns all git, build/preview, and PR operations;
   the agent only edits website source under the repo dir. If a theme build step is ever needed for preview,
   the runner runs it as a fixed command in its deploy step — never the agent.
-- The runner **never merges a PR, never pushes to the default branch, and never deploys.** It is PR-only; a
-  human reviews and merges. Nothing goes live from here.
+- The runner **never commits to or pushes the deploy branch (master) directly.** The ONLY path to master is
+  a human **approving the rendered preview** in the app, which lets the runner open the PR and merge it. By
+  default the merge is **immediate** (the in-app approval is the only gate). Queued/discarded jobs never touch
+  master. Set `WEBSITE_AUTO_MERGE=1` if you instead want the runner to prefer GitHub native auto-merge so
+  required checks still gate the deploy.
 - One job at a time. A single job failing is caught, marked `failed` in the app, and the loop continues.
 - Secrets come from the environment, never hardcoded.
 
@@ -60,11 +81,16 @@ regardless of environment — the environment only tells the agent which page th
    npm install
    npx playwright install chromium
    ```
-3. **Authenticate `gh`** for the *website* repo so the runner can open PRs:
+3. **Authenticate `gh`** for the *website* repo so the runner can open **and merge** PRs:
    ```
    gh auth login
    ```
-   (Run from the website repo once, or ensure `gh` has access to its remote.)
+   The authenticated account needs **write access** to `hgbobia-zoe/zoe-event-rentals` (to merge into
+   `master`). By default the runner merges immediately on approval. Only if you opt into GitHub **native
+   auto-merge** (`WEBSITE_AUTO_MERGE=1`) do you also need to enable "Allow auto-merge" in that repo's settings
+   and configure at least one required status check / branch protection on `master`; otherwise the runner
+   falls back to an immediate merge. The local checkout's `origin` must be the same repo as
+   `WEBSITE_REPO_SLUG` (the runner warns on startup if they disagree).
 4. **Docker Desktop + DevKinsta running**, with the website repo imported, so the local site is reachable
    (see the `website-devkinsta-local` note). The preview step needs the local site up.
 
@@ -81,6 +107,11 @@ regardless of environment — the environment only tells the agent which page th
 
 | Var | Default | What |
 |-----|---------|------|
+| `WEBSITE_REPO_SLUG` | `hgbobia-zoe/zoe-event-rentals` | The GitHub repo the PR + merge target (`--repo`). Keep in sync with the app's `WEBSITE_REPO_SLUG`. |
+| `WEBSITE_DEPLOY_BRANCH` | `master` | The PR base / deploy branch (push → Kinsta). Empty auto-detects the checkout's default branch. |
+| `WEBSITE_WORKING_BRANCH_PREFIX` | `website-studio` | Prefix for the non-master working branch (`<prefix>/<jobId>`). Must match the app's so the displayed branch is correct. |
+| `WEBSITE_AUTO_MERGE` | *(unset)* → immediate merge | **Default (unset): immediate `gh pr merge --squash` on approval** — the in-app approval is the only gate. Set to a truthy value (`1`/`true`/`yes`/`on`) to opt into GitHub native auto-merge (merge when required checks pass, falling back to immediate). `0`/`false`/`no`/`off` is the same as unset. |
+| `WEBSITE_MERGE_METHOD` | `squash` | Merge method for the PR: `squash`, `merge`, or `rebase`. |
 | `WEBSITE_PREVIEW_URL` | *(none)* | Base URL the local DevKinsta site is served at (e.g. `http://zoeeventsdmv.local`). **Needed for screenshots** — without it the preview has no images. |
 | `DEVKINSTA_CONTAINER` | *(none)* | Docker container name/id of the DevKinsta WordPress container. Used by the `docker cp` fallback **only if the website repo has no `sync.ps1`**. |
 | `DEVKINSTA_WP_PATH`   | `/var/www/html` | WordPress root inside the container, for the `docker cp` fallback. |
@@ -117,6 +148,7 @@ Keep it running whenever marketing might submit requests. If it isn't running, j
   being on).
 - Serve a real **shareable / interactive staging URL** instead of screenshots. Screenshots are the Phase-1
   preview; a live preview tunnel is Phase 2.
-- In-app code-diff view, multi-turn follow-up on a job, and auto-deploy are also out of scope for Phase 1.
+- In-app code-diff view and multi-turn follow-up on a job are still out of scope. (Auto-merge-to-master on
+  approval — and therefore auto-deploy — is now wired; see the branch/merge model above.)
 - **Security:** run the agent in a sandbox/container or as a lower-privilege user so even file writes can't
   escape the repo (the file tools run under `bypassPermissions`, so they can still write by absolute path).

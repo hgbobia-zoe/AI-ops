@@ -1,25 +1,40 @@
-// Website Studio — office-machine runner (Phase 1).
+// Website Studio — office-machine runner.
+//
+// BRANCH / MERGE MODEL (see src/lib/website/config.ts — the app shares these constants to DISPLAY the branch):
+//   • Target repo:    WEBSITE_REPO_SLUG   (default "hgbobia-zoe/zoe-event-rentals"). All `gh` calls pass
+//                     --repo <slug> so the PR + merge always act on THIS repo, not whatever the local
+//                     checkout's origin happens to be.
+//   • Working branch: WEBSITE_WORKING_BRANCH_PREFIX + <jobId>  (default "website-studio/<jobId>") — the
+//                     deterministic, clearly-NON-master branch every change lands on.
+//   • Deploy branch:  WEBSITE_DEPLOY_BRANCH  (default "master") — the PR base. A push to master auto-deploys
+//                     to Kinsta (GitHub Actions on push to master), so master = production/live.
 //
 // WHAT IT DOES, one job at a time (single-flight — the local DevKinsta site reflects the current job):
 //   1. Claim the next queued job from the app         (GET  <APP_URL>/api/website/runner/next)
-//   2. In WEBSITE_REPO_PATH, fetch + hard-reset the default branch, then cut website-studio/<jobId>
+//   2. In WEBSITE_REPO_PATH, fetch the deploy branch, then cut the working branch off origin/<deploy branch>
 //   3. Run the Claude Agent SDK (centralized ANTHROPIC_API_KEY) with the marketer's prompt to edit the repo
-//   4. Commit the change on the branch (NEVER on the default branch)
+//   4. Commit the change on the WORKING branch (NEVER on the deploy branch)
 //   5. Apply the branch's working tree to the LOCAL DevKinsta WordPress site (sync.ps1 if present, else
 //      docker cp) — LOCAL PREVIEW ONLY, never the live site
 //   6. Screenshot the changed page(s) at desktop (1280w) + mobile (390w) with Playwright, upload them +
 //      the summary + the changed-file list, and set the job to `preview`  (POST .../runner/artifact, .../runner/update)
 //   7. WAIT for the human decision (poll GET .../runner/job?id=<jobId>):
-//        approved  → push the branch + `gh pr create` (base = default branch) → set `done` with the PR url
-//        discarded → delete the local branch, restore the local site to a clean default branch → (already `discarded`)
+//        approved  → push the working branch + `gh pr create` (base = deploy branch), then merge to the deploy
+//                    branch. DEFAULT = an IMMEDIATE squash-merge (in-app approval is the only gate). Set
+//                    WEBSITE_AUTO_MERGE=1 to instead enable GitHub native auto-merge (merge when required
+//                    checks pass), falling back to an immediate merge if the repo has no auto-merge/required
+//                    checks. The merge to master is what triggers the Kinsta deploy. → set `done` with the PR url.
+//        discarded → delete the local branch, restore the local site to a clean deploy branch → (already `discarded`)
 //
 // GUARDRAILS (this edits real website code driven by non-engineers):
 //   • The agent is FILE-OPS ONLY — Read/Write/Edit/Glob/Grep, deliberately NO Bash/shell. Under
 //     bypassPermissions nobody approves tool calls and prompts come from non-engineers (possibly with text
 //     injected via files the agent reads), so a shell would be arbitrary command execution on this machine
 //     (whose env holds ANTHROPIC_API_KEY + WEBSITE_RUNNER_TOKEN). The RUNNER owns git, the build/preview
-//     deploy, and PRs — the agent just edits website source under cwd=WEBSITE_REPO_PATH.
-//   • The runner NEVER merges a PR, NEVER pushes to the default branch, and NEVER deploys. PR-only.
+//     deploy, PRs, and the merge — the agent just edits website source under cwd=WEBSITE_REPO_PATH.
+//   • The runner NEVER commits to / pushes the deploy branch directly. The ONLY way a change reaches master is
+//     a human APPROVING the preview in the app, which lets the runner open the PR and merge it (immediately by
+//     default; WEBSITE_AUTO_MERGE=1 instead gates the merge on GitHub checks). Discarded/queued jobs never touch master.
 //   • One job at a time. One job failing never crashes the loop — it is marked `failed` and the loop continues.
 //   • Secrets (ANTHROPIC_API_KEY, WEBSITE_RUNNER_TOKEN) are read from the environment, never hardcoded.
 //
@@ -50,6 +65,26 @@ const MODEL = process.env.WEBSITE_MODEL || "claude-opus-4-8";
 const POLL_MS = Number(process.env.POLL_INTERVAL_MS || 15000);
 const APPROVAL_TIMEOUT_MS = Number(process.env.APPROVAL_TIMEOUT_MS || 24 * 60 * 60 * 1000); // give humans a day
 
+// ── Branch / merge model (keep in lockstep with src/lib/website/config.ts so the app displays the SAME
+//    working branch the runner cuts). ──────────────────────────────────────────
+// The target GitHub repo. `master` on this repo auto-deploys to Kinsta, so master = production. All gh calls
+// pass --repo <slug> so the PR + merge always act on THIS repo regardless of the local checkout's origin.
+const REPO_SLUG = (process.env.WEBSITE_REPO_SLUG || "hgbobia-zoe/zoe-event-rentals").trim();
+// The deploy target / PR base (what deploys to Kinsta on push). Empty => auto-detect the checkout's default.
+const DEPLOY_BRANCH = (process.env.WEBSITE_DEPLOY_BRANCH || "master").trim();
+// The clearly-non-master working-branch prefix; full name = `${prefix}${jobId}`.
+const WORKING_BRANCH_PREFIX = ((process.env.WEBSITE_WORKING_BRANCH_PREFIX || "website-studio").trim().replace(/\/+$/, "")) + "/";
+// On approval, the DEFAULT (WEBSITE_AUTO_MERGE unset) is an IMMEDIATE squash-merge to the deploy branch — the
+// in-app approval is the ONLY gate, so the approved change goes live right away. Opt INTO GitHub native
+// auto-merge (the PR merges itself once required checks pass) by setting WEBSITE_AUTO_MERGE to a truthy value
+// (1/true/yes/on). Parsing is opt-in-truthy so "unset" NEVER means auto-merge — this mirrors websiteAutoMerge()
+// in src/lib/website/config.ts exactly. WEBSITE_MERGE_METHOD is squash|merge|rebase.
+const AUTO_MERGE = /^(1|true|yes|on)$/i.test((process.env.WEBSITE_AUTO_MERGE || "").trim());
+const MERGE_METHOD = (() => {
+  const m = (process.env.WEBSITE_MERGE_METHOD || "squash").trim().toLowerCase();
+  return ["squash", "merge", "rebase"].includes(m) ? m : "squash";
+})();
+
 function requireEnv() {
   const missing = [];
   if (!APP_URL) missing.push("APP_URL");
@@ -75,16 +110,47 @@ function git(args, opts = {}) {
   return execFileSync("git", args, { cwd: REPO, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts }).trim();
 }
 
-function defaultBranch() {
-  // origin/HEAD points at the remote default branch; fall back to main/master.
+// gh CLI pinned to the configured target repo (so the PR + merge never act on the wrong repo). `capture`
+// returns stdout; otherwise stderr/stdout inherit. Throws on non-zero exit (caller decides fallback).
+function gh(args, { capture = true } = {}) {
+  const full = [...args, "--repo", REPO_SLUG];
+  return execFileSync("gh", full, {
+    cwd: REPO,
+    encoding: "utf8",
+    stdio: capture ? ["ignore", "pipe", "pipe"] : "inherit",
+  });
+}
+
+// The deploy target / PR base. Explicit WEBSITE_DEPLOY_BRANCH wins; otherwise fall back to the checkout's
+// default (origin/HEAD → main/master). For the Zoe website repo this resolves to `master`, the Kinsta deploy
+// branch.
+function resolveDeployBranch() {
+  if (DEPLOY_BRANCH) return DEPLOY_BRANCH;
   try {
-    const ref = git(["symbolic-ref", "refs/remotes/origin/HEAD"]); // refs/remotes/origin/main
+    const ref = git(["symbolic-ref", "refs/remotes/origin/HEAD"]); // refs/remotes/origin/master
     return ref.split("/").pop();
   } catch {
-    for (const b of ["main", "master"]) {
+    for (const b of ["master", "main"]) {
       try { git(["rev-parse", "--verify", `origin/${b}`]); return b; } catch { /* try next */ }
     }
-    return "main";
+    return "master";
+  }
+}
+
+// Sanity check at startup: the local checkout's `origin` should be the SAME repo we open/merge PRs against
+// (git push uses origin, gh uses --repo REPO_SLUG — if they disagree the PR won't find the pushed branch).
+// Warn loudly rather than hard-fail, since a valid remote may be an SSH/https variant of the same slug.
+function verifyOriginMatchesSlug() {
+  let url = "";
+  try { url = git(["remote", "get-url", "origin"]); } catch { /* no origin */ }
+  const norm = (url || "").replace(/\.git$/, "").toLowerCase();
+  if (!norm) {
+    log(`WARNING: the checkout at ${REPO} has no 'origin' remote; expected it to be ${REPO_SLUG}.`);
+    return;
+  }
+  if (!norm.includes(REPO_SLUG.toLowerCase())) {
+    log(`WARNING: origin (${url}) does not look like WEBSITE_REPO_SLUG (${REPO_SLUG}). The PR + merge target`);
+    log(`         ${REPO_SLUG} while 'git push' targets origin — make them the SAME repo or the PR will fail.`);
   }
 }
 
@@ -298,10 +364,41 @@ async function waitForDecision(jobId) {
   return "timeout";
 }
 
+// ── Merge the approved PR into the deploy branch (triggers the Kinsta deploy) ─
+// Returns a short human-readable note describing what happened (recorded on the job). Never throws — a merge
+// that can't be completed now (e.g. checks still pending with branch protection) leaves the PR open with
+// auto-merge armed, which is the desired outcome, not a failure.
+function mergeToDeployBranch(branch, base) {
+  const method = `--${MERGE_METHOD}`;
+  if (AUTO_MERGE) {
+    try {
+      // GitHub native auto-merge: the PR merges itself into `base` once required checks pass. Needs the repo
+      // to allow auto-merge (and typically a required status check); gh errors otherwise → fall back below.
+      gh(["pr", "merge", branch, "--auto", method], { capture: false });
+      log(`job: auto-merge enabled on ${branch} → ${base} (will merge + deploy when checks pass)`);
+      return `Auto-merge enabled: this merges into \`${base}\` and deploys to the live site once required checks pass.`;
+    } catch (e) {
+      log(`auto-merge could not be enabled (${(e.message || "").split("\n")[0]}) — trying an immediate merge`);
+    }
+  }
+  try {
+    // Immediate merge — the DEFAULT path (WEBSITE_AUTO_MERGE unset), or the fallback when auto-merge was
+    // requested but the repo has no auto-merge / required checks. This merges to the deploy branch now, which
+    // triggers the Kinsta deploy.
+    gh(["pr", "merge", branch, method], { capture: false });
+    log(`job: merged ${branch} → ${base} immediately (deploy triggered)`);
+    return `Merged into \`${base}\` — the live-site (Kinsta) deploy is triggered.`;
+  } catch (e) {
+    const first = (e.message || "").split("\n")[0];
+    log(`merge did not complete (${first}) — PR left open for a human to merge`);
+    return `PR opened into \`${base}\` but the automatic merge did not complete (${first}). Merge it manually to deploy.`;
+  }
+}
+
 // ── Process one claimed job end to end ───────────────────────────────────────
 async function processJob(job) {
-  const branch = `website-studio/${job.id}`;
-  const base = defaultBranch();
+  const branch = `${WORKING_BRANCH_PREFIX}${job.id}`;
+  const base = resolveDeployBranch();
   // Edit context captured from the embedded browser: which page + environment the request targets.
   const pathHint = pathFromContextUrl(job.contextUrl);
   const environment = job.environment || "production";
@@ -336,24 +433,35 @@ async function processJob(job) {
   // 7. wait for the decision
   const decision = await waitForDecision(job.id);
   if (decision === "approved") {
-    log(`job ${job.id}: approved — pushing + opening PR`);
+    log(`job ${job.id}: approved — pushing ${branch} + opening PR into ${base} on ${REPO_SLUG}`);
     git(["push", "-u", "origin", branch]);
     let prUrl = "";
     try {
-      prUrl = execFileSync(
-        "gh",
-        ["pr", "create", "--base", base, "--head", branch, "--title", `Website Studio: ${job.prompt.slice(0, 72)}`, "--body", `Requested in Website Studio (job ${job.id}).\n\n${summary}\n\nReview the rendered preview in the app before merging. Nothing is live until this PR is merged.`],
-        { cwd: REPO, encoding: "utf8" },
-      ).trim();
+      prUrl = gh([
+        "pr", "create",
+        "--base", base,
+        "--head", branch,
+        "--title", `Website Studio: ${job.prompt.slice(0, 72)}`,
+        "--body", `Requested in Website Studio (job ${job.id}).\n\n${summary}\n\nApproved from the rendered preview in the app. Merging this into \`${base}\` deploys the change to the live site (Kinsta).`,
+      ]).trim();
     } catch (e) {
       await markFailed(job.id, `gh pr create failed: ${e.message}`);
       return;
     }
-    await postUpdate({ id: job.id, status: "done", summary, prUrl });
-    // leave the branch; return the local site to a clean default so the next job starts fresh
+
+    // Merge into the deploy branch. The human already approved the rendered preview in the app, so the
+    // approval IS the go-live decision. DEFAULT: merge immediately (approval is the only gate). With
+    // WEBSITE_AUTO_MERGE=1, instead prefer GitHub NATIVE auto-merge (merge when required checks pass) so the
+    // repo's branch protection / CI gates the actual deploy, falling back to an immediate merge only when the
+    // repo has no auto-merge or required checks configured (gh errors in that case).
+    const mergeNote = mergeToDeployBranch(branch, base);
+
+    await postUpdate({ id: job.id, status: "done", summary: `${summary}\n\n${mergeNote}`.trim(), prUrl });
+    // leave the branch (GitHub removes it on merge per repo settings); return the local site to a clean
+    // deploy branch so the next job starts fresh.
     git(["checkout", base]);
     try { deployToDevKinsta([]); } catch { /* best effort */ }
-    log(`job ${job.id}: DONE — ${prUrl}`);
+    log(`job ${job.id}: DONE — ${prUrl} (${mergeNote})`);
   } else if (decision === "discarded") {
     log(`job ${job.id}: discarded — cleaning up`);
     git(["checkout", base]);
@@ -372,7 +480,8 @@ async function processJob(job) {
 // ── Main loop (single-flight) ────────────────────────────────────────────────
 async function main() {
   requireEnv();
-  log(`started. app=${APP_URL} repo=${REPO} model=${MODEL} poll=${POLL_MS}ms`);
+  verifyOriginMatchesSlug();
+  log(`started. app=${APP_URL} repo=${REPO} targetRepo=${REPO_SLUG} deployBranch=${DEPLOY_BRANCH || "(auto)"} branchPrefix=${WORKING_BRANCH_PREFIX} autoMerge=${AUTO_MERGE} mergeMethod=${MERGE_METHOD} model=${MODEL} poll=${POLL_MS}ms`);
   for (;;) {
     let job = null;
     try {
@@ -396,7 +505,7 @@ async function main() {
       } catch (e) {
         // One job failing must never crash the loop.
         await markFailed(job.id, e && e.message ? e.message : e);
-        try { git(["checkout", defaultBranch()]); } catch { /* best effort */ }
+        try { git(["checkout", resolveDeployBranch()]); } catch { /* best effort */ }
       }
     } else {
       await sleep(POLL_MS);

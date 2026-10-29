@@ -43,6 +43,9 @@ describe("website_jobs state machine", () => {
     // Edit context defaults: no page captured, environment falls back to production.
     expect(job!.contextUrl).toBeNull();
     expect(job!.environment).toBe("production");
+    // The change lands on a deterministic, clearly-non-master working branch derived from the id.
+    expect(job!.branch).toBe(`website-studio/${job!.id}`);
+    expect(job!.branch).not.toBe("master");
 
     expect(createJob({ prompt: "   " })).toBeNull();
     expect(createJob({ prompt: "" })).toBeNull();

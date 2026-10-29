@@ -18,7 +18,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
-import { coerceEnvironment, type WebsiteEnvironment } from "@/lib/website/config";
+import { coerceEnvironment, workingBranchForJob, type WebsiteEnvironment } from "@/lib/website/config";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type WebsiteJobStatus =
@@ -67,6 +67,10 @@ export interface WebsiteJob {
   // along to the runner so the agent knows WHICH page to edit and in WHICH environment.
   contextUrl: string | null;
   environment: WebsiteEnvironment;
+  // The deterministic, clearly-non-master working branch this job's change lives on (e.g.
+  // "website-studio/WJ-…"). Derived from the job id — the office runner cuts the SAME branch — so the UI can
+  // show WHERE the change is before it merges to the deploy branch (master). Never master.
+  branch: string;
 }
 
 // ── Row shape + mapper ──────────────────────────────────────────────────────────
@@ -134,6 +138,8 @@ function toJob(r: JobRow): WebsiteJob {
     contextUrl: r.context_url,
     // A legacy row (queued before this upgrade) has null environment — treat it as production.
     environment: coerceEnvironment(r.environment),
+    // Computed, not stored: deterministic from the id so it always matches the branch the runner cuts.
+    branch: workingBranchForJob(r.id),
   };
 }
 

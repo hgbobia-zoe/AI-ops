@@ -7,11 +7,14 @@ export type SeoIntent = "informational" | "commercial" | "transactional" | "navi
 /** The recommended editorial action for an opportunity (derived in Phase 2 — null until analyzed). */
 export type SeoAction = "CREATE" | "IMPROVE" | "CONSOLIDATE" | "SKIP";
 
-/** How the opportunity was discovered. */
-export type SeoSource = "ubersuggest" | "manual" | "derived";
+/** How the opportunity was discovered. `serp` = a live Google SERP read (the office runner, current source);
+ *  `ubersuggest` is retained for back-compat with rows pulled before the SERP pivot. */
+export type SeoSource = "serp" | "ubersuggest" | "manual" | "derived";
 
-/** Where the attached metrics came from (provenance of the `metrics` blob). */
-export type SeoMetricsSource = "ubersuggest" | "none";
+/** Where the attached metrics came from (provenance of the `metrics` blob). A SERP read gives rankings, NOT
+ *  volume/difficulty, so a SERP-sourced opportunity keeps `metricsSource: "none"` (those stay honest UNKNOWN);
+ *  `"serp"`/`"ubersuggest"` exist for a future metrics provider + back-compat. */
+export type SeoMetricsSource = "serp" | "ubersuggest" | "none";
 
 /**
  * Operational workflow state. Phase 1 only ever creates `new`; the rest exist so the Overview counts and
@@ -56,6 +59,56 @@ export interface SeoMetrics {
   locale?: string;
 }
 
+/** One organic result on a read SERP: the ranking domain, its 1-based position, the URL and the title. FACTS
+ *  ONLY — these are positions actually observed on the page, never estimated. */
+export interface SerpResultEntry {
+  domain: string;
+  /** 1-based organic position as observed on the SERP. */
+  rank: number;
+  url: string;
+  title: string | null;
+}
+
+/**
+ * A live Google SERP read for a keyword — the current data source (office runner). Everything here is OBSERVED
+ * on the page, never estimated: who ranks, whether Zoe appears and where. Volume/difficulty are NOT part of a
+ * SERP read and stay UNKNOWN in `metrics` (that is honest, not a gap in the data). null `zoeRank` = Zoe did not
+ * appear in the read organic results (the competitive gap signal).
+ */
+export interface SerpData {
+  /** ISO time the SERP was read. */
+  retrievedAt: string;
+  /** Zoe's 1-based organic position, or null when Zoe does not appear in the read results. */
+  zoeRank: number | null;
+  /** True iff Zoe appears in the read organic results. */
+  zoePresent: boolean;
+  /** The organic results read, best-first (capped). */
+  topDomains: SerpResultEntry[];
+  /** "People also ask" questions observed, if any. */
+  peopleAlsoAsk: string[];
+  /** "Related searches" observed, if any. */
+  relatedSearches: string[];
+  /** Locale the SERP was read for (e.g. "US"). */
+  locale: string;
+}
+
+/**
+ * Market-level rollup: a competitor domain and how often/where it ranks across Zoe's tracked keywords. Derived
+ * purely from the stored SERP reads (see serp.ts aggregateCompetitorDomains) — nothing fabricated. Zoe's own
+ * domain and known directories/aggregators are excluded.
+ */
+export interface SeoCompetitorDomain {
+  domain: string;
+  /** How many tracked keywords this domain ranks for (on the read SERPs). */
+  appearances: number;
+  /** Mean 1-based rank across those appearances (lower = stronger). */
+  avgRank: number;
+  /** The keywords it ranks for (capped for display). */
+  keywords: string[];
+  firstSeen: string;
+  lastSeen: string;
+}
+
 export interface SeoOpportunity {
   id: string;
   dedupeKey: string;
@@ -65,9 +118,13 @@ export interface SeoOpportunity {
   location: string | null;
   category: string | null;
   competitorRefs: string[];
-  /** Third-party ESTIMATE blob (Ubersuggest). null when never fetched. */
+  /** Third-party ESTIMATE blob (volume/difficulty/cpc). null when never fetched. A SERP read does not populate
+   *  this — those metrics stay UNKNOWN until a metrics provider is wired. */
   metrics: SeoMetrics | null;
   metricsSource: SeoMetricsSource;
+  /** The latest live SERP read for this keyword (positions actually observed), or null when never read. The
+   *  competitive-gap engine reads this; absent = UNKNOWN, never assumed. */
+  serp: SerpData | null;
   source: SeoSource;
   /** ISO retrieval timestamp of `metrics`; null = never fetched. */
   researchAt: string | null;

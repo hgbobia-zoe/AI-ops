@@ -4,8 +4,7 @@
 // Server-only.
 
 import { countsByStage, latestSuccess, recentDiagnostics } from "./store";
-import { getHealth } from "./ubersuggest";
-import { seoWatcherStatus, type SeoWatcherStatus } from "./watcher";
+import { seoWatcherStatus, serpHealth, type SeoWatcherStatus } from "./watcher";
 import type { SeoHealth, SeoStage, SeoDiagnostic } from "./types";
 
 export interface SeoOverview {
@@ -44,7 +43,7 @@ export function seoOverview(): SeoOverview {
       deferredOrRejected: by.DEFERRED + by.REJECTED + by.CONSOLIDATED + by.BLOCKED,
       total,
     },
-    health: getHealth(),
+    health: serpHealth(),
     lastSuccess: latestSuccess(),
     diagnostics: recentDiagnostics(8),
     watcher: seoWatcherStatus(),

@@ -106,6 +106,79 @@ describe("ingestKeywordResults — office-runner PUSH path", () => {
   });
 });
 
+describe("ingestKeywordResults — SERP source (meta.source='serp')", () => {
+  it("parses a pushed SERP, stores the competitive gap, and never invents volume", async () => {
+    const { ingestKeywordResults } = await disc();
+    const { findOpportunityByDedupe } = await store();
+    const r = ingestKeywordResults({
+      keywords: [
+        {
+          keyword: "lounge furniture rental",
+          category: "lounge",
+          location: "DMV",
+          intent: "commercial",
+          rawResult: {
+            organic: [
+              { rank: 1, url: "https://aabletents.com/lounge", title: "A Able" },
+              { rank: 2, url: "https://yelp.com/biz/x", title: "Yelp" },
+              { rank: 3, url: "https://dmvrentals.com/lounge", title: "DMV Rentals" },
+            ],
+            relatedSearches: ["lounge rental dc"],
+          },
+        },
+      ],
+      meta: { source: "serp", zoeDomain: "zoeeventsdmv.com", toolName: "google-serp", retrievedAt: new Date().toISOString() },
+    });
+    expect(r.received).toBe(1);
+    expect(r.created).toBe(1);
+    expect(r.analyzed).toBe(1);
+    const opp = findOpportunityByDedupe("lounge furniture rental", "commercial", "DMV");
+    expect(opp).toBeTruthy();
+    expect(opp!.source).toBe("serp");
+    expect(opp!.metrics).toBeNull(); // SERP read gives NO volume/difficulty — honest UNKNOWN
+    expect(opp!.serp).toBeTruthy();
+    expect(opp!.serp!.zoePresent).toBe(false); // Zoe absent → the gap
+    expect(opp!.competitorRefs).toContain("aabletents.com");
+    expect(opp!.competitorRefs).not.toContain("yelp.com"); // directory excluded
+    // the competitive-gap component lifted priority with a known (non-placeholder) signal
+    const gap = opp!.priorityBreakdown?.components.find((c) => c.key === "competitive_gap");
+    expect(gap?.unknown).toBe(false);
+  });
+
+  it("skips a keyword whose SERP read was empty (no organic) — never a fabricated row", async () => {
+    const { ingestKeywordResults } = await disc();
+    const r = ingestKeywordResults({
+      keywords: [{ keyword: "marquee letter rental", category: "marquee letters", location: "DMV", intent: "commercial", rawResult: { organic: [] } }],
+      meta: { source: "serp", zoeDomain: "zoeeventsdmv.com" },
+    });
+    expect(r.skipped).toBe(1);
+    expect(r.created).toBe(0);
+  });
+
+  it("records a blocked run honestly and creates nothing", async () => {
+    const { ingestKeywordResults } = await disc();
+    const { recentDiagnostics, listOpportunities } = await store();
+    const before = listOpportunities().length;
+    const r = ingestKeywordResults({ keywords: [], meta: { source: "serp", blocked: true } });
+    expect(r.blocked).toBe(true);
+    expect(r.created).toBe(0);
+    expect(listOpportunities().length).toBe(before);
+    const diag = recentDiagnostics(20).find((d) => (d.detail ?? "").includes("blocked"));
+    expect(diag).toBeTruthy();
+    expect(diag!.ok).toBe(false);
+    expect(diag!.rateLimited).toBe(false); // blocked is NOT a rate-limit
+  });
+
+  it("competitor-domain aggregate rolls up across stored SERP reads", async () => {
+    const { competitorDomainAggregate } = await store();
+    const agg = competitorDomainAggregate("zoeeventsdmv.com");
+    const able = agg.find((d) => d.domain === "aabletents.com");
+    expect(able).toBeTruthy();
+    expect(able!.appearances).toBeGreaterThanOrEqual(1);
+    expect(agg.some((d) => d.domain === "yelp.com")).toBe(false);
+  });
+});
+
 describe("pendingSeedKeywords — free-tier drip resume", () => {
   it("excludes already-discovered seeds so the runner never re-pulls them", async () => {
     const { pendingSeedKeywords, buildSeedKeywords } = await disc();

@@ -1,20 +1,16 @@
-# Install the SEO keyword-pull runner as a Windows Scheduled Task that DRIPS: it runs a small batch at logon
-# and then every few hours, each run pulling SEO_BATCH pending keywords and exiting (free-tier safe).
+# Install the SEO SERP-pull runner as a Windows Scheduled Task that DRIPS: it reads a small batch at logon and
+# then every few hours, each run reading SEO_BATCH pending keywords' Google SERPs and exiting.
 #   powershell -ExecutionPolicy Bypass -File .\install-service.ps1
-# Run start.ps1 ONCE first to complete the Ubersuggest OAuth sign-in (the task runs headless with the cached
-# token). Re-run to update. Remove with:  Unregister-ScheduledTask -TaskName ZoeSeoRunner -Confirm:$false
+# No sign-in needed (the Ubersuggest OAuth is gone). Run start.ps1 once first just to confirm it reads cleanly.
+# Re-run to update. Remove with:  Unregister-ScheduledTask -TaskName ZoeSeoRunner -Confirm:$false
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 if (-not (Test-Path ".env")) { Write-Error "No .env found - run .\setup.ps1 first, then edit .env."; exit 1 }
-if (-not (Test-Path "node_modules")) { Write-Error "Dependencies not installed - run .\setup.ps1 first."; exit 1 }
-if (-not (Test-Path ".seo-oauth\tokens.json")) {
-  Write-Warning "No cached OAuth token yet. Run .\start.ps1 once to sign into Ubersuggest, or the task will exit with 'sign-in required' until you do."
-}
 
 $taskName = "ZoeSeoRunner"
 $node = (Get-Command node -ErrorAction Stop).Source
-$intervalHours = 6  # free-tier drip; lower this (and raise SEO_BATCH) on a paid plan
+$intervalHours = 6  # drip; a tiny batch per run keeps Google reads low-volume and under the radar
 
 # Absolute script path — Task Scheduler does not reliably honor the action's WorkingDirectory at logon.
 $action = New-ScheduledTaskAction -Execute $node -Argument ('"' + (Join-Path $PSScriptRoot 'runner.mjs') + '"') -WorkingDirectory $PSScriptRoot

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyReadiness, classifyReadinessWorker, type ReadinessFacts, type ReadinessContext } from "./readiness";
+import { classifyReadiness, classifyReadinessWorker, isExcludedFromRun, type ReadinessFacts, type ReadinessContext } from "./readiness";
 import type { PayPeriod } from "./types";
 
 const period: PayPeriod = { start: "2026-10-05", end: "2026-10-11", label: "Oct 5 – Oct 11" };
@@ -78,10 +78,16 @@ describe("classifyReadiness — overall status", () => {
     expect(r.exceptions.some((e) => e.type === "MISSING_GUSTO_MAPPING")).toBe(true);
   });
 
-  it("BLOCKED when hours exist but no pay rate", () => {
+  it("a missing pay rate is a non-blocking anomaly (Gusto applies its own rate on the push), not a blocker", () => {
+    // Policy (aligned with review.ts): a missing app rate only means the in-app ESTIMATE is unavailable — it
+    // never blocks payroll, because Gusto pays its own stored rate. So the worker is ACTION_REQUIRED (an
+    // anomaly to note), NOT BLOCKED, and the NO_PAY_RATE exception is EXCEPTION-kind.
     const r = classifyReadiness([facts({ gustoMapped: true, payRate: null, actualHours: 10, approvedHours: 10, unapprovedHours: 0, approvalKnownForWorker: true })], ctx({}));
-    expect(r.status).toBe("BLOCKED");
-    expect(r.exceptions.some((e) => e.type === "NO_PAY_RATE")).toBe(true);
+    expect(r.status).toBe("ACTION_REQUIRED");
+    expect(r.blocking).toBe(0);
+    const e = r.exceptions.find((x) => x.type === "NO_PAY_RATE");
+    expect(e).toBeDefined();
+    expect(e?.kind).toBe("EXCEPTION");
   });
 });
 
@@ -149,5 +155,18 @@ describe("exception detect keys are stable + idempotent", () => {
     // Re-running the same facts yields the identical key (idempotent upsert target).
     const again = classifyReadinessWorker(facts({ key: "ct:5", gustoMapped: false, actualHours: 10 }), ctx({}));
     expect(again.issues.find((i) => i.type === "MISSING_GUSTO_MAPPING")!.detectKey).toBe(exc.detectKey);
+  });
+});
+
+describe("isExcludedFromRun — excluded workers are dropped before readiness is assessed", () => {
+  const none = new Map<string, unknown>();
+  it("drops a permanently excluded worker", () => {
+    expect(isExcludedFromRun(true, "ct:1", none)).toBe(true);
+  });
+  it("drops a worker skipped for THIS period", () => {
+    expect(isExcludedFromRun(false, "ct:2", new Map([["ct:2", { reason: "paid elsewhere" }]]))).toBe(true);
+  });
+  it("keeps a normal worker (still assessed — e.g. flagged for unapproved time)", () => {
+    expect(isExcludedFromRun(false, "ct:3", none)).toBe(false);
   });
 });

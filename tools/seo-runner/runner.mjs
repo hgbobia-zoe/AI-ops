@@ -1,31 +1,28 @@
-// SEO keyword-pull — office-machine runner (path B).
+// SEO SERP-pull — office-machine runner (the current SEO data source).
 //
-// WHY THIS EXISTS: Ubersuggest's MCP (https://ubersuggest-mcp.neilpatelapi.com/mcp) authenticates by OAuth
-// sign-in with a Ubersuggest account — there is NO static API token, and Ubersuggest has no public REST API.
-// Our app on Fly can't hold an OAuth session, so the OFFICE MACHINE (residential, can do the one-time browser
-// sign-in) runs the MCP client, pulls a small batch of pending keywords, and PUSHES the raw results to the app
-// at /api/seo/ingest. Mirrors tools/gusto-runner (office executes, server governs). The app parses + scores.
+// WHY THIS EXISTS: Ubersuggest's MCP was OAuth-only and its auth server rejects any non-official client, so we
+// cannot sign a headless runner in. We pivoted the SEO engine to read LIVE GOOGLE SERPs instead. The app on Fly
+// is a datacenter IP (Google blocks that); the OFFICE MACHINE is residential, so IT reads the SERPs and PUSHES
+// the observed results to the app at /api/seo/ingest (meta.source = "serp"). The app computes the competitive
+// gap (who ranks, whether Zoe appears and where). Mirrors tools/gusto-runner: office executes, server governs.
 //
-// FREE-TIER SAFE: the account is free for now (a few lookups/day), so each run pulls only SEO_BATCH pending
-// keywords and STOPS on the first quota/limit response, posting meta.limitHit so the app's watcher alerts.
-// Nothing is fabricated: a limit-hit sends zero keyword rows.
+// HONESTY LAW: this runner NEVER fabricates a ranking. It pushes only what it actually read. Google serves a
+// consent wall / CAPTCHA / empty page to automation; when a read looks blocked the runner sets meta.blocked and
+// STOPS (pushes zero rows) so the app's health/watcher surface it honestly. Keep the drip tiny (SEO_BATCH).
 //
-// FIRST RUN: must be interactive (run start.ps1) so you can complete the Ubersuggest OAuth sign-in in the
-// browser; the tokens are cached locally and refreshed, so the scheduled task then runs headless. The first
-// successful run also dumps tools/list + a sample result to boot.log AND posts meta.toolsList, so the REAL
-// Ubersuggest tool name + response schema are captured (ours is written defensively and unverified).
+// DATA SHAPE pushed per keyword (rawResult): { organic: [{ rank, url, title }], peopleAlsoAsk: string[],
+// relatedSearches: string[], retrievedAt } — parsed by src/lib/seo/serp.ts (defensive about this shape).
+//
+// FRAGILITY: Google's HTML is undocumented and DRIFTS. The parse below is best-effort and isolated in
+// parseGoogleHtml(); if it stops finding results the run reports blocked (honest) rather than inventing data.
+// A future robust source drops in via the SEO_SERP_PROVIDER seam (e.g. a SERP API) without touching the app.
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import { createServer } from "node:http";
-import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Resolve .env, the token cache and boot.log against THIS script's dir, never the cwd — a Windows Scheduled
-// Task does not reliably honor its "Start in" dir (see tools/gusto-runner).
+// Resolve .env + boot.log against THIS script's dir, never the cwd — a Windows Scheduled Task does not reliably
+// honor its "Start in" dir (see tools/gusto-runner).
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 // ── bootstrap crash log (the scheduled task discards stdout/stderr) ──────────────────────────────────
@@ -64,104 +61,26 @@ function bootLog(tag, ...a) {
 // ── config ───────────────────────────────────────────────────────────────────────────────────────────
 const APP_URL = (process.env.APP_URL || "").replace(/\/+$/, "");
 const INGEST_TOKEN = process.env.SEO_INGEST_TOKEN || "";
-const MCP_URL = process.env.UBERSUGGEST_MCP_URL || "https://ubersuggest-mcp.neilpatelapi.com/mcp";
-// The keyword tool + its arg mapping are CONFIGURABLE because the live schema is unverified until the first
-// signed-in run (which dumps the real tools/list). Defaults match the app's server-side guess.
-const KEYWORD_TOOL = process.env.SEO_KEYWORD_TOOL || "keyword_overview";
-const KEYWORD_ARG = process.env.SEO_KEYWORD_ARG || "keyword";
-const TOOL_ARGS = (() => { try { return JSON.parse(process.env.SEO_TOOL_ARGS || '{"country":"US","language":"en"}'); } catch { return { country: "US", language: "en" }; } })();
-const BATCH = Math.max(1, Math.min(Number(process.env.SEO_BATCH || 3) || 3, 50));
-const CACHE_DIR = process.env.SEO_CACHE_DIR || join(SCRIPT_DIR, ".seo-oauth");
-const REDIRECT_PORT = Number(process.env.SEO_OAUTH_PORT || 7331) || 7331;
-const REDIRECT_URL = `http://localhost:${REDIRECT_PORT}/callback`;
-// start.ps1 sets this so a human-run invocation may open the browser for sign-in; the scheduled task does NOT
-// set it, so an unauthenticated headless run exits cleanly with a "sign-in required" note instead of hanging.
-const ALLOW_INTERACTIVE = /^(1|true|yes|on)$/i.test(process.env.SEO_ALLOW_INTERACTIVE || "");
-const LIMIT_RE = new RegExp(process.env.SEO_LIMIT_PATTERN || "limit|quota|exceed|upgrade|too many|rate.?limit|429|insufficient", "i");
+const ZOE_DOMAIN = (process.env.SEO_ZOE_DOMAIN || "zoeeventsdmv.com").trim();
+const COMPETITOR_DOMAINS = (process.env.SEO_COMPETITOR_DOMAINS || "").split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+const BATCH = Math.max(1, Math.min(Number(process.env.SEO_BATCH || 3) || 3, 25));
+const GL = (process.env.SEO_SERP_GL || "us").toLowerCase();
+const HL = (process.env.SEO_SERP_HL || "en").toLowerCase();
+const PROVIDER = (process.env.SEO_SERP_PROVIDER || "google-html").toLowerCase();
+// Optional generic SERP-API provider (set SEO_SERP_PROVIDER=api). Robust/paid; a drop-in for google-html.
+const SERP_API_ENDPOINT = process.env.SEO_SERP_ENDPOINT || "";
+const SERP_API_KEY = process.env.SEO_SERP_API_KEY || "";
+// Polite pause between queries to look human + stay under Google's radar on the tiny drip.
+const QUERY_DELAY_MS = Math.max(0, Number(process.env.SEO_QUERY_DELAY_MS || 2500) || 2500);
 
-function requireEnv() {
-  const missing = [];
-  if (!APP_URL) missing.push("APP_URL");
-  if (missing.length) { console.error(`[seo-runner] missing required env: ${missing.join(", ")} — see README`); process.exit(1); }
-}
+const UA =
+  process.env.SEO_USER_AGENT ||
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
 const log = (...a) => console.log(`[seo-runner] ${new Date().toISOString()}`, ...a);
-if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
 
-// ── file-backed OAuth client provider (MCP SDK OAuthClientProvider) ──────────────────────────────────
-// Stores the dynamic client registration, PKCE verifier and tokens in CACHE_DIR so the OAuth session persists
-// (and refreshes) across runs — a one-time interactive sign-in, headless thereafter.
-function readJson(name) { try { return JSON.parse(readFileSync(join(CACHE_DIR, name), "utf8")); } catch { return undefined; } }
-function writeJson(name, v) { writeFileSync(join(CACHE_DIR, name), JSON.stringify(v, null, 2)); }
-
-let pendingAuthUrl = null; // set by redirectToAuthorization when a sign-in is needed
-
-const authProvider = {
-  get redirectUrl() { return REDIRECT_URL; },
-  get clientMetadata() {
-    return { client_name: "Zoe Ops SEO Runner", redirect_uris: [REDIRECT_URL], grant_types: ["authorization_code", "refresh_token"], response_types: ["code"], token_endpoint_auth_method: "none" };
-  },
-  clientInformation() { return readJson("client.json"); },
-  saveClientInformation(info) { writeJson("client.json", info); },
-  tokens() { return readJson("tokens.json"); },
-  saveTokens(tokens) { writeJson("tokens.json", tokens); },
-  saveCodeVerifier(v) { writeJson("verifier.json", { v }); },
-  codeVerifier() { const r = readJson("verifier.json"); if (!r?.v) throw new Error("no code_verifier cached"); return r.v; },
-  // The SDK calls this when it needs the user to authorize. We stash the URL; main() opens it + waits for the
-  // code on our localhost callback, then calls transport.finishAuth(code).
-  redirectToAuthorization(authorizationUrl) { pendingAuthUrl = authorizationUrl.toString(); },
-};
-
-/** Run a one-shot localhost server to capture the OAuth ?code= redirect. Resolves with the code. */
-function waitForCallbackCode(timeoutMs = 300000) {
-  return new Promise((resolve, reject) => {
-    const server = createServer((req, res) => {
-      try {
-        const u = new URL(req.url, REDIRECT_URL);
-        const code = u.searchParams.get("code");
-        const err = u.searchParams.get("error");
-        res.writeHead(200, { "content-type": "text/html" });
-        res.end(`<html><body style="font-family:sans-serif;padding:2rem"><h2>${code ? "Ubersuggest connected — you can close this tab." : "Sign-in failed: " + (err || "no code")}</h2></body></html>`);
-        if (code) { server.close(); resolve(code); }
-        else if (err) { server.close(); reject(new Error(`oauth error: ${err}`)); }
-      } catch (e) { reject(e); }
-    });
-    server.on("error", reject);
-    server.listen(REDIRECT_PORT, () => log(`waiting for OAuth callback on ${REDIRECT_URL}`));
-    setTimeout(() => { server.close(); reject(new Error("timed out waiting for OAuth sign-in")); }, timeoutMs);
-  });
-}
-
-function openBrowser(url) {
-  // Windows: `cmd /c start "" <url>`. Best-effort; if it fails the URL is in boot.log for a manual open.
-  try { spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref(); }
-  catch (e) { bootLog("err", `could not open browser: ${String(e)} — open manually: ${url}`); }
-}
-
-/** Connect an MCP client to Ubersuggest, running the interactive OAuth flow if needed (and allowed). */
-async function connect() {
-  const client = new Client({ name: "zoe-seo-runner", version: "0.1.0" }, { capabilities: {} });
-  const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), { authProvider });
-  try {
-    await client.connect(transport);
-    return client;
-  } catch (e) {
-    if (!(e instanceof UnauthorizedError) && !pendingAuthUrl) throw e;
-    if (!ALLOW_INTERACTIVE) {
-      const msg = "Ubersuggest sign-in required — run start.ps1 once to authorize (then the scheduled task runs headless).";
-      bootLog("signin_required", msg);
-      const e2 = new Error(msg); e2.signinRequired = true; throw e2;
-    }
-    if (!pendingAuthUrl) throw e;
-    log("opening browser for Ubersuggest OAuth sign-in…");
-    openBrowser(pendingAuthUrl);
-    const code = await waitForCallbackCode();
-    await transport.finishAuth(code);
-    // Reconnect with the freshly-saved tokens.
-    const client2 = new Client({ name: "zoe-seo-runner", version: "0.1.0" }, { capabilities: {} });
-    await client2.connect(new StreamableHTTPClientTransport(new URL(MCP_URL), { authProvider }));
-    return client2;
-  }
+function requireEnv() {
+  if (!APP_URL) { console.error("[seo-runner] missing required env: APP_URL — see README"); process.exit(1); }
 }
 
 async function appFetch(path, init = {}) {
@@ -170,76 +89,163 @@ async function appFetch(path, init = {}) {
   return fetch(`${APP_URL}${path}`, { ...init, headers });
 }
 
-/** Does a tool call look like a quota/limit response? (free-tier daily cap). */
-function looksLimited(result, errText) {
-  if (errText && LIMIT_RE.test(errText)) return true;
-  try {
-    if (result?.isError) {
-      const txt = JSON.stringify(result.content ?? result);
-      if (LIMIT_RE.test(txt)) return true;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ── Google SERP read (best-effort HTML) ───────────────────────────────────────────────────────────────
+// Google infra / non-result hosts to skip when harvesting result links.
+const SKIP_HOSTS = /(^|\.)(google\.|gstatic\.com|googleusercontent\.com|googleadservices\.com|youtube\.com\/redirect|schema\.org|w3\.org)/i;
+
+function stripTags(s) {
+  return s.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, " ").trim();
+}
+
+/**
+ * Parse a Google results HTML page into organic results + PAA + related searches. BEST-EFFORT and DRIFT-PRONE
+ * (Google's markup is undocumented and changes) — isolated here on purpose. Returns { organic, peopleAlsoAsk,
+ * relatedSearches }. An empty organic list is treated by the caller as "blocked/empty", never as real data.
+ */
+function parseGoogleHtml(html) {
+  const organic = [];
+  const seen = new Set();
+  // Result anchors appear either as a direct external href or wrapped in Google's /url?q= redirector. Harvest
+  // both, in document order, and pull the nearest following <h3> as the title.
+  const anchorRe = /<a\s+[^>]*href="(\/url\?q=[^"]+|https?:\/\/[^"]+)"[^>]*>/gi;
+  let m;
+  while ((m = anchorRe.exec(html)) !== null && organic.length < 20) {
+    let href = m[1];
+    if (href.startsWith("/url?q=")) {
+      const q = /[?&]q=([^&]+)/.exec(href);
+      if (!q) continue;
+      try { href = decodeURIComponent(q[1]); } catch { continue; }
     }
-  } catch { /* ignore */ }
-  return false;
+    if (!/^https?:\/\//i.test(href)) continue;
+    let host;
+    try { host = new URL(href).hostname; } catch { continue; }
+    if (SKIP_HOSTS.test(host)) continue;
+    if (seen.has(host)) continue; // one result row per host (keep its best position)
+    seen.add(host);
+    // Title: the nearest <h3>…</h3> within a window after the anchor (Google wraps the title in an h3).
+    const after = html.slice(m.index, m.index + 600);
+    const h3 = /<h3[^>]*>(.*?)<\/h3>/i.exec(after);
+    const title = h3 ? stripTags(h3[1]).slice(0, 200) : null;
+    organic.push({ rank: organic.length + 1, url: href, title });
+  }
+
+  // "People also ask" + "Related searches" are best-effort: harvest question-ish / related anchor text blocks.
+  const peopleAlsoAsk = [];
+  const paaRe = /data-q="([^"]+)"/gi;
+  while ((m = paaRe.exec(html)) !== null && peopleAlsoAsk.length < 20) peopleAlsoAsk.push(stripTags(m[1]));
+
+  const relatedSearches = [];
+  // Related searches link to /search?q=…; capture their visible text.
+  const relRe = /<a[^>]+href="\/search\?[^"]*q=([^"&]+)[^"]*"[^>]*>(?:<[^>]+>)*([^<]{3,80})</gi;
+  while ((m = relRe.exec(html)) !== null && relatedSearches.length < 20) {
+    const txt = stripTags(m[2]);
+    if (txt && !/^https?:/i.test(txt)) relatedSearches.push(txt);
+  }
+
+  return { organic, peopleAlsoAsk: dedupe(peopleAlsoAsk), relatedSearches: dedupe(relatedSearches) };
+}
+
+function dedupe(arr) {
+  const seen = new Set();
+  const out = [];
+  for (const s of arr) { const k = s.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(s); } }
+  return out;
+}
+
+const BLOCK_RE = /unusual traffic|detected unusual|our systems have detected|recaptcha|\/sorry\/|enablejs|before you continue to google/i;
+
+/** Read one keyword's SERP. Returns { ok, blocked, rawResult } — rawResult is the parsed SERP for the app. */
+async function readGoogleSerp(keyword) {
+  const url = `https://www.google.com/search?q=${encodeURIComponent(keyword)}&num=20&gl=${GL}&hl=${HL}&pws=0`;
+  let res, html;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    res = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "user-agent": UA,
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": `${HL}-${GL.toUpperCase()},${HL};q=0.9`,
+        // Consent cookies so Google serves results instead of the EU consent interstitial (best-effort).
+        "cookie": "CONSENT=YES+1; SOCS=CAESHAgBEhIaAB",
+      },
+    });
+    clearTimeout(timer);
+    html = await res.text();
+  } catch (e) {
+    bootLog("err", `SERP fetch failed for "${keyword}": ${String(e?.message || e)}`);
+    return { ok: false, blocked: false, error: String(e?.message || e) };
+  }
+
+  // A 429 or a consent/CAPTCHA interstitial = blocked (honest no-data, never fabricate).
+  if (res.status === 429 || res.status === 503 || (res.status >= 300 && res.status < 400) || /\/sorry\//.test(res.url || "")) {
+    return { ok: false, blocked: true, error: `HTTP ${res.status}` };
+  }
+  if (BLOCK_RE.test(html.slice(0, 4000))) return { ok: false, blocked: true, error: "consent/CAPTCHA interstitial" };
+
+  const parsed = parseGoogleHtml(html);
+  if (parsed.organic.length === 0) return { ok: false, blocked: true, error: "no organic results parsed (markup drift or soft-block)" };
+  return { ok: true, blocked: false, rawResult: { ...parsed, retrievedAt: new Date().toISOString() } };
+}
+
+/** Optional generic SERP-API provider (SEO_SERP_PROVIDER=api). A thin seam so a robust/paid source drops in
+ *  without touching the app: it must return JSON the app's parseSerpResult understands (organic/results[...]). */
+async function readApiSerp(keyword) {
+  if (!SERP_API_ENDPOINT) return { ok: false, blocked: false, error: "SEO_SERP_ENDPOINT not set for provider=api" };
+  const u = SERP_API_ENDPOINT.replace("{q}", encodeURIComponent(keyword)).replace("{gl}", GL).replace("{hl}", HL);
+  try {
+    const res = await fetch(u, { headers: SERP_API_KEY ? { authorization: `Bearer ${SERP_API_KEY}` } : {} });
+    if (res.status === 429) return { ok: false, blocked: true, error: "API 429" };
+    if (!res.ok) return { ok: false, blocked: false, error: `API ${res.status}` };
+    const json = await res.json();
+    return { ok: true, blocked: false, rawResult: { ...json, retrievedAt: new Date().toISOString() } };
+  } catch (e) {
+    return { ok: false, blocked: false, error: String(e?.message || e) };
+  }
+}
+
+async function readSerp(keyword) {
+  return PROVIDER === "api" ? readApiSerp(keyword) : readGoogleSerp(keyword);
 }
 
 async function main() {
   requireEnv();
-  bootLog("boot", `node ${process.version} cwd=${process.cwd()} script=${SCRIPT_DIR} app=${APP_URL} tool=${KEYWORD_TOOL} batch=${BATCH} interactive=${ALLOW_INTERACTIVE}`);
+  bootLog("boot", `node ${process.version} script=${SCRIPT_DIR} app=${APP_URL} provider=${PROVIDER} batch=${BATCH} zoe=${ZOE_DOMAIN} competitors=${COMPETITOR_DOMAINS.length}`);
 
-  // 1) What should we pull next? (the app computes pending = seeds − already discovered)
+  // 1) What should we read next? (the app computes pending = seeds − already discovered)
   let pending = [];
   try {
     const res = await appFetch(`/api/seo/ingest?pending=${BATCH}`);
     if (!res.ok) { log(`pending fetch → ${res.status}`); process.exit(res.status === 401 ? 1 : 0); }
     pending = (await res.json()).pending ?? [];
   } catch (e) { console.error(`[seo-runner] could not reach the app: ${e.message}`); process.exit(1); }
-  if (pending.length === 0) { log("nothing pending — all seed keywords discovered. Exiting."); return; }
-  log(`pending: ${pending.length} keyword(s) to pull this run`);
+  if (pending.length === 0) { log("nothing pending — all seed keywords read. Exiting."); return; }
+  log(`pending: ${pending.length} keyword(s) to read this run (provider=${PROVIDER})`);
 
-  // 2) Connect to Ubersuggest (OAuth). A scheduled (non-interactive) run with no cached token exits cleanly
-  //    after telling the app so the health card shows "sign-in required".
-  let client;
-  try {
-    client = await connect();
-  } catch (e) {
-    if (e.signinRequired) {
-      await appFetch("/api/seo/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ keywords: [], meta: { error: e.message } }) }).catch(() => {});
-      process.exit(0);
-    }
-    throw e;
-  }
-
-  // 3) First-run schema capture: dump the live tools/list (ours is unverified).
-  let toolsList;
-  try {
-    const t = await client.listTools();
-    toolsList = t.tools?.map((x) => ({ name: x.name, description: x.description })) ?? t;
-    bootLog("tools", JSON.stringify(toolsList));
-    log(`MCP exposes ${Array.isArray(toolsList) ? toolsList.length : "?"} tool(s). Using "${KEYWORD_TOOL}".`);
-  } catch (e) { bootLog("err", `listTools failed: ${String(e)}`); }
-
-  // 4) Pull the batch; STOP immediately on a quota/limit response (never retry into a limit).
+  // 2) Read each SERP; STOP on the first blocked response (never hammer a block).
   const keywords = [];
-  let limitHit = false;
+  let blocked = false;
   let sampleDumped = false;
-  for (const seed of pending) {
-    let result, errText;
-    try {
-      result = await client.callTool({ name: KEYWORD_TOOL, arguments: { [KEYWORD_ARG]: seed.keyword, ...TOOL_ARGS } });
-    } catch (e) { errText = String(e?.message || e); }
-    if (looksLimited(result, errText)) { limitHit = true; log(`daily limit reached at "${seed.keyword}" — stopping.`); break; }
-    if (errText) { bootLog("err", `tool error for "${seed.keyword}": ${errText}`); continue; }
-    if (!sampleDumped) { bootLog("sample", `"${seed.keyword}" → ${JSON.stringify(result).slice(0, 2000)}`); sampleDumped = true; }
-    keywords.push({ keyword: seed.keyword, category: seed.category, location: seed.location, intent: seed.intent, rawResult: result });
+  for (let i = 0; i < pending.length; i++) {
+    const seed = pending[i];
+    if (i > 0) await sleep(QUERY_DELAY_MS);
+    const r = await readSerp(seed.keyword);
+    if (r.blocked) { blocked = true; log(`blocked at "${seed.keyword}" (${r.error}) — stopping this run.`); break; }
+    if (!r.ok) { bootLog("err", `read error for "${seed.keyword}": ${r.error}`); continue; }
+    if (!sampleDumped) { bootLog("sample", `"${seed.keyword}" → ${JSON.stringify(r.rawResult).slice(0, 1500)}`); sampleDumped = true; }
+    keywords.push({ keyword: seed.keyword, category: seed.category, location: seed.location, intent: seed.intent, rawResult: r.rawResult });
   }
-  try { await client.close(); } catch { /* ignore */ }
 
-  // 5) Push to the app (even an empty batch on a limit-hit, so the watcher records + alerts).
-  const body = { keywords, meta: { toolName: KEYWORD_TOOL, toolsList, limitHit, retrievedAt: new Date().toISOString() } };
+  // 3) Push to the app (even an empty batch on a block, so the health card records it honestly).
+  const body = { keywords, meta: { source: "serp", zoeDomain: ZOE_DOMAIN, toolName: `${PROVIDER === "api" ? "serp-api" : "google-serp"}`, blocked, retrievedAt: new Date().toISOString() } };
   try {
     const res = await appFetch("/api/seo/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     const json = await res.json().catch(() => ({}));
-    log(`pushed ${keywords.length} keyword(s)${limitHit ? " (LIMIT HIT)" : ""} → ${res.status} ${JSON.stringify(json.result ?? json)}`);
+    log(`pushed ${keywords.length} SERP(s)${blocked ? " (BLOCKED)" : ""} → ${res.status} ${JSON.stringify(json.result ?? json)}`);
   } catch (e) { console.error(`[seo-runner] push failed: ${e.message}`); process.exit(1); }
 }
 

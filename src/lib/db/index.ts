@@ -1717,9 +1717,10 @@ CREATE TABLE IF NOT EXISTS seo_opportunities (
   location           TEXT,                   -- geography the metrics are for (e.g. "US", "Washington, DC")
   category           TEXT,                   -- Zoe service category (tents, tables, linens, ...) — nullable
   competitor_refs    TEXT,                   -- JSON string[] of competitor domains ranking for the keyword
-  metrics            TEXT,                   -- JSON blob of AVAILABLE Ubersuggest metrics (volume/difficulty/cpc/...) — absent fields are UNKNOWN
-  metrics_source     TEXT,                   -- ubersuggest | none  (provenance of the metrics blob)
-  source             TEXT NOT NULL,          -- ubersuggest | manual | derived (how this opportunity was discovered)
+  metrics            TEXT,                   -- JSON blob of AVAILABLE metric ESTIMATES (volume/difficulty/cpc/...) — absent fields are UNKNOWN
+  metrics_source     TEXT,                   -- serp | ubersuggest | none  (provenance of the metrics blob)
+  serp               TEXT,                   -- JSON SerpData blob: observed Google SERP (who ranks, Zoe's position, PAA/related) — null when never read
+  source             TEXT NOT NULL,          -- serp | ubersuggest | manual | derived (how this opportunity was discovered)
   research_at        TEXT,                   -- ISO retrieval timestamp of the metrics (null = never fetched)
   matched_url        TEXT,                   -- matched Zoe URL (null until matched in Phase 2)
   recommended_action TEXT,                   -- CREATE | IMPROVE | CONSOLIDATE | SKIP (null until analyzed)
@@ -2086,18 +2087,21 @@ CREATE INDEX IF NOT EXISTS idx_exception_resolutions_status ON exception_resolut
 
 -- Website Studio (Phase 1) — a queue of plain-English website-change requests from the marketing team.
 -- The app only RECORDS the ask; the office-machine runner (tools/website-studio-runner) drains it, runs the
--- Claude Agent SDK against the SEPARATE website repo on a branch, renders the change on the LOCAL DevKinsta
--- site, screenshots it, and posts those back for a human to PREVIEW. Only after a human approves does the
--- runner push + open a PR — and nothing goes live until a human merges that PR. Mirrors the gs_outbox
+-- Claude Agent SDK against the SEPARATE website repo on a NON-MASTER working branch (website-studio/<id>),
+-- renders THAT branch on the LOCAL DevKinsta site, screenshots it, and posts those back for a human to
+-- PREVIEW. Only after a human approves does the runner push + open a PR into the deploy branch (master) and
+-- auto-merge it — the merge to master is what deploys to the live site (Kinsta). Mirrors the gs_outbox
 -- pattern (app queues, office machine executes). One job per row. The lifecycle is:
 --   pending   queued by a marketer
---   running   claimed by the runner (editing the repo + rendering + screenshotting locally)
+--   running   claimed by the runner (editing the working branch + rendering + screenshotting locally)
 --   preview   screenshots ready, awaiting a human approve/discard decision
---   approved  human approved → the runner pushes the branch + opens a PR
---   done      PR opened (pr_url set)
+--   approved  human approved → the runner pushes the working branch, opens a PR, and merges it into master
+--   done      PR opened + merge enabled/done (pr_url set; summary carries the merge note)
 --   discarded human rejected → the runner deletes the branch + restores the local site
 --   failed    the runner hit an error (summary/error captured)
 -- A non-technical remote team can't judge code, so they judge the rendered screenshots — never a blind PR.
+-- The working branch is NOT stored: it is derived deterministically from the id (see
+-- src/lib/website/config.ts workingBranchForJob) so the app's display always matches the branch the runner cuts.
 CREATE TABLE IF NOT EXISTS website_jobs (
   id            TEXT PRIMARY KEY,      -- "WJ-"+uuid
   prompt        TEXT NOT NULL,         -- the marketer's plain-English change request
@@ -2381,6 +2385,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // priority breakdown JSON. Both additive on the Phase-1 seo_opportunities table.
   { table: "seo_opportunities", column: "stage", type: "TEXT" },
   { table: "seo_opportunities", column: "priority_breakdown", type: "TEXT" },
+  // SEO Growth SERP pivot: the latest live Google SERP read (JSON SerpData) — who ranks, Zoe's position,
+  // PAA/related. Additive + nullable; rows pulled before the pivot simply have no SERP.
+  { table: "seo_opportunities", column: "serp", type: "TEXT" },
   // Shift Lifecycle engine: lifecycle + logistics columns on the demand line (all nullable; lifecycle_state
   // is authoritative going forward, derived from the legacy status when null). readiness_json is a derived
   // cache, never a source of truth.

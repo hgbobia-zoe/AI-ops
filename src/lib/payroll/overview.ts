@@ -3,7 +3,7 @@
 // is null when its source is unavailable. The AI layer (later) only INTERPRETS this; it never recomputes it.
 
 import { unifiedWorkers, workerCounts } from "./workers";
-import { countOpenExceptions, latestSyncRun, getApproval } from "./store";
+import { countOpenExceptions, latestSyncRun, getApproval, listPeriodExclusions, listReviewAccepts } from "./store";
 import { gustoConfigured } from "./gusto";
 import { instaworkTempPay } from "./instawork";
 import { classifyReview } from "./review";
@@ -15,9 +15,13 @@ export async function payrollOverview(period: PayPeriod): Promise<PayrollOvervie
   const counts = workerCounts(workers);
   const active = workers.filter((w) => w.active);
 
-  // Deterministic payroll-readiness classification (the taxonomy that drives "Can I approve payroll?").
+  // Deterministic payroll-readiness classification (the taxonomy that drives "Can I approve payroll?"). Honor
+  // the per-period exclusions + approvals the human set on the Review tab, so the Overview's ready/review/
+  // blocked rollup matches it (same inputs as payrollReview()).
   const cfg = getPayrollConfig();
-  const rv = classifyReview(period, workers, connecteamOk, { overtimeThreshold: cfg.overtimeThreshold });
+  const periodExclusions = listPeriodExclusions(period.start, period.end);
+  const reviewAccepts = listReviewAccepts(period.start, period.end);
+  const rv = classifyReview(period, workers, connecteamOk, { overtimeThreshold: cfg.overtimeThreshold }, periodExclusions, reviewAccepts);
   const approval = getApproval(period.start, period.end);
 
   // Total hours — only when the time source answered; otherwise UNVERIFIED (null), never a fabricated 0.

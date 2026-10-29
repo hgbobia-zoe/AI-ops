@@ -3,7 +3,8 @@
 //                       files, and changed site page paths (screenshots are uploaded separately to
 //                       /api/website/runner/artifact). Moves running → preview, then the runner WAITS for a
 //                       human approve/discard (polled via /api/website/runner/job).
-//   status "done"    — the branch was pushed + a PR opened (carries prUrl). Moves approved → done.
+//   status "done"    — the branch was pushed, a PR opened into master, and the merge enabled/done (carries
+//                       prUrl + a merge note in summary). Moves approved → done.
 //   status "failed"  — the runner hit an error (carries a short reason). From running or approved.
 // Token-gated (WEBSITE_RUNNER_TOKEN via x-website-runner-token), fail-CLOSED (503 until configured). The
 // store only transitions the expected prior state, so a stale/duplicate POST is a safe no-op (409).

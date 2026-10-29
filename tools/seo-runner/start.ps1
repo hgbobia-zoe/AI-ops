@@ -1,12 +1,14 @@
-# Run the SEO keyword-pull runner in the FOREGROUND (reads config from .env).
+# Run the SEO SERP-pull runner ONCE in the FOREGROUND (a test run). Reads config from .env.
 #   .\start.ps1
-# Use this for the ONE-TIME sign-in: it sets SEO_ALLOW_INTERACTIVE so the runner may open a browser for the
-# Ubersuggest OAuth. After you authorize once, the token is cached and the scheduled task runs headless.
+# There is NO sign-in step anymore (the Ubersuggest OAuth is gone) — this just reads a small batch of Google
+# SERPs and pushes them to the app so you can confirm it works, then watch boot.log / the SEO Overview.
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 if (-not (Test-Path ".env")) { Write-Error "No .env found - run .\setup.ps1 first, then edit .env."; exit 1 }
-if (-not (Test-Path "node_modules")) { Write-Error "Dependencies not installed - run .\setup.ps1 first."; exit 1 }
 
-$env:SEO_ALLOW_INTERACTIVE = "1"
 npm start
+
+Write-Host ""
+Write-Host "Done. Check what it read:  Get-Content .\boot.log -Tail 30" -ForegroundColor Green
+Write-Host "Then install the drip:     .\install-service.ps1"
