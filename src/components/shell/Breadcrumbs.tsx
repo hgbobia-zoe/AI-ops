@@ -6,14 +6,18 @@
 // @/lib/nav/config (breadcrumbTrail); this component just renders it off usePathname.
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 import { breadcrumbTrail } from "@/lib/nav/config";
 import type { Role } from "@/lib/auth/roles";
 
 export function Breadcrumbs({ role }: { role: Role }): React.JSX.Element {
   const pathname = usePathname();
-  const trail = breadcrumbTrail(pathname, role);
+  // The ?tab resolves the active sub-section for a nested blade (HR/Payroll) so the leaf crumb matches the
+  // sidebar's highlighted item. Reading it opts this client component into needing a Suspense boundary
+  // (AppHeader supplies one), per Next's useSearchParams contract.
+  const tab = useSearchParams().get("tab");
+  const trail = breadcrumbTrail(pathname, role, tab);
 
   return (
     <nav aria-label="Breadcrumb" className="min-w-0">

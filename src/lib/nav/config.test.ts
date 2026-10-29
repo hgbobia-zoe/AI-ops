@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
-  NAV_GROUPS, buildAdminGroup, bladeVisible, visibleGroups, visibleHubs, showsPrimaryAction,
-  isHrefActive, isBladeActive, groupIsActive, activeGroupLabel, activeBlade, breadcrumbTrail,
-  type Blade, type NavGroup,
+  NAV_GROUPS, PAYROLL_HREF, PAYROLL_SUBNAV, buildAdminGroup, bladeVisible, visibleGroups, visibleHubs,
+  showsPrimaryAction, isHrefActive, isBladeActive, groupIsActive, activeGroupLabel, activeBlade,
+  breadcrumbTrail, type Blade, type NavGroup,
 } from "@/lib/nav/config";
 
 const groupByLabel = (groups: NavGroup[], label: string) => groups.find((g) => g.label === label);
@@ -147,5 +147,42 @@ describe("breadcrumb trail", () => {
     const trail = breadcrumbTrail("/some/deep/thing", "owner");
     expect(trail[trail.length - 1]).toEqual({ label: "Thing" });
     expect(trail[0]).toEqual({ label: "Some", href: "/some" });
+  });
+
+  it("resolves a nested blade's active ?tab as the leaf crumb (People › Payroll › section)", () => {
+    // No tab (bare /payroll) → Overview is the leaf; the Payroll crumb is inert (we're on it).
+    expect(breadcrumbTrail(PAYROLL_HREF, "owner")).toEqual([
+      { label: "People" },
+      { label: "Payroll" },
+      { label: "Overview" },
+    ]);
+    // A deeper section → Payroll links back to its overview, the section is the current crumb.
+    expect(breadcrumbTrail(PAYROLL_HREF, "owner", "review")).toEqual([
+      { label: "People" },
+      { label: "Payroll", href: PAYROLL_HREF },
+      { label: "Payroll Review" },
+    ]);
+    // An unknown tab falls back to the first section (never throws / never a blank leaf).
+    expect(breadcrumbTrail(PAYROLL_HREF, "owner", "bogus")).toEqual([
+      { label: "People" },
+      { label: "Payroll" },
+      { label: "Overview" },
+    ]);
+  });
+});
+
+describe("nested payroll sub-nav", () => {
+  it("People › Payroll carries the eight sections as nested children", () => {
+    const people = groupByLabel(visibleGroups("owner"), "People")!;
+    const payroll = people.blades.find((b) => b.href === PAYROLL_HREF)!;
+    expect(payroll.label).toBe("Payroll");
+    expect(payroll.children?.map((c) => c.tab)).toEqual([
+      "overview", "review", "sync", "workers", "contractors", "exceptions", "history", "settings",
+    ]);
+    expect(payroll.children).toBe(PAYROLL_SUBNAV);
+  });
+
+  it("the Payroll blade stays financial-gated (members never see it or its sections)", () => {
+    expect(hrefs(visibleGroups("member"))).not.toContain(PAYROLL_HREF);
   });
 });

@@ -13,15 +13,16 @@
 // aria-current; group toggles carry aria-expanded. Full keyboard access throughout.
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Menu, X, ChevronRight, Tent, Plus, PanelLeftClose, PanelLeftOpen, LogOut } from "lucide-react";
 import { ROLE_LABEL, type Role } from "@/lib/auth/roles";
 import {
-  PRIMARY_ACTION, visibleGroups, visibleHubs, showsPrimaryAction,
+  PRIMARY_ACTION, PAYROLL_HREF, visibleGroups, visibleHubs, showsPrimaryAction,
   isHrefActive, isBladeActive, groupIsActive, activeGroupLabel, activeBlade,
-  type Blade,
+  type Blade, type SubBlade,
 } from "@/lib/nav/config";
+import { payrollSubHref, payrollSubActive, clampWeeksAgo } from "@/lib/payroll/nav";
 import { IntegrationSummary } from "@/components/shell/IntegrationSummary";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import type { Connection } from "@/lib/health/connections";
@@ -30,6 +31,48 @@ const GROUPS_KEY = "zoe-nav-groups";
 const COLLAPSED_KEY = "zoe-nav-collapsed";
 
 const groupId = (label: string) => "nav-group-" + label.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+const subId = (href: string) => "nav-sub-" + href.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+
+// The nested sub-section links for a blade with `children` (HR/Payroll). Third sidebar level: indented one
+// step past a blade, the ACTIVE destination carries the fill + accent (the parent blade row stays merely
+// identifiable). Pure/presentational so it can also serve as the Suspense fallback below.
+function PayrollLinks({
+  items, pathname, activeTab, weeksAgo, onNavigate,
+}: {
+  items: SubBlade[]; pathname: string; activeTab: string | null; weeksAgo: number; onNavigate: () => void;
+}): React.JSX.Element {
+  return (
+    <>
+      {items.map((c) => {
+        const Icon = c.icon;
+        const active = payrollSubActive(pathname, activeTab, PAYROLL_HREF, c.tab);
+        return (
+          <Link
+            key={c.tab}
+            href={payrollSubHref(PAYROLL_HREF, c.tab, weeksAgo)}
+            onClick={onNavigate}
+            aria-current={active ? "page" : undefined}
+            className={`flex items-center gap-2.5 rounded border-l-2 py-[6px] pr-2.5 pl-[44px] text-[12.5px] transition-colors ${
+              active
+                ? "border-l-[var(--primary)] bg-foreground/[0.08] font-medium text-foreground"
+                : "border-l-transparent text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"
+            }`}
+          >
+            <Icon className={`size-[14px] shrink-0 ${active ? "text-foreground" : "text-meta"}`} aria-hidden />
+            {c.label}
+          </Link>
+        );
+      })}
+    </>
+  );
+}
+
+// Reads the live ?tab + ?weeksAgo so the active section highlights and the links carry the selected pay
+// period. useSearchParams requires a Suspense boundary (supplied where this is rendered).
+function PayrollLinksLive({ items, pathname, onNavigate }: { items: SubBlade[]; pathname: string; onNavigate: () => void }): React.JSX.Element {
+  const sp = useSearchParams();
+  return <PayrollLinks items={items} pathname={pathname} activeTab={sp.get("tab")} weeksAgo={clampWeeksAgo(sp.get("weeksAgo"))} onNavigate={onNavigate} />;
+}
 
 export function ConsoleNav({
   role,
@@ -141,6 +184,25 @@ export function ConsoleNav({
     });
   }, []);
 
+  // Nested sub-groups (a blade with children, e.g. HR/Payroll). The sub-group owning the current page
+  // auto-expands — alongside its parent group — so landing on any payroll section opens People › Payroll.
+  // The viewer can still collapse it; state is session-only (the auto-open keeps it correct on navigation).
+  const activeSubHref = groups.flatMap((g) => g.blades).find((b) => b.children?.length && isHrefActive(b.href, pathname))?.href;
+  const [openSubs, setOpenSubs] = useState<Set<string>>(() => new Set(activeSubHref ? [activeSubHref] : []));
+  useEffect(() => {
+    if (!activeSubHref) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- auto-expand the active nested sub-group on navigation
+    setOpenSubs((prev) => (prev.has(activeSubHref) ? prev : new Set(prev).add(activeSubHref)));
+  }, [activeSubHref]);
+  const toggleSub = useCallback((href: string) => {
+    setOpenSubs((prev) => {
+      const n = new Set(prev);
+      if (n.has(href)) n.delete(href);
+      else n.add(href);
+      return n;
+    });
+  }, []);
+
   const logout = async () => {
     await fetch("/api/auth/login", { method: "DELETE" });
     window.location.href = "/login";
@@ -235,6 +297,34 @@ export function ConsoleNav({
               <div id={groupId(g.label)} hidden={!isOpen} className="mt-0.5 mb-1 flex flex-col gap-0.5">
                 {g.blades.map((b) => {
                   const BIcon = b.icon;
+                  // A blade with nested sub-sections (HR/Payroll) → a third-level disclosure in the same
+                  // sidebar. The parent row stays identifiable (foreground text, no fill); the active child
+                  // below it carries the fill + accent, so only the true destination reads as selected.
+                  if (b.children?.length) {
+                    const subOpen = openSubs.has(b.href);
+                    const onSub = isHrefActive(b.href, pathname);
+                    return (
+                      <div key={b.href}>
+                        <button
+                          onClick={() => toggleSub(b.href)}
+                          aria-expanded={subOpen}
+                          aria-controls={subId(b.href)}
+                          className={`flex w-full items-center gap-2.5 rounded py-[7px] pr-2.5 pl-[32px] text-[13px] font-medium transition-colors hover:bg-[var(--row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                            onSub ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <BIcon className={`size-[15px] shrink-0 ${onSub ? "text-foreground" : "text-meta"}`} aria-hidden />
+                          <span className="flex-1 text-left">{b.label}</span>
+                          <ChevronRight className={`size-3.5 shrink-0 text-meta transition-transform ${subOpen ? "rotate-90" : ""}`} aria-hidden />
+                        </button>
+                        <div id={subId(b.href)} hidden={!subOpen} className="mt-0.5 flex flex-col gap-0.5">
+                          <Suspense fallback={<PayrollLinks items={b.children} pathname={pathname} activeTab={null} weeksAgo={1} onNavigate={() => setOpen(false)} />}>
+                            <PayrollLinksLive items={b.children} pathname={pathname} onNavigate={() => setOpen(false)} />
+                          </Suspense>
+                        </div>
+                      </div>
+                    );
+                  }
                   const active = isBladeActive(b, pathname);
                   return (
                     <Link
