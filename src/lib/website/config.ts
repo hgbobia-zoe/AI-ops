@@ -35,6 +35,11 @@ export const DEFAULT_WEBSITE_DEPLOY_BRANCH = "master";
  *  non-empty and distinct from the deploy branch). */
 export const DEFAULT_WORKING_BRANCH_PREFIX = "website-studio/";
 
+/** Default merge behavior on approval. In-app approval is the ONLY gate, so the approved change merges to the
+ *  deploy branch IMMEDIATELY (false = do NOT prefer GitHub native auto-merge). Opt into the checks-gated
+ *  auto-merge with WEBSITE_AUTO_MERGE=1 (see websiteAutoMerge). */
+export const DEFAULT_WEBSITE_AUTO_MERGE = false;
+
 /** The configured target repo slug (owner/name). Never throws. */
 export function websiteRepoSlug(): string {
   return (process.env.WEBSITE_REPO_SLUG ?? "").trim() || DEFAULT_WEBSITE_REPO_SLUG;
@@ -43,6 +48,16 @@ export function websiteRepoSlug(): string {
 /** The configured deploy target / PR base branch (what deploys to Kinsta on push). Never throws. */
 export function websiteDeployBranch(): string {
   return (process.env.WEBSITE_DEPLOY_BRANCH ?? "").trim() || DEFAULT_WEBSITE_DEPLOY_BRANCH;
+}
+
+/** Whether the runner should prefer GitHub NATIVE auto-merge (the PR merges itself once required checks pass)
+ *  instead of merging immediately on approval. DEFAULT (env unset) = false: in-app approval is the only gate,
+ *  so the approved change squash-merges to the deploy branch immediately. Opt IN to the checks-gated native
+ *  auto-merge by setting WEBSITE_AUTO_MERGE to a truthy value (1/true/yes/on); 0/false/no/off (or unset) =
+ *  immediate. Parsing is intentionally opt-in-truthy so "unset" NEVER means auto-merge. The office runner
+ *  (tools/website-studio-runner/runner.js) mirrors this exact rule. Never throws. */
+export function websiteAutoMerge(): boolean {
+  return /^(1|true|yes|on)$/i.test((process.env.WEBSITE_AUTO_MERGE ?? "").trim());
 }
 
 /** The working-branch prefix, normalized to end with a single "/". Never throws; falls back to the default if
