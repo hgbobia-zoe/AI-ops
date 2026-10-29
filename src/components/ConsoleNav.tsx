@@ -1,256 +1,145 @@
 "use client";
 
-// The platform's navigation (Nocturne redesign, Goodshuffle-familiar). Two presentations from one source:
-//   • Desktop (lg+): a persistent left sidebar.
-//   • Mobile / tablet (< lg): a compact top bar with a hamburger that opens a slide-out drawer.
-// Blades live under expandable section parents (Operations / Sales / Company / Admin) — each with an icon
-// and a chevron, like Goodshuffle's sub-menus. Every blade carries an icon; the active blade is a solid
-// filled row. "New Project" is the primary action, pinned at the bottom above the viewer.
+// The platform's primary navigation (Nocturne redesign). Two presentations from ONE source of truth
+// (@/lib/nav/config):
+//   • Desktop (lg+): a persistent left sidebar, ~248px expanded, with a COLLAPSED icon-rail mode
+//     (toggle persisted) that keeps every destination reachable.
+//   • Mobile / tablet (< lg): a compact top bar (hamburger + page title + integration summary + theme
+//     toggle) that opens a focus-trapped slide-out drawer.
+//
+// Blades live under expandable "big blade" groups. The group holding the current page auto-expands
+// (active ancestor), while the viewer's manual expand/collapse of any group is remembered and never
+// forces unrelated groups open. The active destination is a strong, filled row with a left accent and
+// aria-current; group toggles carry aria-expanded. Full keyboard access throughout.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Menu, X, ChevronRight, Tent, Plus, PanelLeftClose, PanelLeftOpen, LogOut } from "lucide-react";
+import { ROLE_LABEL, type Role } from "@/lib/auth/roles";
 import {
-  Menu, X, ChevronRight,
-  LayoutGrid, Tag, Building2, Wrench,
-  Gauge, ListChecks, Truck, AlertTriangle, DollarSign,
-  TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
-  RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator, Radar, IdCard,
-  Megaphone, Send, Upload, CalendarDays, CalendarCheck, Star,
-  HeartHandshake, Columns3, LifeBuoy, ClipboardCheck, ClipboardList,
-  Aperture, Plus, Dna,
-  Headset, PhoneCall, FlaskConical,
-  Search, FileText, Rocket, Globe,
-  BrainCircuit, Tent, Wallet, Boxes,
-  type LucideIcon,
-} from "lucide-react";
-import { canSeeFinancials, canSeeCoaching, canManageSettings, canManageUsers, canUseSeo, marketingCanReachPage, ROLE_LABEL, type Role } from "@/lib/auth/roles";
+  PRIMARY_ACTION, visibleGroups, visibleHubs, showsPrimaryAction,
+  isHrefActive, isBladeActive, groupIsActive, activeGroupLabel, activeBlade,
+  type Blade,
+} from "@/lib/nav/config";
+import { IntegrationSummary } from "@/components/shell/IntegrationSummary";
+import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import type { Connection } from "@/lib/health/connections";
 
-interface Blade {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-  financial?: boolean; // only where role can see $
-  coaching?: boolean; // only where role can see call transcripts
-  manage?: boolean; // owner/admin only (e.g. Capability Profile)
-  seo?: boolean; // owner/admin + the scoped marketing role (canUseSeo) — SEO Growth blades
-  exact?: boolean; // highlight only on an exact path match (section landing pages)
-}
-interface Group {
-  label: string;
-  icon: LucideIcon;
-  blades: Blade[];
-}
+const GROUPS_KEY = "zoe-nav-groups";
+const COLLAPSED_KEY = "zoe-nav-collapsed";
 
-// Command Center is the main hub / 10k-ft view, so it sits on its own at the top of the nav, outside
-// (and above) the expandable sections — not nested inside Operations.
-const HUB: Blade = { href: "/dashboard", label: "Command Center", icon: Gauge };
-// AI Command Center — the operating layer / mission control over every AI session across the platform.
-// A first-class top-level area (distinct from the business Command Center and NOT buried in Admin),
-// pinned right below the hub. Governance (provider, bridge, per-blade AI) lives under Admin → AI Config.
-const AI_HUB: Blade = { href: "/ai-command", label: "AI Command Center", icon: BrainCircuit };
+const groupId = (label: string) => "nav-group-" + label.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
 
-const GROUPS: Group[] = [
-  {
-    // AI Org — the control plane over Zoe's AI workforce. A leadership/governance surface (owner/admin
-    // only, so every sub-blade carries `manage`): it SURFACES what the other blades already compute and
-    // governs the AI employees. Minimal, additive — it disturbs no existing routes.
-    label: "AI Org",
-    icon: BrainCircuit,
-    blades: [
-      { href: "/ai-org", label: "AI Org", icon: Gauge, exact: true, manage: true },
-      { href: "/ai-org/employees", label: "AI Employees", icon: UsersRound, manage: true },
-      { href: "/ai-org/approvals", label: "Approvals", icon: ClipboardCheck, manage: true },
-      { href: "/ai-org/runs", label: "Runs", icon: RefreshCw, manage: true },
-      { href: "/ai-org/exceptions", label: "Exceptions", icon: AlertTriangle, manage: true },
-    ],
-  },
-  {
-    // Opportunity Radar — the opportunity intelligence + bid-pursuit house. A big blade in its own right
-    // (it detects future demand; Sales OS converts it), with its working views as sub-blades. The
-    // reusable Capability Profile lives here too (owner/admin), not buried in Settings.
-    label: "Opportunity Radar",
-    icon: Radar,
-    blades: [
-      { href: "/radar", label: "Radar", icon: Gauge, exact: true },
-      { href: "/radar/outreach", label: "Outreach", icon: Send },
-      { href: "/radar/campaigns", label: "Campaigns", icon: Target },
-      { href: "/radar/companies", label: "Companies", icon: Building2 },
-      { href: "/radar/analytics", label: "Analytics", icon: TrendingUp },
-      { href: "/radar/sources", label: "Sources", icon: Plug },
-      { href: "/radar/capability", label: "Capability Profile", icon: IdCard, manage: true },
-      { href: "/radar/import", label: "Import", icon: Upload },
-    ],
-  },
-  {
-    label: "Operations",
-    icon: LayoutGrid,
-    blades: [
-      { href: "/ops", label: "Ops Manager", icon: ListChecks },
-      { href: "/dispatch", label: "Dispatch", icon: Truck },
-      // Event Command Center + Portfolio — the whole-event lifecycle view over the deterministic engine
-      // (src/lib/event/*). Owner/admin only (manage), matching the other back-office operations blades.
-      { href: "/events", label: "Events", icon: CalendarCheck, manage: true },
-      { href: "/risk", label: "Event Risk", icon: AlertTriangle },
-      // Inventory Automation — bulk-copy a partner's Goodshuffle catalog into Zoe's (sub-rental onboarding
-      // + future bulk cleanup). Owner/admin only (manage), like the other back-office operations blades.
-      { href: "/inventory", label: "Inventory", icon: Boxes, manage: true },
-      { href: "/scheduling", label: "Scheduling", icon: CalendarDays },
-      { href: "/admin/passes", label: "Shift Passes", icon: KeyRound, manage: true },
-      { href: "/finance", label: "Financial", icon: DollarSign, financial: true },
-    ],
-  },
-  {
-    // People — HR / Payroll. The reconciliation + control layer between Connecteam (operational time) and
-    // Gusto (payroll SoR): worker identity, time sync, exceptions, and the payroll audit trail. Pay + PII
-    // are sensitive, so it's owner/admin only (the blade carries `financial`, enforced in the proxy by
-    // canManagePayroll). Its sections are in-page tabs under the single /payroll blade.
-    label: "People",
-    icon: UsersRound,
-    blades: [
-      // People Lifecycle — onboarding / offboarding + access provisioning. Owner/admin only (manage);
-      // the proxy gates /people by canManageUsers, matching Admin → Team.
-      { href: "/people", label: "People Lifecycle", icon: Contact, manage: true },
-      { href: "/payroll", label: "HR / Payroll", icon: Wallet, financial: true },
-    ],
-  },
-  {
-    // Marketing — Zoe's demand-generation OS. A big blade over the tools the team runs (Confluence,
-    // social poster, ManyChat, Google Business). Two-track: weddings/social + corporate/gov. Sits above
-    // Sales: it fills the top of the funnel that Sales then converts.
-    label: "Marketing",
-    icon: Megaphone,
-    blades: [
-      { href: "/marketing", label: "Marketing", icon: Gauge, exact: true },
-      { href: "/marketing/outreach", label: "Outreach", icon: Send },
-      { href: "/marketing/campaigns", label: "Campaigns", icon: Megaphone },
-      { href: "/marketing/content", label: "Content", icon: CalendarDays },
-      { href: "/marketing/reviews", label: "Reviews", icon: Star },
-      // Creative Engine — AI-directed creative production (AI creates, rules constrain, AI evaluates,
-      // humans approve). It produces the marketing/web imagery, so it lives under Marketing.
-      { href: "/creative", label: "Creative Engine", icon: Aperture, exact: true },
-      { href: "/creative/new", label: "New Creative Job", icon: Plus },
-      { href: "/creative/benchmarks", label: "Provider Benchmarks", icon: FlaskConical },
-      { href: "/creative/dna", label: "Visual DNA", icon: Dna, manage: true },
-    ],
-  },
-  {
-    // SEO & Website — the organic-demand engine grouped with Website Studio, because the website exists to
-    // drive SEO: keyword research (Ubersuggest MCP), opportunity matching, competitor intelligence, content
-    // production (reusing the Creative Engine), publishing, AND the prompt→PR website editor that feeds it.
-    // SEO sub-blades carry `seo` (owner/admin + marketing via canUseSeo; the integration CREDENTIAL stays
-    // settings-gated). Website Studio is any-staff (canUseWebsiteStudio) + marketing; it only QUEUES a PR.
-    label: "SEO & Website",
-    icon: Search,
-    blades: [
-      { href: "/seo", label: "SEO Overview", icon: Gauge, exact: true, seo: true },
-      { href: "/seo/opportunities", label: "Opportunities", icon: Search, seo: true },
-      { href: "/seo/competitors", label: "Competitors", icon: Building2, seo: true },
-      { href: "/seo/content", label: "Content Studio", icon: FileText, seo: true },
-      { href: "/seo/queue", label: "Review Queue", icon: ClipboardCheck, seo: true },
-      { href: "/seo/performance", label: "Performance", icon: Rocket, seo: true },
-      // Website Studio — prompt a website change in plain English, preview the rendered result, approve → PR.
-      // Grouped here because the website's job is to drive SEO. Any staff (canUseWebsiteStudio) + marketing.
-      { href: "/website-studio", label: "Website Studio", icon: Globe },
-    ],
-  },
-  {
-    // Communications / Voice Operations — "give the Control Tower a voice." The operating console over
-    // Zoe's inbound/outbound calls + SMS (Quo owns telephony; Sona will own conversation), with the
-    // context engine, tool registry and Voice Lab. Reads like a dispatch desk, not a chatbot. Sits under
-    // Sales — it's where the customer conversation actually happens.
-    label: "Communications",
-    icon: Headset,
-    blades: [
-      { href: "/communications", label: "Queue", icon: PhoneCall, exact: true },
-      { href: "/communications/lab", label: "Voice Lab", icon: FlaskConical },
-      { href: "/communications/tools", label: "Tool Registry", icon: Wrench },
-      { href: "/communications/status", label: "Integrations", icon: Plug },
-    ],
-  },
-  {
-    label: "Sales",
-    icon: Tag,
-    blades: [
-      { href: "/sales", label: "Sales", icon: TrendingUp },
-      { href: "/salesos", label: "Sales OS", icon: Target },
-      { href: "/salesos/outreach", label: "Bulk Outreach", icon: Send, manage: true },
-      { href: "/salesos/status", label: "Pipeline Status", icon: ClipboardList, financial: true },
-      { href: "/coaching", label: "Coaching", icon: GraduationCap, coaching: true },
-      { href: "/customers", label: "Customers", icon: Contact },
-      { href: "/pricing", label: "Delivery Pricing", icon: Calculator },
-    ],
-  },
-  {
-    // Post-Event — the human-first customer experience + service-recovery + review workflow. A review is
-    // the OUTCOME of a confirmed good experience, never the objective. The real product is the structured
-    // funnel data behind it (Overview). Sits directly under Sales — the far end of the same customer
-    // lifecycle. Working views are the sub-blades.
-    label: "Post-Event",
-    icon: HeartHandshake,
-    blades: [
-      { href: "/postevent", label: "Overview", icon: Gauge, exact: true },
-      { href: "/postevent/kanban", label: "Kanban", icon: Columns3 },
-      { href: "/postevent/issues", label: "Issues / Recovery", icon: LifeBuoy },
-      { href: "/postevent/analytics", label: "Analytics", icon: TrendingUp },
-      { href: "/postevent/closures", label: "Closure Reasons", icon: ClipboardCheck },
-    ],
-  },
-  {
-    label: "Company",
-    icon: Building2,
-    blades: [
-      { href: "/history", label: "History", icon: Clock },
-      { href: "/automation", label: "Automation", icon: Zap },
-    ],
-  },
-];
-
-export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: string }): React.JSX.Element {
+export function ConsoleNav({
+  role,
+  viewerName,
+  connections = [],
+}: {
+  role: Role;
+  viewerName?: string;
+  connections?: Connection[];
+}): React.JSX.Element {
   const pathname = usePathname();
-  const [open, setOpen] = useState(false); // drawer (mobile)
-  const close = () => setOpen(false); // drawer closes on any nav tap
 
-  const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
-  const bladeActive = (b: Blade) => (b.exact ? pathname === b.href : isActive(b.href));
-  // The scoped marketing role sees its WHOLE allowed surface (Marketing incl. Creative, Opportunity Radar,
-  // SEO Growth, Website Studio) — the same allow-list the proxy enforces as the hard boundary. Within that
-  // surface it sees every blade (there are no financial ones there), so the `manage`/`seo` flags — which exist
-  // to gate the OTHER roles' deny-list model — don't hide anything from it; the financial flag is still
-  // honored defensively. Non-marketing roles keep the original "see everything except flagged-sensitive".
-  const isMarketingRole = role === "marketing";
-  const canSee = (b: Blade) =>
-    (!b.financial || canSeeFinancials(role)) &&
-    (isMarketingRole
-      ? marketingCanReachPage(b.href)
-      : (!b.coaching || canSeeCoaching(role)) && (!b.seo || canUseSeo(role)) && (!b.manage || canManageSettings(role)));
+  const hubs = visibleHubs(role);
+  const groups = visibleGroups(role);
+  const showPrimary = showsPrimaryAction(role);
+  const activeGroup = activeGroupLabel(groups, pathname);
 
-  // Admin is another expandable parent, built from what the role can manage.
-  const adminBlades: Blade[] = [];
-  if (canManageSettings(role)) adminBlades.push({ href: "/admin/pull", label: "Pull Routes", icon: RefreshCw });
-  if (canManageSettings(role)) adminBlades.push({ href: "/admin/health", label: "Connections", icon: Plug });
-  if (canManageUsers(role)) adminBlades.push({ href: "/admin/users", label: "Team", icon: UsersRound });
-  // AI Configuration — govern the AI system (provider, session bridge, per-blade AI). Operating the AI
-  // lives in the top-level AI Command Center; this is the governance half.
-  if (canManageSettings(role)) adminBlades.push({ href: "/admin/ai", label: "AI Configuration", icon: BrainCircuit });
-  // Shift Passes moved to the Operations group (it's an ops task, not a setting).
-  if (canManageSettings(role)) adminBlades.push({ href: "/admin", label: "Settings", icon: Settings });
+  // Drawer (mobile) + its focus management.
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const closeDrawer = useCallback(() => {
+    setOpen(false);
+    triggerRef.current?.focus(); // return focus to the trigger
+  }, []);
+  // Move focus into the drawer when it opens.
+  useEffect(() => {
+    if (open) closeBtnRef.current?.focus();
+  }, [open]);
+  // Trap Tab within the open drawer; Escape closes it.
+  const onDrawerKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      closeDrawer();
+      return;
+    }
+    if (e.key !== "Tab" || !drawerRef.current) return;
+    const nodes = drawerRef.current.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    if (nodes.length === 0) return;
+    const first = nodes[0];
+    const last = nodes[nodes.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
-  const parents: Group[] = [
-    ...GROUPS.map((g) => ({ ...g, blades: g.blades.filter(canSee) })).filter((g) => g.blades.length > 0),
-    ...(adminBlades.length ? [{ label: "Admin", icon: Wrench, blades: adminBlades }] : []),
-  ];
+  // Desktop collapsed rail — preference persisted (minor expand→collapse settle on first paint only).
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    try {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time restore of the persisted rail preference
+      if (localStorage.getItem(COLLAPSED_KEY) === "1") setCollapsed(true);
+    } catch {
+      /* storage blocked (private mode) — default expanded */
+    }
+  }, []);
+  const toggleCollapsed = () =>
+    setCollapsed((v) => {
+      const nv = !v;
+      try {
+        localStorage.setItem(COLLAPSED_KEY, nv ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return nv;
+    });
 
-  // The section holding the current page starts expanded; the user can toggle any parent from there.
-  const activeGroup = parents.find((g) => g.blades.some((b) => isActive(b.href)))?.label;
+  // Expanded groups. Seeded deterministically from the active ancestor (matches SSR), then merged with
+  // the viewer's saved manual preferences after mount.
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set(activeGroup ? [activeGroup] : []));
-  const toggleGroup = (label: string) =>
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(GROUPS_KEY);
+      if (!raw) return;
+      const arr = JSON.parse(raw) as unknown;
+      if (Array.isArray(arr)) {
+        const saved = arr.filter((x): x is string => typeof x === "string");
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time merge of saved expand/collapse prefs
+        setOpenGroups((prev) => new Set([...prev, ...saved]));
+      }
+    } catch {
+      /* ignore malformed storage */
+    }
+  }, []);
+  // Auto-expand the active ancestor whenever navigation changes which group owns the page.
+  useEffect(() => {
+    if (!activeGroup) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- auto-expand the active ancestor on navigation
+    setOpenGroups((prev) => (prev.has(activeGroup) ? prev : new Set(prev).add(activeGroup)));
+  }, [activeGroup]);
+  const toggleGroup = useCallback((label: string) => {
     setOpenGroups((prev) => {
       const n = new Set(prev);
       if (n.has(label)) n.delete(label);
       else n.add(label);
+      try {
+        localStorage.setItem(GROUPS_KEY, JSON.stringify([...n]));
+      } catch {
+        /* ignore */
+      }
       return n;
     });
+  }, []);
 
   const logout = async () => {
     await fetch("/api/auth/login", { method: "DELETE" });
@@ -260,169 +149,269 @@ export function ConsoleNav({ role, viewerName }: { role: Role; viewerName?: stri
   const name = viewerName?.trim() || "Zoe Operations";
   const initials = name.split(/\s+/).map((p) => p[0]).slice(0, 2).join("").toUpperCase() || "ZO";
 
-  // The label of the current screen, for the mobile top bar (mirrors Goodshuffle showing the page title).
-  const isNewProject = pathname === "/intake" || pathname.startsWith("/intake/");
-  const activeLabel = isNewProject
-    ? "New Project"
-    : isActive(HUB.href)
-      ? HUB.label
-      : [...parents].flatMap((g) => g.blades).filter((b) => bladeActive(b)).sort((a, b) => b.href.length - a.href.length)[0]?.label ?? "Zoe Operations";
+  // Title for the compact mobile top bar (mirrors the current screen).
+  const isNewProject = isHrefActive(PRIMARY_ACTION.href, pathname);
+  const activeLabel =
+    isNewProject
+      ? PRIMARY_ACTION.label
+      : hubs.find((h) => isHrefActive(h.href, pathname))?.label ?? activeBlade(groups, pathname)?.label ?? "Zoe Operations";
 
-  const HubIcon = HUB.icon;
-  const AiHubIcon = AI_HUB.icon;
+  // ── A single hub/blade row (shared by drawer + expanded desktop) ──
+  const hubRow = (hub: Blade) => {
+    const active = isHrefActive(hub.href, pathname);
+    const Icon = hub.icon;
+    return (
+      <Link
+        key={hub.href}
+        href={hub.href}
+        onClick={() => setOpen(false)}
+        aria-current={active ? "page" : undefined}
+        className={`flex items-center gap-2.5 rounded border-l-2 px-2.5 py-2 text-[13px] font-medium transition-colors ${
+          active
+            ? "border-l-[var(--primary)] bg-foreground/[0.08] text-foreground"
+            : "border-l-transparent text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
+        }`}
+      >
+        <Icon className={`size-[17px] shrink-0 ${active ? "text-foreground" : "text-meta"}`} aria-hidden />
+        <span className="flex-1">{hub.label}</span>
+        {hub.badge && (
+          <span className="rounded border border-[var(--info)]/40 px-1 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.08em] text-[var(--info)]">New</span>
+        )}
+      </Link>
+    );
+  };
 
-  // The nav body — shared by the desktop sidebar and the mobile drawer. `withClose` adds the drawer's ✕.
-  const panel = (withClose: boolean): React.JSX.Element => (
+  // The expanded nav body — shared by the desktop sidebar (expanded) and the mobile drawer.
+  const expandedPanel = (variant: "drawer" | "desktop"): React.JSX.Element => (
     <>
-      {/* Wordmark — ZOE (gold) OPERATIONS with the tent mark */}
+      {/* Wordmark + a trailing control (drawer: close ✕ · desktop: collapse) */}
       <div className="flex items-center gap-2.5 px-4 py-4 lg:px-[18px]">
-        <Tent className="size-5 shrink-0 text-[var(--gold)]" />
-        <span className="text-[14px] tracking-[0.04em]"><span className="font-semibold text-[var(--gold)]">ZOE</span> <span className="text-foreground">OPERATIONS</span></span>
-        {withClose && (
-          <button onClick={close} aria-label="Close navigation" className="ml-auto flex size-8 items-center justify-center rounded border border-border text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">
-            <X className="size-4" />
+        <Tent className="size-5 shrink-0 text-[var(--gold)]" aria-hidden />
+        <span className="text-[14px] tracking-[0.04em]">
+          <span className="font-semibold text-[var(--gold)]">ZOE</span> <span className="text-foreground">OPERATIONS</span>
+        </span>
+        {variant === "drawer" ? (
+          <button
+            ref={closeBtnRef}
+            onClick={closeDrawer}
+            aria-label="Close navigation"
+            className="ml-auto flex size-8 items-center justify-center rounded border border-border text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <X className="size-4" aria-hidden />
+          </button>
+        ) : (
+          <button
+            onClick={toggleCollapsed}
+            aria-label="Collapse navigation"
+            aria-expanded
+            className="ml-auto hidden size-8 items-center justify-center rounded border border-border text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:flex"
+          >
+            <PanelLeftClose className="size-4" aria-hidden />
           </button>
         )}
       </div>
 
-      {/* Command Center — the hub / 10k-ft view, pinned at the top above the sections */}
-      <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1">
-        {/* The 10k-ft hubs are hidden for the scoped marketing role (confined to Marketing + Website Studio). */}
-        {!isMarketingRole && (
-          <Link
-            href={HUB.href}
-            onClick={close}
-            aria-current={isActive(HUB.href) ? "page" : undefined}
-            className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
-              isActive(HUB.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
-            }`}
-          >
-            <HubIcon className={`size-[17px] shrink-0 ${isActive(HUB.href) ? "text-foreground" : "text-meta"}`} />
-            {HUB.label}
-          </Link>
-        )}
+      <nav aria-label="Primary" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-1">
+        {hubs.map(hubRow)}
 
-        {/* AI Command Center — second pinned top-level item (mission control over all AI activity) */}
-        {!isMarketingRole && (
-          <Link
-            href={AI_HUB.href}
-            onClick={close}
-            aria-current={isActive(AI_HUB.href) ? "page" : undefined}
-            className={`flex items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors ${
-              isActive(AI_HUB.href) ? "bg-foreground/[0.08] text-foreground" : "text-tertiary-text hover:bg-[var(--row-hover)] hover:text-foreground"
-            }`}
-          >
-            <AiHubIcon className={`size-[17px] shrink-0 ${isActive(AI_HUB.href) ? "text-foreground" : "text-meta"}`} />
-            <span className="flex-1">{AI_HUB.label}</span>
-            <span className="rounded border border-attention/40 px-1 py-0.5 text-[8.5px] font-semibold uppercase tracking-[0.08em] text-attention">New</span>
-          </Link>
-        )}
-
-        {/* Expandable section parents → sub-blades */}
-        {parents.map((g) => {
+        {groups.map((g) => {
           const isOpen = openGroups.has(g.label);
           const GIcon = g.icon;
-          const hasActive = g.blades.some((b) => isActive(b.href));
+          const hasActive = groupIsActive(g, pathname);
           return (
             <div key={g.label}>
               <button
                 onClick={() => toggleGroup(g.label)}
                 aria-expanded={isOpen}
-                className={`flex w-full items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--row-hover)] ${hasActive ? "text-foreground" : "text-tertiary-text hover:text-foreground"}`}
+                aria-controls={groupId(g.label)}
+                className={`flex w-full items-center gap-2.5 rounded px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                  hasActive ? "text-foreground" : "text-tertiary-text hover:text-foreground"
+                }`}
               >
-                <GIcon className="size-[17px] shrink-0 text-meta" />
+                <GIcon className="size-[17px] shrink-0 text-meta" aria-hidden />
                 <span className="flex-1 text-left">{g.label}</span>
-                <ChevronRight className={`size-4 shrink-0 text-meta transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                <ChevronRight className={`size-4 shrink-0 text-meta transition-transform ${isOpen ? "rotate-90" : ""}`} aria-hidden />
               </button>
-              {isOpen && (
-                <div className="mt-0.5 mb-1 flex flex-col gap-0.5">
-                  {g.blades.map((b) => {
-                    const BIcon = b.icon;
-                    const active = bladeActive(b);
-                    return (
-                      <Link
-                        key={b.href}
-                        href={b.href}
-                        onClick={close}
-                        aria-current={active ? "page" : undefined}
-                        className={`flex items-center gap-2.5 rounded py-[7px] pl-[34px] pr-2.5 text-[13px] transition-colors ${
-                          active ? "bg-foreground/[0.08] font-medium text-foreground" : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"
-                        }`}
-                      >
-                        <BIcon className={`size-[15px] shrink-0 ${active ? "text-foreground" : "text-meta"}`} />
-                        {b.label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              )}
+              <div id={groupId(g.label)} hidden={!isOpen} className="mt-0.5 mb-1 flex flex-col gap-0.5">
+                {g.blades.map((b) => {
+                  const BIcon = b.icon;
+                  const active = isBladeActive(b, pathname);
+                  return (
+                    <Link
+                      key={b.href}
+                      href={b.href}
+                      onClick={() => setOpen(false)}
+                      aria-current={active ? "page" : undefined}
+                      className={`flex items-center gap-2.5 rounded border-l-2 py-[7px] pr-2.5 pl-[32px] text-[13px] transition-colors ${
+                        active
+                          ? "border-l-[var(--primary)] bg-foreground/[0.08] font-medium text-foreground"
+                          : "border-l-transparent text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"
+                      }`}
+                    >
+                      <BIcon className={`size-[15px] shrink-0 ${active ? "text-foreground" : "text-meta"}`} aria-hidden />
+                      {b.label}
+                    </Link>
+                  );
+                })}
+              </div>
             </div>
           );
         })}
       </nav>
 
-      {/* Primary action — start a new customer project (the guided intake). Sits at the bottom, just
-          above the viewer, mirroring Goodshuffle's "Create New Project" placement. Hidden for the scoped
-          marketing role, which has no access to intake/projects (proxy-denied). */}
-      {!isMarketingRole && (
+      {showPrimary && (
         <div className="border-t border-border px-2 py-2 lg:px-3">
           <Link
-            href="/intake"
-            onClick={close}
-            aria-current={isActive("/intake") ? "page" : undefined}
-            className={`flex items-center justify-center gap-2 whitespace-nowrap rounded border px-3 py-2 text-[13.5px] font-medium transition-colors ${
-              isActive("/intake") ? "border-foreground bg-foreground/[0.07] text-foreground" : "border-border text-foreground hover:bg-[var(--row-hover)]"
+            href={PRIMARY_ACTION.href}
+            onClick={() => setOpen(false)}
+            aria-current={isHrefActive(PRIMARY_ACTION.href, pathname) ? "page" : undefined}
+            className={`flex items-center justify-center gap-2 whitespace-nowrap rounded border px-3 py-2 text-[13.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+              isHrefActive(PRIMARY_ACTION.href, pathname) ? "border-foreground bg-foreground/[0.07] text-foreground" : "border-border text-foreground hover:bg-[var(--row-hover)]"
             }`}
           >
-            <span aria-hidden className="text-[15px] leading-none text-tertiary-text">+</span> New Project
+            <Plus className="size-4 shrink-0 text-tertiary-text" aria-hidden /> {PRIMARY_ACTION.label}
           </Link>
         </div>
       )}
 
-      {/* Viewer */}
       <div className="flex items-center gap-2.5 border-t border-border px-[18px] py-3">
         <span className="flex size-7 shrink-0 items-center justify-center rounded border border-border text-[11px] font-medium text-tertiary-text">{initials}</span>
         <div className="min-w-0 flex-1 leading-tight">
           <div className="truncate text-[12.5px] font-medium text-foreground">{name}</div>
           <div className="text-[11px] text-meta">{ROLE_LABEL[role]}</div>
         </div>
-        <button onClick={logout} className="text-[11.5px] font-medium uppercase tracking-[0.06em] text-meta transition-colors hover:text-foreground" title="Sign out">
+        <button onClick={logout} className="text-[11.5px] font-medium uppercase tracking-[0.06em] text-meta transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Sign out">
           Sign out
         </button>
       </div>
     </>
   );
 
+  // ── Collapsed desktop rail: icons only, every destination still reachable ──
+  const railIconBtn =
+    "flex size-9 items-center justify-center rounded border-l-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  const expandAndOpen = (label: string) => {
+    setCollapsed(false);
+    try {
+      localStorage.setItem(COLLAPSED_KEY, "0");
+    } catch {
+      /* ignore */
+    }
+    setOpenGroups((prev) => (prev.has(label) ? prev : new Set(prev).add(label)));
+  };
+  const rail = (
+    <div className="flex h-full flex-col items-center gap-1 py-3">
+      <Tent className="size-5 shrink-0 text-[var(--gold)]" aria-hidden />
+      <button
+        onClick={toggleCollapsed}
+        aria-label="Expand navigation"
+        aria-expanded={false}
+        className="mt-1 flex size-9 items-center justify-center rounded border border-border text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <PanelLeftOpen className="size-4" aria-hidden />
+      </button>
+
+      <div className="mt-1 flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto">
+        {hubs.map((hub) => {
+          const active = isHrefActive(hub.href, pathname);
+          const Icon = hub.icon;
+          return (
+            <Link
+              key={hub.href}
+              href={hub.href}
+              aria-current={active ? "page" : undefined}
+              aria-label={hub.label}
+              title={hub.label}
+              className={`${railIconBtn} ${active ? "border-l-[var(--primary)] bg-foreground/[0.08] text-foreground" : "border-l-transparent text-meta hover:bg-[var(--row-hover)] hover:text-foreground"}`}
+            >
+              <Icon className="size-[18px]" aria-hidden />
+            </Link>
+          );
+        })}
+        {groups.map((g) => {
+          const GIcon = g.icon;
+          const hasActive = groupIsActive(g, pathname);
+          return (
+            <button
+              key={g.label}
+              onClick={() => expandAndOpen(g.label)}
+              aria-label={`${g.label} (expand to open)`}
+              title={g.label}
+              className={`${railIconBtn} ${hasActive ? "border-l-[var(--primary)] bg-foreground/[0.08] text-foreground" : "border-l-transparent text-meta hover:bg-[var(--row-hover)] hover:text-foreground"}`}
+            >
+              <GIcon className="size-[18px]" aria-hidden />
+            </button>
+          );
+        })}
+      </div>
+
+      {showPrimary && (
+        <Link
+          href={PRIMARY_ACTION.href}
+          aria-label={PRIMARY_ACTION.label}
+          title={PRIMARY_ACTION.label}
+          className="flex size-9 items-center justify-center rounded border border-border text-foreground transition-colors hover:bg-[var(--row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Plus className="size-4" aria-hidden />
+        </Link>
+      )}
+      <span className="flex size-7 shrink-0 items-center justify-center rounded border border-border text-[11px] font-medium text-tertiary-text" title={`${name} · ${ROLE_LABEL[role]}`}>{initials}</span>
+      <button
+        onClick={logout}
+        aria-label="Sign out"
+        title="Sign out"
+        className="flex size-9 items-center justify-center rounded text-meta transition-colors hover:bg-[var(--row-hover)] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <LogOut className="size-4" aria-hidden />
+      </button>
+    </div>
+  );
+
   return (
     <>
-      {/* Mobile / tablet: compact top bar with a hamburger (Goodshuffle-style) */}
-      <div className="flex items-center gap-3 border-b border-border bg-sidebar px-3 py-2.5 lg:hidden">
-        <button onClick={() => setOpen(true)} aria-label="Open navigation" aria-expanded={open} className="flex size-9 items-center justify-center rounded border border-border text-foreground transition-colors hover:bg-[var(--row-hover)]">
-          <Menu className="size-5" />
+      {/* Mobile / tablet: compact top bar (hamburger · title · integration summary · theme) */}
+      <div className="flex items-center gap-2 border-b border-border bg-sidebar px-3 py-2.5 lg:hidden">
+        <button
+          ref={triggerRef}
+          onClick={() => setOpen(true)}
+          aria-label="Open navigation"
+          aria-expanded={open}
+          className="flex size-9 shrink-0 items-center justify-center rounded border border-border text-foreground transition-colors hover:bg-[var(--row-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Menu className="size-5" aria-hidden />
         </button>
-        <span className="truncate text-[15px] font-medium text-foreground">{activeLabel}</span>
+        <span className="min-w-0 flex-1 truncate text-[15px] font-medium text-foreground">{activeLabel}</span>
+        <IntegrationSummary connections={connections} />
+        <ThemeToggle />
       </div>
 
       {/* Drawer backdrop */}
       <div
         aria-hidden
-        onClick={close}
+        onClick={closeDrawer}
         className={`fixed inset-0 z-40 bg-black/60 transition-opacity duration-200 lg:hidden ${open ? "opacity-100" : "pointer-events-none opacity-0"}`}
       />
 
-      {/* Drawer */}
+      {/* Drawer — focus-trapped while open; inert (out of tab order + a11y tree) while closed */}
       <aside
+        ref={drawerRef}
+        onKeyDown={onDrawerKeyDown}
+        inert={!open}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Navigation"
         className={`fixed inset-y-0 left-0 z-50 flex w-[264px] max-w-[82vw] flex-col overflow-y-auto border-r border-border bg-sidebar transition-transform duration-200 lg:hidden ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
-        aria-hidden={!open}
       >
-        {panel(true)}
+        {expandedPanel("drawer")}
       </aside>
 
-      {/* Desktop: persistent left sidebar */}
-      <aside className="hidden shrink-0 lg:sticky lg:top-0 lg:flex lg:h-dvh lg:w-[212px] lg:flex-col lg:border-r lg:border-border lg:bg-sidebar">
-        {panel(false)}
+      {/* Desktop: persistent left sidebar (expanded ~248px, or a collapsed icon rail) */}
+      <aside
+        className={`hidden shrink-0 lg:sticky lg:top-0 lg:flex lg:h-dvh lg:flex-col lg:border-r lg:border-border lg:bg-sidebar ${collapsed ? "lg:w-[60px]" : "lg:w-[248px]"}`}
+      >
+        {collapsed ? rail : expandedPanel("desktop")}
       </aside>
     </>
   );
