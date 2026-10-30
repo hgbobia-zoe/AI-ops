@@ -279,10 +279,82 @@ export interface CrewMember {
 // reversal of #81 (2026-10-23), IS auto-routed on an UNAMBIGUOUS match — exactly one open field route fits
 // (see routeAutoAssign.isAutoRouteEligible). The safe default for an UNrecognized title stays "other"
 // (non-crew, never auto-routed) — we never guess an unproven worker onto a delivery route.
+//
+// DENY-BY-DEFAULT, OFFICE WINS (2026-10-30 — the "Raquel" fix): this is the ONE chokepoint every auto-route
+// path reads (roster role → scheduledUnrouted → routeAutoAssign/driverSeniority/optimize all gate on this
+// CrewRole). The old classifier was a loose substring ALLOW-list with no back-office exclusion, so a
+// back-office title that merely CONTAINED a crew word (e.g. "Asset Manager", "Warehouse Manager", "Driver
+// Coordinator") was promoted to delivery crew and auto-assigned to a truck. Raquel is back office and must
+// NEVER be auto-routed. The fix: an explicit OFFICE/back-office denylist is checked FIRST and wins — only a
+// title with a genuine crew word AND no office word is delivery-eligible; everything else is "other". This
+// matches the documented intent (availability.ts: "any manager type → other") and keeps the honest default.
+// Whole-word matching (not raw substring) so a crew word embedded in an unrelated word can't false-match.
+
+/** Connecteam Title words that mark a DRIVER (drives the truck on the event day). */
+export const DRIVER_TITLE_KEYWORDS = ["driver"] as const;
+/** Connecteam Title words that mark WAREHOUSE / field-prep crew (loads, processes returns, fills a field seat). */
+export const PREP_TITLE_KEYWORDS = ["warehouse", "asset", "prep", "loader"] as const;
+/** Connecteam Title words that mark a BACK-OFFICE / admin role — NEVER delivery crew, never auto-routed. Checked
+ *  FIRST so an office title that incidentally contains a crew word (e.g. "Warehouse Manager", "Asset Manager")
+ *  is still classified "other". Extend here as new back-office titles appear (see the owner-editable note in the
+ *  PR: this mirrors specialtyItemKeywords and is a clean candidate to promote into /admin settings). */
+export const OFFICE_TITLE_KEYWORDS = [
+  "office",
+  "admin",
+  "administrative",
+  "manager",
+  "management",
+  "coordinator",
+  "sales",
+  "marketing",
+  "executive",
+  "assistant",
+  "reception",
+  "receptionist",
+  "accounting",
+  "accountant",
+  "bookkeeper",
+  "bookkeeping",
+  "finance",
+  "payroll",
+  "clerk",
+  "recruiter",
+  "director",
+  "president",
+  "hr",
+] as const;
+
+function tokenizeTitle(title: string): string[] {
+  return title.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+/** CREW allow-list match — WHOLE WORD (token must equal the keyword; multi-word → phrase substring). Narrow on
+ *  purpose: a crew word embedded in an unrelated word ("screwdriver") must NOT promote someone to crew. */
+function hasCrewWord(title: string, keywords: readonly string[]): boolean {
+  const tokens = tokenizeTitle(title);
+  const tokenSet = new Set(tokens);
+  const joined = tokens.join(" ");
+  return keywords.some((k) => (k.includes(" ") ? joined.includes(k) : tokenSet.has(k)));
+}
+
+/** OFFICE deny-list match — token PREFIX (a token that starts with the keyword; multi-word → phrase substring).
+ *  Broad on purpose so "admin" catches "administrative"/"administrator" and "account" catches "accountant":
+ *  we want to deny back-office widely, never guess an admin onto a truck. */
+function hasOfficeWord(title: string, keywords: readonly string[]): boolean {
+  const tokens = tokenizeTitle(title);
+  const joined = tokens.join(" ");
+  return keywords.some((k) => (k.includes(" ") ? joined.includes(k) : tokens.some((t) => t.startsWith(k))));
+}
+
 export function roleFromTitle(title?: string): CrewRole {
-  const t = (title || "").toLowerCase();
-  if (t.includes("driver")) return "driver";
-  if (t.includes("warehouse") || t.includes("asset") || t.includes("prep") || t.includes("loader")) return "prep";
+  const t = title || "";
+  // 1. OFFICE / back-office wins first — a non-delivery role is never auto-routed, even if its title also
+  //    carries a crew word ("Warehouse Manager", "Asset Manager", "Driver Coordinator" → "other").
+  if (hasOfficeWord(t, OFFICE_TITLE_KEYWORDS)) return "other";
+  // 2. Genuine delivery crew: a driver word, then a warehouse/field-prep word.
+  if (hasCrewWord(t, DRIVER_TITLE_KEYWORDS)) return "driver";
+  if (hasCrewWord(t, PREP_TITLE_KEYWORDS)) return "prep";
+  // 3. Deny-by-default: an unrecognized / blank title is non-crew — never guessed onto a delivery route.
   return "other";
 }
 
