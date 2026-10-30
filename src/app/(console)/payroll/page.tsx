@@ -866,18 +866,18 @@ function ReviewTable({ rows, filter, period, gustoMembers, timesheets, timesheet
   return (
     <div className="surface border">
       <div className="max-h-[70vh] overflow-auto">
-        <table className="w-full min-w-[1000px] text-[12.5px]">
+        <table className="w-full min-w-[1120px] text-[12.5px]">
           <thead className="sticky top-0 z-10 bg-[var(--panel)]">
             <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
-              <th className="px-3 py-2.5 font-medium">Worker</th>
-              <th className="px-3 py-2.5 font-medium">Type</th>
-              <th className="px-3 py-2.5 text-right font-medium">Hours</th>
-              <th className="px-3 py-2.5 text-right font-medium">Rate / source</th>
-              <th className="px-3 py-2.5 text-right font-medium">Est. gross</th>
-              <th className="px-3 py-2.5 font-medium">Approval</th>
-              <th className="px-3 py-2.5 font-medium">Gusto</th>
-              <th className="px-3 py-2.5 font-medium">Status / issues</th>
-              <th className="px-3 py-2.5 text-right font-medium">Actions</th>
+              <th className="whitespace-nowrap px-3 py-2.5 font-medium">Worker</th>
+              <th className="whitespace-nowrap px-3 py-2.5 font-medium">Type</th>
+              <th className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Hours</th>
+              <th className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Rate / source</th>
+              <th className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Est. gross</th>
+              <th className="whitespace-nowrap px-3 py-2.5 font-medium">Approval</th>
+              <th className="whitespace-nowrap px-3 py-2.5 font-medium">Gusto</th>
+              <th className="whitespace-nowrap px-3 py-2.5 font-medium">Status / issues</th>
+              <th className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -887,43 +887,43 @@ function ReviewTable({ rows, filter, period, gustoMembers, timesheets, timesheet
               return (
                 <Fragment key={w.key}>
                 <tr className="border-b border-rule/60 hover:bg-[var(--row-hover)]">
-                  <td className="px-3 py-2.5 font-medium text-foreground">{w.name}{w.accepted && <span className="ml-1.5 rounded bg-[var(--row)] px-1 py-0.5 text-[9.5px] font-normal text-tertiary-text">accepted</span>}</td>
-                  <td className="px-3 py-2.5 text-tertiary-text">{WORKER_TYPE_LABEL[w.workerType]}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-secondary-text">{w.hours == null ? "—" : w.hours.toLocaleString("en-US")}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-secondary-text">{rateCell(w)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-secondary-text">{money(w.estPay, w.currency)}</td>
-                  <td className="px-3 py-2.5">
+                  <td className="whitespace-nowrap px-3 py-2.5 align-middle font-medium text-foreground">{w.name}{w.accepted && <span className="ml-1.5 rounded bg-[var(--row)] px-1 py-0.5 text-[9.5px] font-normal text-tertiary-text">accepted</span>}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 align-middle text-tertiary-text">{WORKER_TYPE_LABEL[w.workerType]}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right align-middle tabular-nums text-secondary-text">{w.hours == null ? "—" : w.hours.toLocaleString("en-US")}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right align-middle tabular-nums text-secondary-text">{rateCell(w)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right align-middle tabular-nums text-secondary-text">{money(w.estPay, w.currency)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 align-middle">
                     <span className={`text-[11.5px] ${ap.cls}`}>{excluded ? "—" : ap.label}</span>
                     {!excluded && w.approvalState === "APPROVED_IN_ZOE" && w.ctLockStatus && (
                       <span className={`block text-[10px] ${CT_LOCK_UI[w.ctLockStatus].cls}`} title={w.ctLockDetail ?? undefined}>· {CT_LOCK_UI[w.ctLockStatus].label}</span>
                     )}
                   </td>
-                  <td className="px-3 py-2.5"><span className={w.gustoMapped ? "text-secondary-text" : "text-attention"}>{MAPPING_STATUS_LABEL[w.mappingStatus]}</span></td>
-                  <td className="px-3 py-2.5">
+                  <td className="whitespace-nowrap px-3 py-2.5 align-middle"><span className={w.gustoMapped ? "text-secondary-text" : "text-attention"}>{MAPPING_STATUS_LABEL[w.mappingStatus]}</span></td>
+                  <td className="whitespace-nowrap px-3 py-2.5 align-middle">
                     {excluded ? (
                       <span className="text-[11.5px] text-meta">
                         <span className="rounded bg-[var(--row)] px-1.5 py-0.5 text-[10px] text-tertiary-text">{w.excludeMode === "period" ? "This period" : "Permanent"}</span>
                         {w.excludeReason ? <span className="ml-1.5">{w.excludeReason}</span> : null}
                       </span>
                     ) : (
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 whitespace-nowrap">
                         <span className={`text-[11.5px] font-medium ${st.cls}`}>{st.label}</span>
                         {w.issues.length > 0 && (
-                          <span className="flex flex-wrap gap-1">
-                            {w.issues.slice(0, 3).map((i) => (
-                              <span key={i.code} className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${i.severity === "blocker" ? "bg-critical/15 text-critical" : i.severity === "setup" ? "bg-[var(--row)] text-meta" : "bg-attention/15 text-attention"}`}>{i.label}</span>
+                          <span className="flex flex-nowrap items-center gap-1">
+                            {w.issues.slice(0, 2).map((i) => (
+                              <span key={i.code} className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium ${i.severity === "blocker" ? "bg-critical/15 text-critical" : i.severity === "setup" ? "bg-[var(--row)] text-meta" : "bg-attention/15 text-attention"}`}>{i.label}</span>
                             ))}
-                            {w.issues.length > 3 && <span className="text-[10px] text-meta">+{w.issues.length - 3}</span>}
+                            {w.issues.length > 2 && <span className="whitespace-nowrap text-[10px] text-meta">+{w.issues.length - 2}</span>}
                           </span>
                         )}
                       </div>
                     )}
                   </td>
-                  <td className="px-3 py-2.5 text-right">
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right align-middle">
                     {excluded ? (
                       <ExcludeControl workerKey={w.key} recordId={w.recordId} connecteamUserId={w.connecteamUserId} name={w.name} periodStart={period.start} periodEnd={period.end} excluded excludeMode={w.excludeMode} />
                     ) : (
-                      <div className="flex items-center justify-end gap-1.5">
+                      <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
                         {w.status === "ACTION_REQUIRED" && <ApproveControl workerKey={w.key} name={w.name} periodStart={period.start} periodEnd={period.end} />}
                         {w.accepted && <ApproveControl workerKey={w.key} name={w.name} periodStart={period.start} periodEnd={period.end} accepted acceptedBy={w.acceptedBy} />}
                         <WorkerEditor
