@@ -41,16 +41,18 @@ export function ApproveControl(props: ApproveControlProps): React.JSX.Element {
   }
 
   if (props.accepted) {
+    // Attribution ("Accepted by X") lives in the button tooltip so the Actions cell stays one aligned line,
+    // the way Gusto/Connecteam keep row-level metadata on hover rather than stacked under the control.
     return (
       <div className="flex flex-col items-end gap-0.5">
         <button
           onClick={() => post("unaccept")}
           disabled={busy}
-          className="inline-flex h-7 items-center gap-1.5 rounded border border-border px-2 text-[11.5px] text-meta transition-colors hover:bg-[var(--row-hover)] hover:text-secondary-text disabled:opacity-40"
+          title={props.acceptedBy ? `Accepted by ${props.acceptedBy}` : undefined}
+          className="inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded border border-border px-2 text-[11.5px] text-meta transition-colors hover:bg-[var(--row-hover)] hover:text-secondary-text disabled:opacity-40"
         >
           <RotateCcw className="size-3.5" /> {busy ? "…" : "Un-approve"}
         </button>
-        {props.acceptedBy && <span className="text-[10px] text-meta">Accepted by {props.acceptedBy}</span>}
         {err && <span className="text-[10.5px] text-critical">{err}</span>}
       </div>
     );
@@ -61,7 +63,7 @@ export function ApproveControl(props: ApproveControlProps): React.JSX.Element {
       <button
         onClick={() => post("accept")}
         disabled={busy}
-        className="inline-flex h-7 items-center gap-1.5 rounded border border-positive/40 px-2 text-[11.5px] text-positive transition-colors hover:bg-positive/10 disabled:opacity-40"
+        className="inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded border border-positive/40 px-2 text-[11.5px] text-positive transition-colors hover:bg-positive/10 disabled:opacity-40"
       >
         <Check className="size-3.5" /> {busy ? "…" : "Approve"}
       </button>
