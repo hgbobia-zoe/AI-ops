@@ -10,12 +10,28 @@
 // extension/ content changes (a re-run on unchanged sources yields an identical zip).
 
 import { readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SRC = join(ROOT, "extension");
-const OUT = join(ROOT, "public", "zoe-autopull-extension.zip");
+
+// Args (both optional; default behavior is unchanged — the committed served zip):
+//   --store          Build the CHROME WEB STORE variant: strip manifest "key" so the store owns the id
+//                    (amjncl…). The committed key resolves to the OLD unpacked id (mpneeiibe…); uploading a
+//                    zip carrying it to the store item is rejected on id mismatch. The publish-extension CI
+//                    job calls this; the committed/served zip (no flag) keeps the key untouched.
+//   --out <path>     Write the zip here instead of public/zoe-autopull-extension.zip (used by CI to emit a
+//                    throwaway store zip it does not commit). Relative paths resolve against the repo root.
+const argv = process.argv.slice(2);
+const STORE = argv.includes("--store");
+const outFlagIdx = argv.indexOf("--out");
+const outArg = outFlagIdx >= 0 ? argv[outFlagIdx + 1] : null;
+if (outFlagIdx >= 0 && !outArg) {
+  console.error("build-extension: --out requires a path");
+  process.exit(1);
+}
+const OUT = outArg ? (isAbsolute(outArg) ? outArg : join(ROOT, outArg)) : join(ROOT, "public", "zoe-autopull-extension.zip");
 
 // Fixed DOS date/time (1980-01-01 00:00:00) for reproducible output.
 const DOS_TIME = 0;
@@ -52,7 +68,15 @@ function contentOf(name) {
   const data = readFileSync(join(SRC, name));
   const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
   if (!TEXT_EXT.has(ext)) return data;
-  return Buffer.from(data.toString("utf8").replace(/\r\n/g, "\n"), "utf8");
+  let text = data.toString("utf8").replace(/\r\n/g, "\n");
+  // Store variant: drop the manifest "key". The store item (amjncl…) owns the id, so the upload must NOT
+  // carry the committed key (which resolves to the retired unpacked id mpneeiibe…) or it is rejected.
+  if (STORE && name === "manifest.json") {
+    const manifest = JSON.parse(text);
+    delete manifest.key;
+    text = JSON.stringify(manifest, null, 2) + "\n";
+  }
+  return Buffer.from(text, "utf8");
 }
 
 const locals = [];
@@ -116,4 +140,4 @@ eocd.writeUInt16LE(0, 20); // comment length
 
 mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, Buffer.concat([...locals, centralBuf, eocd]));
-console.log(`built ${OUT} — ${names.length} files`);
+console.log(`built ${OUT} — ${names.length} files${STORE ? " (store variant: manifest key stripped)" : ""}`);
