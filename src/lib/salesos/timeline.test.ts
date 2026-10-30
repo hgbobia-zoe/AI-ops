@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildLeadTimeline, timelineLastActivity, timelineLastOutbound, leadTouchSummary, shapeTouchpoints, leadTouchContext } from "./timeline";
+import { buildLeadTimeline, timelineLastActivity, timelineLastOutbound, leadTouchSummary, shapeTouchpoints, leadTouchContext, lastThreadMessage, lastThreadMessageForLead } from "./timeline";
 import { saveBookings, saveLeadNotes, insertCommsEventIfNew, insertCallEventIfNew, saveEmailEvents } from "@/lib/db/repo";
 
 // DATABASE_PATH is ":memory:" (vitest.config.ts). Unique ids keep tests isolated in the shared DB.
@@ -156,5 +156,52 @@ describe("shapeTouchpoints — bounded, chronological, facts-only strip", () => 
     expect(note.dateToken).toBe("9/7");
     expect(touchpoints[0].channel).toBe("note"); // undated note kept at the left of the strip
     expect(touchpoints[touchpoints.length - 1].iso).not.toBeNull(); // the dated quote sits to its right
+  });
+});
+
+describe("lastThreadMessage", () => {
+  it("picks the newest DATED real communication (either direction), with who/when/channel/snippet", () => {
+    const id = "LM-newest-1";
+    saveBookings([{ bookingId: id, eventName: "Reed · Gala", clientName: "Ada Reed", clientPhone: "301-555-7788", eventDate: "2030-09-01", signed: false }]);
+    saveLeadNotes([{ bookingId: id, quoteSentAt: "2027-04-01T10:00:00.000Z", internalNotes: "header" }]);
+    insertCommsEventIfNew({ providerId: "lm-sms-out", leadId: id, direction: "outbound", channel: "sms", body: "Just following up", actor: "HG", occurredAt: "2027-04-02T10:00:00.000Z" });
+    insertCommsEventIfNew({ providerId: "lm-sms-in", leadId: id, direction: "inbound", channel: "sms", body: "We need to check with my husband first, can you give us a few days", occurredAt: "2027-04-05T14:00:00.000Z" });
+
+    const lm = lastThreadMessage(buildLeadTimeline(id));
+    expect(lm).not.toBeNull();
+    expect(lm!.channel).toBe("sms");
+    expect(lm!.direction).toBe("in"); // the inbound text is the most recent
+    expect(lm!.snippet).toContain("husband");
+    expect(lm!.at).toBe("2027-04-05T14:00:00.000Z");
+  });
+
+  it("excludes internal system/audit entries; falls back to the most recently WRITTEN undated note", () => {
+    const id = "LM-note-1";
+    saveBookings([{ bookingId: id, eventName: "N", clientName: "Ned Flint", eventDate: "2030-01-01", signed: false }]);
+    saveLeadNotes([{ bookingId: id, internalNotes: "HG - 9/1 - first call\nHG - 9/7 - left a voicemail" }]);
+    const lm = lastThreadMessage(buildLeadTimeline(id));
+    expect(lm).not.toBeNull();
+    expect(lm!.channel).toBe("note");
+    expect(lm!.at).toBeNull();
+    expect(lm!.rawDate).toBe("9/7"); // the most recently written note
+    expect(lm!.snippet).toContain("voicemail");
+  });
+
+  it("returns null for a genuinely empty thread (honest 'no prior message', never fabricated)", () => {
+    const id = "LM-empty-1";
+    saveBookings([{ bookingId: id, eventName: "E", clientName: "E", eventDate: "2030-01-01", signed: false }]);
+    expect(lastThreadMessage(buildLeadTimeline(id))).toBeNull();
+    expect(lastThreadMessageForLead(id)).toBeNull();
+    expect(lastThreadMessageForLead("LM-does-not-exist")).toBeNull();
+  });
+
+  it("prefers a dated communication over an undated note even when the note was written later", () => {
+    const id = "LM-prefer-dated-1";
+    saveBookings([{ bookingId: id, eventName: "P", clientName: "Pia Vo", clientPhone: "301-555-2200", eventDate: "2030-05-05", signed: false }]);
+    saveLeadNotes([{ bookingId: id, internalNotes: "HG - 9/9 - undated note line" }]);
+    insertCommsEventIfNew({ providerId: "lm-sms-pref", leadId: id, direction: "inbound", channel: "sms", body: "Can you resend the quote?", occurredAt: "2027-05-01T10:00:00.000Z" });
+    const lm = lastThreadMessageForLead(id);
+    expect(lm!.channel).toBe("sms"); // dated comm wins over the undated note
+    expect(lm!.snippet).toContain("resend");
   });
 });

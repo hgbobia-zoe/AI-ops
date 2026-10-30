@@ -10,9 +10,11 @@ import { salesLeads, getLead } from "@/lib/salesos/service";
 import { lostQuotesOverview } from "@/lib/salesos/lostService";
 import { draftLeadOutreach } from "@/lib/salesos/outreachService";
 import { stripSignOff } from "@/lib/salesos/outreach";
+import { lastThreadMessageForLead } from "@/lib/salesos/timeline";
 import { STAGE_LABEL } from "@/lib/salesos/calc";
 import { getSettings } from "@/lib/settings";
 import { approvalExistsByKey, createApproval, type ApprovalActionType, type ApprovalCard } from "./approvals";
+import { describeLastMessageWho, formatLastMessageWhen, type LastMessageSnapshot } from "./lastMessage";
 import { botAnnounce, appUrl } from "@/lib/notify/aiBots";
 import { APPROVE_ACTION, REJECT_ACTION } from "@/lib/slack/interactivity";
 
@@ -52,6 +54,18 @@ function draftPreview(actionType: ApprovalActionType, body: string, subject: str
   const quoted = text.split("\n").map((l) => `> ${l}`).join("\n");
   const head = actionType === "send_email" ? `> *Subject:* ${subject}\n` : "";
   return `*Drafted ${channelWord(actionType)}:*\n${head}${quoted}`;
+}
+
+/** A Slack-mrkdwn "in reply to" block: the last message in the client's thread, so the approver sees what
+ *  the drafted reply is responding to. Null when there is no prior message (nothing fabricated). */
+function lastMessageBlock(lm: LastMessageSnapshot | null, clientName: string): string | null {
+  if (!lm) return null;
+  const when = formatLastMessageWhen(lm);
+  const head = `${describeLastMessageWho(lm, clientName)}${when ? ` · ${when}` : ""}`;
+  const MAX = 300;
+  const body = lm.snippet ? (lm.snippet.length > MAX ? lm.snippet.slice(0, MAX).trimEnd() + "…" : lm.snippet) : null;
+  const quoted = body ? "\n" + body.split("\n").map((l) => `> ${l}`).join("\n") : "";
+  return `*In reply to (last message):*\n> ${head}${quoted}`;
 }
 
 /** Pick the reachable, wired-first channel from the contact facts (email is fully outbox-wired; SMS is
@@ -108,6 +122,10 @@ export async function proposeOutreachApprovals(): Promise<ProposeResult> {
       whatIfApproved: whatIfLine(actionType),
     };
 
+    // Snapshot the last message in the client's thread (what this reply is responding to) ONTO the
+    // approval, so the approver sees the context without a live lookup. Null when there's no prior message.
+    const lastMessage = lastThreadMessageForLead(lead.id);
+
     const key = `outreach:${lead.id}:${today}`;
     const existed = approvalExistsByKey(key);
     const appr = createApproval({
@@ -115,7 +133,7 @@ export async function proposeOutreachApprovals(): Promise<ProposeResult> {
       owner: "Jessie",
       title: `Follow-up ${channelWord(actionType)} to ${lead.clientName || lead.id}`,
       actionType,
-      actionPayload: { transactionId: lead.id, leadId: lead.id, body, subject: "Following up on your event" },
+      actionPayload: { transactionId: lead.id, leadId: lead.id, body, subject: "Following up on your event", lastMessage: lastMessage ?? undefined },
       card,
       financial: false,
       idempotencyKey: key,
@@ -123,6 +141,7 @@ export async function proposeOutreachApprovals(): Promise<ProposeResult> {
     if (existed) skipped++;
     else {
       created++;
+      const lmBlock = lastMessageBlock(lastMessage, lead.clientName || "the client");
       void botAnnounce("sales", {
         emoji: "✍️",
         title: "Follow-up drafted — ready for approval",
@@ -132,6 +151,7 @@ export async function proposeOutreachApprovals(): Promise<ProposeResult> {
           { label: "Channel", value: channelWord(actionType) },
           { label: "Event", value: lead.eventDate ?? "undated" },
         ],
+        sections: lmBlock ? [lmBlock] : undefined,
         body: `${draftPreview(actionType, body, "Following up on your event")}\n\n*Why:* ${lead.action.reason}`,
         buttons: [
           { text: "Approve & send", actionId: APPROVE_ACTION, value: appr.id, style: "primary" },
@@ -186,6 +206,10 @@ export async function proposeLostQuoteApprovals(): Promise<ProposeResult> {
       whatIfApproved: whatIfLine(actionType),
     };
 
+    // Snapshot the last message in the client's thread (the context the win-back responds to) onto the
+    // approval. Null when there's no prior message.
+    const lastMessage = lastThreadMessageForLead(q.id);
+
     const key = `lostquote:${q.id}`;
     const existed = approvalExistsByKey(key);
     const appr = createApproval({
@@ -193,7 +217,7 @@ export async function proposeLostQuoteApprovals(): Promise<ProposeResult> {
       owner: "Jessie",
       title: `Win-back ${channelWord(actionType)} to ${q.clientName || q.id}`,
       actionType,
-      actionPayload: { transactionId: q.id, leadId: q.id, body, subject: "Checking back in about your event" },
+      actionPayload: { transactionId: q.id, leadId: q.id, body, subject: "Checking back in about your event", lastMessage: lastMessage ?? undefined },
       card,
       financial: true, // references a dollar value — $-redacted for non-financial roles
       idempotencyKey: key,
@@ -201,6 +225,7 @@ export async function proposeLostQuoteApprovals(): Promise<ProposeResult> {
     if (existed) skipped++;
     else {
       created++;
+      const lmBlock = lastMessageBlock(lastMessage, q.clientName || "the client");
       void botAnnounce("sales", {
         emoji: "✍️",
         title: "Win-back drafted — ready for approval",
@@ -210,6 +235,7 @@ export async function proposeLostQuoteApprovals(): Promise<ProposeResult> {
           { label: "Channel", value: channelWord(actionType) },
           { label: "Event", value: q.eventDate ?? "undated" },
         ],
+        sections: lmBlock ? [lmBlock] : undefined,
         body: `${draftPreview(actionType, body, "Checking back in about your event")}\n\n${q.lossReason ? `*Loss reason:* ${q.lossReason}` : "Loss reason untagged."}`,
         buttons: [
           { text: "Approve & send", actionId: APPROVE_ACTION, value: appr.id, style: "primary" },
