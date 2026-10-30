@@ -12,6 +12,7 @@ import {
   Search, Bell, ChevronDown, Plus, Tag,
 } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { StatusBadge } from "@/components/ui/status";
 import { commandCenter } from "@/lib/command/service";
 import { capacityLevel, type CapacityLevel } from "@/lib/command/calc";
 import { salesYearOverview } from "@/lib/sales/service";
@@ -584,7 +585,7 @@ function TodayOps({ ops, showMoney }: { ops: { events: number; activeRoutes: num
     <div className="flex h-full flex-col justify-between gap-3">
       {ops.stops === 0 && ops.events > 0 ? (
         <div className="flex items-center gap-2 text-[12.5px]">
-          <span className="inline-flex items-center gap-1.5 rounded border border-attention/40 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-attention"><AlertTriangle className="size-3" /> Not dispatched</span>
+          <StatusBadge tone="attention" size="sm" className="uppercase tracking-wide">Not dispatched</StatusBadge>
           <span className="text-muted-foreground">{plural(ops.events, "event")} booked.</span>
         </div>
       ) : ops.stops === 0 ? (

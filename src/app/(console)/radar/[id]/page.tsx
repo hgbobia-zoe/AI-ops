@@ -7,6 +7,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowUpRight, ExternalLink, FileText, Compass } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
+import { StatusBadge } from "@/components/ui/status";
 import { canManageSettings } from "@/lib/auth/roles";
 import { OpportunityActions } from "@/components/OpportunityActions";
 import { OpportunityInterpret } from "@/components/OpportunityInterpret";
@@ -105,9 +106,9 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
         <div className="rounded border border-border p-3">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             {awarded ? (
-              <span className="inline-flex items-center rounded border border-attention/40 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-attention">Awarded{awardee ? ` · ${awardee}` : ""}</span>
+              <StatusBadge tone="attention" size="sm" className="uppercase tracking-[0.06em]">Awarded{awardee ? ` · ${awardee}` : ""}</StatusBadge>
             ) : (
-              <span className="inline-flex items-center rounded border border-positive/40 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-positive">Open{e.deadline ? "" : " · no deadline on file"}</span>
+              <StatusBadge tone="positive" size="sm" className="uppercase tracking-[0.06em]">Open{e.deadline ? "" : " · no deadline on file"}</StatusBadge>
             )}
             {procurement?.noticeType && <span className="rounded border border-border px-2 py-0.5 text-[11px] uppercase tracking-[0.05em] text-tertiary-text">{procurement.noticeType.replace(/_/g, " ")}</span>}
             <span className="ml-auto">
@@ -245,7 +246,7 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
           <div className="rounded border border-border p-3">
             <div className="mb-2 flex flex-wrap items-center gap-2 text-[13px]">
               <span className="font-medium">{TIER_LABEL[enrollment.enrollment.tier]}</span>
-              <span className={`rounded border px-1.5 py-0.5 text-[10.5px] uppercase tracking-[0.05em] ${enrollment.enrollment.status === "replied" ? "border-positive/40 text-positive" : enrollment.enrollment.status === "active" ? "border-attention/40 text-attention" : "border-border text-meta"}`}>{enrollment.enrollment.status}</span>
+              <StatusBadge tone={enrollment.enrollment.status === "replied" ? "positive" : enrollment.enrollment.status === "active" ? "attention" : "neutral"} size="sm" className="uppercase tracking-[0.05em]">{enrollment.enrollment.status}</StatusBadge>
               {enrollment.enrollment.status === "replied" && <span className="text-[12px] text-positive">Responded — convert in Goodshuffle when qualified.</span>}
             </div>
             <ol className="space-y-2">
@@ -274,7 +275,7 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
           <div className="border border-border">
             {related.map((r) => (
               <Link key={r.opportunity.id} href={`/radar/${r.opportunity.id}`} className="flex items-center gap-3 border-t border-[var(--row-rule)] px-3 py-2 text-[13px] transition-colors first:border-t-0 hover:bg-[var(--row-hover)]">
-                <span className={`rounded border px-1.5 py-px text-[10px] uppercase tracking-[0.05em] ${r.confidence === "HIGH" ? "border-positive/40 text-positive" : r.confidence === "MEDIUM" ? "border-attention/40 text-attention" : "border-border text-meta"}`}>{r.confidence}</span>
+                <StatusBadge tone={r.confidence === "HIGH" ? "positive" : r.confidence === "MEDIUM" ? "attention" : "neutral"} size="sm" className="uppercase tracking-[0.05em]">{r.confidence}</StatusBadge>
                 <span className="min-w-0 flex-1 truncate text-foreground">{r.opportunity.name}</span>
                 <span className="hidden shrink-0 text-[12px] text-meta sm:block">{r.reason}</span>
                 <ArrowUpRight className="size-3.5 shrink-0 text-meta" />

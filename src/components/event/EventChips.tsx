@@ -15,57 +15,52 @@ import {
   CircleDot,
   Clock,
   Minus,
+  type LucideIcon,
 } from "lucide-react";
 import type { EventCondition, RequirementStatus } from "@/lib/event/types";
 import type { LifecycleState } from "@/lib/event/machine";
 import type { MilestoneStatus } from "@/lib/event/timeline";
+import { StatusBadge } from "@/components/ui/status";
+import type { Tone } from "@/lib/tone";
 
-type ChipTone = "good" | "warning" | "serious" | "critical" | "neutral";
-
-// Reserved status tones → Nocturne classes. good=positive, warning/serious=attention, critical=critical,
-// neutral=meta (no status colour). Each chip pairs the colour with an icon + text label.
-const TONE_CLS: Record<ChipTone, string> = {
-  good: "border-positive/40 text-positive bg-positive/10",
-  warning: "border-attention/40 text-attention bg-attention/10",
-  serious: "border-attention/60 text-attention bg-attention/10",
-  critical: "border-critical/45 text-critical bg-critical/10",
-  neutral: "border-border text-tertiary-text",
-};
-
-function Chip({ tone, icon: Icon, label }: { tone: ChipTone; icon: React.ComponentType<{ className?: string }>; label: string }): React.JSX.Element {
-  return (
-    <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-[0.05em] ${TONE_CLS[tone]}`}>
-      <Icon className="size-3 shrink-0" aria-hidden />
-      {label}
-    </span>
-  );
-}
+// Status = a SATURATED coloured indicator (distinct-shape icon) + a crisp white label on the inherited
+// surface, via the shared StatusBadge. No pill, no outline, no pastel tint; `filled` is the reserved
+// exceptional case (ESCALATED). Meaning is icon-shape + text, so it never depends on colour alone.
+const BADGE_CLS = "uppercase tracking-[0.05em]";
 
 // ── Readiness condition (the independent risk axis) ─────────────────────────────────────────────────────
-const CONDITION_META: Record<EventCondition, { tone: ChipTone; icon: React.ComponentType<{ className?: string }>; label: string }> = {
-  NORMAL: { tone: "good", icon: CheckCircle2, label: "On track" },
-  WATCH: { tone: "warning", icon: Eye, label: "Watch" },
-  AT_RISK: { tone: "serious", icon: AlertTriangle, label: "At risk" },
+const CONDITION_META: Record<EventCondition, { tone: Tone; icon: LucideIcon; label: string; filled?: boolean }> = {
+  NORMAL: { tone: "positive", icon: CheckCircle2, label: "On track" },
+  WATCH: { tone: "attention", icon: Eye, label: "Watch" },
+  AT_RISK: { tone: "attention", icon: AlertTriangle, label: "At risk" },
   BLOCKED: { tone: "critical", icon: Ban, label: "Blocked" },
-  ESCALATED: { tone: "critical", icon: ShieldAlert, label: "Escalated" },
+  ESCALATED: { tone: "critical", icon: ShieldAlert, label: "Escalated", filled: true },
 };
 
 export function ConditionChip({ condition }: { condition: EventCondition }): React.JSX.Element {
   const m = CONDITION_META[condition];
-  return <Chip tone={m.tone} icon={m.icon} label={m.label} />;
+  return (
+    <StatusBadge tone={m.tone} icon={m.icon} filled={m.filled} size="sm" className={BADGE_CLS}>
+      {m.label}
+    </StatusBadge>
+  );
 }
 
 // ── Requirement status ─────────────────────────────────────────────────────────────────────────────────
-const REQ_META: Record<RequirementStatus, { tone: ChipTone; icon: React.ComponentType<{ className?: string }>; label: string }> = {
-  OK: { tone: "good", icon: CheckCircle2, label: "OK" },
-  WARNING: { tone: "warning", icon: AlertTriangle, label: "Warning" },
+const REQ_META: Record<RequirementStatus, { tone: Tone; icon: LucideIcon; label: string }> = {
+  OK: { tone: "positive", icon: CheckCircle2, label: "OK" },
+  WARNING: { tone: "attention", icon: AlertTriangle, label: "Warning" },
   BLOCKED: { tone: "critical", icon: Ban, label: "Blocked" },
   UNVERIFIED: { tone: "neutral", icon: CircleHelp, label: "Unverified" },
 };
 
 export function RequirementChip({ status }: { status: RequirementStatus }): React.JSX.Element {
   const m = REQ_META[status];
-  return <Chip tone={m.tone} icon={m.icon} label={m.label} />;
+  return (
+    <StatusBadge tone={m.tone} icon={m.icon} size="sm" className={BADGE_CLS}>
+      {m.label}
+    </StatusBadge>
+  );
 }
 
 // ── Lifecycle (NEUTRAL / structural — a stage, not a verdict) ────────────────────────────────────────────

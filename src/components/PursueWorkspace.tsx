@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ExternalLink, Copy, Check, Sparkles, Loader2, Save, Send, AlertTriangle, FileText } from "lucide-react";
+import { StatusBadge } from "@/components/ui/status";
 import {
   PURSUIT_STATUS_LABEL,
   PURSUIT_STATUS_ORDER,
@@ -282,7 +283,7 @@ export function PursueWorkspace({ opportunityId }: { opportunityId: string }): R
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={done ? "text-meta line-through" : "text-foreground"}>{item.label}</span>
-                    {item.kind === "blocker" && !done && <span className="rounded border border-critical/40 px-1.5 py-px text-[10px] font-semibold uppercase tracking-[0.05em] text-critical">Blocker</span>}
+                    {item.kind === "blocker" && !done && <StatusBadge tone="critical" size="sm" className="uppercase tracking-[0.05em]">Blocker</StatusBadge>}
                   </div>
                   {item.detail && <div className="mt-0.5 break-words text-[11.5px] text-meta">{item.detail}</div>}
                 </div>

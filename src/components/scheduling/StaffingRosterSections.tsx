@@ -11,6 +11,7 @@ import { Truck, PackageCheck, PackageOpen, Briefcase, Users } from "lucide-react
 import { OpenShiftsPanel } from "@/components/OpenShiftsPanel";
 import type { OpenShiftView } from "@/lib/staffing/openShifts";
 import { type CrewShift, type CrewMember, type CrewRole } from "@/lib/connecteam";
+import { StatusBadge } from "@/components/ui/status";
 import { formatYmdLong, formatClockTime } from "@/lib/dates";
 import type { Route } from "@/lib/types";
 
@@ -83,7 +84,7 @@ export function StaffingRosterSections({
         <span className="flex items-center gap-2">
           <Users className="size-4 text-meta" />
           <span className="text-[13px] font-medium uppercase tracking-[0.08em] text-tertiary-text">Staffing roster and open shifts</span>
-          {openCount > 0 && <span className="rounded border border-critical/50 px-1.5 py-px text-[10.5px] font-medium uppercase tracking-[0.06em] text-critical">{openCount} open</span>}
+          {openCount > 0 && <StatusBadge tone="critical" size="sm" className="uppercase tracking-[0.06em]">{openCount} open</StatusBadge>}
         </span>
         <span className="text-[11px] text-meta transition-colors group-hover:text-foreground">Connecteam roster (read only)</span>
       </summary>
