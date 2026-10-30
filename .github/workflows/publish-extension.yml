@@ -23,9 +23,10 @@ on:
       - "scripts/build-extension.mjs"
       - ".github/workflows/publish-extension.yml"
   pull_request:
+    # The bump guard is about SHIPPED CONTENT, so it keys off extension/ only — a change to the build script
+    # or the workflow itself must not demand a version bump.
     paths:
       - "extension/**"
-      - "scripts/build-extension.mjs"
   workflow_dispatch:
     inputs:
       force:
@@ -54,9 +55,9 @@ jobs:
           set -euo pipefail
           git fetch origin "${{ github.base_ref }}" -q
           BASE="origin/${{ github.base_ref }}"
-          CHANGED=$(git diff --name-only "$BASE...HEAD" -- extension scripts/build-extension.mjs || true)
+          CHANGED=$(git diff --name-only "$BASE...HEAD" -- extension || true)
           if [ -z "$CHANGED" ]; then
-            echo "No extension changes in this PR — nothing to guard."
+            echo "No extension/ content changes in this PR — nothing to guard."
             exit 0
           fi
           HEAD_V=$(node -p "require('./extension/manifest.json').version")
