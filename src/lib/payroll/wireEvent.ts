@@ -212,6 +212,12 @@ export interface WireEventRecord {
   statusHistory: string[]; // statuses observed, in order
   firstSeenAt: string;
   updatedAt: string;
+  // Gusto RECEIPT confirmation — set when the inbound "Gusto received your wire" email is matched to this
+  // wire (via /api/payroll/gusto-wire-received). Closes the loop: the wire we sent is confirmed funded.
+  receiptConfirmed?: boolean;
+  receiptConfirmedAt?: string | null;
+  receiptAmountAbs?: number | null;
+  receiptDate?: string | null; // yyyy-mm-dd as stated by Gusto, when parseable
 }
 
 type WireStore = Record<string, WireEventRecord>;
@@ -241,6 +247,51 @@ export function upsertWireEvent(rec: WireEventRecord): void {
     return;
   }
   setJson(KEY, store);
+}
+
+// ── Gusto receipt correlation + idempotency (the inbound "Gusto received your wire" email) ────────────
+/** The most-recent wire whose |amount| is within tolerance and whose Gusto receipt is NOT yet confirmed.
+ *  Used to tie the inbound "Gusto received your wire" email to the wire we actually sent. Null = no match
+ *  (the receipt is still posted, just without a linked Mercury wire). */
+export function findUnconfirmedWireByAmount(amountAbs: number | null, tolerancePct = 2): WireEventRecord | null {
+  if (amountAbs == null || !Number.isFinite(amountAbs) || amountAbs <= 0) return null;
+  let best: { rec: WireEventRecord; delta: number } | null = null;
+  for (const rec of listWireEvents(100)) {
+    if (rec.receiptConfirmed) continue;
+    if (rec.amountAbs == null || !(rec.amountAbs > 0)) continue;
+    const delta = (Math.abs(amountAbs - rec.amountAbs) / rec.amountAbs) * 100;
+    if (delta <= tolerancePct && (best == null || delta < best.delta)) best = { rec, delta };
+  }
+  return best?.rec ?? null;
+}
+
+/** Mark a stored wire as confirmed-received by Gusto. Idempotent: returns the updated record, or null when
+ *  the transactionId is unknown. */
+export function markWireReceiptConfirmed(
+  transactionId: string,
+  info: { amountAbs: number | null; date: string | null; at: string },
+): WireEventRecord | null {
+  const rec = readWireEvent(transactionId);
+  if (!rec) return null;
+  rec.receiptConfirmed = true;
+  rec.receiptConfirmedAt = info.at;
+  rec.receiptAmountAbs = info.amountAbs;
+  rec.receiptDate = info.date;
+  rec.updatedAt = info.at;
+  upsertWireEvent(rec);
+  return rec;
+}
+
+// Receipt-email dedup lives in its own key because a receipt can arrive with NO matching Mercury wire on
+// file; we still want to post exactly once. Keyed by a stable receipt key (Gmail message id, else amount+date).
+const RECEIPT_POSTED_KEY = "payroll.wireReceiptsPosted";
+export function wasReceiptPosted(key: string): boolean {
+  return Boolean(getJson<Record<string, string>>(RECEIPT_POSTED_KEY, {})[key]);
+}
+export function markReceiptPosted(key: string, at: string): void {
+  const store = getJson<Record<string, string>>(RECEIPT_POSTED_KEY, {});
+  store[key] = at;
+  setJson(RECEIPT_POSTED_KEY, store);
 }
 
 /** Merge a freshly-received transaction into (or create) its record. Pure: does not persist or post. */
