@@ -1,7 +1,8 @@
 // HR / Payroll — the Zoe Payroll Control Plane. Reconciliation + control layer between Connecteam (operational
-// time source of truth) and Gusto (payroll system of record). The blade's sections are NESTED VERTICAL links
-// in the global sidebar (ConsoleNav → People → HR / Payroll → Overview · Payroll Review · Time Sync · Workers
-// · Contractors · Exceptions · Payroll History · Settings); there is no in-page horizontal tab row.
+// time source of truth) and Gusto (payroll system of record). The blade's eight sections are NESTED VERTICAL
+// links in the global sidebar (ConsoleNav → People › Payroll › Overview · Payroll Review · Time Sync · Workers
+// · Contractors · Exceptions · History · Settings); there is NO in-page nav rail and NO horizontal tab row,
+// so the page uses the full recovered width. Sections are the SAME ?tab= URLs (deep-linkable, period-preserving).
 //
 // ONE authoritative readiness model (lib/payroll/readinessModel.ts) drives every status, count, badge and
 // action on Overview + Review, so the two can never disagree for the same period/snapshot. FACTS ONLY — an
@@ -35,7 +36,6 @@ import {
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { readGustoSnapshot } from "@/lib/payroll/gustoSnapshot";
 import { getLatestImportBySource } from "@/lib/pull/state";
-import { PayrollSubnav } from "@/components/payroll/PayrollSubnav";
 import { WorkerEditor, type GustoPick } from "@/components/payroll/WorkerEditor";
 import { SyncButton } from "@/components/payroll/SyncButton";
 import { SyncGustoButton } from "@/components/payroll/SyncGustoButton";
@@ -60,7 +60,7 @@ type Tab = "overview" | "review" | "sync" | "workers" | "contractors" | "excepti
 const TAB_KEYS: Tab[] = ["overview", "review", "sync", "workers", "contractors", "exceptions", "history", "settings"];
 const TAB_TITLE: Record<Tab, string> = {
   overview: "Overview", review: "Payroll Review", sync: "Time Sync", workers: "Workers",
-  contractors: "Contractors", exceptions: "Exceptions", history: "Payroll History", settings: "Settings",
+  contractors: "Contractors", exceptions: "Exceptions", history: "History", settings: "Settings",
 };
 
 // ── formatting ───────────────────────────────────────────────────────────────────────────────────────
@@ -115,23 +115,20 @@ export default async function PayrollPage({
   const today = await safeToday();
   const period = completedWeeksBack(today, weeksAgo);
 
-  // Two vertical menus: the global sidebar (ConsoleNav, in the console layout) + this blade's own vertical
-  // section menu next to it (PayrollSubnav), replacing the old horizontal tab row.
+  // The eight sections are nested in the GLOBAL sidebar (ConsoleNav → People › Payroll). There is no
+  // in-page nav rail and no horizontal tab row — the page uses the full recovered width.
   return (
-    <div className="flex flex-col lg:flex-row lg:items-start">
-      <PayrollSubnav activeTab={tab} weeksAgo={weeksAgo} />
-      <main className="mx-auto w-full min-w-0 max-w-[1240px] flex-1 p-4 pb-12 leading-[1.35] md:p-6">
-        <PayrollHeader tab={tab} period={period} weeksAgo={weeksAgo} />
-        {tab === "overview" && <OverviewTab period={period} weeksAgo={weeksAgo} />}
-        {tab === "review" && <ReviewTab period={period} statusFilter={sp.status ?? "all"} q={(sp.q ?? "").trim()} weeksAgo={weeksAgo} />}
-        {tab === "sync" && <SyncTab period={period} weeksAgo={weeksAgo} />}
-        {tab === "workers" && <WorkersTab period={period} mode="all" />}
-        {tab === "contractors" && <WorkersTab period={period} mode="contractors" />}
-        {tab === "exceptions" && <ExceptionsTab />}
-        {tab === "history" && <HistoryTab />}
-        {tab === "settings" && <SettingsTab />}
-      </main>
-    </div>
+    <main className="mx-auto w-full min-w-0 max-w-[1440px] p-4 pb-12 leading-[1.35] md:p-6 lg:px-8">
+      <PayrollHeader tab={tab} period={period} weeksAgo={weeksAgo} />
+      {tab === "overview" && <OverviewTab period={period} weeksAgo={weeksAgo} />}
+      {tab === "review" && <ReviewTab period={period} statusFilter={sp.status ?? "all"} q={(sp.q ?? "").trim()} weeksAgo={weeksAgo} />}
+      {tab === "sync" && <SyncTab period={period} weeksAgo={weeksAgo} />}
+      {tab === "workers" && <WorkersTab period={period} mode="all" />}
+      {tab === "contractors" && <WorkersTab period={period} mode="contractors" />}
+      {tab === "exceptions" && <ExceptionsTab />}
+      {tab === "history" && <HistoryTab />}
+      {tab === "settings" && <SettingsTab />}
+    </main>
   );
 }
 
@@ -154,16 +151,8 @@ function PayrollHeader({ tab, period, weeksAgo }: { tab: Tab; period: { start: s
   const atOldest = weeksAgo >= 8;
   return (
     <header className="mb-5 border-b border-border pb-4">
-      {/* Breadcrumb */}
-      <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-[11.5px] text-meta">
-        <span>People</span>
-        <ChevronRight className="size-3" aria-hidden />
-        <Link href="/payroll" className="transition-colors hover:text-foreground">HR &amp; Payroll</Link>
-        <ChevronRight className="size-3" aria-hidden />
-        <span className="text-tertiary-text" aria-current="page">{TAB_TITLE[tab]}</span>
-      </nav>
-
-      <div className="mt-2 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+      {/* The breadcrumb (People › Payroll › <section>) lives once in the global app header, not here. */}
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
         <div>
           <h1 className="flex items-center gap-2 text-[22px] font-semibold tracking-tight text-foreground">
             <Wallet className="size-5 text-meta" aria-hidden /> {TAB_TITLE[tab]}
@@ -203,7 +192,9 @@ function PayrollHeader({ tab, period, weeksAgo }: { tab: Tab; period: { start: s
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[11.5px] text-meta">
         <span className="inline-flex items-center gap-1.5"><CalendarClock className="size-3.5" aria-hidden /> Payroll runs {payrollDeadlineText(cfg)}</span>
         <span className="inline-flex items-center gap-1.5"><Clock className="size-3.5" aria-hidden /> Hours last verified {relTime(last?.finishedAt ?? last?.startedAt ?? null)}{last ? ` · ${last.status.toLowerCase().replace(/_/g, " ")}` : ""}</span>
-        <span className="ml-auto"><SyncButton period={period} label="Sync hours" variant="secondary" /></span>
+        {/* One Sync control per view (never two "Sync hours" doing the same thing): Overview's readiness banner
+            and the Time Sync tab each already own a primary sync, so the header sync is shown on the rest only. */}
+        {tab !== "overview" && tab !== "sync" && <span className="ml-auto"><SyncButton period={period} label="Sync hours" variant="secondary" /></span>}
       </div>
     </header>
   );
@@ -333,7 +324,9 @@ const GATE_STATE_UI: Record<GateState, { dot: string; label: string; tone: Payro
 };
 function GateStrip({ m }: { m: PayrollReadinessModel }): React.JSX.Element {
   return (
-    <ol className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-rule pt-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="mt-3 border-t border-rule pt-3">
+      <h3 className="mb-2 text-[10.5px] uppercase tracking-[0.1em] text-meta">Payroll workflow</h3>
+      <ol className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 lg:grid-cols-5">
       {m.gates.map((g) => {
         const ui = GATE_STATE_UI[g.state];
         return (
@@ -348,7 +341,8 @@ function GateStrip({ m }: { m: PayrollReadinessModel }): React.JSX.Element {
           </li>
         );
       })}
-    </ol>
+      </ol>
+    </div>
   );
 }
 
@@ -372,9 +366,7 @@ function NeedsAttention({ m }: { m: PayrollReadinessModel }): React.JSX.Element 
         {groups.length > 0 && <Link href="/payroll?tab=exceptions" className="text-[11px] text-meta transition-colors hover:text-foreground">All exceptions →</Link>}
       </div>
       {groups.length === 0 ? (
-        <div className="mt-3 flex items-center gap-2 text-[12.5px] text-positive">
-          <CheckCircle2 className="size-4" aria-hidden /> Nothing needs attention for this period.
-        </div>
+        <NeedsAttentionEmpty m={m} />
       ) : (
         <ul className="mt-3 flex flex-col divide-y divide-[var(--row-rule)]">
           {groups.slice(0, 6).map((g) => {
@@ -405,6 +397,41 @@ function NeedsAttention({ m }: { m: PayrollReadinessModel }): React.JSX.Element 
         </ul>
       )}
     </section>
+  );
+}
+
+// The empty "Needs attention" state, told honestly. Unavailable and stale sources must NEVER render as a
+// verified all-clear: an empty attention list only means "clear" when the time source actually reported.
+function NeedsAttentionEmpty({ m }: { m: PayrollReadinessModel }): React.JSX.Element {
+  if (!m.connecteamOk) {
+    return (
+      <div className="mt-3 flex items-start gap-2 text-[12.5px] text-attention">
+        <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+        <span>Connecteam is unavailable, so no worker could be checked. This period is <span className="font-medium">unverified</span>, not clear. Retry the hours sync before relying on it.</span>
+      </div>
+    );
+  }
+  if (m.counts.included === 0) {
+    return (
+      <div className="mt-3 flex items-start gap-2 text-[12.5px] text-meta">
+        <HelpCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
+        <span>No worker hours were recorded for this completed week. Nothing to pay — a verified empty period, not a pending one.</span>
+      </div>
+    );
+  }
+  const gustoStale = m.sources.some((s) => s.key === "gusto" && s.state === "stale");
+  return (
+    <div className="mt-3 flex flex-col gap-1.5">
+      <div className="flex items-center gap-2 text-[12.5px] text-positive">
+        <CheckCircle2 className="size-4" aria-hidden /> All {m.counts.included} worker{m.counts.included === 1 ? "" : "s"} are clear for this period.
+      </div>
+      {gustoStale && (
+        <div className="flex items-start gap-2 text-[11.5px] text-attention">
+          <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          <span>Worker checks are clean, but the Gusto snapshot is stale, so pay rates may be out of date. Re-run the Gusto pull to verify rates.</span>
+        </div>
+      )}
+    </div>
   );
 }
 

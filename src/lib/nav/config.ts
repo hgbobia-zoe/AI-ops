@@ -12,7 +12,7 @@ import {
   LayoutGrid, Tag, Building2, Wrench,
   Gauge, ListChecks, Truck, AlertTriangle, DollarSign,
   TrendingUp, Target, GraduationCap, Contact, Clock, Zap,
-  RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator, Radar, IdCard,
+  RefreshCw, Plug, UsersRound, Settings, KeyRound, Calculator, Radar, IdCard, History, Globe2,
   Megaphone, Send, Upload, CalendarDays, CalendarCheck, Star,
   HeartHandshake, Columns3, LifeBuoy, ClipboardCheck, ClipboardList,
   Aperture, Dna,
@@ -36,12 +36,38 @@ export interface Blade {
   seo?: boolean; // owner/admin + the scoped marketing role (canUseSeo)
   exact?: boolean; // highlight only on an exact path match (section landing pages)
   badge?: boolean; // show a small "New" badge beside the label
+  children?: SubBlade[]; // nested query-param sub-sections, rendered as a third sidebar level (see SubBlade)
 }
 export interface NavGroup {
   label: string;
   icon: LucideIcon;
   blades: Blade[];
 }
+
+// A nested sub-section of a blade that is a query-param destination on ONE page (e.g. HR/Payroll's eight
+// `?tab=` views). These render as a third level in the sidebar (group › blade › sub-section) instead of a
+// separate in-page nav rail, so the whole hierarchy lives in the one global sidebar. `tab` is the ?tab=
+// value ("overview" = the bare blade path); the active/href logic lives in @/lib/payroll/nav (pure + tested).
+export interface SubBlade {
+  tab: string;
+  label: string;
+  icon: LucideIcon;
+}
+
+// HR/Payroll's eight sections, nested under People › Payroll. SINGLE source of truth for the sidebar
+// sub-nav AND the breadcrumb leaf (the page's own tab titles read from the same order). "overview" is the
+// bare /payroll path; the rest are ?tab=<tab>. The selected pay period (?weeksAgo) is carried across them.
+export const PAYROLL_HREF = "/payroll";
+export const PAYROLL_SUBNAV: SubBlade[] = [
+  { tab: "overview", label: "Overview", icon: Gauge },
+  { tab: "review", label: "Payroll Review", icon: ClipboardCheck },
+  { tab: "sync", label: "Time Sync", icon: RefreshCw },
+  { tab: "workers", label: "Workers", icon: UsersRound },
+  { tab: "contractors", label: "Contractors", icon: Globe2 },
+  { tab: "exceptions", label: "Exceptions", icon: AlertTriangle },
+  { tab: "history", label: "History", icon: History },
+  { tab: "settings", label: "Settings", icon: Settings },
+];
 
 // The two 10k-ft hubs sit on their own at the top, outside the expandable groups. Hidden for the scoped
 // marketing role (confined to its demand-gen surface).
@@ -101,7 +127,8 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: UsersRound,
     blades: [
       { href: "/people", label: "People Lifecycle", icon: Contact, manage: true },
-      { href: "/payroll", label: "HR / Payroll", icon: Wallet, financial: true },
+      // Payroll's eight sections are nested here (third sidebar level), not a separate in-page rail.
+      { href: PAYROLL_HREF, label: "Payroll", icon: Wallet, financial: true, children: PAYROLL_SUBNAV },
     ],
   },
   {
@@ -271,8 +298,10 @@ function titleize(segment: string): string {
 }
 
 /** Breadcrumb trail for the current path, resolved against what THIS role can see. One consistent
- *  pattern: [group] › [blade] › [sub-view?]. Hubs and the primary action are single crumbs. */
-export function breadcrumbTrail(pathname: string, role: Role): Crumb[] {
+ *  pattern: [group] › [blade] › [sub-view?]. Hubs and the primary action are single crumbs. `tab` (the
+ *  ?tab= query) resolves the active sub-section for a blade with nested children (HR/Payroll), so the
+ *  header breadcrumb reads e.g. People › Payroll › Payroll Review. */
+export function breadcrumbTrail(pathname: string, role: Role, tab?: string | null): Crumb[] {
   for (const hub of visibleHubs(role)) {
     if (isHrefActive(hub.href, pathname)) return [{ label: hub.label, href: hub.href }];
   }
@@ -286,6 +315,18 @@ export function breadcrumbTrail(pathname: string, role: Role): Crumb[] {
       .filter((b) => isHrefActive(b.href, pathname))
       .sort((a, b) => b.href.length - a.href.length)[0];
     if (!blade) break;
+    // A blade with nested sub-sections (HR/Payroll): the active ?tab becomes the leaf crumb, and the blade
+    // itself links to its overview when we're on a deeper section. Always exactly group › blade › section.
+    if (blade.children?.length) {
+      const activeTab = (tab && tab.trim()) || "overview";
+      const sub = blade.children.find((c) => c.tab === activeTab) ?? blade.children[0];
+      const onOverview = sub.tab === "overview";
+      return [
+        { label: g.label },
+        { label: blade.label, href: onOverview ? undefined : blade.href },
+        { label: sub.label },
+      ];
+    }
     // The group label links to its landing blade ONLY when the group has an explicit exact landing page
     // (e.g. /radar, /marketing) and we're deeper than it; otherwise the group label is inert (no link to
     // an arbitrary first blade).

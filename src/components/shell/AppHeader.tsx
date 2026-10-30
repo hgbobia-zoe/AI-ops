@@ -8,7 +8,7 @@
 // Shown only at lg+ (desktop); the compact mobile header lives in ConsoleNav's top bar. The clock uses
 // the mounted-clock pattern (empty until mounted) to avoid an SSR hydration mismatch.
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { Breadcrumbs } from "@/components/shell/Breadcrumbs";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import type { Role } from "@/lib/auth/roles";
@@ -36,7 +36,11 @@ export function AppHeader({ role }: { role: Role }): React.JSX.Element {
   return (
     <header className="hidden h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-4 lg:flex">
       <div className="min-w-0 flex-1">
-        <Breadcrumbs role={role} />
+        {/* Breadcrumbs reads ?tab (useSearchParams) → needs a Suspense boundary so the rest of the header
+            can still be prerendered. Fallback is an empty breadcrumb slot (it fills in on hydration). */}
+        <Suspense fallback={<nav aria-label="Breadcrumb" className="min-w-0" />}>
+          <Breadcrumbs role={role} />
+        </Suspense>
       </div>
       <Clock />
       <ThemeToggle />
