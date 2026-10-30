@@ -19,6 +19,7 @@ import {
 } from "@/lib/db/repo";
 import { datedNoteLines } from "./outreach";
 import { ACTION_LABEL, type SalesAction } from "./audit";
+import type { LastMessageChannel, LastMessageSnapshot } from "@/lib/aiorg/lastMessage";
 
 export type TimelineChannel = "sms" | "call" | "email" | "note" | "quote" | "system";
 
@@ -206,6 +207,40 @@ export function timelineLastActivity(entries: TimelineEntry[]): TimelineEntry | 
  *  Internal system actions and inbound entries don't count. Null when a rep has never reached out. */
 export function timelineLastOutbound(entries: TimelineEntry[]): TimelineEntry | null {
   return entries.find((e) => e.at != null && e.direction === "out") ?? null;
+}
+
+// Channels that represent an actual message in the conversation thread (client-facing or client-
+// originated). Internal "system"/audit entries are excluded; an internal note is only a last-resort
+// fallback when no real dated communication exists.
+const THREAD_CHANNELS = new Set<TimelineChannel>(["sms", "call", "email", "quote"]);
+
+/** The PREVIOUS / LAST message in the client's thread — the one a drafted reply is responding to — as a
+ *  compact, serializable snapshot (direction, who, when, channel, truncated body). Prefers the newest
+ *  DATED real communication (text/call/email/quote, either direction); falls back to the most recently
+ *  WRITTEN undated internal note so a worked-but-undated lead still shows context. Returns null when the
+ *  thread is genuinely empty — the honest "no prior message" state (never fabricated). PURE. */
+export function lastThreadMessage(entries: TimelineEntry[]): LastMessageSnapshot | null {
+  // buildLeadTimeline orders dated entries newest-first, so the first thread-channel hit is the most recent.
+  const dated = entries.find((e) => e.at != null && THREAD_CHANNELS.has(e.channel));
+  // Undated note lines keep their written order (oldest-first), so the LAST one is the most recently written.
+  const undatedNotes = entries.filter((e) => e.at == null && e.channel === "note");
+  const chosen = dated ?? (undatedNotes.length ? undatedNotes[undatedNotes.length - 1] : null);
+  if (!chosen) return null;
+  return {
+    channel: chosen.channel as LastMessageChannel,
+    direction: chosen.direction,
+    at: chosen.at,
+    rawDate: chosen.rawDate ?? null,
+    actor: chosen.actor,
+    title: chosen.title,
+    snippet: chosen.detail ? chosen.detail.slice(0, 240) : null,
+  };
+}
+
+/** The last thread message for a lead id, built from ONE merged-timeline pass. Null for an unknown lead
+ *  or an empty thread. Used by the proposers to snapshot the context onto a new approval request. */
+export function lastThreadMessageForLead(bookingId: string): LastMessageSnapshot | null {
+  return lastThreadMessage(buildLeadTimeline(bookingId));
 }
 
 // ── Cockpit-facing last-touch (the Bulk Review-and-Fire "Last touch" column + its recently-contacted

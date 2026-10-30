@@ -9,6 +9,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, X, Pencil, HelpCircle, Send } from "lucide-react";
 import { StatusBadge } from "@/components/ui/status";
+import { describeLastMessageWho, formatLastMessageWhen, type LastMessageSnapshot } from "@/lib/aiorg/lastMessage";
 
 export interface ApprovalCardData {
   id: string;
@@ -19,7 +20,7 @@ export interface ApprovalCardData {
   status: string;
   financial: boolean;
   card: { what: string; why: string; dataUsed: string; expectedOutcome: string; risk: string; whatIfApproved: string };
-  payload: { transactionId?: string; leadId?: string; body?: string; subject?: string };
+  payload: { transactionId?: string; leadId?: string; body?: string; subject?: string; lastMessage?: LastMessageSnapshot };
   createdAt: string;
   decidedBy?: string | null;
   decidedAt?: string | null;
@@ -103,6 +104,19 @@ export function ApprovalCard({ data, actionable }: { data: ApprovalCardData; act
         <Field label="Expected">{data.card.expectedOutcome}</Field>
         <Field label="Risk"><span className="text-attention">{data.card.risk}</span></Field>
         <Field label="If approved"><span className="text-tertiary-text">{data.card.whatIfApproved}</span></Field>
+
+        {data.payload.lastMessage && (
+          <div className="mt-2 border-t border-[var(--row-rule)] pt-2">
+            <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-meta">In reply to · last message</div>
+            <div className="text-[12px] text-meta">
+              {describeLastMessageWho(data.payload.lastMessage)}
+              {formatLastMessageWhen(data.payload.lastMessage) ? <span className="text-tertiary-text"> · {formatLastMessageWhen(data.payload.lastMessage)}</span> : null}
+            </div>
+            {data.payload.lastMessage.snippet && (
+              <div className="mt-0.5 max-h-28 overflow-y-auto whitespace-pre-wrap border-l-2 border-border bg-black/20 p-2 text-[12.5px] text-tertiary-text">{data.payload.lastMessage.snippet}</div>
+            )}
+          </div>
+        )}
 
         {hasBody && (
           <div className="mt-2 border-t border-[var(--row-rule)] pt-2">

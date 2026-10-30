@@ -9,6 +9,7 @@ import { redirect } from "next/navigation";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings, canSeeFinancials } from "@/lib/auth/roles";
 import { listPendingApprovals, listDecidedApprovals, type AiApproval } from "@/lib/aiorg/approvals";
+import { asLastMessageSnapshot } from "@/lib/aiorg/lastMessage";
 import { OrgTabs } from "@/components/aiorg/AiOrgBits";
 import { ApprovalCard, type ApprovalCardData } from "@/components/aiorg/ApprovalCard";
 import { ProposeButtons } from "@/components/aiorg/ProposeButtons";
@@ -30,6 +31,7 @@ function toCardData(a: AiApproval): ApprovalCardData {
       leadId: typeof a.actionPayload.leadId === "string" ? a.actionPayload.leadId : undefined,
       body: typeof a.actionPayload.body === "string" ? a.actionPayload.body : undefined,
       subject: typeof a.actionPayload.subject === "string" ? a.actionPayload.subject : undefined,
+      lastMessage: asLastMessageSnapshot(a.actionPayload.lastMessage) ?? undefined,
     },
     createdAt: a.createdAt,
     decidedBy: a.decidedBy,
