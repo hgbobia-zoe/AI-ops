@@ -288,8 +288,9 @@ function StatusPanel({ m, weeksAgo }: { m: PayrollReadinessModel; weeksAgo: numb
 }
 
 function NextActionControl({ m, periodQS, na }: { m: PayrollReadinessModel; periodQS: string; na: PayrollReadinessModel["nextAction"] }): React.JSX.Element {
-  // Hours gate → the real Sync control (dedupe + progress). Navigable gates → a Link. External/manual steps
-  // (approve timesheets in Connecteam) → a labelled static control, never a dead link.
+  // Hours gate → the real Sync control (dedupe + progress). Navigable gates (incl. reviewing + approving
+  // timesheets in-app) → a Link. A step that still happens OUTSIDE the app (submit in Gusto) → a labelled
+  // static control, never a dead link.
   if (na.gate === "hours") {
     return (
       <div className="flex flex-col items-end gap-1">

@@ -470,7 +470,7 @@ function computeNextAction(a: {
   // Hard blockers first.
   if (a.mappingGate.state === "BLOCKED") return { label: "Map workers to Gusto", href: REVIEW_TAB, explain: a.mappingGate.detail, gate: "gustoMapping" };
   // Then the earliest pipeline gate that isn't passing.
-  if (a.approvalGate.state === "ACTION" || a.approvalGate.state === "UNVERIFIED") return { label: "Approve timesheets in Connecteam", href: null, explain: a.approvalGate.detail, gate: "timesheetApproval" };
+  if (a.approvalGate.state === "ACTION" || a.approvalGate.state === "UNVERIFIED") return { label: "Review and approve timesheets", href: REVIEW_TAB, explain: a.approvalGate.detail, gate: "timesheetApproval" };
   if (a.reviewGate.state === "ACTION") return { label: "Review payroll", href: REVIEW_TAB, explain: a.reviewGate.detail, gate: "zoeReview" };
   if (a.status === "READY") return { label: "Approve payroll", href: REVIEW_TAB, explain: "Every gate is clean — record the Zoe approval.", gate: "zoeReview" };
   if (a.status === "APPROVED") return { label: "Push hours to Gusto (draft)", href: REVIEW_TAB, explain: "Approved — write the hours into the Gusto draft from the Review tab.", gate: "gustoSubmission" };
@@ -482,8 +482,8 @@ const SEV_RANK: Record<UnifiedIssueSeverity, number> = { blocker: 0, review: 1, 
 const ATTENTION_ACTION: Record<string, { label: string; href: string | null }> = {
   NO_GUSTO_MAPPING: { label: "Map to Gusto", href: WORKERS_TAB },
   DUPLICATE_GUSTO_MAPPING: { label: "Fix mapping", href: WORKERS_TAB },
-  UNAPPROVED_TIMESHEET: { label: "Approve in Connecteam", href: null },
-  APPROVAL_UNVERIFIED: { label: "Verify in Connecteam", href: null },
+  UNAPPROVED_TIMESHEET: { label: "Review and approve", href: REVIEW_TAB },
+  APPROVAL_UNVERIFIED: { label: "Review and approve", href: REVIEW_TAB },
   MISSING_PUNCH: { label: "Fix in Connecteam", href: null },
   SCHEDULE_DISCREPANCY: { label: "Review in Exceptions", href: EXCEPTIONS_TAB },
   OVERTIME: { label: "Review overtime", href: REVIEW_TAB },
