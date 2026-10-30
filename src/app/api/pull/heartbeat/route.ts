@@ -27,7 +27,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (publishToken && req.headers.get("x-publish-token") !== publishToken) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
   }
-  let body: { agent?: string; status?: string; detail?: string | null };
+  let body: { agent?: string; label?: string | null; status?: string; detail?: string | null };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -35,7 +35,12 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
   const status = VALID.includes(body.status as AgentStatus) ? (body.status as AgentStatus) : null;
   if (!status) return NextResponse.json({ error: "bad status" }, { status: 400, headers: CORS });
-  const { alert } = recordAgentHeartbeat((body.agent ?? "extension").slice(0, 40), status, (body.detail ?? null)?.toString().slice(0, 200) ?? null);
+  const { alert } = recordAgentHeartbeat(
+    (body.agent ?? "extension").slice(0, 60),
+    status,
+    (body.detail ?? null)?.toString().slice(0, 200) ?? null,
+    (body.label ?? null)?.toString().slice(0, 40) ?? null,
+  );
   if (alert) void slackNotify(alert); // loud, deduped signal so a broken puller is caught fast
   return NextResponse.json({ ok: true }, { headers: CORS });
 }

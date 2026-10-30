@@ -21,7 +21,8 @@ export interface SourceFreshness {
 export type AgentStatus = "ok" | "no_tab" | "not_logged_in" | "error";
 
 export interface AgentHeartbeat {
-  agent: string; // e.g. "extension"
+  agent: string; // stable per-install id (random, from the extension). Old installs send the constant "extension".
+  label?: string | null; // human label for this puller (e.g. "Office PC", "Jane laptop"), when the install sets one
   status: AgentStatus;
   detail: string | null;
   at: string; // ISO of this heartbeat
@@ -30,9 +31,13 @@ export interface AgentHeartbeat {
 export interface PullState {
   sources?: Record<string, SourceFreshness>;
   lastStaleAlertAt?: string;
-  agent?: AgentHeartbeat; // last heartbeat from the Auto-Pull extension (drives the "not signed in" banner)
-  agentFailingSince?: string; // ISO the agent first started failing (cleared on a healthy heartbeat)
-  agentAlertedAt?: string; // ISO we last Slack-alerted about a failing agent (cool-off dedup)
+  // Each Auto-Pull install reports independently, keyed by its stable id, so one signed-out laptop can no
+  // longer clobber a healthy puller's status. `agent` is kept as the single most-recent heartbeat for
+  // legacy readers; the FLEET (agents) is what drives the banner and the alert.
+  agents?: Record<string, AgentHeartbeat>;
+  agent?: AgentHeartbeat; // legacy: last heartbeat from ANY install (most recent); prefer fleetHealth()
+  agentFailingSince?: string; // ISO the WHOLE fleet first went unhealthy (cleared when any puller recovers)
+  agentAlertedAt?: string; // ISO we last Slack-alerted a fleet-down (cool-off dedup)
   routeHealthAlerted?: Record<string, string>; // routeId → ISO we last Slack-alerted it (overdue routes)
   instaworkOk?: boolean; // last Instawork probe result (undefined until first probe) — drives OK↔failed flip alerts
   instaworkFailingSince?: string; // ISO Instawork first started failing (cleared on a good probe)
@@ -181,43 +186,114 @@ export function setRouteHealthAlerted(map: Record<string, string>): void {
   save(s);
 }
 
-/** Record the Auto-Pull extension's latest heartbeat (status + detail). Independent of pull success —
- *  a successful pull updates source freshness via recordPull; this captures WHY a pull didn't happen
- *  (no GSPRO tab, signed out) so the UI can say so precisely instead of only "stale". */
-// `alert` (when non-null) is a message the caller should Slack. We alert on a SUSTAINED failure (a
-// second consecutive failing heartbeat — one blip doesn't page), deduped by a 2h cool-off, and once on
-// recovery. This is the loud signal so a broken puller is caught in ~10 minutes instead of rotting.
+// How recent a heartbeat must be to count toward the fleet (the extension pings every ~10m).
+export const AGENT_FRESH_MIN = 30;
+// How recently any source must have pulled for the data itself to count as "fresh" — a direct sign the
+// pullers are working, independent of who last pinged. Generous vs the ~10m cadence.
+const DATA_FRESH_MIN = 60;
+// The fleet must be continuously unhealthy for this long before we page (one blip never alerts), and we
+// re-page at most once per cool-off while it stays down.
+const SUSTAIN_MS = 15 * 60 * 1000;
 const ALERT_COOLOFF_MS = 2 * 60 * 60 * 1000;
-export function recordAgentHeartbeat(agent: string, status: AgentStatus, detail: string | null, now: Date = new Date()): { alert: string | null } {
+// Forget an install that has not pinged in this long (a decommissioned laptop must not count as a puller).
+const AGENT_TTL_MS = 24 * 60 * 60 * 1000;
+
+export interface FleetHealth {
+  agents: AgentHeartbeat[]; // fresh heartbeats (within AGENT_FRESH_MIN), most-recent first
+  total: number; // number of fresh pullers reporting
+  okCount: number; // fresh pullers currently able to pull
+  dataFresh: boolean; // a source pulled within DATA_FRESH_MIN (ground truth that pulling works)
+  healthy: boolean; // at least one puller OK, or data is fresh → redundancy is holding
+  reason: AgentStatus | "none"; // when unhealthy, the most actionable failure across the fleet
+  lastRouteAt: number | null;
+}
+
+/** Most recent successful pull across ALL sources (routes + bookings), in ms, or null. */
+function latestPullMs(st: PullState): { route: number | null; any: number | null } {
+  const routeAts = Object.entries(st.sources ?? {})
+    .filter(([k]) => k.startsWith("route:"))
+    .map(([, v]) => Date.parse(v.at))
+    .filter((t) => !Number.isNaN(t));
+  const route = routeAts.length ? Math.max(...routeAts) : null;
+  const bookings = st.sources?.["bookings"] ? Date.parse(st.sources["bookings"].at) : NaN;
+  const all = [route, Number.isNaN(bookings) ? null : bookings].filter((t): t is number => t != null);
+  return { route, any: all.length ? Math.max(...all) : null };
+}
+
+/** The FLEET view of the Auto-Pull installs: healthy when any install is pulling OR data is fresh, so a
+ *  single signed-out/closed laptop never reads as an outage while another operator is covering. This is
+ *  what the banner and the fleet-down alert key off — never a single most-recent heartbeat. */
+export function fleetHealth(now: number = Date.now(), freshMin = AGENT_FRESH_MIN, dataFreshMin = DATA_FRESH_MIN): FleetHealth {
+  return computeFleet(getPullState(), now, freshMin, dataFreshMin);
+}
+
+// Pure fleet computation over a given state snapshot. recordAgentHeartbeat must compute from its IN-MEMORY
+// state (the beat it just set but has not saved yet), so the verdict reflects the heartbeat being recorded.
+function computeFleet(st: PullState, now: number, freshMin = AGENT_FRESH_MIN, dataFreshMin = DATA_FRESH_MIN): FleetHealth {
+  const all = Object.values(st.agents ?? (st.agent ? { [st.agent.agent]: st.agent } : {}));
+  const fresh = all
+    .filter((a) => (now - Date.parse(a.at)) / 60000 <= freshMin)
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  const okCount = fresh.filter((a) => a.status === "ok").length;
+  const { route, any } = latestPullMs(st);
+  const dataFresh = any != null && (now - any) / 60000 <= dataFreshMin;
+  const healthy = okCount > 0 || dataFresh;
+  const reason: AgentStatus | "none" = fresh.some((a) => a.status === "not_logged_in")
+    ? "not_logged_in"
+    : fresh.some((a) => a.status === "no_tab")
+      ? "no_tab"
+      : fresh.some((a) => a.status === "error")
+        ? "error"
+        : "none";
+  return { agents: fresh, total: fresh.length, okCount, dataFresh, healthy, reason, lastRouteAt: route };
+}
+
+/** Record ONE install's heartbeat (status + detail), keyed by its stable id. Independent of pull success —
+ *  a successful pull updates source freshness via recordPull; this captures WHY a pull didn't happen (no
+ *  GSPRO tab, signed out) per operator. The returned `alert` (when non-null) is a message the caller should
+ *  Slack: we page ONLY when the WHOLE fleet is down (no puller OK and data stale) for at least SUSTAIN_MS,
+ *  deduped by a 2h cool-off, and once on recovery. One signed-out laptop with a healthy peer never pages. */
+export function recordAgentHeartbeat(agent: string, status: AgentStatus, detail: string | null, label: string | null = null, now: Date = new Date()): { alert: string | null } {
   const s = getPullState();
-  const prev = s.agent;
-  const prevFailing = !!prev && prev.status !== "ok";
-  const failing = status !== "ok";
+  const beat: AgentHeartbeat = { agent, label: label ?? undefined, status, detail: detail ?? null, at: now.toISOString() };
+
+  // Upsert this install into the fleet map and prune installs that have gone silent past the TTL.
+  const agents = s.agents ?? (s.agent ? { [s.agent.agent]: s.agent } : {});
+  agents[agent] = beat;
+  for (const [id, a] of Object.entries(agents)) {
+    if (id !== agent && now.getTime() - Date.parse(a.at) > AGENT_TTL_MS) delete agents[id];
+  }
+  s.agents = agents;
+  s.agent = beat; // legacy single-slot, kept for older readers
+
+  // Fleet verdict AFTER recording this beat — computed from the in-memory state (not yet saved).
+  const fleet = computeFleet(s, now.getTime());
   let alert: string | null = null;
 
-  if (failing) {
-    if (!s.agentFailingSince) s.agentFailingSince = now.toISOString();
-    const sustained = prevFailing; // 2nd+ consecutive failure
-    const alertedAgo = s.agentAlertedAt ? now.getTime() - Date.parse(s.agentAlertedAt) : Infinity;
-    if (sustained && alertedAgo > ALERT_COOLOFF_MS) {
-      const since = s.agentFailingSince;
-      const reason =
-        status === "not_logged_in"
-          ? "Goodshuffle is signed out on the office machine. Open pro.goodshuffle.com and sign in."
-          : status === "no_tab"
-            ? "No Goodshuffle tab is open in the office browser. Open pro.goodshuffle.com (signed in)."
-            : `Auto-Pull errored: ${detail || "inject/pull failed"}. Check the extension's site access on pro.goodshuffle.com.`;
-      alert = `Zoe Auto-Pull is down (${status}). ${reason} Goodshuffle data will go stale until this is fixed. Failing since ${since}.`;
-      s.agentAlertedAt = now.toISOString();
-    }
-  } else {
-    // Healthy heartbeat: if we had alerted, say it recovered; clear the failing/alert bookkeeping.
-    if (s.agentAlertedAt) alert = `Zoe Auto-Pull recovered (${detail || "ok"}).`;
+  if (fleet.healthy) {
+    if (s.agentAlertedAt) alert = "Zoe Auto-Pull recovered — a puller is reporting in again.";
     s.agentFailingSince = undefined;
     s.agentAlertedAt = undefined;
+  } else {
+    if (!s.agentFailingSince) s.agentFailingSince = now.toISOString();
+    const downForMs = now.getTime() - Date.parse(s.agentFailingSince);
+    const alertedAgo = s.agentAlertedAt ? now.getTime() - Date.parse(s.agentAlertedAt) : Infinity;
+    if (downForMs >= SUSTAIN_MS && alertedAgo > ALERT_COOLOFF_MS) {
+      const n = fleet.total;
+      const fleetNote = n > 1 ? `all ${n} reporting pullers` : n === 1 ? "the reporting puller" : "no puller is reporting and";
+      const reason =
+        fleet.reason === "not_logged_in"
+          ? `Goodshuffle is signed out on ${fleetNote}. Sign in at pro.goodshuffle.com on an office machine.`
+          : fleet.reason === "no_tab"
+            ? `No Goodshuffle tab is open on ${fleetNote}. Open pro.goodshuffle.com (signed in).`
+            : fleet.reason === "error"
+              ? `Auto-Pull is erroring on ${fleetNote} (${detail || "inject/pull failed"}). Check the extension's site access on pro.goodshuffle.com.`
+              : "no Auto-Pull install is reporting in. Start the extension on an office machine.";
+      alert = `Zoe Auto-Pull is down — ${reason} No puller has pulled in a while, so Goodshuffle data will go stale. Down since ${s.agentFailingSince}.`;
+      s.agentAlertedAt = now.toISOString();
+    }
   }
 
-  s.agent = { agent, status, detail: detail ?? null, at: now.toISOString() };
   save(s);
   return { alert };
 }
@@ -295,43 +371,32 @@ export interface PullBanner {
  *  a missing/stale heartbeat means the puller isn't running at all. Returns null when all is well.
  *  `agentFreshMin` = how recent a heartbeat must be to be trusted (default 30m; the extension pulls
  *  every ~10m). `routeStaleH` = fallback route-freshness threshold when there's no extension at all. */
-export function pullBannerState(now: number = Date.now(), agentFreshMin = 30, routeStaleH = 20): PullBanner | null {
-  const st = getPullState();
-  const agent = st.agent;
-  const agentAgeMin = agent ? (now - Date.parse(agent.at)) / 60000 : Infinity;
+export function pullBannerState(now: number = Date.now(), agentFreshMin = AGENT_FRESH_MIN, routeStaleH = 20): PullBanner | null {
+  const fleet = fleetHealth(now, agentFreshMin);
 
-  const routeAts = Object.entries(st.sources ?? {})
-    .filter(([k]) => k.startsWith("route:"))
-    .map(([, v]) => Date.parse(v.at))
-    .filter((t) => !Number.isNaN(t));
-  const lastRouteAt = routeAts.length ? Math.max(...routeAts) : NaN;
-  const routeAgeH = routeAts.length ? (now - lastRouteAt) / 3_600_000 : Infinity;
-  const routeAgeMin = routeAgeH * 60;
-  const lastPullPhrase = routeAts.length ? `Last route pull ${Math.round(routeAgeH)}h ago.` : "Routes have never been pulled.";
+  // Redundancy holds: at least one puller is OK, or data is fresh. A signed-out/closed peer is irrelevant.
+  if (fleet.healthy) return null;
 
-  // A live extension heartbeat is the most precise signal.
-  if (agent && agentAgeMin <= agentFreshMin) {
-    if (agent.status === "not_logged_in")
-      return { level: "error", title: "Goodshuffle is signed out — auto-pull can't run", detail: "Open pro.goodshuffle.com on the office machine and sign in; data will refresh within a few minutes." };
-    if (agent.status === "no_tab")
-      return { level: "warn", title: "Auto-pull has no Goodshuffle tab open", detail: "Open pro.goodshuffle.com (signed in) in the office browser so the pull can run." };
-    if (agent.status === "error") {
-      // A transient/partial error is RESOLVED once a successful route pull lands. If routes are fresh
-      // (a good pull within the freshness window), the data is current — don't alarm over a stale error
-      // heartbeat. The banner returns only while routes are ALSO stale (a real, unresolved problem).
-      if (routeAgeMin <= agentFreshMin) return null;
-      return { level: "warn", title: "Auto-pull hit a problem", detail: `${agent.detail ?? "Last pull errored."} ${lastPullPhrase}` };
-    }
-    return null; // status ok and recent → all good
+  const routeAgeH = fleet.lastRouteAt != null ? (now - fleet.lastRouteAt) / 3_600_000 : Infinity;
+  const lastPullPhrase = fleet.lastRouteAt != null ? `Last route pull ${Math.round(routeAgeH)}h ago.` : "Routes have never been pulled.";
+  const fleetNote = fleet.total > 1 ? ` ${fleet.total} pullers are reporting and none can pull right now.` : "";
+
+  // No install is reporting in at all → fall back to route-age so a manual bookmarklet pull stays quiet.
+  if (fleet.total === 0) {
+    if (routeAgeH < routeStaleH) return null;
+    return {
+      level: "warn",
+      title: "Route data may be stale — auto-pull isn't reporting in",
+      detail: `${lastPullPhrase} Start the Auto-Pull extension (or run the pull) on an office machine.`,
+    };
   }
 
-  // No live heartbeat. If a route pull is recent enough anyway (manual bookmarklet), stay quiet.
-  if (routeAgeH < routeStaleH) return null;
-  return {
-    level: "warn",
-    title: "Route data may be stale — auto-pull isn't reporting in",
-    detail: `${lastPullPhrase} Start the Auto-Pull extension (or run the pull) on the office machine.`,
-  };
+  // Installs ARE reporting, all are failing, and data is stale — a real, uncovered outage.
+  if (fleet.reason === "not_logged_in")
+    return { level: "error", title: "Goodshuffle is signed out — auto-pull can't run", detail: `Sign into pro.goodshuffle.com on an office machine; data will refresh within a few minutes.${fleetNote}` };
+  if (fleet.reason === "no_tab")
+    return { level: "warn", title: "Auto-pull has no Goodshuffle tab open", detail: `Open pro.goodshuffle.com (signed in) in an office browser so the pull can run.${fleetNote}` };
+  return { level: "warn", title: "Auto-pull hit a problem", detail: `${fleet.agents[0]?.detail ?? "Last pull errored."} ${lastPullPhrase}${fleetNote}` };
 }
 
 // ── Import ledger ────────────────────────────────────────────────────────────

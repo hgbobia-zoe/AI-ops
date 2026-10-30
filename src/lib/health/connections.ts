@@ -4,7 +4,7 @@
 // extension heartbeat + import ledger) and from config presence (provider secrets). Never fabricates:
 // an unconfigured integration is OFF, not "healthy".
 
-import { getPullState, getLatestImportBySource, type ImportRow } from "@/lib/pull/state";
+import { getPullState, getLatestImportBySource, fleetHealth, AGENT_FRESH_MIN, type ImportRow } from "@/lib/pull/state";
 import { computeDataHealth, type HealthState } from "./health";
 import { openphoneApiKey } from "@/lib/comms/openphone";
 import { connecteamConfigured, connecteamHealthCached } from "@/lib/connecteam";
@@ -41,8 +41,6 @@ export interface Connection {
   // Testable live: provider-module creds via /api/integrations/test, or GPS TrackIt via /api/eta/units.
   test?: { kind: "sms" | "gps"; provider: string } | { kind: "gpstrackit" } | null;
 }
-
-const AGENT_FRESH_MIN = 30; // a heartbeat older than this means the puller isn't running
 
 /** Map a Data-Health source state to a connection status. */
 function fromHealth(s: HealthState): ConnStatus {
@@ -109,19 +107,26 @@ export function computeConnections(now: number = Date.now()): Connection[] {
   const routes = health.find((h) => h.key === "routes");
   const bookings = health.find((h) => h.key === "bookings");
 
-  // ── Auto-Pull extension (the office-machine puller that feeds routes + bookings) ──
-  const agent = st.agent;
-  const ageMin = agent ? (now - Date.parse(agent.at)) / 60000 : Infinity;
+  // ── Auto-Pull extension (the office-machine puller(s) that feed routes + bookings) ──
+  // Fleet-aware: with several installs for redundancy, the row reflects the whole fleet, so one signed-out
+  // laptop reads as "N of M pulling", not an outage, as long as another puller is covering.
+  const fleet = fleetHealth(now, AGENT_FRESH_MIN);
+  const lastAt = fleet.agents[0]?.at ?? st.agent?.at ?? null;
+  const mOf = fleet.total > 0 ? `${fleet.okCount} of ${fleet.total} pulling` : null;
   let ext: Connection;
-  if (agent && ageMin <= AGENT_FRESH_MIN) {
-    if (agent.status === "ok") {
-      ext = { key: "extension", label: "Auto-Pull extension", category: "Data pull", status: "ok", headline: "Pulling", detail: agent.detail || "Reporting in and pulling on schedule.", lastAt: agent.at, fixHref: null, fixLabel: null };
-    } else if (agent.status === "not_logged_in") {
-      ext = { key: "extension", label: "Auto-Pull extension", category: "Data pull", status: "attention", headline: "Goodshuffle signed out", detail: "Open pro.goodshuffle.com on the office machine and sign in.", lastAt: agent.at, fixHref: "/admin/pull", fixLabel: "How to fix" };
-    } else if (agent.status === "no_tab") {
-      ext = { key: "extension", label: "Auto-Pull extension", category: "Data pull", status: "attention", headline: "No Goodshuffle tab", detail: "Open a signed-in pro.goodshuffle.com tab in the office browser so the pull can run.", lastAt: agent.at, fixHref: "/admin/pull", fixLabel: "How to fix" };
+  if (fleet.okCount > 0) {
+    ext = { key: "extension", label: "Auto-Pull extension", category: "Data pull", status: "ok", headline: "Pulling", detail: fleet.total > 1 ? `${mOf} · redundancy holding.` : (fleet.agents[0]?.detail || "Reporting in and pulling on schedule."), lastAt, fixHref: null, fixLabel: null };
+  } else if (fleet.healthy) {
+    // No live OK heartbeat this moment, but a recent pull proves the fleet is working — stay green.
+    ext = { key: "extension", label: "Auto-Pull extension", category: "Data pull", status: "ok", headline: "Pulling", detail: "A recent pull landed — data is fresh.", lastAt, fixHref: null, fixLabel: null };
+  } else if (fleet.total > 0) {
+    const covered = fleet.total > 1 ? ` (${fleet.total} pullers reporting, none can pull)` : "";
+    if (fleet.reason === "not_logged_in") {
+      ext = { key: "extension", label: "Auto-Pull extension", category: "Data pull", status: "attention", headline: "Goodshuffle signed out", detail: `Sign into pro.goodshuffle.com on an office machine.${covered}`, lastAt, fixHref: "/admin/pull", fixLabel: "How to fix" };
+    } else if (fleet.reason === "no_tab") {
+      ext = { key: "extension", label: "Auto-Pull extension", category: "Data pull", status: "attention", headline: "No Goodshuffle tab", detail: `Open a signed-in pro.goodshuffle.com tab in an office browser.${covered}`, lastAt, fixHref: "/admin/pull", fixLabel: "How to fix" };
     } else {
-      ext = { key: "extension", label: "Auto-Pull extension", category: "Data pull", status: "attention", headline: "Last pull errored", detail: agent.detail || "The last pull hit a problem.", lastAt: agent.at, fixHref: "/admin/pull", fixLabel: "How to fix" };
+      ext = { key: "extension", label: "Auto-Pull extension", category: "Data pull", status: "attention", headline: "Last pull errored", detail: `${fleet.agents[0]?.detail || "The last pull hit a problem."}${covered}`, lastAt, fixHref: "/admin/pull", fixLabel: "How to fix" };
     }
   } else {
     ext = {
@@ -129,11 +134,11 @@ export function computeConnections(now: number = Date.now()): Connection[] {
       label: "Auto-Pull extension",
       category: "Data pull",
       status: "attention",
-      headline: agent ? "Not reporting in" : "Never installed",
-      detail: agent
-        ? `No heartbeat for ${Math.round(ageMin)} min — the extension/browser may be closed on the office machine.`
-        : "Install the Auto-Pull extension on the office machine so data refreshes on its own.",
-      lastAt: agent?.at ?? null,
+      headline: st.agent ? "Not reporting in" : "Never installed",
+      detail: st.agent
+        ? "No puller has pinged recently — the extension/browser may be closed on the office machine(s)."
+        : "Install the Auto-Pull extension on an office machine so data refreshes on its own.",
+      lastAt: st.agent?.at ?? null,
       fixHref: "/admin/pull",
       fixLabel: "How to fix",
     };
