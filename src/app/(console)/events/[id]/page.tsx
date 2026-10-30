@@ -31,6 +31,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
+import { StatusBadge } from "@/components/ui/status";
 import { canManageSettings, canSeeFinancials } from "@/lib/auth/roles";
 import { todayInOpsTz, formatYmdLong, formatClockTime } from "@/lib/dates";
 import { getEventRef } from "@/lib/event/adapter";
@@ -298,9 +299,9 @@ export default async function EventCommandCenterPage({ params }: { params: Promi
                 <div key={a.id} className="border-t border-[var(--row-rule)] px-3 py-2.5 first:border-t-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[13.5px] font-medium">{a.label}</span>
-                    <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] ${a.priority === "blocking" ? "border-critical/40 text-critical" : "border-border text-meta"}`}>
+                    <StatusBadge tone={a.priority === "blocking" ? "critical" : "neutral"} size="sm" className="uppercase tracking-[0.06em]">
                       {a.priority}
-                    </span>
+                    </StatusBadge>
                     {a.deadline && <span className="text-[11.5px] text-meta">by {a.deadline}</span>}
                   </div>
                   <div className="mt-0.5 text-[12.5px] text-meta">

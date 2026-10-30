@@ -53,6 +53,7 @@ import { ExcludeControl } from "@/components/payroll/ExcludeControl";
 import { ApproveControl } from "@/components/payroll/ApproveControl";
 import { RateSyncPanel } from "@/components/payroll/RateSyncPanel";
 import { buildRateSyncPlan } from "@/lib/payroll/rateSync";
+import { StatusBadge } from "@/components/ui/status";
 
 export const dynamic = "force-dynamic";
 
@@ -93,12 +94,6 @@ const TONE_BADGE: Record<PayrollTone, string> = {
   positive: "text-positive border-positive/40 bg-positive/10",
   neutral: "text-tertiary-text border-border bg-[var(--row)]",
 };
-function StatusGlyph({ tone, className = "size-4" }: { tone: PayrollTone; className?: string }): React.JSX.Element {
-  if (tone === "positive") return <CheckCircle2 className={className} aria-hidden />;
-  if (tone === "critical") return <Ban className={className} aria-hidden />;
-  if (tone === "attention") return <CircleAlert className={className} aria-hidden />;
-  return <HelpCircle className={className} aria-hidden />;
-}
 
 export default async function PayrollPage({
   searchParams,
@@ -254,9 +249,7 @@ function StatusPanel({ m, weeksAgo }: { m: PayrollReadinessModel; weeksAgo: numb
         <div className="min-w-0">
           <h2 id="payroll-status-h" className="text-[10.5px] uppercase tracking-[0.1em] text-meta">Payroll status</h2>
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            <span className={`inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-[14px] font-semibold ${TONE_BADGE[m.tone]}`}>
-              <StatusGlyph tone={m.tone} /> {m.headline}
-            </span>
+            <StatusBadge tone={m.tone} size="md" className="font-semibold">{m.headline}</StatusBadge>
             {m.approval && (
               <span className="rounded border border-border bg-[var(--row)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-tertiary-text">
                 {APPROVAL_STATUS_LABEL[m.approval.status]}{m.approval.approvedBy ? ` · ${m.approval.approvedBy}` : ""}
@@ -655,9 +648,7 @@ async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
       <section className="surface flex flex-wrap items-center justify-between gap-4 border p-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-[13px] font-semibold ${TONE_BADGE[m.tone]}`}>
-              <StatusGlyph tone={m.tone} /> {UNIFIED_STATUS_LABEL[m.status]}
-            </span>
+            <StatusBadge tone={m.tone} size="md" className="font-semibold">{UNIFIED_STATUS_LABEL[m.status]}</StatusBadge>
             <span className="text-[12px] text-meta">{m.counts.included} in run · {hrs(m.totals.hours)}</span>
           </div>
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-[12px]">

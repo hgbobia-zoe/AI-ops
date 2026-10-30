@@ -8,6 +8,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Check, X, Pencil, HelpCircle, Send } from "lucide-react";
+import { StatusBadge } from "@/components/ui/status";
 
 export interface ApprovalCardData {
   id: string;
@@ -90,7 +91,7 @@ export function ApprovalCard({ data, actionable }: { data: ApprovalCardData; act
         <div className="flex items-center gap-2">
           <span className="text-[13.5px] font-medium">{data.title}</span>
           <span className="rounded border border-border px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.07em] text-meta">{ACTION_LABEL[data.actionType] ?? data.actionType}</span>
-          {forbidden && <span className="rounded border border-critical/40 px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.07em] text-critical">Execution not wired</span>}
+          {forbidden && <StatusBadge tone="critical" size="sm" className="uppercase tracking-[0.07em]">Execution not wired</StatusBadge>}
         </div>
         <span className="text-[11px] text-meta">{data.agentId} · {data.owner}</span>
       </div>
