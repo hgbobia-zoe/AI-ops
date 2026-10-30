@@ -9,20 +9,24 @@
 // Role grounding (from Zoe's real Connecteam titles): driver → "Driver"/"Delivery Driver"; prep →
 // "Warehouse Associate"/"Event Asset Processor". Office/admin titles (Operations Coordinator, Executive
 // Assistant, Digital Sales Marketer, any `manager` type) map to CrewRole "other" and are NEVER
-// recommended. There is NO internal "field" title — field/tent help is Instawork "General Labor" (or a
-// free warehouse person pulled over), so a field shift recommends free PREP crew as optional helpers and
-// the UI points to Instawork for the rest.
+// recommended. There is NO internal "field" title, and as of the owner directive 2026-10-30 a warehouse/prep
+// worker is NOT pulled onto a truck either ("asset prep does not get on a truck at all") — so a field shift
+// recommends NO internal crew; field/tent help is Instawork "General Labor" and the UI points there.
 
 import type { CrewMember, CrewShift, CrewRole, UnavailabilityBlock } from "@/lib/connecteam";
 import { eligibilityFor, type AssignmentWindow, type EligibilityResult } from "./eligibility";
 import type { ShiftRole, StaffShift } from "./types";
 
-/** Which Connecteam crew roles can fill a scheduling role. "other" (office/admin) is never included. */
+/** Which Connecteam crew roles can fill a scheduling role. "other" (office/admin) is never included, and a
+ *  "prep" (warehouse) worker fills ONLY a warehouse prep shift — never a TRUCK seat (driver or field). Owner
+ *  directive 2026-10-30 ("asset prep does not get on a truck at all"): field-helper seats have NO internal
+ *  crew — they are Instawork "General Labor" (or an explicit, reasoned dispatcher override), never an
+ *  auto-pulled warehouse person. This is the single qualification gate every engine reads (recommendCrew,
+ *  the optimizer, planView), so prep is kept off trucks everywhere at once. */
 export function candidateRoles(role: ShiftRole): CrewRole[] {
   if (role === "driver") return ["driver"];
-  if (role === "prep") return ["prep"];
-  if (role === "office") return []; // office/admin shift — NOT route crew; nobody qualifies to fill it
-  return ["prep"]; // field: no internal field title → free warehouse/prep as optional helpers (else Instawork)
+  if (role === "prep") return ["prep"]; // warehouse prep/load shift — NOT a truck seat
+  return []; // field (truck helper) + office: no internal crew qualifies → Instawork / manual override
 }
 
 export interface CrewRecommendation {

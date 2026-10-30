@@ -77,19 +77,24 @@ describe("computeStaffingHealth", () => {
 describe("moveEligibility", () => {
   const win = { startMs: 1000, endMs: 2000 };
 
-  it("good-fit: qualified prep, free window", () => {
-    expect(moveEligibility({ workerRole: "prep", targetRole: "field", routeWindow: win, workerBusyWindows: [] }).fit).toBe("good-fit");
+  it("good-fit: qualified prep to a prep (warehouse) seat, free window", () => {
+    // NB: prep → FIELD is now a qualification-mismatch (owner directive 2026-10-30, prep is not truck crew);
+    // the window-logic cases below use the still-valid prep → prep move.
+    expect(moveEligibility({ workerRole: "prep", targetRole: "prep", routeWindow: win, workerBusyWindows: [] }).fit).toBe("good-fit");
   });
   it("qualification-mismatch: office/other cannot fill a field seat", () => {
     expect(moveEligibility({ workerRole: "other", targetRole: "field", routeWindow: win, workerBusyWindows: [] }).fit).toBe("qualification-mismatch");
   });
+  it("qualification-mismatch: a prep (warehouse) worker cannot fill a FIELD truck seat (owner directive 2026-10-30)", () => {
+    expect(moveEligibility({ workerRole: "prep", targetRole: "field", routeWindow: win, workerBusyWindows: [] }).fit).toBe("qualification-mismatch");
+  });
   it("exceeds-availability: qualified but busy overlapping the route window", () => {
-    expect(moveEligibility({ workerRole: "prep", targetRole: "field", routeWindow: win, workerBusyWindows: [[1500, 2500]] }).fit).toBe("exceeds-availability");
+    expect(moveEligibility({ workerRole: "prep", targetRole: "prep", routeWindow: win, workerBusyWindows: [[1500, 2500]] }).fit).toBe("exceeds-availability");
   });
   it("good-fit when the window is unknown (no overlap to check) but qualified", () => {
-    expect(moveEligibility({ workerRole: "prep", targetRole: "field", routeWindow: null, workerBusyWindows: [[1500, 2500]] }).fit).toBe("good-fit");
+    expect(moveEligibility({ workerRole: "prep", targetRole: "prep", routeWindow: null, workerBusyWindows: [[1500, 2500]] }).fit).toBe("good-fit");
   });
   it("a non-overlapping busy window is still a good fit", () => {
-    expect(moveEligibility({ workerRole: "prep", targetRole: "field", routeWindow: win, workerBusyWindows: [[2000, 3000]] }).fit).toBe("good-fit");
+    expect(moveEligibility({ workerRole: "prep", targetRole: "prep", routeWindow: win, workerBusyWindows: [[2000, 3000]] }).fit).toBe("good-fit");
   });
 });

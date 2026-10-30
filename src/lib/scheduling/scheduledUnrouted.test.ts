@@ -38,15 +38,16 @@ describe("detectScheduledUnrouted (pure)", () => {
     expect(r.people[0]).toMatchObject({ userId: 1, fillRole: "driver", suggestedRouteId: "r1", eligibleRouteIds: ["r1"] });
   });
 
-  it("maps a scheduled prep (warehouse) person to a FIELD helper gap", () => {
+  it("NEVER surfaces a prep (warehouse) person onto a truck, even with an open FIELD gap (owner directive 2026-10-30)", () => {
+    // "asset prep does not get on a truck at all" — prep is warehouse crew, not truck crew, so it is treated
+    // exactly like office/admin here: never suggested onto a route. Field help is Instawork.
     const r = detectScheduledUnrouted(
       input({
         scheduled: [person({ userId: 2, role: "prep" })],
         routes: [routeCand({ routeId: "r1", gapByRole: { driver: 0, field: 2 } })],
       }),
     );
-    expect(r.people).toHaveLength(1);
-    expect(r.people[0]).toMatchObject({ userId: 2, fillRole: "field", suggestedRouteId: "r1" });
+    expect(r.people).toHaveLength(0);
   });
 
   it("never surfaces office/admin ('other') crew", () => {
@@ -73,8 +74,8 @@ describe("detectScheduledUnrouted (pure)", () => {
   it("does NOT surface a scheduled person when no route has a gap they can fill (nothing to assign to)", () => {
     const r = detectScheduledUnrouted(
       input({
-        scheduled: [person({ userId: 2, role: "prep" })],
-        routes: [routeCand({ routeId: "r1", gapByRole: { driver: 1, field: 0 } })], // only a driver gap; prep fills field
+        scheduled: [person({ userId: 1, role: "driver" })],
+        routes: [routeCand({ routeId: "r1", gapByRole: { driver: 0, field: 1 } })], // only a field gap; a driver fills driver
       }),
     );
     expect(r.people).toHaveLength(0);
@@ -93,14 +94,14 @@ describe("detectScheduledUnrouted (pure)", () => {
   it("suggests the route with the largest matching gap, ties broken by truck name", () => {
     const r = detectScheduledUnrouted(
       input({
-        scheduled: [person({ userId: 2, role: "prep" })],
+        scheduled: [person({ userId: 1, role: "driver" })],
         routes: [
-          routeCand({ routeId: "r1", truckName: "Beta", gapByRole: { driver: 0, field: 1 } }),
-          routeCand({ routeId: "r2", truckName: "Alpha", gapByRole: { driver: 0, field: 3 } }),
+          routeCand({ routeId: "r1", truckName: "Beta", gapByRole: { driver: 1, field: 0 } }),
+          routeCand({ routeId: "r2", truckName: "Alpha", gapByRole: { driver: 3, field: 0 } }),
         ],
       }),
     );
-    expect(r.people[0].suggestedRouteId).toBe("r2"); // bigger field gap wins
+    expect(r.people[0].suggestedRouteId).toBe("r2"); // bigger driver gap wins
     expect(r.people[0].eligibleRouteIds.sort()).toEqual(["r1", "r2"]);
   });
 
