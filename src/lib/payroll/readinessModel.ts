@@ -156,12 +156,13 @@ function mergeWorker(
 }
 
 const AUDIT_ACTIONS = [
-  "payroll.approve", "payroll.unapprove", "payroll.worker.accept", "payroll.worker.unaccept",
+  "payroll.approve", "payroll.unapprove", "payroll.worker.approve", "payroll.worker.accept", "payroll.worker.unaccept",
   "payroll.worker.exclude", "payroll.worker.include", "payroll.rate_sync.write", "payroll.gusto.push_hours",
 ];
 const ACTIVITY: Record<string, { layer: PayrollActivityEvent["layer"]; label: string; tone: PayrollTone }> = {
   "payroll.approve": { layer: "approval", label: "Approved payroll (Zoe sign-off + Connecteam finalize)", tone: "positive" },
   "payroll.unapprove": { layer: "approval", label: "Un-approved payroll (unlocked in Connecteam)", tone: "neutral" },
+  "payroll.worker.approve": { layer: "approval", label: "Approved a worker's timesheet (Connecteam finalize)", tone: "positive" },
   "payroll.worker.accept": { layer: "review", label: "Accepted a worker into the run", tone: "neutral" },
   "payroll.worker.unaccept": { layer: "review", label: "Un-accepted a worker", tone: "neutral" },
   "payroll.worker.exclude": { layer: "exclusion", label: "Excluded a worker", tone: "neutral" },
@@ -180,6 +181,7 @@ function buildActivity(): PayrollActivityEvent[] {
       const d = a.detail ?? {};
       const outcome =
         a.action === "payroll.approve" ? `${d.readyWorkers ?? "?"} approved${Number(d.ctLocked) ? `, ${Number(d.ctLocked)} locked in Connecteam` : ""}${Number(d.ctLockFailed) ? `, ${Number(d.ctLockFailed)} finalize failed` : ""}`
+          : a.action === "payroll.worker.approve" ? `${Array.isArray(d.workers) ? d.workers.length : "?"} approved${Number(d.ctLocked) ? `, ${Number(d.ctLocked)} locked in Connecteam` : ""}${Number(d.ctLockFailed) ? `, ${Number(d.ctLockFailed)} finalize failed` : ""}`
           : a.action === "payroll.unapprove" ? `${d.unlocked ?? "?"} unapproved${Number(d.lockConflicts) ? `, ${Number(d.lockConflicts)} still locked in Connecteam` : ""}`
           : a.action === "payroll.gusto.push_hours" ? `${d.pushed ?? "?"} pushed${d.failed ? `, ${d.failed} failed` : ""}`
             : a.action === "payroll.rate_sync.write" ? `${d.name ?? "worker"} → $${d.gustoRate ?? "?"}/hr`

@@ -27,7 +27,7 @@ export async function POST(req: Request): Promise<Response> {
 
   // Payroll targets a COMPLETED week: the UI sends the exact period (start/end). `which` is a back-compat alias;
   // with nothing given we default to the last completed week (never the in-progress one).
-  const body = (await req.json().catch(() => ({}))) as { which?: "current" | "previous"; start?: string; end?: string; acknowledge?: boolean; action?: "approve" | "unapprove" };
+  const body = (await req.json().catch(() => ({}))) as { which?: "current" | "previous"; start?: string; end?: string; acknowledge?: boolean; action?: "approve" | "unapprove"; workerKeys?: string[] };
   const today = await safeToday();
   const period =
     body.start && body.end
@@ -56,6 +56,38 @@ export async function POST(req: Request): Promise<Response> {
   // Hard stop: never approve on an unavailable/unverified time source.
   if (appr.unavailable) {
     return NextResponse.json({ error: "Connecteam is unavailable — hours can't be verified, so payroll can't be approved. Retry the sync first." }, { status: 409 });
+  }
+
+  // ── PER-WORKER APPROVE (from the in-app Timesheet Review): approve + finalize JUST the requested workers,
+  // scoped to the SAME approvability gate (a blocked/review-held worker can never be approved this way). This
+  // writes each worker's lock record, which clears THEIR source-timesheet gate independently — exactly the
+  // readiness model's per-worker-lock semantics. It deliberately does NOT record the period-level Zoe sign-off
+  // (that is the explicit bulk "Approve" + the run-payroll gate); it only finalizes the reviewed worker(s). ──
+  if (Array.isArray(body.workerKeys) && body.workerKeys.length > 0) {
+    const requested = new Set(body.workerKeys);
+    const scoped = appr.approvableKeys.filter((k) => requested.has(k));
+    if (scoped.length === 0) {
+      return NextResponse.json({
+        error: appr.needsAck && !acknowledge
+          ? `That worker is held by the source-timesheet gate. ${appr.ackReason ?? ""} Re-submit with acknowledgement to approve it.`
+          : "That worker isn't approvable. Resolve its blockers or review items first.",
+        requiresAck: appr.needsAck && !acknowledge,
+      }, { status: 409 });
+    }
+    const scopedSet = new Set(scoped);
+    const targets: LockTarget[] = model.workers
+      .filter((w) => scopedSet.has(w.key))
+      .map((w) => ({ workerKey: w.key, name: w.name, connecteamUserId: w.connecteamUserId }));
+    const actor = await currentActor();
+    const finalize = await finalizeApprovedTimesheets(period, targets, actor.label);
+    try {
+      const { insertAudit } = await import("@/lib/db/repo");
+      insertAudit({
+        actor: actor.label, action: "payroll.worker.approve", entity: "hr_payroll_ct_locks", entityId: `${period.start}..${period.end}`,
+        after: { workers: targets.map((t) => t.name), ctLocked: finalize.locked, ctLockFailed: finalize.failed, ctNothingToLock: finalize.na },
+      });
+    } catch { /* audit is best-effort */ }
+    return NextResponse.json({ period, approvedKeys: scoped, finalize });
   }
   // The only approvable workers are held by the source-approval gate, and the caller did not acknowledge it.
   if (appr.readyKeys.length === 0 && appr.needsAck && !acknowledge) {
