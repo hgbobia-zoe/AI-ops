@@ -20,12 +20,26 @@
     };
   }
 
+  // Stable per-install identity so the app tracks each puller independently (true N-of-M redundancy):
+  // one signed-out laptop no longer clobbers a healthy puller's status. Generated once, then persisted.
+  // `operatorLabel` is optional (a human name for this machine) and shown in the app's fleet view.
+  async function agentIdentity() {
+    const c = await chrome.storage.local.get(["agentId", "operatorLabel"]);
+    let agentId = c.agentId;
+    if (!agentId) {
+      agentId = (crypto && crypto.randomUUID ? crypto.randomUUID() : "x" + Math.random().toString(36).slice(2) + Date.now().toString(36));
+      await chrome.storage.local.set({ agentId });
+    }
+    return { agentId, operatorLabel: c.operatorLabel || null };
+  }
+
   async function heartbeat(apiBase, status, detail) {
     try {
+      const { agentId, operatorLabel } = await agentIdentity();
       await fetch(apiBase + "/api/pull/heartbeat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ agent: "extension", status, detail: detail ?? null, at: new Date().toISOString() }),
+        body: JSON.stringify({ agent: agentId, label: operatorLabel, status, detail: detail ?? null, at: new Date().toISOString() }),
       });
     } catch (e) {
       /* best-effort; the pull already ran */

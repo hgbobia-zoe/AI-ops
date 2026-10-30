@@ -9,7 +9,7 @@ import { Download, CircleCheck, AlertTriangle, Puzzle } from "lucide-react";
 import { PullBookmarklet } from "@/components/PullBookmarklet";
 import { PullExtensionInstall } from "@/components/PullExtensionInstall";
 import { buildOfficePullScript } from "@/lib/gsPull";
-import { getPullState } from "@/lib/pull/state";
+import { getPullState, fleetHealth } from "@/lib/pull/state";
 import { getRoutesDebug } from "@/lib/db/repo";
 import { DISPLAY_TZ, todayInOpsTz } from "@/lib/dates";
 
@@ -68,15 +68,24 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
   // Goodshuffle route arrived (and under which id/status) instead of guessing.
   const dbRoutes = getRoutesDebug(todayInOpsTz());
 
-  const agent = state.agent;
+  // Fleet-aware live status: several installs can report, so show "N of M pulling" and only flag a
+  // problem when the whole fleet is down (no puller OK and data stale). One signed-out laptop that a
+  // peer is covering reads green here, matching the no-false-alarm behavior of the banner and Slack.
+  const fleet = fleetHealth();
+  const agent = fleet.agents[0] ?? state.agent;
   const agentAgeMin = minutesAgo(agent?.at);
-  const agentLive = agentAgeMin != null && agentAgeMin <= 30;
+  const fleetOk = fleet.healthy;
   const AGENT_STATUS_LABEL: Record<string, string> = {
     ok: "Pulling on schedule",
     no_tab: "No Goodshuffle tab open on this machine",
     not_logged_in: "Goodshuffle is signed out — sign in to resume",
     error: "Last pull hit a problem",
   };
+  const fleetLine = fleet.total === 0
+    ? (agent ? `Extension last reported ${agentAgeMin}m ago — may not be running here.` : "Extension not detected yet. Install it below, or it hasn't run its first pull.")
+    : fleetOk
+      ? `${fleet.okCount} of ${fleet.total} puller${fleet.total === 1 ? "" : "s"} pulling${fleet.okCount === 0 ? " — a recent pull landed, data is fresh" : fleet.total > 1 ? " · redundancy holding" : ""}.`
+      : `${fleet.total} puller${fleet.total === 1 ? "" : "s"} reporting, none able to pull right now — ${AGENT_STATUS_LABEL[fleet.reason] ?? fleet.reason}.`;
 
   return (
     <main className="mx-auto max-w-3xl p-5 pb-16 md:p-8">
@@ -121,16 +130,10 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
           update.
         </p>
 
-        {/* Live status from the extension's heartbeat */}
-        <div className={`flex items-center gap-2 border px-3 py-2 text-sm ${agentLive && agent?.status === "ok" ? "border-emerald-500/30 bg-emerald-500/[0.06] text-emerald-200" : agentLive ? "border-amber-500/40 bg-amber-500/10 text-amber-200" : "border-white/10 bg-white/[0.03] text-muted-foreground"}`}>
-          {agentLive && agent?.status === "ok" ? <CircleCheck className="size-4 shrink-0" /> : <AlertTriangle className="size-4 shrink-0" />}
-          <span>
-            {agent
-              ? agentLive
-                ? `Extension: ${AGENT_STATUS_LABEL[agent.status] ?? agent.status} (${agentAgeMin}m ago)`
-                : `Extension last reported ${agentAgeMin}m ago — may not be running here.`
-              : "Extension not detected yet. Install it below, or it hasn't run its first pull."}
-          </span>
+        {/* Live status from the extension heartbeats — the whole fleet, not a single install */}
+        <div className={`flex items-center gap-2 border px-3 py-2 text-sm ${fleet.total > 0 && fleetOk ? "border-emerald-500/30 bg-emerald-500/[0.06] text-emerald-200" : fleet.total > 0 ? "border-amber-500/40 bg-amber-500/10 text-amber-200" : "border-white/10 bg-white/[0.03] text-muted-foreground"}`}>
+          {fleet.total > 0 && fleetOk ? <CircleCheck className="size-4 shrink-0" /> : <AlertTriangle className="size-4 shrink-0" />}
+          <span>{fleetLine}</span>
         </div>
 
         {/* ?v= is the manifest version (read at render), so the link always points at the current build and
