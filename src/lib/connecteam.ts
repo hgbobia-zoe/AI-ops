@@ -973,6 +973,170 @@ async function getTimesheetDetailUncached(startDate: string, endDate: string): P
   return { ok: true, approvalFieldSeen, byUser };
 }
 
+// ── Timesheet REVIEW: per-DAY breakdown (so the owner reviews each worker's timesheet IN THE APP) ─────
+// getTimesheetDetail gives the approval split + worked-date SET; review needs the per-DAY rows the owner
+// would otherwise open Connecteam to read. Same shape-tolerance (findArray/num/ymdOf/approvalOf/isOpenPunch)
+// and the same honesty contract: ok:false when Connecteam is unreachable (everything UNVERIFIED, NEVER
+// zeroed), approvalState null when no approval field is present (never assumed approved). Clock in/out are
+// included only when the payload exposes shift start/end; otherwise they are omitted honestly.
+
+const CT_REVIEW_TZ = "America/New_York"; // the business runs ET; day breakdowns render in ET.
+
+export interface TimesheetDayReview {
+  date: string; //                                  yyyy-MM-dd
+  hours: number; //                                 dailyTotalHours for the day
+  openPunch: boolean; //                            an open (clocked-in, never clocked-out) shift that day
+  approvalState: "approved" | "unapproved" | null; // per-day approval signal (null = none exposed)
+  clockIn: string | null; //                        earliest shift start (ET), when shifts expose it
+  clockOut: string | null; //                       latest shift end (ET); null when open or not exposed
+}
+export interface TimesheetUserReview {
+  userId: number;
+  totalHours: number;
+  /** Rolled up from the days: APPROVED (every day approved) | UNAPPROVED (any day unapproved) | UNVERIFIED
+   *  (no approval field exposed anywhere — never assumed approved). */
+  approvalState: "APPROVED" | "UNAPPROVED" | "UNVERIFIED";
+  openPunch: boolean;
+  days: TimesheetDayReview[]; // one per day with a resolvable date, sorted ascending
+}
+export interface TimesheetReviewResult {
+  ok: boolean; // false = Connecteam unreachable → everything UNVERIFIED (never zeroed)
+  byUser: Map<number, TimesheetUserReview>;
+}
+
+/** The day's approval signal: day-level flag first, else rolled up from its shifts (unflagged shift counts
+ *  as unapproved once ANY approval field has been seen on the day — never silently approved). Pure. */
+function dayApprovalOf(d: Json): "approved" | "unapproved" | null {
+  const dayLevel = approvalOf(d);
+  if (dayLevel != null) return dayLevel;
+  const shifts = (d.shifts ?? d.shiftsData ?? d.entries) as unknown;
+  if (Array.isArray(shifts) && shifts.length > 0) {
+    let sawField = false;
+    let anyUnapproved = false;
+    for (const s of shifts) {
+      if (!s || typeof s !== "object") continue;
+      const a = approvalOf(s as Json);
+      if (a != null) { sawField = true; if (a === "unapproved") anyUnapproved = true; }
+      else if (sawField) anyUnapproved = true; // unflagged after a flag was seen → unapproved
+    }
+    if (sawField) return anyUnapproved ? "unapproved" : "approved";
+  }
+  return null;
+}
+
+/** Earliest clock-in / latest clock-out for a day, formatted in `tz`. clockOut is null when a shift is open
+ *  (clocked in, never out) or when no shift exposes an end — never fabricated. Pure. */
+function dayClockWindow(d: Json, tz: string): { clockIn: string | null; clockOut: string | null } {
+  const shifts = (d.shifts ?? d.shiftsData ?? d.entries) as unknown;
+  if (!Array.isArray(shifts) || shifts.length === 0) return { clockIn: null, clockOut: null };
+  let minStart: number | null = null;
+  let maxEnd: number | null = null;
+  let anyOpen = false;
+  for (const s of shifts) {
+    if (!s || typeof s !== "object") continue;
+    const o = s as Json;
+    const start = unixOf(o.start ?? o.startTime ?? o.clockIn ?? o.clockInTime);
+    const end = unixOf(o.end ?? o.endTime ?? o.clockOut ?? o.clockOutTime);
+    if (start != null) minStart = minStart == null ? start : Math.min(minStart, start);
+    if (start != null && end == null) anyOpen = true;
+    if (end != null) maxEnd = maxEnd == null ? end : Math.max(maxEnd, end);
+  }
+  return {
+    clockIn: minStart != null ? shiftClock(minStart, tz) : null,
+    clockOut: !anyOpen && maxEnd != null ? shiftClock(maxEnd, tz) : null,
+  };
+}
+
+/** Parse ONE raw Connecteam timesheet user into a per-DAY review. Pure + exported for tests. Mirrors
+ *  parseTimesheetUser's totals/approval honesty but keeps the daily rows. */
+export function parseTimesheetReviewUser(rawUser: Json, tz: string = CT_REVIEW_TZ): TimesheetUserReview | null {
+  const userId = num(rawUser.userId ?? rawUser.id);
+  if (!userId) return null;
+  const rawDays = (rawUser.dailyRecords as Json[] | undefined) ?? [];
+  const days: TimesheetDayReview[] = [];
+  let total = 0;
+  let sawApproval = false;
+  let anyUnapproved = false;
+  let openPunch = false;
+
+  for (const d of rawDays) {
+    const date = ymdOf(d.date ?? d.day ?? d.dateString ?? d.workDate ?? d.recordDate);
+    if (!date) continue; // a day we can't place is not shown (never fabricated)
+    const hours = Math.round((num(d.dailyTotalHours ?? d.dailyTotalWorkHours) ?? 0) * 100) / 100;
+    total += hours;
+    const open = isOpenPunch(d);
+    if (open) openPunch = true;
+    const approval = dayApprovalOf(d);
+    if (approval != null) { sawApproval = true; if (approval === "unapproved") anyUnapproved = true; }
+    const { clockIn, clockOut } = dayClockWindow(d, tz);
+    days.push({ date, hours, openPunch: open, approvalState: approval, clockIn, clockOut });
+  }
+
+  days.sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    userId,
+    totalHours: Math.round(total * 100) / 100,
+    approvalState: !sawApproval ? "UNVERIFIED" : anyUnapproved ? "UNAPPROVED" : "APPROVED",
+    openPunch,
+    days,
+  };
+}
+
+/** Merge two reviews for the same user (a user can appear on more than one clock). Days are merged by date
+ *  (hours summed, open OR'd, earliest in / latest out kept); approval rolls down to the least-approved. */
+function mergeUserReview(a: TimesheetUserReview, b: TimesheetUserReview): TimesheetUserReview {
+  const byDate = new Map<string, TimesheetDayReview>();
+  for (const d of [...a.days, ...b.days]) {
+    const prev = byDate.get(d.date);
+    if (!prev) { byDate.set(d.date, { ...d }); continue; }
+    byDate.set(d.date, {
+      date: d.date,
+      hours: Math.round((prev.hours + d.hours) * 100) / 100,
+      openPunch: prev.openPunch || d.openPunch,
+      approvalState:
+        prev.approvalState === "unapproved" || d.approvalState === "unapproved" ? "unapproved"
+          : prev.approvalState === "approved" || d.approvalState === "approved" ? "approved"
+            : null,
+      clockIn: [prev.clockIn, d.clockIn].filter((x): x is string => !!x).sort()[0] ?? null,
+      clockOut: [prev.clockOut, d.clockOut].filter((x): x is string => !!x).sort().slice(-1)[0] ?? null,
+    });
+  }
+  const days = [...byDate.values()].sort((x, y) => x.date.localeCompare(y.date));
+  const approvalState = a.approvalState === "UNAPPROVED" || b.approvalState === "UNAPPROVED" ? "UNAPPROVED"
+    : a.approvalState === "UNVERIFIED" || b.approvalState === "UNVERIFIED" ? "UNVERIFIED" : "APPROVED";
+  return {
+    userId: a.userId,
+    totalHours: Math.round((a.totalHours + b.totalHours) * 100) / 100,
+    approvalState,
+    openPunch: a.openPunch || b.openPunch,
+    days,
+  };
+}
+
+const _tsReviewCache = ttlCache<TimesheetReviewResult>(5 * 60_000, (r) => r.ok);
+
+/** Per-user per-DAY timesheet review for [startDate,endDate] — the in-app review surface. ok:false when
+ *  Connecteam is unreachable (everything UNVERIFIED, never zeroed). Additive; does not touch the sync path. */
+export async function getTimesheetReview(startDate: string, endDate: string): Promise<TimesheetReviewResult> {
+  if (!connecteamConfigured()) return { ok: false, byUser: new Map() };
+  return _tsReviewCache(`tsreview:${startDate}:${endDate}`, () => getTimesheetReviewUncached(startDate, endDate));
+}
+async function getTimesheetReviewUncached(startDate: string, endDate: string): Promise<TimesheetReviewResult> {
+  const byUser = new Map<number, TimesheetUserReview>();
+  const clocks = await getTimeClocks();
+  if (clocks.length === 0) return { ok: false, byUser }; // unreachable / none configured
+  for (const c of clocks) {
+    const j = await ctGet(`/time-clock/v1/time-clocks/${c.id}/timesheet?startDate=${startDate}&endDate=${endDate}`);
+    for (const e of findArray(j, ["users", "employees"])) {
+      const r = parseTimesheetReviewUser(e);
+      if (!r) continue;
+      const prev = byUser.get(r.userId);
+      byUser.set(r.userId, prev ? mergeUserReview(prev, r) : r);
+    }
+  }
+  return { ok: true, byUser };
+}
+
 /** Format a Unix-seconds instant as clock time in `tz` (e.g. "7:30 AM"). */
 export function shiftClock(unix: number, tz: string): string {
   return new Intl.DateTimeFormat("en-US", {

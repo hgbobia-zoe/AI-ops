@@ -18,7 +18,7 @@ import {
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManagePayroll, canRunPayroll } from "@/lib/auth/roles";
 import { commandCenter } from "@/lib/command/service";
-import { connecteamConfigured } from "@/lib/connecteam";
+import { connecteamConfigured, getTimesheetReview, type TimesheetUserReview } from "@/lib/connecteam";
 import { completedWeeksBack } from "@/lib/payroll/period";
 import { clampWeeksAgo, periodNavHref } from "@/lib/payroll/nav";
 import { derivePayrollReadiness, payrollApprovability } from "@/lib/payroll/readinessModel";
@@ -51,9 +51,12 @@ import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 import { ExceptionActions } from "@/components/payroll/ExceptionActions";
 import { ExcludeControl } from "@/components/payroll/ExcludeControl";
 import { ApproveControl } from "@/components/payroll/ApproveControl";
+import { WorkerApproveControl } from "@/components/payroll/WorkerApproveControl";
 import { RateSyncPanel } from "@/components/payroll/RateSyncPanel";
 import { buildRateSyncPlan } from "@/lib/payroll/rateSync";
 import { StatusBadge } from "@/components/ui/status";
+import type { Tone } from "@/lib/tone";
+import { Fragment } from "react";
 
 export const dynamic = "force-dynamic";
 
@@ -71,6 +74,12 @@ const money = (n: number | null, cur = "USD"): string => {
   return sym + Math.round(n).toLocaleString("en-US");
 };
 const hrs = (n: number | null): string => (n == null ? "—" : `${n.toLocaleString("en-US")} h`);
+// A yyyy-MM-dd day as "Mon, Oct 20" (UTC-parsed so the calendar date never shifts by timezone).
+const fmtDay = (ymd: string): string => {
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (!y || !m || !d) return ymd;
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+};
 function relTime(iso: string | null): string {
   if (!iso) return "never";
   const d = Date.parse(iso);
@@ -279,8 +288,9 @@ function StatusPanel({ m, weeksAgo }: { m: PayrollReadinessModel; weeksAgo: numb
 }
 
 function NextActionControl({ m, periodQS, na }: { m: PayrollReadinessModel; periodQS: string; na: PayrollReadinessModel["nextAction"] }): React.JSX.Element {
-  // Hours gate → the real Sync control (dedupe + progress). Navigable gates → a Link. External/manual steps
-  // (approve timesheets in Connecteam) → a labelled static control, never a dead link.
+  // Hours gate → the real Sync control (dedupe + progress). Navigable gates (incl. reviewing + approving
+  // timesheets in-app) → a Link. A step that still happens OUTSIDE the app (submit in Gusto) → a labelled
+  // static control, never a dead link.
   if (na.gate === "hours") {
     return (
       <div className="flex flex-col items-end gap-1">
@@ -581,7 +591,9 @@ const WSTATUS_UI: Record<UnifiedWorkerStatus, { label: string; cls: string }> = 
 async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
   period: { start: string; end: string; label: string }; statusFilter: string; q: string; weeksAgo: number;
 }): Promise<React.JSX.Element> {
-  const [m, ratePlan] = await Promise.all([derivePayrollReadiness(period), buildRateSyncPlan(period.end)]);
+  const [m, ratePlan, tsReview] = await Promise.all([
+    derivePayrollReadiness(period), buildRateSyncPlan(period.end), getTimesheetReview(period.start, period.end),
+  ]);
   if (m.status === "NO_DATA" || (m.counts.included === 0 && m.counts.excluded === 0)) {
     return <EmptyState icon={<ClipboardCheck className="size-5" />} title="Nothing to review yet" body="No worker hours for this period (or Connecteam is unavailable). Sync hours, then review." />;
   }
@@ -724,9 +736,9 @@ async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
         </form>
       </div>
 
-      <ReviewTable rows={rows} filter={filter} period={period} gustoMembers={gustoMembers} />
+      <ReviewTable rows={rows} filter={filter} period={period} gustoMembers={gustoMembers} timesheets={tsReview.byUser} timesheetsOk={tsReview.ok} approvableKeys={new Set([...appr.readyKeys, ...appr.acknowledgeableKeys])} />
       <p className="text-[11px] text-meta">
-        Eligibility (the status column) is computed from the gates; it is not the same as the recorded Zoe approval. Approving records a sign-off for the eligible workers and does NOT submit or run payroll in Gusto. Excluded workers are kept here for reference and are never part of payable totals.
+        Expand a worker to review their day-by-day Connecteam timesheet in the app, then approve. Eligibility (the status column) is computed from the gates; it is not the same as the recorded Zoe approval. Approving records a sign-off for the eligible workers and does NOT submit or run payroll in Gusto. Excluded workers are kept here for reference and are never part of payable totals.
       </p>
     </div>
   );
@@ -752,8 +764,100 @@ const CT_LOCK_UI: Record<NonNullable<UnifiedWorkerRow["ctLockStatus"]>, { label:
   UNLOCKED: { label: "unlocked in Connecteam", cls: "text-meta" },
 };
 
-function ReviewTable({ rows, filter, period, gustoMembers }: {
+// Per-day approval signal → status tone (the in-app review surface renders every status via StatusBadge).
+const DAY_APPROVAL_TONE: Record<"approved" | "unapproved" | "unverified", Tone> = {
+  approved: "positive", unapproved: "attention", unverified: "neutral",
+};
+const REVIEW_APPROVAL_TONE: Record<TimesheetUserReview["approvalState"], Tone> = {
+  APPROVED: "positive", UNAPPROVED: "attention", UNVERIFIED: "neutral",
+};
+const REVIEW_APPROVAL_LABEL: Record<TimesheetUserReview["approvalState"], string> = {
+  APPROVED: "Approved in Connecteam", UNAPPROVED: "Unapproved in Connecteam", UNVERIFIED: "Approval not exposed",
+};
+
+// The day-by-day Connecteam timesheet for ONE worker, so the owner reviews it in the app instead of opening
+// Connecteam. Collapsed by default; expanding shows each day's hours, clock in/out (when the payload exposes
+// them), open-punch flag, and per-day approval. Honest: no Connecteam user, or an unreachable source, is
+// stated plainly and never rendered as zeroed hours.
+function DayBreakdown({ worker, review, ok, period, approvable }: {
+  worker: UnifiedWorkerRow; review: TimesheetUserReview | undefined; ok: boolean; period: { start: string; end: string }; approvable: boolean;
+}): React.JSX.Element {
+  const alreadyApproved = worker.approvalState === "APPROVED_IN_ZOE";
+  const approveControl = approvable && !alreadyApproved
+    ? <WorkerApproveControl workerKey={worker.key} name={worker.name} periodStart={period.start} periodEnd={period.end} />
+    : null;
+
+  let body: React.JSX.Element;
+  if (worker.connecteamUserId == null) {
+    body = <p className="px-3 py-2.5 text-[11.5px] text-meta">No Connecteam timesheet for this worker (not a Connecteam user). Hours and approval are tracked outside Connecteam.</p>;
+  } else if (!ok) {
+    body = <p className="px-3 py-2.5 text-[11.5px] text-attention">Connecteam is unreachable, so the day-by-day timesheet could not be loaded. Sync hours, then review. Hours are not assumed.</p>;
+  } else if (!review || review.days.length === 0) {
+    body = <p className="px-3 py-2.5 text-[11.5px] text-meta">No daily records in Connecteam for this period.</p>;
+  } else {
+    body = (
+      <table className="w-full text-[11.5px]">
+        <thead>
+          <tr className="border-b border-rule/60 text-left text-[10px] uppercase tracking-[0.05em] text-meta">
+            <th className="px-3 py-1.5 font-medium">Day</th>
+            <th className="px-3 py-1.5 text-right font-medium">Hours</th>
+            <th className="px-3 py-1.5 font-medium">Clock in</th>
+            <th className="px-3 py-1.5 font-medium">Clock out</th>
+            <th className="px-3 py-1.5 font-medium">Approval</th>
+          </tr>
+        </thead>
+        <tbody>
+          {review.days.map((d) => {
+            const dayTone = d.approvalState == null ? "unverified" : d.approvalState;
+            return (
+              <tr key={d.date} className="border-b border-rule/40 last:border-0">
+                <td className="px-3 py-1.5 tabular-nums text-secondary-text">{fmtDay(d.date)}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums text-secondary-text">{d.hours.toLocaleString("en-US")}</td>
+                <td className="px-3 py-1.5 tabular-nums text-tertiary-text">{d.clockIn ?? "—"}</td>
+                <td className="px-3 py-1.5 tabular-nums text-tertiary-text">
+                  {d.openPunch ? <span className="text-attention">open punch</span> : d.clockOut ?? "—"}
+                </td>
+                <td className="px-3 py-1.5">
+                  <StatusBadge tone={DAY_APPROVAL_TONE[dayTone]} size="sm">
+                    {d.approvalState == null ? "Not exposed" : d.approvalState === "approved" ? "Approved" : "Unapproved"}
+                  </StatusBadge>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    );
+  }
+
+  return (
+    <details className="group">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[11.5px] text-meta transition-colors hover:text-secondary-text">
+        <ChevronRight className="size-3.5 shrink-0 transition-transform group-open:rotate-90" aria-hidden />
+        <span>Review daily timesheet{review && review.days.length > 0 ? ` (${review.days.length} day${review.days.length === 1 ? "" : "s"}, ${hrs(review.totalHours)})` : ""}</span>
+        {review && (
+          <StatusBadge tone={REVIEW_APPROVAL_TONE[review.approvalState]} size="sm" className="ml-1">
+            {REVIEW_APPROVAL_LABEL[review.approvalState]}
+          </StatusBadge>
+        )}
+        {review?.openPunch && <span className="text-[10.5px] text-attention">· open punch</span>}
+      </summary>
+      <div className="border-t border-rule/60 bg-[var(--row)]/40 pb-2">
+        {body}
+        {approveControl && (
+          <div className="flex flex-wrap items-center gap-2 px-3 pt-2">
+            {approveControl}
+            <span className="text-[10.5px] text-meta">Records the Zoe approval for this worker and finalizes their days in Connecteam. Does not run payroll.</span>
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function ReviewTable({ rows, filter, period, gustoMembers, timesheets, timesheetsOk, approvableKeys }: {
   rows: UnifiedWorkerRow[]; filter: ReviewFilter; period: { start: string; end: string; label: string }; gustoMembers: GustoPick[];
+  timesheets: Map<number, TimesheetUserReview>; timesheetsOk: boolean; approvableKeys: Set<string>;
 }): React.JSX.Element {
   if (rows.length === 0) {
     return <div className="surface border px-4 py-10 text-center text-[12.5px] text-meta">No workers in this view.</div>;
@@ -781,7 +885,8 @@ function ReviewTable({ rows, filter, period, gustoMembers }: {
               const st = WSTATUS_UI[w.status];
               const ap = APPROVAL_UI[w.approvalState];
               return (
-                <tr key={w.key} className="border-b border-rule/60 last:border-0 hover:bg-[var(--row-hover)]">
+                <Fragment key={w.key}>
+                <tr className="border-b border-rule/60 hover:bg-[var(--row-hover)]">
                   <td className="px-3 py-2.5 font-medium text-foreground">{w.name}{w.accepted && <span className="ml-1.5 rounded bg-[var(--row)] px-1 py-0.5 text-[9.5px] font-normal text-tertiary-text">accepted</span>}</td>
                   <td className="px-3 py-2.5 text-tertiary-text">{WORKER_TYPE_LABEL[w.workerType]}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums text-secondary-text">{w.hours == null ? "—" : w.hours.toLocaleString("en-US")}</td>
@@ -830,6 +935,14 @@ function ReviewTable({ rows, filter, period, gustoMembers }: {
                     )}
                   </td>
                 </tr>
+                {!excluded && (
+                  <tr className="border-b border-rule/60">
+                    <td colSpan={9} className="p-0">
+                      <DayBreakdown worker={w} review={w.connecteamUserId != null ? timesheets.get(w.connecteamUserId) : undefined} ok={timesheetsOk} period={period} approvable={approvableKeys.has(w.key)} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>
