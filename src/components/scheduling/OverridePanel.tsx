@@ -198,7 +198,7 @@ export function OverridePanel({
   const onRoute = new Set(crew.map((c) => c.uid));
   function candidatesFor(role: ShiftRole): CrewMember[] {
     const rec = (recsByRole[role] ?? []).map((r) => roster.find((m) => m.userId === r.userId)).filter((m): m is CrewMember => Boolean(m));
-    const rosterForRole = roster.filter((m) => (role === "driver" ? m.role === "driver" : m.role === "prep" || m.role === "other"));
+    const rosterForRole = roster.filter((m) => (role === "driver" ? m.role === "driver" : m.role === "warehouse" || m.role === "prep" || m.role === "other"));
     const merged = [...rec, ...rosterForRole];
     const seen = new Set<number>();
     return merged.filter((m) => !onRoute.has(m.userId) && !seen.has(m.userId) && (seen.add(m.userId), true));

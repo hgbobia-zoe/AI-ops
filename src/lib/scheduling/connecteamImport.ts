@@ -25,11 +25,13 @@ import { createHash } from "node:crypto";
 import { roleFromTitle, type CrewRole, type CrewShift } from "@/lib/connecteam";
 import type { ShiftRole, StaffShift } from "./types";
 
-/** Map Connecteam's Title-derived ops role onto the app's ShiftRole. office/admin ("other") -> "office"
- *  (a NON-CREW bucket — never driver/field/prep, never counted as route coverage). */
+/** Map Connecteam's Title-derived ops role onto the app's day-level ShiftRole. A Warehouse Associate
+ *  ("warehouse") and an asset processor ("prep") both default to a "prep" (warehouse) day shift — riding a
+ *  truck is a separate route-seat assignment, never implied by the day shift. office/admin ("other") ->
+ *  "office" (a NON-CREW bucket — never driver/field/prep, never counted as route coverage). */
 export function shiftRoleFromCrewRole(role: CrewRole): ShiftRole {
   if (role === "driver") return "driver";
-  if (role === "prep") return "prep";
+  if (role === "warehouse" || role === "prep") return "prep";
   return "office";
 }
 
@@ -84,10 +86,11 @@ export function contentHashOf(parts: {
 function roleForShift(shift: CrewShift): ShiftRole {
   const titleRole = roleFromTitle(shift.title);
   if (titleRole !== "other") return shiftRoleFromCrewRole(titleRole);
-  const counts: Record<CrewRole, number> = { driver: 0, prep: 0, other: 0 };
+  const counts: Record<CrewRole, number> = { driver: 0, warehouse: 0, prep: 0, other: 0 };
   for (const a of shift.assignees) counts[a.role] += 1;
-  if (counts.driver > 0 && counts.driver >= counts.prep) return "driver";
-  if (counts.prep > 0) return "prep";
+  const warehouseCrew = counts.warehouse + counts.prep; // both warehouse roles share the "prep" day bucket
+  if (counts.driver > 0 && counts.driver >= warehouseCrew) return "driver";
+  if (warehouseCrew > 0) return "prep";
   return "office";
 }
 
