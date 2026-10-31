@@ -44,7 +44,7 @@ import {
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate, setRouteDriver } from "@/lib/db/repo";
 import { insertAudit } from "@/lib/db/repo";
-import { todayInOpsTz, shiftYmd, DISPLAY_TZ } from "@/lib/dates";
+import { todayInOpsTz, shiftYmd, DISPLAY_TZ, formatYmdLong } from "@/lib/dates";
 import { botAnnounce, appUrl } from "@/lib/notify/aiBots";
 import { slackNotify } from "@/lib/notify/slack";
 import { recordSchedulingAlarm } from "./autoAssignAlarm";
@@ -53,8 +53,8 @@ import { syncInternalAssignments } from "./assignments";
 import { routeAssignWindow, requiredCrewForRoute, assignedCrewForRoute, computeRouteGap, type RouteCrewRole } from "./preCheck";
 import { scheduledUnroutedForDate } from "./scheduledUnrouted";
 import { matchConnecteamShiftForPush, unionPushWindowUnix } from "./connecteamImport";
-import type { CrewShift } from "@/lib/connecteam";
-import { planRouteAutoAssign, type RouteAutoAssignPlan, type AutoAssignDecision } from "./routeAutoAssign";
+import type { CrewShift, CrewRole } from "@/lib/connecteam";
+import { planRouteAutoAssign, isAutoRouteEligible, type RouteAutoAssignPlan, type AutoAssignDecision } from "./routeAutoAssign";
 import { resolveDriverSeniority, type SeniorityRouteMeta } from "./driverSeniority";
 import { routeSpecialty } from "./routeSpecialty";
 import { trackWindow, routeOwnWindow } from "./routeRatchet";
@@ -207,6 +207,11 @@ const MIXED_NOTE =
   "Connecteam shift could duplicate or drop people, so it was left for a human. Publish this shift from " +
   "Dispatch to push it deliberately.";
 
+export const NON_TRUCK_CREW_NOTE =
+  "Someone on this route seat is asset prep (Event Asset Processor), which is not truck crew, so no " +
+  "Connecteam shift was created for it. Creating one would set their schedule and pay to a truck shift they " +
+  "should not be on. Remove them from the route in Scheduling, or confirm the assignment there if it is right.";
+
 /**
  * PURE. Decide, per route app shift, whether to CREATE its Connecteam copy, ADOPT (update) an existing one,
  * flag, or defer. A "route seat" is a shift with a routeId and a driver/field role. `crew` is the day's live
@@ -217,7 +222,16 @@ const MIXED_NOTE =
  * this shift's assignees, we UPDATE that shift in place (adopting its id, unioning the window so a longer
  * human shift is never truncated) rather than creating a parallel duplicate.
  */
-export function planRouteConnecteamCreate(input: { appShifts: StaffShift[]; crew: CrewShift[] }): RouteCreatePlan {
+export function planRouteConnecteamCreate(input: {
+  appShifts: StaffShift[];
+  crew: CrewShift[];
+  /** userId → Connecteam crew role (roleFromTitle). The 4th chokepoint (owner directive 2026-10-30, the
+   *  "Raquel" fix): a mirror must never turn a route truck shift into a Connecteam shift for an assignee who
+   *  is NOT truck crew. Optional — when absent (older callers / unit tests) the gate is skipped and behaviour
+   *  is unchanged; the orchestrator passes it from the Connecteam roster, and a null role (title unknown /
+   *  roster unreachable) is treated as "don't block" so we never fabricate an exclusion. */
+  crewRoleOf?: (userId: number) => CrewRole | null;
+}): RouteCreatePlan {
   const ctUserIds = new Set<number>();
   for (const c of input.crew) for (const a of c.assignees) ctUserIds.add(a.userId);
   const plan: RouteCreatePlan = { creates: [], adopts: [], flags: [], deferred: [], skipped: 0 };
@@ -228,6 +242,22 @@ export function planRouteConnecteamCreate(input: { appShifts: StaffShift[]; crew
     if (s.syncStatus === "needs_review") continue; // never fight a human
     if (s.status === "cancelled") continue; // a called-off shift is not pushed to Connecteam
     if (s.assignees.length === 0) continue; // nothing to push
+
+    // 4th CHOKEPOINT — asset prep is never turned into a truck shift (owner directive 2026-10-30). The three
+    // auto-ASSIGN chokepoints keep prep off a route seat, but a pre-fix stale assignment or a forced manual
+    // override can still leave a non-truck-crew worker on one. Silently mirroring that to Connecteam would set
+    // their schedule + PAY to a truck shift, so we flag it for a human instead of writing it. Only blocks when
+    // we actually KNOW the role is not truck crew (driver/warehouse are eligible; null/unknown never blocks).
+    if (input.crewRoleOf) {
+      const offCrew = s.assignees.some((u) => {
+        const r = input.crewRoleOf!(u);
+        return r != null && !isAutoRouteEligible(r);
+      });
+      if (offCrew) {
+        plan.flags.push({ shiftId: s.id, note: NON_TRUCK_CREW_NOTE });
+        continue;
+      }
+    }
 
     // ROBUST MATCH (worker + day): the worker already has a Connecteam shift holding all these assignees ->
     // UPDATE it in place, never duplicate. Union the window so Connecteam keeps the broader hours.
@@ -308,7 +338,27 @@ export async function applyRouteConnecteamCreate(plan: RouteCreatePlan, deps: Ro
   for (const f of plan.flags) {
     updateShift(f.shiftId, { syncStatus: "needs_review", syncNote: f.note });
     flagged += 1;
-    audit(actor, "ROUTE_SYNC_NEEDS_REVIEW", f.shiftId, { reason: "mixed_connecteam_presence" });
+    const nonTruckCrew = f.note === NON_TRUCK_CREW_NOTE;
+    audit(actor, "ROUTE_SYNC_NEEDS_REVIEW", f.shiftId, { reason: nonTruckCrew ? "non_truck_crew_on_route" : "mixed_connecteam_presence" });
+    // A prep-on-a-truck hold is the user's actual pain, so announce it (owner rule: surface, never silent).
+    // The mixed-presence flag stays quiet (it is an ordinary record-only case handled in Scheduling).
+    if (nonTruckCrew) {
+      const sh = getShiftById(f.shiftId);
+      const whoNames = sh ? sh.assignees.map((u) => deps.nameOf?.(u) || `#${u}`).join(", ") : "someone";
+      const truckName = sh?.truckId ? deps.truckNameOf(sh.truckId) : (sh?.date ?? "the route");
+      void botAnnounce("scheduling", {
+        emoji: "⚠️",
+        title: "Held a route shift for review",
+        fields: [
+          { label: "Who", value: whoNames },
+          { label: "Truck", value: truckName },
+          ...(sh ? [{ label: "Day", value: formatYmdLong(sh.date) }] : []),
+        ],
+        body: "This person's Connecteam title is asset prep, which is not truck crew, so no Connecteam shift was created. Remove them from the route or confirm the assignment in Scheduling.",
+        link: { text: "View in Scheduling", url: appUrl("/scheduling") },
+        context: "Scheduling Bot · reply here if that's wrong",
+      }).catch(() => {});
+    }
   }
 
   // ADOPT: the worker already has a matching Connecteam shift -> UPDATE it in place (silent), link the app
@@ -364,6 +414,7 @@ export async function applyRouteConnecteamCreate(plan: RouteCreatePlan, deps: Ro
       fields: [
         { label: "Who", value: whoNames },
         { label: "Truck", value: truckName },
+        { label: "Day", value: formatYmdLong(shift.date) },
         { label: "Role", value: ROLE_WORD[shift.role] },
         { label: "Window", value: `${hhmm(new Date(a.startUnix * 1000).toISOString())}–${hhmm(new Date(a.endUnix * 1000).toISOString())}` },
       ],
@@ -434,6 +485,7 @@ export async function applyRouteConnecteamCreate(plan: RouteCreatePlan, deps: Ro
       fields: [
         { label: "Who", value: whoNames },
         { label: "Truck", value: truckName },
+        { label: "Day", value: formatYmdLong(shift.date) },
         { label: "Role", value: ROLE_WORD[shift.role] },
         { label: "Window", value: `${hhmm(shift.startTime)}–${hhmm(shift.endTime)}` },
       ],
@@ -722,12 +774,14 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
 
   let nameOf: (userId: number) => string | null = () => null;
   let seniorityOf: (userId: number) => string | null = () => null;
+  let crewRoleOf: (userId: number) => CrewRole | null = () => null;
   try {
     const users = await getUsers();
     nameOf = (uid) => users.get(uid)?.name ?? null;
     seniorityOf = (uid) => users.get(uid)?.seniorityDate ?? null;
+    crewRoleOf = (uid) => users.get(uid)?.role ?? null; // Connecteam Title → crew role (the 4th-chokepoint read)
   } catch {
-    /* Connecteam roster unreachable — names/seniority stay null, filled on a later tick. */
+    /* Connecteam roster unreachable — names/seniority/role stay null, filled on a later tick. */
   }
 
   // SENIORITY ROUTING: resolve the ambiguous DRIVERS (fit >= 2 routes) across ALL driver-gapped routes —
@@ -793,6 +847,7 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
         { label: "Who", value: a.name },
         { label: "Role", value: ROLE_WORD[a.fillRole] },
         { label: "Truck", value: truck },
+        { label: "Day", value: formatYmdLong(date) },
         { label: "Route", value: `${a.routeStops} stop${a.routeStops === 1 ? "" : "s"}` },
       ],
       body: `*Why:* ${why}`,
@@ -823,7 +878,7 @@ export async function reconcileRouteAutoSyncForDate(date: string, actor = "conne
   if (!crew.ok) return out; // reachable for auto-assign (cache) but can't confirm presence now — skip create
 
   const appShifts = getShiftsForDate(date);
-  const createPlan = planRouteConnecteamCreate({ appShifts, crew: crew.shifts });
+  const createPlan = planRouteConnecteamCreate({ appShifts, crew: crew.shifts, crewRoleOf });
   out.alreadyInCt = createPlan.skipped;
   out.createDeferred = createPlan.deferred.length;
 
