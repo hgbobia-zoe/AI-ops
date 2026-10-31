@@ -1,7 +1,8 @@
 // Guided Sales Intake — deterministic formatting. Turns the structured intake into (a) a suggested
-// Goodshuffle project name and (b) a readable internal-notes block stashed on the project shell, so every
-// captured fact travels to Goodshuffle even before the rename/date/contact writes are wired. No inference:
-// UNKNOWN and UNANSWERED are rendered as themselves, never as No.
+// Goodshuffle project name, (b) the saveEventDetails field set, (c) the client-contact payload, and (d) a
+// readable internal-notes block stashed on the project shell, so every captured fact travels to Goodshuffle.
+// The name/date, venue, client contact, and notes writes are all wired and verified live (2026-10-31). No
+// inference: UNKNOWN and UNANSWERED are rendered as themselves, never as No.
 
 import type { Intake, TriState } from "./types";
 import type { GeoResult } from "./geocode";
@@ -76,6 +77,27 @@ export function gsEventDetails(i: Intake): Record<string, string> {
     eventType: GS_EVENT_TYPE[i.eventType] ?? "",
     headCount: i.guestCount != null ? String(i.guestCount) : "",
   };
+}
+
+// ── Goodshuffle client contact (POST /app/contact/saveNewContact — captured + verified live 2026-10-31) ──
+// Creates the client contact AND attaches it to the project in one call (the transactionID in the body is
+// what links it). The drainer builds the full form body; this just carries the customer fields the intake
+// captured. Returns null when the intake has no name and no way to reach the customer (then the shell is
+// created with the contact info still present in the internal notes, and the client is added by hand).
+export interface GsClient {
+  firstName: string;
+  lastName: string;
+  email: string;
+  mobilePhone: string;
+}
+
+export function gsClientContact(i: Intake): GsClient | null {
+  const firstName = i.firstName.trim();
+  const lastName = i.lastName.trim();
+  const email = i.email.trim();
+  const mobilePhone = i.phone.trim();
+  if (!firstName && !lastName && !email && !mobilePhone) return null;
+  return { firstName, lastName, email, mobilePhone };
 }
 
 const EVENT_TYPE_LABEL: Record<string, string> = { wedding: "Wedding", corporate: "Corporate", social: "Social / Private", other: "Other" };
