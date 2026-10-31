@@ -27,7 +27,7 @@ describe("summarizeConnecteamSchedule", () => {
     expect(s.reachable).toBe(false);
     expect(s.totalScheduled).toBe(0);
     expect(s.people).toEqual([]);
-    expect(s.byRole).toEqual({ driver: 0, prep: 0, other: 0 });
+    expect(s.byRole).toEqual({ driver: 0, warehouse: 0, prep: 0, other: 0 });
   });
 
   it("counts every scheduled person across all roles, including the catch-all 'other' (the undercount bug)", () => {
@@ -35,14 +35,14 @@ describe("summarizeConnecteamSchedule", () => {
       ok: true,
       shifts: [
         shift({ id: "a", assignees: [member(1, "Joel D", "driver", "Driver")] }),
-        shift({ id: "b", assignees: [member(2, "Adrane W", "prep", "Warehouse Associate")] }),
+        shift({ id: "b", assignees: [member(2, "Adrane W", "warehouse", "Warehouse Associate")] }),
         // An office/unusual title lands in "other" — the old headline dropped these entirely.
         shift({ id: "c", assignees: [member(3, "Lisa M", "other", "Operations Coordinator")] }),
       ],
     });
     expect(summary.reachable).toBe(true);
     expect(summary.totalScheduled).toBe(3);
-    expect(summary.byRole).toEqual({ driver: 1, prep: 1, other: 1 });
+    expect(summary.byRole).toEqual({ driver: 1, warehouse: 1, prep: 0, other: 1 });
     expect(summary.people.map((p) => p.name)).toEqual(["Adrane W", "Joel D", "Lisa M"]);
   });
 

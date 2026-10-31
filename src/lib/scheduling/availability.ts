@@ -6,27 +6,29 @@
 // sunk commitment to turn into coverage), never "busy". Preferred first, least-loaded as the tiebreaker.
 // The human then picks (or posts to Instawork). Pure + deterministic.
 //
-// Role grounding (from Zoe's real Connecteam titles): driver → "Driver"/"Delivery Driver"; prep →
-// "Warehouse Associate"/"Event Asset Processor". Office/admin titles (Operations Coordinator, Executive
-// Assistant, Digital Sales Marketer, any `manager` type) map to CrewRole "other" and are NEVER
-// recommended. There is NO internal "field" title, and as of the owner directive 2026-10-30 a warehouse/prep
-// worker is NOT pulled onto a truck either ("asset prep does not get on a truck at all") — so a field shift
-// recommends NO internal crew; field/tent help is Instawork "General Labor" and the UI points there.
+// Role grounding (from Zoe's real Connecteam titles): driver → "Driver"/"Delivery Driver"; warehouse →
+// "Warehouse Associate" (TRUCK-ELIGIBLE field crew); prep → "Event Asset Processor" (warehouse prep only).
+// Office/admin titles (Operations Coordinator, Executive Assistant, Digital Sales Marketer, any `manager`
+// type) map to CrewRole "other" and are NEVER recommended. Owner directive 2026-10-30: a Warehouse Associate
+// ("warehouse") CAN fill a truck-helper (field) seat and is auto-added where needed; an Event Asset Processor
+// ("prep") is NEVER pulled onto a truck — asset prep stays a warehouse-prep role. Both qualify for a warehouse
+// PREP shift. A field seat with no free Warehouse Associate falls to Instawork "General Labor".
 
 import type { CrewMember, CrewShift, CrewRole, UnavailabilityBlock } from "@/lib/connecteam";
 import { eligibilityFor, type AssignmentWindow, type EligibilityResult } from "./eligibility";
 import type { ShiftRole, StaffShift } from "./types";
 
-/** Which Connecteam crew roles can fill a scheduling role. "other" (office/admin) is never included, and a
- *  "prep" (warehouse) worker fills ONLY a warehouse prep shift — never a TRUCK seat (driver or field). Owner
- *  directive 2026-10-30 ("asset prep does not get on a truck at all"): field-helper seats have NO internal
- *  crew — they are Instawork "General Labor" (or an explicit, reasoned dispatcher override), never an
- *  auto-pulled warehouse person. This is the single qualification gate every engine reads (recommendCrew,
- *  the optimizer, planView), so prep is kept off trucks everywhere at once. */
+/** Which Connecteam crew roles can fill a scheduling role. "other" (office/admin) is never included. Owner
+ *  directive 2026-10-30: a TRUCK-helper (field) seat qualifies a Warehouse Associate ("warehouse") only — an
+ *  Event Asset Processor ("prep") is NEVER on a truck. A warehouse PREP shift qualifies BOTH (warehouse
+ *  associates and asset processors both prep/load). This is the single qualification gate every engine reads
+ *  (recommendCrew, the optimizer, planView.moveEligibility), so the truck line holds everywhere at once. A
+ *  field seat with no free Warehouse Associate falls to Instawork (or an explicit, reasoned override). */
 export function candidateRoles(role: ShiftRole): CrewRole[] {
   if (role === "driver") return ["driver"];
-  if (role === "prep") return ["prep"]; // warehouse prep/load shift — NOT a truck seat
-  return []; // field (truck helper) + office: no internal crew qualifies → Instawork / manual override
+  if (role === "field") return ["warehouse"]; // truck helper — Warehouse Associate rides; asset prep never does
+  if (role === "prep") return ["warehouse", "prep"]; // warehouse prep/load shift — both warehouse roles qualify
+  return []; // office: non-crew, never route-assignable
 }
 
 export interface CrewRecommendation {

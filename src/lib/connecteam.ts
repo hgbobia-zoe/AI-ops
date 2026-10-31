@@ -252,8 +252,14 @@ async function ctGetAllPages<T>(base: string, extract: (j: unknown) => T[], keyO
   return out;
 }
 
-/** Ops role, derived from the Connecteam "Title" custom field. */
-export type CrewRole = "driver" | "prep" | "other";
+/** Ops role, derived from the Connecteam "Title" custom field.
+ *  - "driver"    — drives a truck on the event day.
+ *  - "warehouse" — Warehouse Associate: TRUCK-ELIGIBLE field crew (rides as a delivery helper) AND does
+ *                  warehouse prep. The auto-router MAY place them on a route where needed (owner directive
+ *                  2026-10-30). This is the role the old auto-place was meant for.
+ *  - "prep"      — Event Asset Processor / asset prep: warehouse prep + processes returns, NEVER on a truck.
+ *  - "other"     — back-office / admin: non-crew, never auto-routed. */
+export type CrewRole = "driver" | "warehouse" | "prep" | "other";
 
 export interface CrewMember {
   userId: number;
@@ -272,28 +278,35 @@ export interface CrewMember {
   role: CrewRole;
 }
 
-// Map a Title to an ops role. Drivers drive on the event day; warehouse associates +
-// event asset processors prep/load (and process returns) — typically the day before.
-// Recognize the common warehouse/prep title words so a back-of-warehouse person is classified as "prep"
-// (not the "other"/office fallthrough). A "prep" maps to a field-helper seat and, as of the owner-authorized
-// reversal of #81 (2026-10-23), IS auto-routed on an UNAMBIGUOUS match — exactly one open field route fits
-// (see routeAutoAssign.isAutoRouteEligible). The safe default for an UNrecognized title stays "other"
-// (non-crew, never auto-routed) — we never guess an unproven worker onto a delivery route.
+// Map a Title to an ops role. Drivers drive on the event day; a Warehouse Associate loads AND rides as a
+// delivery helper; an Event Asset Processor preps/loads and processes returns at the warehouse but does NOT
+// ride. The safe default for an UNrecognized title stays "other" (non-crew, never auto-routed) — we never
+// guess an unproven worker onto a delivery route.
 //
-// DENY-BY-DEFAULT, OFFICE WINS (2026-10-30 — the "Raquel" fix): this is the ONE chokepoint every auto-route
-// path reads (roster role → scheduledUnrouted → routeAutoAssign/driverSeniority/optimize all gate on this
-// CrewRole). The old classifier was a loose substring ALLOW-list with no back-office exclusion, so a
-// back-office title that merely CONTAINED a crew word (e.g. "Asset Manager", "Warehouse Manager", "Driver
-// Coordinator") was promoted to delivery crew and auto-assigned to a truck. Raquel is back office and must
-// NEVER be auto-routed. The fix: an explicit OFFICE/back-office denylist is checked FIRST and wins — only a
-// title with a genuine crew word AND no office word is delivery-eligible; everything else is "other". This
-// matches the documented intent (availability.ts: "any manager type → other") and keeps the honest default.
-// Whole-word matching (not raw substring) so a crew word embedded in an unrelated word can't false-match.
+// WAREHOUSE vs ASSET-PREP — THE TRUCK LINE (owner directive 2026-10-30): both are "warehouse" people, but
+// only one belongs on a truck. A "warehouse" title (Warehouse Associate) is TRUCK-ELIGIBLE field crew and IS
+// auto-added to a route where needed. An "asset"/"prep"/"loader" title (Event Asset Processor) is NEVER on a
+// truck — it stays a warehouse-prep-only role. The trigger: a back-office worker carried the title "Event
+// Asset Processor" (identical to a real loader's) and was auto-added to trucks; since title alone can't
+// separate that back-office person from a warehouse loader, asset-prep as a whole is kept off trucks, while
+// the genuine ride-along role (Warehouse Associate) remains auto-routable. The two titles map to two roles.
+//
+// DENY-BY-DEFAULT, OFFICE WINS (2026-10-30): this is the ONE chokepoint every auto-route path reads (roster
+// role → scheduledUnrouted → routeAutoAssign/driverSeniority/optimize all gate on this CrewRole). An explicit
+// OFFICE/back-office denylist is checked FIRST and wins — so a title that merely CONTAINS a crew word (e.g.
+// "Asset Manager", "Warehouse Manager", "Driver Coordinator") is still "other" and never auto-assigned to a
+// truck. Only a title with a genuine crew word AND no office word is delivery-eligible; everything else is
+// "other". Whole-word matching (not raw substring) so a crew word embedded in an unrelated word can't
+// false-match.
 
 /** Connecteam Title words that mark a DRIVER (drives the truck on the event day). */
 export const DRIVER_TITLE_KEYWORDS = ["driver"] as const;
-/** Connecteam Title words that mark WAREHOUSE / field-prep crew (loads, processes returns, fills a field seat). */
-export const PREP_TITLE_KEYWORDS = ["warehouse", "asset", "prep", "loader"] as const;
+/** Connecteam Title words that mark a TRUCK-ELIGIBLE Warehouse Associate — loads AND rides as a delivery
+ *  helper, so the auto-router may place them on a route (CrewRole "warehouse"). */
+export const WAREHOUSE_TITLE_KEYWORDS = ["warehouse"] as const;
+/** Connecteam Title words that mark ASSET-PREP crew — Event Asset Processor / loader: preps/loads and
+ *  processes returns at the warehouse, NEVER rides a truck (CrewRole "prep"). */
+export const PREP_TITLE_KEYWORDS = ["asset", "prep", "loader"] as const;
 /** Connecteam Title words that mark a BACK-OFFICE / admin role — NEVER delivery crew, never auto-routed. Checked
  *  FIRST so an office title that incidentally contains a crew word (e.g. "Warehouse Manager", "Asset Manager")
  *  is still classified "other". Extend here as new back-office titles appear (see the owner-editable note in the
@@ -351,8 +364,11 @@ export function roleFromTitle(title?: string): CrewRole {
   // 1. OFFICE / back-office wins first — a non-delivery role is never auto-routed, even if its title also
   //    carries a crew word ("Warehouse Manager", "Asset Manager", "Driver Coordinator" → "other").
   if (hasOfficeWord(t, OFFICE_TITLE_KEYWORDS)) return "other";
-  // 2. Genuine delivery crew: a driver word, then a warehouse/field-prep word.
+  // 2. Genuine delivery crew: a driver word, then a truck-eligible Warehouse Associate, then asset-prep.
+  //    "warehouse" is checked before asset-prep so "Warehouse Associate" is the truck-eligible role and only
+  //    an asset/prep/loader title (no "warehouse" word) falls to the non-truck "prep" role.
   if (hasCrewWord(t, DRIVER_TITLE_KEYWORDS)) return "driver";
+  if (hasCrewWord(t, WAREHOUSE_TITLE_KEYWORDS)) return "warehouse";
   if (hasCrewWord(t, PREP_TITLE_KEYWORDS)) return "prep";
   // 3. Deny-by-default: an unrecognized / blank title is non-crew — never guessed onto a delivery route.
   return "other";

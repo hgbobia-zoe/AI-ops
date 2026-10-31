@@ -104,7 +104,7 @@ export function AddWorkerPanel({
   const recs = (recsByRole[role] ?? []).filter((r) => !existingAssignees.has(r.userId));
   const rosterForRole = roster.filter((m) => {
     if (role === "driver") return m.role === "driver";
-    return m.role === "prep" || m.role === "other"; // field/prep: warehouse + general crew (office excluded by recommendCrew only)
+    return m.role === "warehouse" || m.role === "prep" || m.role === "other"; // field/prep: both warehouse roles + general crew (manual override stays broad)
   });
 
   // The route+role shift we'll attach to. Create one if the role has none yet.

@@ -49,7 +49,7 @@ export interface ConnecteamScheduleSummary {
   people: ScheduledPersonRow[];
 }
 
-const EMPTY_BY_ROLE = (): Record<CrewRole, number> => ({ driver: 0, prep: 0, other: 0 });
+const EMPTY_BY_ROLE = (): Record<CrewRole, number> => ({ driver: 0, warehouse: 0, prep: 0, other: 0 });
 
 /**
  * Collapse a day's Connecteam shifts into an accurate, role-agnostic schedule mirror. Pure: pass the

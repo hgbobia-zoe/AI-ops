@@ -20,11 +20,18 @@ function distinctByRole(shifts: CrewShift[], role: CrewRole): CrewMember[] {
   for (const s of shifts) for (const a of s.assignees) if (a.role === role) m.set(a.userId, a);
   return [...m.values()];
 }
+/** Both warehouse roles (Warehouse Associate + Event Asset Processor) count as warehouse/unload crew. */
+const isWarehouseCrew = (role: CrewRole): boolean => role === "warehouse" || role === "prep";
+function distinctWarehouseCrew(shifts: CrewShift[]): CrewMember[] {
+  const m = new Map<number, CrewMember>();
+  for (const s of shifts) for (const a of s.assignees) if (isWarehouseCrew(a.role)) m.set(a.userId, a);
+  return [...m.values()];
+}
 function distinctPrepAfter(shifts: CrewShift[], routeEndUnix: number | null): CrewMember[] {
   const m = new Map<number, CrewMember>();
   for (const s of shifts) {
     if (routeEndUnix != null && s.endUnix < routeEndUnix) continue;
-    for (const a of s.assignees) if (a.role === "prep") m.set(a.userId, a);
+    for (const a of s.assignees) if (isWarehouseCrew(a.role)) m.set(a.userId, a);
   }
   return [...m.values()];
 }
@@ -71,11 +78,11 @@ export function StaffingRosterSections({
   isToday: boolean;
 }): React.JSX.Element {
   const driversD = distinctByRole(crewD, "driver");
-  const prepPrev = distinctByRole(crewPrev, "prep");
+  const prepPrev = distinctWarehouseCrew(crewPrev);
   const officeD = distinctByRole(crewD, "other");
   const hasPickups = routes.some((r) => r.stops.some((s) => s.kind === "pickup"));
   const routeEndUnix = latestStopUnix(routes);
-  const unloadCrew = dedupById([...distinctPrepAfter(crewD, routeEndUnix), ...distinctByRole(crewNext, "prep")]);
+  const unloadCrew = dedupById([...distinctPrepAfter(crewD, routeEndUnix), ...distinctWarehouseCrew(crewNext)]);
   const openCount = verified ? openShifts.length : 0;
 
   return (

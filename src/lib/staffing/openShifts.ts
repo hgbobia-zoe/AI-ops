@@ -31,7 +31,7 @@ export function neededRoleFor(title: string): NeededRole {
   return "any";
 }
 
-const ROLE_LABEL: Record<CrewRole, string> = { driver: "Driver", prep: "Warehouse/prep", other: "Crew" };
+const ROLE_LABEL: Record<CrewRole, string> = { driver: "Driver", warehouse: "Warehouse", prep: "Warehouse/prep", other: "Crew" };
 
 /** Hours each user is already booked among the day's assigned shifts. */
 function bookedHoursByUser(dayShifts: CrewShift[]): Map<number, number> {
@@ -63,7 +63,15 @@ export function suggestForOpenShift(open: CrewShift, dayShifts: CrewShift[], all
   const suggestions = allUsers
     .filter((u) => !busy.has(u.userId))
     .map((u) => {
-      const roleMatch = neededRole === "any" ? true : u.role === neededRole;
+      // A "prep" (warehouse) need is filled by either warehouse role — a Warehouse Associate or an asset
+      // processor both prep/load; a "driver" need only by a driver. (Truck-vs-no-truck is enforced on the
+      // route seat itself, not on this open-shift suggestion board.)
+      const roleMatch =
+        neededRole === "any"
+          ? true
+          : neededRole === "prep"
+            ? u.role === "prep" || u.role === "warehouse"
+            : u.role === neededRole;
       const bookedHours = booked.get(u.userId) ?? 0;
       return { member: u, bookedHours, roleMatch, reason: "" };
     })
