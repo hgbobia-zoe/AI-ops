@@ -5,9 +5,9 @@
 // redirects that to /app/project/detail?id=<newId>, where THIS script runs. It asks the worker whether
 // this exact tab was opened for a create ("claim" — returned once, atomically, only for that tab id),
 // and if so runs the SAME populate sequence as the in-app drainer (src/lib/gsPull.ts) and the standalone
-// runner (scripts/zoe-pull/run.mts populateCreate): saveEventDetails → saveEventNotes →
-// saveDefaultEventLocation → line-item groups + items → logistics legs → window upgrade, then reports
-// intake-result + acks the outbox op, and asks the worker to close this tab.
+// runner (scripts/zoe-pull/run.mts populateCreate): saveEventDetails → saveEventNotes → saveNewContact
+// (create + attach the client) → saveDefaultEventLocation → line-item groups + items → logistics legs →
+// window upgrade, then reports intake-result + acks the outbox op, and asks the worker to close this tab.
 //
 // Fetches are same-origin (carry the operator's GS cookies); the Zoe posts carry Origin
 // pro.goodshuffle.com, which the CORS-locked ingest endpoints allow — no token needed (fail-open), same
@@ -53,6 +53,14 @@
 
     await fetch("/app/vendorTransaction/saveEventDetails", { method: "POST", headers: GH, credentials: "include", body: new URLSearchParams({ transactionID: String(pid), eventName: String(d.eventName || ""), fromDateStr: String(d.fromDateStr || ""), fromTimeStr: String(d.fromTimeStr || ""), toDateStr: String(d.toDateStr || ""), toTimeStr: String(d.toTimeStr || ""), eventType: String(d.eventType || ""), headCount: String(d.headCount || "") }).toString() }).catch(() => {});
     await fetch("/app/vendorTransaction/saveEventNotes", { method: "POST", headers: GH, credentials: "include", body: new URLSearchParams({ transactionID: String(pid), clientVisibleNotes: "", internalNotes: String(p.notes || ""), fulfillmentNotes: "" }).toString() }).catch(() => {});
+
+    // Create + attach the CLIENT contact. saveNewContact creates the person AND links them to the project via
+    // the transactionID in the body (captured + verified live 2026-10-31). Best-effort: the customer's details
+    // also live in the internal notes, so a hiccup never loses the project.
+    const cl = p.client || null;
+    if (cl && (cl.firstName || cl.lastName || cl.email || cl.mobilePhone)) {
+      await fetch("/app/contact/saveNewContact", { method: "POST", headers: GH, credentials: "include", body: new URLSearchParams({ transactionID: String(pid), dayOfContactTransactionID: "", existingBusinessContactID: "", contactType: "Client", contactFirstName: String(cl.firstName || ""), contactLastName: String(cl.lastName || ""), referredBy: "", useAddressAsVenue: "false", contactMobilePhoneNumber: String(cl.mobilePhone || ""), mobilePhoneExtension: "", contactWorkPhoneNumber: "", workPhoneExtension: "", contactEmail: String(cl.email || ""), contactAddress_venueName: "", contactAddress: "", contactAddress_line2: "", contactAddress_city: "", contactAddress_state: "", contactAddress_zipCode: "", contactAddress_country: "", contactAddress_latitude: "", contactAddress_longitude: "", notes: "", taxResaleCertificateOnFile: "false", taxExemptCertificateOnFile: "false", defaultPaymentPolicyID: "", defaultTermsID: "", discountPercentage: "", eventInsuranceEnabled: "true", vendorEnabledTextMessages: "true" }).toString() }).catch(() => {});
+    }
 
     const loc = p.location || null;
     if (loc) await fetch("/app/vendorTransaction/saveDefaultEventLocation", { method: "POST", headers: GH, credentials: "include", body: new URLSearchParams({ transactionID: String(pid), venueName: String(loc.venueName || ""), venuePhoneNumber: "", venueAddress: String(loc.address || ""), venueAddress_line2: String(loc.line2 || ""), venueCity: String(loc.city || ""), venueCounty: String(loc.county || ""), venueState: String(loc.state || ""), venueZipCode: String(loc.zip || ""), venueCountry: String(loc.country || "US"), venueLatitude: String(loc.latitude || ""), venueLongitude: String(loc.longitude || ""), venueNotes: "" }).toString() }).catch(() => {});
