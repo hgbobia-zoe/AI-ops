@@ -6,7 +6,7 @@
 import { NextResponse } from "next/server";
 import { getIntake, updateIntake } from "@/lib/intake/store";
 import { logIntakeEvent } from "@/lib/intake/audit";
-import { enqueueGsOp, webLeadAckForIntake } from "@/lib/db/repo";
+import { enqueueGsOp, webLeadAckForIntake, recentEmailSendOpExists } from "@/lib/db/repo";
 
 export const dynamic = "force-dynamic";
 
@@ -53,12 +53,16 @@ export async function POST(req: Request): Promise<NextResponse> {
     // exists. Guided intakes carry no ack (webLeadAckForIntake returns null) and are unaffected. The office
     // session threads it into the project's client email; see the caveat in the PR notes if no thread exists.
     const ack = webLeadAckForIntake(id);
-    if (ack) {
+    // Idempotency: the office session may report the same created project back more than once (a retry, a
+    // lost-response re-POST, a re-pull). Dedup on consume is producer-side only (recentEmailSendOpExists),
+    // so guard the ack enqueue here too — otherwise a repeat callback would send the customer two acks.
+    const ackDedupeKey = `weback:${id}`;
+    if (ack && !recentEmailSendOpExists(ackDedupeKey)) {
       enqueueGsOp({
         op: "email_send",
         transactionId: String(body.projectId),
         label: "web lead acknowledgement",
-        payload: { content: ack.content, subject: ack.subject || undefined, dedupeKey: `weback:${id}` },
+        payload: { content: ack.content, subject: ack.subject || undefined, dedupeKey: ackDedupeKey },
       });
     }
   } else {
