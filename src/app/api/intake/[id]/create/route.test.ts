@@ -42,6 +42,9 @@ describe("POST /api/intake/[id]/create", () => {
 
     const ops = listGsOps(100).filter((o) => o.op === "create_project" && (o.payload as { intakeId?: string }).intakeId === id);
     expect(ops).toHaveLength(1);
+    // The op carries the client contact so the drainer creates + attaches the customer (saveNewContact).
+    const payload = ops[0].payload as { client?: { firstName?: string; lastName?: string; email?: string; mobilePhone?: string } };
+    expect(payload.client).toMatchObject({ firstName: "Pat", lastName: "Smith", email: "pat@example.com", mobilePhone: "5555550111" });
     // The intake is moved into the honest "creating/queued" state, NOT "created" (that only lands via the
     // Goodshuffle result callback).
     const after = getIntake(id)!;
