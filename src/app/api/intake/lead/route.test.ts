@@ -163,4 +163,17 @@ describe("web-lead acknowledgement email (tied to /api/gs/intake-result)", () =>
     expect(String(p.content)).not.toMatch(/[—–]/); // house style: no dashes
     expect(p.dedupeKey).toBe(`weback:${j.intakeId}`);
   });
+
+  it("does NOT enqueue a second ack when the office reports the same project twice (idempotent)", async () => {
+    const j = (await (await callLead(validLead({ email: "ack2@example.com", phone: "5550000009" }))).json()) as { intakeId: string };
+
+    const first = await callIntakeResult({ intakeId: j.intakeId, projectId: "99002", ok: true });
+    expect(first.status).toBe(200);
+    // A duplicate callback (retry / lost-response re-POST / re-pull) for the same project id.
+    const second = await callIntakeResult({ intakeId: j.intakeId, projectId: "99002", ok: true });
+    expect(second.status).toBe(200);
+
+    const emails = listGsOps(200).filter((o) => o.op === "email_send" && o.transactionId === "99002");
+    expect(emails).toHaveLength(1); // still exactly one ack — the customer is not double-emailed
+  });
 });
