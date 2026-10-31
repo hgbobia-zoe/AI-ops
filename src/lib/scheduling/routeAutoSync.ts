@@ -3,13 +3,14 @@
 //
 //   1. Connecteam -> route AUTO-ASSIGN. Takes the scheduledUnrouted detector's output and performs a REAL app
 //      assignment through the SAME path the dispatcher's one-click uses (create/attach the route+role shift,
-//      add the assignee, dual-write the per-worker row) for: (a) UNAMBIGUOUS matches — exactly one open route
-//      fits — for BOTH drivers and warehouse/field-prep helpers (planRouteAutoAssign; the field/prep case is
-//      the owner-authorized reversal of the old #81 driver-only exclusion, 2026-10-23); and (b) AMBIGUOUS
-//      drivers, resolved deterministically across all driver-gapped routes by seniority routing
-//      (resolveDriverSeniority). Ambiguous field helpers have no seniority tiebreak and stay on the prompt.
-//      The staffing gate stays honest — a Connecteam schedule is never credited as coverage; only the real
-//      assignment clears the gap — and a seat-capacity guard keeps a route from being filled past its need.
+//      add the assignee, dual-write the per-worker row) for DRIVERS ONLY: (a) UNAMBIGUOUS matches — exactly
+//      one open route fits (planRouteAutoAssign); and (b) AMBIGUOUS drivers, resolved deterministically across
+//      all driver-gapped routes by seniority routing (resolveDriverSeniority). Per the owner directive
+//      2026-10-30 ("asset prep does not get on a truck at all") a warehouse/prep worker is NOT delivery crew
+//      and is never auto-placed on a truck — the detector no longer even surfaces them for a route seat, and
+//      field-helper seats are Instawork. The staffing gate stays honest — a Connecteam schedule is never
+//      credited as coverage; only the real assignment clears the gap — and a seat-capacity guard keeps a
+//      route from being filled past its need.
 //
 //   2. App route -> Connecteam AUTO-CREATE (SILENT). Enforces the invariant "nobody on a Dispatch route
 //      without being in Connecteam": a route app shift whose assignees are NOT in Connecteam that day gets a

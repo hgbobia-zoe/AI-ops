@@ -15,30 +15,31 @@
 // then resolved deterministically by seniority routing (driverSeniority.ts), so staggered-time driver gaps
 // still get filled. A FIELD helper who fits several routes has no such tiebreak and stays on the prompt.
 //
-// POLICY NOTE — WAREHOUSE/FIELD CREW ARE NOW AUTO-ROUTED (reverses the earlier #81 exclusion, authorized by
-// the owner 2026-10-23). Previously ONLY a genuine driver could be auto-placed; a "prep" (warehouse) worker
-// mapped to a field-helper seat was always held for the one-click prompt. The owner's call: if someone is
-// scheduled in Connecteam and there is exactly one open route seat they fit, place them — don't nag a human
-// to do the obvious. The honesty invariant is untouched (a schedule is still never credited as coverage; a
-// REAL assignment is made), and the care is preserved by keeping it to the UNAMBIGUOUS case for field: a
-// warehouse worker is auto-placed only when there is a single matching route, never guessed across several.
+// POLICY NOTE — PREP/WAREHOUSE CREW ARE NEVER ON A TRUCK (owner directive 2026-10-30, re-instates the #81
+// driver-only rule and reverses the 2026-10-23 warehouse/field auto-placement). A "prep" (warehouse / asset
+// processor) worker is NOT delivery crew: they load and process returns at the warehouse, never ride a route.
+// So the ONLY role the auto path may place on a truck is a genuine DRIVER. The trigger was a back-office
+// worker ("Event Asset Processor", same Connecteam title as a real loader) being auto-added to trucks — title
+// alone cannot separate warehouse-prep from back-office, so neither is route crew. Field-helper seats are
+// Instawork (or an explicit, reasoned dispatcher override), never an auto-pulled warehouse person. This is
+// enforced at THREE chokepoints that all read roleFromTitle: isAutoRouteEligible here (driver only),
+// scheduledUnrouted.fillRoleFor (prep → no route seat), and availability.candidateRoles (field → no internal
+// crew). The honesty invariant is untouched (a schedule is never credited as coverage).
 
 import type { ScheduledUnroutedResult } from "./scheduledUnrouted";
 import type { RouteCrewRole } from "./preCheck";
 import type { CrewRole } from "@/lib/connecteam";
 
 /**
- * Which Connecteam crew roles the AUTO path may place on a route without a human. A genuine internal DRIVER
- * fills a driver seat (their actual job) and a "prep" (warehouse / asset-processor) worker fills a
- * field-helper seat — BOTH are auto-route-eligible as of the owner-authorized reversal of the #81 exclusion
- * (see the POLICY NOTE above). Office/admin ("other") is non-crew and is still never eligible, and the
- * detector never surfaces them onto a route anyway (scheduledUnrouted.fillRoleFor → null). Any role we don't
- * positively recognize as driver or prep is treated as NOT auto-eligible (honest: don't guess an unproven
- * worker onto a delivery route). The UNAMBIGUOUS guard in planRouteAutoAssign still bounds this — a prep
- * worker is auto-placed only when exactly one route fits; a multi-route prep stays on the one-click prompt.
+ * Which Connecteam crew roles the AUTO path may place on a truck without a human. ONLY a genuine internal
+ * DRIVER — driving a route is their actual job. A "prep" (warehouse / asset-processor) worker is NOT delivery
+ * crew and is never auto-placed on a truck (owner directive 2026-10-30, see the POLICY NOTE above); the
+ * detector no longer even surfaces them for a route seat (scheduledUnrouted.fillRoleFor → null), so this gate
+ * is defence in depth. Office/admin ("other") was already non-crew. Any role we don't positively recognize as
+ * a driver is NOT auto-eligible (honest: never guess a non-driver onto a route).
  */
 export function isAutoRouteEligible(role: CrewRole): boolean {
-  return role === "driver" || role === "prep";
+  return role === "driver";
 }
 
 /** One person the engine will AUTO-ASSIGN to a specific route (unambiguous match). */

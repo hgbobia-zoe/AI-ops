@@ -8,8 +8,9 @@
 // DESIGN LAW (docs/work-schedule-vs-route-assignment.md §2.1, §4): a Connecteam work shift is a WORKFORCE
 // COMMITMENT (this person is expected to work today), never a route assignment and never "busy". A person
 // is "on a route" ONLY when they are in a route-tied app shift's assignees. The role a scheduled person can
-// fill follows the same rule availability.candidateRoles uses: a Connecteam "driver" fills a driver seat; a
-// "prep" (warehouse) fills a field helper seat; office/admin ("other") is never suggested.
+// fill follows the same rule availability.candidateRoles uses: a Connecteam "driver" fills a driver seat;
+// a "prep" (warehouse / asset processor) worker is NOT truck crew and is never suggested onto a route (owner
+// directive 2026-10-30 — field help is Instawork), and office/admin ("other") never was.
 //
 // HONESTY: when Connecteam is unreachable the list is UNKNOWN (reachable:false, empty people) — never a
 // fabricated "nobody is scheduled". RULES CALCULATE: the core is a pure function of the scheduled people,
@@ -81,11 +82,13 @@ export interface ScheduledUnroutedResult {
   people: ScheduledUnroutedPerson[];
 }
 
-/** Which route seat a Connecteam role can fill (mirrors availability.candidateRoles). Office/admin → none. */
+/** Which route (TRUCK) seat a Connecteam role can fill (mirrors availability.candidateRoles). ONLY a driver:
+ *  a "prep" (warehouse / asset processor) worker is NOT delivery crew and is never surfaced onto a truck
+ *  (owner directive 2026-10-30 — the "Raquel" fix; see routeAutoAssign POLICY NOTE), and office/admin never
+ *  was. Field-helper seats are Instawork, not an auto-pulled warehouse person. */
 function fillRoleFor(role: CrewRole): RouteCrewRole | null {
   if (role === "driver") return "driver";
-  if (role === "prep") return "field";
-  return null; // "other" = office/admin, never recommended onto a route
+  return null; // prep (warehouse) + other (office/admin) are not truck crew — never recommended onto a route
 }
 
 const overlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number): boolean => aStart < bEnd && bStart < aEnd;

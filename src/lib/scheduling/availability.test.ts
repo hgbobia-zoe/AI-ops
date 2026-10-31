@@ -35,7 +35,7 @@ describe("candidateRoles", () => {
   it("maps roles and never includes office/other", () => {
     expect(candidateRoles("driver")).toEqual(["driver"]);
     expect(candidateRoles("prep")).toEqual(["prep"]);
-    expect(candidateRoles("field")).toEqual(["prep"]); // no internal field title
+    expect(candidateRoles("field")).toEqual([]); // owner directive 2026-10-30: prep is NOT truck crew; field = Instawork
   });
   it("an OFFICE shift qualifies NOBODY (non-crew, not route-assignable)", () => {
     expect(candidateRoles("office")).toEqual([]);
@@ -90,9 +90,11 @@ describe("recommendCrew", () => {
     expect(recs[0].bookedHours).toBe(0);
   });
 
-  it("a field shift recommends free warehouse/prep (no internal field title)", () => {
+  it("a field (truck helper) shift recommends NO internal crew — field help is Instawork (owner directive 2026-10-30)", () => {
+    // "asset prep does not get on a truck at all": a warehouse/prep worker is no longer pulled onto a field
+    // seat, so a field shift qualifies nobody internal and the UI points to Instawork.
     const recs = recommendCrew(shift("field", "2026-10-01T12:00:00-04:00", "2026-10-01T20:00:00-04:00"), [], roster);
-    expect(recs.map((r) => r.userId)).toEqual([3]); // Adrane (prep); drivers + office excluded
+    expect(recs).toEqual([]);
   });
 
   it("an OFFICE shift recommends NO ONE (not even office staff) — it is never route-assignable", () => {
