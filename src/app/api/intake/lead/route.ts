@@ -13,7 +13,7 @@
 
 import { NextResponse } from "next/server";
 import { createIntake, updateIntake } from "@/lib/intake/store";
-import { formatIntakeNotes, gsEventDetails } from "@/lib/intake/format";
+import { formatIntakeNotes, gsEventDetails, gsClientContact } from "@/lib/intake/format";
 import { mdyFromYmd } from "@/lib/intake/gsItems";
 import {
   normalizeLead,
@@ -95,6 +95,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       eventName,
       notes,
       details,
+      client: gsClientContact(intake), // create + attach the customer (web leads carry name/email/phone)
       eventDateMDY: mdyFromYmd(lead.eventDate),
       addItems: [],
       windowUpgrade: null,
