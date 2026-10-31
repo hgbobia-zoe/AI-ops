@@ -61,6 +61,17 @@ describe("planRouteAutoAssign (pure)", () => {
     expect(plan.prompt[0].reason).toContain("not auto-routed");
   });
 
+  it("AUTO-ASSIGNS a Warehouse Associate to a single eligible field route (owner directive 2026-10-30 — warehouse rides)", () => {
+    // A "warehouse" worker (Warehouse Associate) IS truck crew and is auto-added to a field seat where needed,
+    // exactly like a driver. Only asset prep ("prep") is kept off trucks.
+    const plan = planRouteAutoAssign(
+      result([person({ userId: 8, role: "warehouse", fillRole: "field", eligibleRouteIds: ["r1"], suggestedRouteId: "r1" })]),
+    );
+    expect(plan.autoAssign.map((a) => a.userId)).toEqual([8]);
+    expect(plan.autoAssign[0]).toMatchObject({ routeId: "r1", fillRole: "field" });
+    expect(plan.prompt).toHaveLength(0);
+  });
+
   it("NEVER auto-assigns an office/admin ('other') worker to a route (defense in depth) → PROMPT", () => {
     const plan = planRouteAutoAssign(
       result([person({ userId: 6, role: "other", fillRole: "field", eligibleRouteIds: ["r1"], suggestedRouteId: "r1" })]),

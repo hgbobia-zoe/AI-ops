@@ -78,14 +78,17 @@ describe("moveEligibility", () => {
   const win = { startMs: 1000, endMs: 2000 };
 
   it("good-fit: qualified prep to a prep (warehouse) seat, free window", () => {
-    // NB: prep → FIELD is now a qualification-mismatch (owner directive 2026-10-30, prep is not truck crew);
+    // NB: prep → FIELD is a qualification-mismatch (owner directive 2026-10-30, asset prep is not truck crew);
     // the window-logic cases below use the still-valid prep → prep move.
     expect(moveEligibility({ workerRole: "prep", targetRole: "prep", routeWindow: win, workerBusyWindows: [] }).fit).toBe("good-fit");
+  });
+  it("good-fit: a Warehouse Associate CAN move onto a FIELD truck seat (owner directive 2026-10-30 — warehouse rides)", () => {
+    expect(moveEligibility({ workerRole: "warehouse", targetRole: "field", routeWindow: win, workerBusyWindows: [] }).fit).toBe("good-fit");
   });
   it("qualification-mismatch: office/other cannot fill a field seat", () => {
     expect(moveEligibility({ workerRole: "other", targetRole: "field", routeWindow: win, workerBusyWindows: [] }).fit).toBe("qualification-mismatch");
   });
-  it("qualification-mismatch: a prep (warehouse) worker cannot fill a FIELD truck seat (owner directive 2026-10-30)", () => {
+  it("qualification-mismatch: an asset-prep worker cannot fill a FIELD truck seat (owner directive 2026-10-30)", () => {
     expect(moveEligibility({ workerRole: "prep", targetRole: "field", routeWindow: win, workerBusyWindows: [] }).fit).toBe("qualification-mismatch");
   });
   it("exceeds-availability: qualified but busy overlapping the route window", () => {

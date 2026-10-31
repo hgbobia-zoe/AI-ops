@@ -45,7 +45,7 @@ function shiftsForRole(crew: CrewShift[], role: CrewRole): EngineShift[] {
 }
 function distinctFieldCrew(crew: CrewShift[]): number {
   const ids = new Set<number>();
-  for (const s of crew) for (const a of s.assignees) if (a.role === "driver" || a.role === "prep") ids.add(a.userId);
+  for (const s of crew) for (const a of s.assignees) if (a.role === "driver" || a.role === "warehouse" || a.role === "prep") ids.add(a.userId);
   return ids.size;
 }
 function latestStopUnix(routes: EngineRoute[]): number | null {

@@ -8,9 +8,10 @@
 // DESIGN LAW (docs/work-schedule-vs-route-assignment.md §2.1, §4): a Connecteam work shift is a WORKFORCE
 // COMMITMENT (this person is expected to work today), never a route assignment and never "busy". A person
 // is "on a route" ONLY when they are in a route-tied app shift's assignees. The role a scheduled person can
-// fill follows the same rule availability.candidateRoles uses: a Connecteam "driver" fills a driver seat;
-// a "prep" (warehouse / asset processor) worker is NOT truck crew and is never suggested onto a route (owner
-// directive 2026-10-30 — field help is Instawork), and office/admin ("other") never was.
+// fill follows the same rule availability.candidateRoles uses: a Connecteam "driver" fills a driver seat; a
+// "warehouse" (Warehouse Associate) fills a field (truck-helper) seat and is auto-added where needed; a
+// "prep" (Event Asset Processor) worker is NOT truck crew and is never suggested onto a route (owner
+// directive 2026-10-30), and office/admin ("other") never was.
 //
 // HONESTY: when Connecteam is unreachable the list is UNKNOWN (reachable:false, empty people) — never a
 // fabricated "nobody is scheduled". RULES CALCULATE: the core is a pure function of the scheduled people,
@@ -62,9 +63,9 @@ export interface ScheduledUnroutedInput {
 export interface ScheduledUnroutedPerson {
   userId: number;
   name: string;
-  /** The Connecteam role (driver / prep / other) — "other" is never surfaced. */
+  /** The Connecteam role (driver / warehouse / prep / other) — only driver + warehouse are ever surfaced. */
   role: CrewRole;
-  /** The route seat this person can fill, following candidateRoles (driver→driver, prep→field). */
+  /** The route seat this person can fill, following candidateRoles (driver→driver, warehouse→field). */
   fillRole: RouteCrewRole;
   title: string | null;
   /** The person's Connecteam work window (Unix seconds), null when the shift carried no usable time. */
@@ -82,13 +83,14 @@ export interface ScheduledUnroutedResult {
   people: ScheduledUnroutedPerson[];
 }
 
-/** Which route (TRUCK) seat a Connecteam role can fill (mirrors availability.candidateRoles). ONLY a driver:
- *  a "prep" (warehouse / asset processor) worker is NOT delivery crew and is never surfaced onto a truck
- *  (owner directive 2026-10-30 — the "Raquel" fix; see routeAutoAssign POLICY NOTE), and office/admin never
- *  was. Field-helper seats are Instawork, not an auto-pulled warehouse person. */
+/** Which route (TRUCK) seat a Connecteam role can fill (mirrors availability.candidateRoles). A "driver" fills
+ *  a driver seat; a "warehouse" (Warehouse Associate) fills a field (truck-helper) seat. A "prep" (Event Asset
+ *  Processor / asset prep) worker is NOT delivery crew and is never surfaced onto a truck (owner directive
+ *  2026-10-30 — the "Raquel" fix; see routeAutoAssign POLICY NOTE), and office/admin ("other") never was. */
 function fillRoleFor(role: CrewRole): RouteCrewRole | null {
   if (role === "driver") return "driver";
-  return null; // prep (warehouse) + other (office/admin) are not truck crew — never recommended onto a route
+  if (role === "warehouse") return "field"; // Warehouse Associate rides as a delivery helper
+  return null; // prep (asset) + other (office/admin) are not truck crew — never recommended onto a route
 }
 
 const overlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number): boolean => aStart < bEnd && bStart < aEnd;

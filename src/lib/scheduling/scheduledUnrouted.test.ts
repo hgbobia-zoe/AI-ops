@@ -50,6 +50,19 @@ describe("detectScheduledUnrouted (pure)", () => {
     expect(r.people).toHaveLength(0);
   });
 
+  it("surfaces a Warehouse Associate onto an open FIELD gap (owner directive 2026-10-30 — warehouse rides)", () => {
+    // A "warehouse" worker (Warehouse Associate) IS truck crew: with an open field gap they are surfaced for
+    // the field (delivery-helper) seat, so the auto path can add them where needed. Asset prep still is not.
+    const r = detectScheduledUnrouted(
+      input({
+        scheduled: [person({ userId: 4, role: "warehouse" })],
+        routes: [routeCand({ routeId: "r1", gapByRole: { driver: 0, field: 2 } })],
+      }),
+    );
+    expect(r.people).toHaveLength(1);
+    expect(r.people[0]).toMatchObject({ userId: 4, fillRole: "field", suggestedRouteId: "r1", eligibleRouteIds: ["r1"] });
+  });
+
   it("never surfaces office/admin ('other') crew", () => {
     const r = detectScheduledUnrouted(
       input({

@@ -7,11 +7,18 @@ describe("roleFromTitle (Connecteam Title → ops CrewRole)", () => {
     expect(roleFromTitle("Delivery Driver")).toBe("driver");
   });
 
-  it("classifies warehouse / asset / prep / loader titles as prep (not the office fallthrough)", () => {
-    expect(roleFromTitle("Warehouse Associate")).toBe("prep");
-    expect(roleFromTitle("Event Asset Processor")).toBe("prep");
+  // THE TRUCK LINE (owner directive 2026-10-30): a "warehouse" title is TRUCK-ELIGIBLE field crew; an
+  // asset/prep/loader title is warehouse-prep-only and NEVER rides. Two warehouse titles → two roles.
+  it("classifies a Warehouse Associate as the truck-eligible 'warehouse' role", () => {
+    expect(roleFromTitle("Warehouse Associate")).toBe("warehouse");
+    expect(roleFromTitle("Warehouse")).toBe("warehouse");
+    expect(roleFromTitle("Warehouse Crew")).toBe("warehouse");
+  });
+
+  it("classifies asset / prep / loader titles as the non-truck 'prep' role", () => {
+    expect(roleFromTitle("Event Asset Processor")).toBe("prep"); // the Raquel/Mayerlin title — never on a truck
     expect(roleFromTitle("Asset Prep")).toBe("prep");
-    expect(roleFromTitle("Prep")).toBe("prep"); // was "other" before the fix — a literal prep title
+    expect(roleFromTitle("Prep")).toBe("prep");
     expect(roleFromTitle("Prep Team")).toBe("prep");
     expect(roleFromTitle("Loader")).toBe("prep");
   });

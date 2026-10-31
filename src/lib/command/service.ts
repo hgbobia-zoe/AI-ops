@@ -148,7 +148,7 @@ export async function commandCenter(): Promise<CommandCenter> {
       if (!seen.has(a.userId)) {
         seen.add(a.userId);
         if (a.role === "driver") drivers++;
-        else if (a.role === "prep") prep++;
+        else if (a.role === "prep" || a.role === "warehouse") prep++; // both warehouse roles roll into the warehouse count
         else other++;
       }
     }

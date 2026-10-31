@@ -27,15 +27,18 @@ const EIGHT_PM = Math.floor(Date.parse("2026-10-01T20:00:00-04:00") / 1000);
 const roster: CrewMember[] = [
   member(1, "Joel (driver)", "driver"),
   member(2, "James (driver)", "driver"),
-  member(3, "Adrane (warehouse)", "prep"),
+  member(3, "Adrane (warehouse assoc)", "warehouse"), // Warehouse Associate → rides as a field helper
+  member(4, "Mayerlin (asset prep)", "prep"), // Event Asset Processor → warehouse prep only, never a truck
   member(9, "Lisa (office)", "other"), // Operations Coordinator → never recommended
 ];
 
 describe("candidateRoles", () => {
   it("maps roles and never includes office/other", () => {
     expect(candidateRoles("driver")).toEqual(["driver"]);
-    expect(candidateRoles("prep")).toEqual(["prep"]);
-    expect(candidateRoles("field")).toEqual([]); // owner directive 2026-10-30: prep is NOT truck crew; field = Instawork
+    // owner directive 2026-10-30: a truck-helper (field) seat is a Warehouse Associate only; asset prep never rides.
+    expect(candidateRoles("field")).toEqual(["warehouse"]);
+    // a warehouse PREP shift qualifies BOTH warehouse roles (associates + asset processors both prep/load).
+    expect(candidateRoles("prep")).toEqual(["warehouse", "prep"]);
   });
   it("an OFFICE shift qualifies NOBODY (non-crew, not route-assignable)", () => {
     expect(candidateRoles("office")).toEqual([]);
@@ -90,11 +93,16 @@ describe("recommendCrew", () => {
     expect(recs[0].bookedHours).toBe(0);
   });
 
-  it("a field (truck helper) shift recommends NO internal crew — field help is Instawork (owner directive 2026-10-30)", () => {
-    // "asset prep does not get on a truck at all": a warehouse/prep worker is no longer pulled onto a field
-    // seat, so a field shift qualifies nobody internal and the UI points to Instawork.
+  it("a field (truck helper) shift recommends a free Warehouse Associate, never asset prep (owner directive 2026-10-30)", () => {
+    // Owner directive: a Warehouse Associate ("warehouse") rides as a field helper and IS recommended; an
+    // Event Asset Processor ("prep") never does. Office/other is excluded as always.
     const recs = recommendCrew(shift("field", "2026-10-01T12:00:00-04:00", "2026-10-01T20:00:00-04:00"), [], roster);
-    expect(recs).toEqual([]);
+    expect(recs.map((r) => r.userId)).toEqual([3]); // only Adrane (Warehouse Associate); not Mayerlin (asset prep)
+  });
+
+  it("a warehouse PREP shift recommends BOTH warehouse roles (associate + asset processor), never office", () => {
+    const recs = recommendCrew(shift("prep", "2026-10-01T12:00:00-04:00", "2026-10-01T20:00:00-04:00"), [], roster);
+    expect([...recs.map((r) => r.userId)].sort()).toEqual([3, 4]); // Adrane + Mayerlin both prep; Lisa (office) excluded
   });
 
   it("an OFFICE shift recommends NO ONE (not even office staff) — it is never route-assignable", () => {

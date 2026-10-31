@@ -6,8 +6,8 @@ import { UserX, MapPin, Clock } from "lucide-react";
 import { shiftClock, type CrewRole } from "@/lib/connecteam";
 import type { OpenShiftView, NeededRole } from "@/lib/staffing/openShifts";
 
-const NEEDED_LABEL: Record<NeededRole, string> = { driver: "driver", prep: "warehouse/prep", other: "crew", any: "anyone" };
-const ROLE_BADGE: Record<CrewRole, string> = { driver: "border-sky-500/40 text-sky-200", prep: "border-amber-500/40 text-amber-200", other: "border-white/20 text-muted-foreground" };
+const NEEDED_LABEL: Record<NeededRole, string> = { driver: "driver", warehouse: "warehouse", prep: "warehouse/prep", other: "crew", any: "anyone" };
+const ROLE_BADGE: Record<CrewRole, string> = { driver: "border-sky-500/40 text-sky-200", warehouse: "border-amber-500/40 text-amber-200", prep: "border-amber-500/40 text-amber-200", other: "border-white/20 text-muted-foreground" };
 
 export function OpenShiftsPanel({ openShifts, verified }: { openShifts: OpenShiftView[]; verified: boolean }): React.JSX.Element | null {
   if (!verified) return null; // staffing page shows its own "couldn't verify Connecteam" notice
