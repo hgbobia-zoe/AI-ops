@@ -216,6 +216,7 @@ export function buildAdminGroup(role: Role): NavGroup | null {
   const blades: Blade[] = [];
   if (canManageSettings(role)) blades.push({ href: "/admin/pull", label: "Pull Routes", icon: RefreshCw });
   if (canManageSettings(role)) blades.push({ href: "/admin/health", label: "Connections", icon: Plug });
+  if (canManageSettings(role)) blades.push({ href: "/admin/quo-contacts", label: "Quo Contacts", icon: Contact });
   if (canManageUsers(role)) blades.push({ href: "/admin/users", label: "Team", icon: UsersRound });
   if (canManageSettings(role)) blades.push({ href: "/admin/ai", label: "AI Configuration", icon: BrainCircuit });
   if (canManageSettings(role)) blades.push({ href: "/admin", label: "Settings", icon: Settings, exact: true });
