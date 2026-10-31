@@ -14,6 +14,13 @@
 //    phone looks like this. It is shown, never bulk-merged, and needs an explicit per-group confirm.
 //  - Name-only matches (same name, nothing shared) are NOT grouped — two "John Smith"s can be different
 //    people, and there is no contact detail to prove otherwise.
+//  - HUB keys never link contacts: Zoe's own addresses (old Zaps stamped hello@/admin@ and the
+//    Squarespace form sender onto customers) and any phone/email carried by 3+ different names. Without
+//    this one shared office address chained 166 unrelated customers into one "group" (live, 2026-10-31).
+//  - A merge is DELETE-ONLY: the kept contact must already hold every phone, email, company, role and
+//    custom-field value in the group, so nothing is ever written to it. Groups that would need details
+//    copied over are flagged for a hand merge in Quo. Why: Quo's PATCH wiped both the phone and the email
+//    of a HubSpot-synced contact during the first live merge (2026-10-31), even with the full lists sent.
 
 export interface QuoField {
   name: string;
@@ -61,23 +68,10 @@ export interface DuplicateGroup {
   sharedEmails: string[]; // lowercased emails shared by 2+ members
   names: string[]; // distinct display names in the group
   survivorId: string;
-}
-
-/** PATCH /v1/contacts/{id} body. Quo REPLACES the contact (omitted arrays are wiped), so this always
- *  carries the complete merged lists. */
-export interface QuoContactPatch {
-  externalId?: string;
-  source?: string;
-  sourceUrl?: string;
-  defaultFields: {
-    firstName?: string;
-    lastName?: string;
-    company?: string;
-    role?: string;
-    emails: QuoField[];
-    phoneNumbers: QuoField[];
-  };
-  customFields: { id?: string; key?: string; value: unknown }[];
+  /** True when the kept contact already holds everything, so merging only deletes the copies. */
+  deleteOnly: boolean;
+  /** What the kept contact lacks (empty when deleteOnly). Shown so the team can merge it by hand. */
+  keptLacks: string[];
 }
 
 // ── Normalizers ──────────────────────────────────────────────────────────────────────────────────────
@@ -153,14 +147,79 @@ function createdMs(c: QuoContact): number {
   return Number.isFinite(t) ? t : Number.MAX_SAFE_INTEGER;
 }
 
-/** The contact to keep: most complete, then the oldest (usually the one a person saved by hand), then id. */
+function customValueKey(v: unknown): string {
+  return typeof v === "string" ? v.trim().toLowerCase() : JSON.stringify(v);
+}
+
+/** Everything a copy carries that the kept contact does not: phones, emails, company, role and custom
+ *  field values. Deleting the copies would lose these, so a non-empty list means "merge by hand". Names
+ *  are not compared (an exact group shares one name; a review group is confirmed by a person). */
+export function lostOnDelete(kept: QuoContact, others: QuoContact[]): string[] {
+  const lost: string[] = [];
+  const add = (s: string) => {
+    if (!lost.includes(s)) lost.push(s);
+  };
+  const havePhones = new Set(phonesOf(kept));
+  const haveEmails = new Set(emailsOf(kept));
+  const kf = kept.defaultFields ?? {};
+  const haveCustom = new Map<string, string>();
+  for (const f of kept.customFields ?? []) {
+    const ident = f?.key || f?.id;
+    if (ident && hasValue(f.value)) haveCustom.set(ident, customValueKey(f.value));
+  }
+  for (const c of others) {
+    const f = c.defaultFields ?? {};
+    for (const p of phonesOf(c)) if (!havePhones.has(p)) add(`phone ${p}`);
+    for (const e of emailsOf(c)) if (!haveEmails.has(e)) add(`email ${e}`);
+    if (clean(f.company) && clean(f.company).toLowerCase() !== clean(kf.company).toLowerCase()) add(`company ${clean(f.company)}`);
+    if (clean(f.role) && clean(f.role).toLowerCase() !== clean(kf.role).toLowerCase()) add(`role ${clean(f.role)}`);
+    for (const x of c.customFields ?? []) {
+      const ident = x?.key || x?.id;
+      if (!ident || !hasValue(x.value)) continue;
+      if (haveCustom.get(ident) !== customValueKey(x.value)) add(`${x.name || x.key || "custom field"}`);
+    }
+  }
+  return lost;
+}
+
+/** The contact to keep. First choice: a member that already holds everything the others carry (so the
+ *  merge only deletes). Then most complete, then the oldest (usually saved by hand), then id. */
 export function pickSurvivor(contacts: QuoContact[]): QuoContact {
-  return [...contacts].sort(
+  const ranked = [...contacts].sort(
     (a, b) => completeness(b) - completeness(a) || createdMs(a) - createdMs(b) || a.id.localeCompare(b.id),
-  )[0];
+  );
+  const covering = ranked.find((c) => lostOnDelete(c, contacts.filter((o) => o.id !== c.id)).length === 0);
+  return covering ?? ranked[0];
+}
+
+/** Zoe's own addresses. Old Zaps stamped these onto customer contacts, so they say nothing about who the
+ *  customer is and must never link two contacts. */
+const INTERNAL_EMAIL = /@zoeeventsdmv\.com$|^form-submission@squarespace\.info$/;
+/** A phone or email carried by this many different names is a shared line (office, venue, planner),
+ *  not a person, and never links contacts. */
+export const HUB_NAME_THRESHOLD = 3;
+
+/** Keys ("p:<10 digits>" / "e:<email>") that must not link contacts. */
+export function hubKeys(contacts: QuoContact[]): Set<string> {
+  const names = new Map<string, Set<string>>();
+  const hubs = new Set<string>();
+  for (const c of contacts) {
+    const n = nameKey(c);
+    const keys = [...phonesOf(c).map((p) => `p:${p}`), ...emailsOf(c).map((e) => `e:${e}`)];
+    for (const k of keys) {
+      if (k.startsWith("e:") && INTERNAL_EMAIL.test(k.slice(2))) hubs.add(k);
+      if (!n) continue;
+      const s = names.get(k) ?? new Set<string>();
+      s.add(n);
+      names.set(k, s);
+    }
+  }
+  for (const [k, s] of names) if (s.size >= HUB_NAME_THRESHOLD) hubs.add(k);
+  return hubs;
 }
 
 export function findDuplicateGroups(contacts: QuoContact[]): DuplicateGroup[] {
+  const hubs = hubKeys(contacts);
   const parent = new Map<string, string>();
   const find = (x: string): string => {
     let r = x;
@@ -184,6 +243,7 @@ export function findDuplicateGroups(contacts: QuoContact[]): DuplicateGroup[] {
   for (const c of contacts) {
     const keys = [...phonesOf(c).map((p) => `p:${p}`), ...emailsOf(c).map((e) => `e:${e}`)];
     for (const k of keys) {
+      if (hubs.has(k)) continue; // shared office/venue line: says nothing about who this is
       const seen = firstWithKey.get(k);
       if (seen) union(seen, c.id);
       else firstWithKey.set(k, c.id);
@@ -204,8 +264,8 @@ export function findDuplicateGroups(contacts: QuoContact[]): DuplicateGroup[] {
     const phoneCount = new Map<string, number>();
     const emailCount = new Map<string, number>();
     for (const c of list) {
-      for (const p of phonesOf(c)) phoneCount.set(p, (phoneCount.get(p) ?? 0) + 1);
-      for (const e of emailsOf(c)) emailCount.set(e, (emailCount.get(e) ?? 0) + 1);
+      for (const p of phonesOf(c)) if (!hubs.has(`p:${p}`)) phoneCount.set(p, (phoneCount.get(p) ?? 0) + 1);
+      for (const e of emailsOf(c)) if (!hubs.has(`e:${e}`)) emailCount.set(e, (emailCount.get(e) ?? 0) + 1);
     }
     const sharedPhones = [...phoneCount].filter(([, n]) => n > 1).map(([k]) => k).sort();
     const sharedEmails = [...emailCount].filter(([, n]) => n > 1).map(([k]) => k).sort();
@@ -221,6 +281,8 @@ export function findDuplicateGroups(contacts: QuoContact[]): DuplicateGroup[] {
         ? `${list.length} contacts share ${via || "contact details"} and the same name (or no name).`
         : `${list.length} contacts share ${via || "contact details"} but carry different names. Check they are one person before merging.`;
     const ids = list.map((c) => c.id).sort();
+    const survivor = pickSurvivor(list);
+    const keptLacks = lostOnDelete(survivor, list.filter((c) => c.id !== survivor.id));
     groups.push({
       key: ids.join(","),
       contactIds: ids,
@@ -229,7 +291,9 @@ export function findDuplicateGroups(contacts: QuoContact[]): DuplicateGroup[] {
       sharedPhones,
       sharedEmails,
       names,
-      survivorId: pickSurvivor(list).id,
+      survivorId: survivor.id,
+      deleteOnly: keptLacks.length === 0,
+      keptLacks,
     });
   }
   // Exact first, then biggest groups first, then stable by key.
@@ -251,93 +315,6 @@ export function formsOneGroup(contacts: QuoContact[], ids: string[]): DuplicateG
   return groups.length === 1 && groups[0].contactIds.length === subset.length ? groups[0] : null;
 }
 
-// ── Merge plan ───────────────────────────────────────────────────────────────────────────────────────
-
-function mergeFieldList(lists: QuoField[][], keyOf: (v: string | null | undefined) => string | null): QuoField[] {
-  const out: QuoField[] = [];
-  const seen = new Set<string>();
-  lists.forEach((list, listIdx) => {
-    for (const item of list ?? []) {
-      const raw = clean(item?.value);
-      if (!raw) continue;
-      const k = keyOf(raw) ?? `raw:${raw.toLowerCase()}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      // Keep the survivor's own entries verbatim (with their ids); copied entries go in without an id so
-      // Quo creates them fresh on the survivor.
-      const label = clean(item?.name) || "other";
-      out.push(listIdx === 0 && item.id ? { name: label, value: raw, id: item.id } : { name: label, value: raw });
-    }
-  });
-  return out;
-}
-
-function firstNonEmpty(values: (string | null | undefined)[]): string | undefined {
-  for (const v of values) if (clean(v)) return clean(v);
-  return undefined;
-}
-
-/** The PATCH that turns `survivor` into the merged contact: survivor values win, blanks are filled from
- *  the others, and every distinct phone, email and custom-field value in the group is kept. */
-export function buildMergePatch(survivor: QuoContact, others: QuoContact[]): QuoContactPatch {
-  const all = [survivor, ...others];
-  const df = (c: QuoContact) => c.defaultFields ?? {};
-  const patch: QuoContactPatch = {
-    defaultFields: {
-      emails: mergeFieldList(all.map((c) => df(c).emails ?? []), emailKey),
-      phoneNumbers: mergeFieldList(all.map((c) => df(c).phoneNumbers ?? []), phoneKey),
-    },
-    customFields: [],
-  };
-  const firstName = firstNonEmpty(all.map((c) => df(c).firstName));
-  const lastName = firstNonEmpty(all.map((c) => df(c).lastName));
-  const company = firstNonEmpty(all.map((c) => df(c).company));
-  const role = firstNonEmpty(all.map((c) => df(c).role));
-  if (firstName) patch.defaultFields.firstName = firstName;
-  if (lastName) patch.defaultFields.lastName = lastName;
-  if (company) patch.defaultFields.company = company;
-  if (role) patch.defaultFields.role = role;
-
-  // Carry an external id over when the survivor has none, so an integration that upserts by external id
-  // keeps updating the merged contact instead of re-creating a duplicate.
-  const externalId = firstNonEmpty(all.map((c) => c.externalId));
-  if (externalId) patch.externalId = externalId;
-  if (clean(survivor.source)) patch.source = clean(survivor.source);
-  if (clean(survivor.sourceUrl)) patch.sourceUrl = clean(survivor.sourceUrl);
-
-  // Custom fields: one entry per field (by key, else id); the survivor's value wins when it has one.
-  const fieldOrder: string[] = [];
-  const fieldVal = new Map<string, { id?: string; key?: string; value: unknown }>();
-  for (const c of all) {
-    for (const f of c.customFields ?? []) {
-      const ident = f?.key ? `k:${f.key}` : f?.id ? `i:${f.id}` : "";
-      if (!ident || !hasValue(f.value)) continue;
-      if (fieldVal.has(ident)) continue;
-      fieldOrder.push(ident);
-      const entry: { id?: string; key?: string; value: unknown } = { value: f.value };
-      if (f.id) entry.id = f.id;
-      if (f.key) entry.key = f.key;
-      fieldVal.set(ident, entry);
-    }
-  }
-  patch.customFields = fieldOrder.map((k) => fieldVal.get(k)!);
-  return patch;
-}
-
-/** After the PATCH, confirm the survivor really holds every phone and email from the group before any
- *  duplicate is deleted. Anything missing blocks the deletes. */
-export function missingAfterMerge(survivorAfter: QuoContact, group: QuoContact[]): { phones: string[]; emails: string[] } {
-  const havePhones = new Set(phonesOf(survivorAfter));
-  const haveEmails = new Set(emailsOf(survivorAfter));
-  const phones = new Set<string>();
-  const emails = new Set<string>();
-  for (const c of group) {
-    for (const p of phonesOf(c)) if (!havePhones.has(p)) phones.add(p);
-    for (const e of emailsOf(c)) if (!haveEmails.has(e)) emails.add(e);
-  }
-  return { phones: [...phones].sort(), emails: [...emails].sort() };
-}
-
 export interface DedupeStats {
   totalContacts: number;
   groups: number;
@@ -346,11 +323,17 @@ export interface DedupeStats {
   /** Contacts a full merge would remove (every member but the survivor, across all groups). */
   duplicateContacts: number;
   exactDuplicateContacts: number;
+  /** Exact groups the app can merge safely (kept contact already holds everything) and their copies. */
+  readyGroups: number;
+  readyCopies: number;
+  /** Groups that need details copied onto the kept contact first: merged by hand in Quo. */
+  handMergeGroups: number;
   noPhoneOrEmail: number;
 }
 
 export function dedupeStats(contacts: QuoContact[], groups: DuplicateGroup[]): DedupeStats {
   const exact = groups.filter((g) => g.confidence === "exact");
+  const ready = exact.filter((g) => g.deleteOnly);
   return {
     totalContacts: contacts.length,
     groups: groups.length,
@@ -358,6 +341,9 @@ export function dedupeStats(contacts: QuoContact[], groups: DuplicateGroup[]): D
     reviewGroups: groups.length - exact.length,
     duplicateContacts: groups.reduce((n, g) => n + g.contactIds.length - 1, 0),
     exactDuplicateContacts: exact.reduce((n, g) => n + g.contactIds.length - 1, 0),
+    readyGroups: ready.length,
+    readyCopies: ready.reduce((n, g) => n + g.contactIds.length - 1, 0),
+    handMergeGroups: groups.filter((g) => !g.deleteOnly).length,
     noPhoneOrEmail: contacts.filter((c) => phonesOf(c).length === 0 && emailsOf(c).length === 0).length,
   };
 }

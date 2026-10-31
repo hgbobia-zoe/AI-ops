@@ -100,6 +100,10 @@ describe("webLeadEventName", () => {
   it("uses the verbatim 'other' type as the label", () => {
     expect(webLeadEventName(normalizeLead({ lastName: "Cruz", eventType: "Film shoot" }))).toBe("Cruz - Film shoot");
   });
+  it("labels the form's bare 'other' choice as 'Event' (live: 'Gbobia - other')", () => {
+    expect(webLeadEventName(normalizeLead({ lastName: "Gbobia", eventType: "other" }))).toBe("Gbobia - Event");
+    expect(webLeadEventName(normalizeLead({ lastName: "Gbobia", eventType: " Other " }))).toBe("Gbobia - Event");
+  });
   it("falls back to first name when last name is missing", () => {
     expect(webLeadEventName(normalizeLead({ firstName: "Pat", eventType: "wedding" }))).toBe("Pat - Wedding");
   });

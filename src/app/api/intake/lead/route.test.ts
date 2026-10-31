@@ -142,8 +142,22 @@ describe("web-lead acknowledgement email (tied to /api/gs/intake-result)", () =>
   beforeEach(() => {
     delete process.env.INTAKE_TOKEN;
     process.env.WEB_INTAKE_ENABLED = "true";
+    process.env.WEB_INTAKE_ACK_EMAIL = "true";
   });
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+    delete process.env.WEB_INTAKE_ACK_EMAIL;
+  });
+
+  it("sends NO ack email by default (the website Zap already thanks the customer)", async () => {
+    delete process.env.WEB_INTAKE_ACK_EMAIL;
+    const j = (await (await callLead(validLead({ email: "noack@example.com", phone: "5550000010" }))).json()) as { intakeId: string };
+    expect(createOpsFor(j.intakeId)).toHaveLength(1); // the project is still queued
+    const res = await callIntakeResult({ intakeId: j.intakeId, projectId: "99003", ok: true });
+    expect(res.status).toBe(200);
+    const emails = listGsOps(200).filter((o) => o.op === "email_send" && o.transactionId === "99003");
+    expect(emails).toHaveLength(0);
+  });
 
   it("enqueues an email_send ack ONLY once Goodshuffle confirms the project id", async () => {
     const j = (await (await callLead(validLead({ email: "ack@example.com", phone: "5550000008" }))).json()) as { intakeId: string };

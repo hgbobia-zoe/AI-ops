@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildMergePatch,
   dedupeStats,
   findDuplicateGroups,
   formsOneGroup,
-  missingAfterMerge,
+  hubKeys,
+  lostOnDelete,
   phoneKey,
   pickSurvivor,
   type QuoContact,
@@ -137,67 +137,103 @@ describe("pickSurvivor", () => {
   });
 });
 
-describe("buildMergePatch", () => {
-  const survivor = c("keep", {
+describe("lostOnDelete", () => {
+  const keep = c("keep", {
     first: "Pat",
-    last: "Smith",
     phones: ["+13015550101"],
     emails: ["pat@example.com"],
-    custom: [
-      { name: "Lead source", key: "lead_source", id: "cf1", type: "string", value: "Website" },
-      { name: "Notes", key: "notes", id: "cf2", type: "string", value: null },
-    ],
+    custom: [{ name: "Lead source", key: "lead_source", id: "cf1", type: "string", value: "Website" }],
   });
-  const copy = c("copy", {
-    company: "Smith Events",
-    phones: ["(301) 555-0101", "202-555-0199"],
-    emails: ["PAT@EXAMPLE.COM", "pat.work@example.com"],
-    externalId: "zap-123",
-    custom: [
-      { name: "Lead source", key: "lead_source", id: "cf1", type: "string", value: "Yelp" },
-      { name: "Notes", key: "notes", id: "cf2", type: "string", value: "Prefers text" },
-    ],
+  it("is empty when the copies carry nothing new (format and case differences ignored)", () => {
+    const copy = c("copy", { first: "Pat", phones: ["(301) 555-0101"], emails: ["PAT@EXAMPLE.COM"] });
+    expect(lostOnDelete(keep, [copy])).toEqual([]);
   });
-  const patch = buildMergePatch(survivor, [copy]);
-
-  it("keeps every distinct phone and email, survivor entries first with their ids", () => {
-    expect(patch.defaultFields.phoneNumbers).toEqual([
-      { name: "mobile", value: "+13015550101", id: "keep-p0" },
-      { name: "mobile", value: "202-555-0199" },
-    ]);
-    expect(patch.defaultFields.emails).toEqual([
-      { name: "primary", value: "pat@example.com", id: "keep-e0" },
-      { name: "primary", value: "pat.work@example.com" },
+  it("lists phones, emails, company and custom values only a copy holds", () => {
+    const copy = c("copy", {
+      company: "Smith Events",
+      phones: ["3015550101", "202-555-0199"],
+      emails: ["pat.work@example.com"],
+      custom: [{ name: "Lead source", key: "lead_source", id: "cf1", type: "string", value: "Yelp" }],
+    });
+    expect(lostOnDelete(keep, [copy])).toEqual([
+      "phone 2025550199",
+      "email pat.work@example.com",
+      "company Smith Events",
+      "Lead source",
     ]);
   });
-
-  it("keeps survivor names and fills blanks from the copy", () => {
-    expect(patch.defaultFields.firstName).toBe("Pat");
-    expect(patch.defaultFields.lastName).toBe("Smith");
-    expect(patch.defaultFields.company).toBe("Smith Events");
-  });
-
-  it("carries the copy's external id when the survivor has none", () => {
-    expect(patch.externalId).toBe("zap-123");
-  });
-
-  it("keeps the survivor's custom values and fills empty ones", () => {
-    expect(patch.customFields).toEqual([
-      { id: "cf1", key: "lead_source", value: "Website" },
-      { id: "cf2", key: "notes", value: "Prefers text" },
-    ]);
+  it("ignores empty custom values on a copy", () => {
+    const copy = c("copy", { phones: ["3015550101"], custom: [{ name: "Notes", key: "notes", id: "cf2", type: "string", value: null }] });
+    expect(lostOnDelete(keep, [copy])).toEqual([]);
   });
 });
 
-describe("missingAfterMerge", () => {
-  it("reports details the survivor lost", () => {
-    const group = [c("a", { phones: ["3015550101"], emails: ["a@x.com"] }), c("b", { phones: ["2025550199"] })];
-    const after = c("a", { phones: ["3015550101"] });
-    expect(missingAfterMerge(after, group)).toEqual({ phones: ["2025550199"], emails: ["a@x.com"] });
+describe("delete-only merges", () => {
+  it("marks a group deleteOnly when the kept contact already holds everything (live Yfatwork case)", () => {
+    // The kept contact has phone + email; the Zap copies only the phone. Merging = delete the copies.
+    const g = findDuplicateGroups([
+      c("hub", { first: "Yfatwork", last: "Lulu", phones: ["2029898603"], emails: ["yafe@example.com"] }),
+      c("z1", { first: "Yfatwork", last: "Lulu", phones: ["2029898603"] }),
+      c("z2", { first: "Yfatwork", last: "Lulu", phones: ["2029898603"] }),
+    ]);
+    expect(g[0].survivorId).toBe("hub");
+    expect(g[0].deleteOnly).toBe(true);
+    expect(g[0].keptLacks).toEqual([]);
   });
-  it("is empty when everything landed", () => {
-    const group = [c("a", { phones: ["3015550101"] }), c("b", { phones: ["+1 301 555 0101"] })];
-    expect(missingAfterMerge(c("a", { phones: ["3015550101"] }), group)).toEqual({ phones: [], emails: [] });
+  it("prefers a member that covers everything over a merely 'more complete' one", () => {
+    // "rich" ranks first (older, extra external id) but lacks the second phone that "cover" holds.
+    const g = findDuplicateGroups([
+      c("rich", { first: "Pat", last: "Smith", externalId: "x1", phones: ["3015550101"], createdAt: "2020-01-01T00:00:00Z" }),
+      c("cover", { first: "Pat", last: "Smith", phones: ["3015550101", "2025550199"], createdAt: "2024-01-01T00:00:00Z" }),
+    ]);
+    expect(g[0].survivorId).toBe("cover");
+    expect(g[0].deleteOnly).toBe(true);
+  });
+  it("flags a group for a hand merge when no member holds everything", () => {
+    const g = findDuplicateGroups([
+      c("a", { first: "Pat", phones: ["3015550101"], emails: ["a@example.com"] }),
+      c("b", { first: "Pat", phones: ["3015550101"], emails: ["b@example.com"] }),
+    ]);
+    expect(g[0].deleteOnly).toBe(false);
+    expect(g[0].keptLacks).toEqual(["email b@example.com"]);
+  });
+});
+
+describe("hub keys", () => {
+  it("never links customers through Zoe's own addresses (live: admin@ chained 166 people)", () => {
+    const g = findDuplicateGroups([
+      c("a", { first: "Anna", last: "Allshouse", emails: ["admin@zoeeventsdmv.com"] }),
+      c("b", { first: "Ashley", last: "Garcia", emails: ["admin@zoeeventsdmv.com"] }),
+      c("s", { first: "Bea", emails: ["form-submission@squarespace.info"] }),
+      c("t", { first: "Cal", emails: ["form-submission@squarespace.info"] }),
+    ]);
+    expect(g).toHaveLength(0);
+  });
+  it("ignores a phone carried by 3+ different names (a shared office or venue line)", () => {
+    const contacts = [
+      c("a", { first: "Ann", phones: ["3012915296"] }),
+      c("b", { first: "Bob", phones: ["3012915296"] }),
+      c("c", { first: "Cat", phones: ["3012915296"] }),
+    ];
+    expect(hubKeys(contacts).has("p:3012915296")).toBe(true);
+    expect(findDuplicateGroups(contacts)).toHaveLength(0);
+  });
+  it("still groups real duplicates that also carry a hub address", () => {
+    const g = findDuplicateGroups([
+      c("a", { first: "Pat", phones: ["3015550101"], emails: ["hello@zoeeventsdmv.com"] }),
+      c("b", { first: "Pat", phones: ["3015550101"], emails: ["hello@zoeeventsdmv.com"] }),
+      c("x", { first: "Lee", phones: ["2025550199"], emails: ["hello@zoeeventsdmv.com"] }),
+    ]);
+    expect(g).toHaveLength(1);
+    expect(g[0].contactIds).toEqual(["a", "b"]);
+    expect(g[0].sharedEmails).toEqual([]); // the hub address is not reported as a link
+  });
+  it("keeps a couple sharing a home phone (2 names) as a review group", () => {
+    const g = findDuplicateGroups([
+      c("a", { first: "Pat", last: "Smith", phones: ["3015550101"] }),
+      c("b", { first: "Sam", last: "Smith", phones: ["3015550101"] }),
+    ]);
+    expect(g[0].confidence).toBe("review");
   });
 });
 
@@ -237,6 +273,9 @@ describe("dedupeStats", () => {
       reviewGroups: 1,
       duplicateContacts: 3,
       exactDuplicateContacts: 2,
+      readyGroups: 1,
+      readyCopies: 2,
+      handMergeGroups: 0,
       noPhoneOrEmail: 1,
     });
   });
