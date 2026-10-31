@@ -464,6 +464,14 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
               var nb=new URLSearchParams({ transactionID:String(pid), clientVisibleNotes:"", internalNotes:String(o.payload.notes||""), fulfillmentNotes:"" });
               return fetch("/app/vendorTransaction/saveEventNotes",{method:"POST",headers:GH,credentials:"include",body:nb}).catch(function(){});
             }).then(function(){
+              // Create + attach the CLIENT contact. saveNewContact creates the person AND links them to the
+              // project via the transactionID in the body (captured + verified live 2026-10-31). Best-effort:
+              // the customer's details also live in the internal notes, so a hiccup never loses the project.
+              var cl=o.payload.client;
+              if(!cl || (!cl.firstName && !cl.lastName && !cl.email && !cl.mobilePhone)) return;
+              var cb=new URLSearchParams({ transactionID:String(pid), dayOfContactTransactionID:"", existingBusinessContactID:"", contactType:"Client", contactFirstName:String(cl.firstName||""), contactLastName:String(cl.lastName||""), referredBy:"", useAddressAsVenue:"false", contactMobilePhoneNumber:String(cl.mobilePhone||""), mobilePhoneExtension:"", contactWorkPhoneNumber:"", workPhoneExtension:"", contactEmail:String(cl.email||""), contactAddress_venueName:"", contactAddress:"", contactAddress_line2:"", contactAddress_city:"", contactAddress_state:"", contactAddress_zipCode:"", contactAddress_country:"", contactAddress_latitude:"", contactAddress_longitude:"", notes:"", taxResaleCertificateOnFile:"false", taxExemptCertificateOnFile:"false", defaultPaymentPolicyID:"", defaultTermsID:"", discountPercentage:"", eventInsuranceEnabled:"true", vendorEnabledTextMessages:"true" });
+              return fetch("/app/contact/saveNewContact",{method:"POST",headers:GH,credentials:"include",body:cb}).catch(function(){});
+            }).then(function(){
               // Set the delivery location (venue) from the geocoded intake address, if we have one. Besides
               // showing the venue, this is what lets the logistics legs below add (Goodshuffle rejects
               // delivery items on a shell with no delivery location). Best-effort.
