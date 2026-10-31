@@ -4,6 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CrewMember, CrewShift, PublishShiftInput, PublishShiftResult, Scheduler } from "@/lib/connecteam";
 import type { Route } from "@/lib/types";
+import { formatYmdLong } from "@/lib/dates";
+
+// Capture the Slack bot cards so a test can assert their fields (e.g. the Day) without a webhook. appUrl is
+// re-exported so the announcement's link still renders.
+type BotCard = { title?: string; fields?: Array<{ label: string; value: string }> };
+const { announces } = vi.hoisted(() => ({ announces: [] as BotCard[] }));
+vi.mock("@/lib/notify/aiBots", () => ({
+  botAnnounce: (_channel: string, card: BotCard) => {
+    announces.push(card);
+    return Promise.resolve();
+  },
+  appUrl: (p: string) => `https://app.test${p}`,
+}));
 
 // Throwaway DB so staff_shifts + shift_assignments migrations run end-to-end (mirrors connecteamReconcile.test).
 let dir: string;
@@ -74,6 +87,45 @@ describe("planRouteConnecteamCreate (pure)", () => {
     expect(plan.creates.map((c) => c.shiftId)).not.toContain(shift600.id); // already in Connecteam -> adopt, never create a duplicate
     expect(plan.adopts.map((a) => a.shiftId)).toContain(shift600.id);
     expect(plan.adopts.find((a) => a.shiftId === shift600.id)!.connecteamShiftId).toBe("ct-600");
+  });
+
+  it("FLAGS (never creates) a route shift that holds ASSET-PREP crew — prep is not truck crew (the Raquel fix)", async () => {
+    const { createShift, getShiftsForDate, planRouteConnecteamCreate } = await mods();
+    // A field (delivery-helper) route seat whose assignee is an Event Asset Processor ("prep"). Nobody is in
+    // Connecteam yet, so without the 4th chokepoint this would silently CREATE a truck shift (wrong pay).
+    const s = createShift({ date: DATE, role: "field", headcount: 1, startTime: START, endTime: END, windowKnown: true, routeId: "rPrep", truckId: "E450", assignees: [4242], source: "manual" });
+    const plan = planRouteConnecteamCreate({
+      appShifts: getShiftsForDate(DATE).filter((x) => x.id === s.id),
+      crew: [],
+      crewRoleOf: (u) => (u === 4242 ? "prep" : null),
+    });
+    expect(plan.creates).toHaveLength(0);
+    expect(plan.adopts).toHaveLength(0);
+    expect(plan.flags.map((f) => f.shiftId)).toContain(s.id); // held for a human, not cemented into Connecteam
+  });
+
+  it("still CREATES for a WAREHOUSE associate on a field seat (they ride as a delivery helper)", async () => {
+    const { createShift, getShiftsForDate, planRouteConnecteamCreate } = await mods();
+    const s = createShift({ date: DATE, role: "field", headcount: 1, startTime: START, endTime: END, windowKnown: true, routeId: "rWh", truckId: "E450", assignees: [4343], source: "manual" });
+    const plan = planRouteConnecteamCreate({
+      appShifts: getShiftsForDate(DATE).filter((x) => x.id === s.id),
+      crew: [],
+      crewRoleOf: (u) => (u === 4343 ? "warehouse" : null),
+    });
+    expect(plan.creates.map((c) => c.shiftId)).toContain(s.id); // Warehouse Associate is truck crew → mirror it
+    expect(plan.flags).toHaveLength(0);
+  });
+
+  it("does NOT block when the crew role is unknown (null → never fabricate an exclusion)", async () => {
+    const { createShift, getShiftsForDate, planRouteConnecteamCreate } = await mods();
+    const s = createShift({ date: DATE, role: "driver", headcount: 1, startTime: START, endTime: END, windowKnown: true, routeId: "rUnk", truckId: "E450", assignees: [4444], source: "manual" });
+    const plan = planRouteConnecteamCreate({
+      appShifts: getShiftsForDate(DATE).filter((x) => x.id === s.id),
+      crew: [],
+      crewRoleOf: () => null, // roster unreachable / title unknown
+    });
+    expect(plan.creates.map((c) => c.shiftId)).toContain(s.id);
+    expect(plan.flags).toHaveLength(0);
   });
 
   it("FLAGS a mixed-presence route shift instead of auto-writing (uncertain -> record-only)", async () => {
@@ -280,6 +332,35 @@ describe("applyRouteConnecteamCreate (silent + honest)", () => {
     const res = await applyRouteConnecteamCreate({ creates: [], adopts: [], flags: [{ shiftId: s.id, note: "mixed" }], deferred: [], skipped: 0 }, { scheduler: SCHEDULER, truckNameOf: () => "Truck", publish: vi.fn() });
     expect(res.flagged).toBe(1);
     expect(getShiftById(s.id)!.syncStatus).toBe("needs_review");
+  });
+
+  it("announces the DAY on a created Connecteam shift so the alert is trackable (bug: window had no date)", async () => {
+    const { createShift, getShiftsForDate, planRouteConnecteamCreate, applyRouteConnecteamCreate } = await mods();
+    const s = createShift({ date: DATE, role: "driver", headcount: 1, startTime: START, endTime: END, windowKnown: true, routeId: "rDay", truckId: "E450", assignees: [9100], source: "manual" });
+    const plan = planRouteConnecteamCreate({ appShifts: getShiftsForDate(DATE).filter((x) => x.id === s.id), crew: [] });
+    announces.length = 0;
+    const publish = vi.fn(async (): Promise<PublishShiftResult> => ({ ok: true, shiftId: "ct-day-1" }));
+    await applyRouteConnecteamCreate(plan, { scheduler: SCHEDULER, truckNameOf: () => "Isuzu NPR 1", nameOf: () => "Pat", publish });
+    const card = announces.find((c) => c.title === "Connecteam shift created");
+    expect(card).toBeTruthy();
+    expect(card!.fields?.find((f) => f.label === "Day")?.value).toBe(formatYmdLong(DATE));
+  });
+
+  it("ANNOUNCES the prep-on-a-truck hold (with the day) instead of silently creating it", async () => {
+    const { createShift, getShiftById, applyRouteConnecteamCreate, NON_TRUCK_CREW_NOTE } = await mods();
+    const s = createShift({ date: DATE, role: "field", headcount: 1, startTime: START, endTime: END, windowKnown: true, routeId: "rHold", truckId: "E450", assignees: [9200], source: "manual" });
+    announces.length = 0;
+    const publish = vi.fn(async (): Promise<PublishShiftResult> => ({ ok: true, shiftId: "SHOULD-NOT-HAPPEN" }));
+    const res = await applyRouteConnecteamCreate(
+      { creates: [], adopts: [], flags: [{ shiftId: s.id, note: NON_TRUCK_CREW_NOTE }], deferred: [], skipped: 0 },
+      { scheduler: SCHEDULER, truckNameOf: () => "Isuzu NPR 1", nameOf: () => "Raquel", publish },
+    );
+    expect(res.flagged).toBe(1);
+    expect(publish).not.toHaveBeenCalled(); // never created a truck shift for the prep worker
+    expect(getShiftById(s.id)!.syncStatus).toBe("needs_review");
+    const held = announces.find((c) => c.title === "Held a route shift for review");
+    expect(held).toBeTruthy();
+    expect(held!.fields?.find((f) => f.label === "Day")?.value).toBe(formatYmdLong(DATE));
   });
 });
 
