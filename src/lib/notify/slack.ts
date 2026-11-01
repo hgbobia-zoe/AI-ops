@@ -191,6 +191,15 @@ export async function slackConversationsHistory(channel: string, limit = 20): Pr
   return { ok: true, messages: toSlackMessages(r.data).reverse() };
 }
 
+/** Have the bot join a public channel (needs channels:join). Used before a history read in a channel the bot
+ *  was never invited to. Skipped without a bot token. Never throws. */
+export async function slackJoinChannel(channel: string): Promise<SlackResult> {
+  if (!slackBotConfigured()) return { ok: false, skipped: true };
+  const id = (await resolveChannelId(channel)) ?? channel.trim();
+  const r = await slackApi("conversations.join", { channel: id });
+  return r.ok ? { ok: true } : { ok: false, error: r.error };
+}
+
 /** A bot's Slack identity: the display name + icon it posts under. One Slack app (Viktor) posts AS each bot
  *  via chat:write.customize, so the team sees "Scheduling Bot", "Sales Bot", etc. without a separate app per
  *  bot. When that scope isn't granted Slack simply ignores name/icon and posts as the app — never an error. */

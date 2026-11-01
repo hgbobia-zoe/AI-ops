@@ -8,6 +8,7 @@ import { getIntake, updateIntake } from "@/lib/intake/store";
 import { logIntakeEvent } from "@/lib/intake/audit";
 import { enqueueGsOp, webLeadAckForIntake, recentEmailSendOpExists } from "@/lib/db/repo";
 import { notify } from "@/lib/notify/channels";
+import { replyToLeadPostSoon } from "@/lib/intake/leadSlackReply";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +62,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       completedAt: now,
     });
     await logIntakeEvent("GS_SHELL_CREATED", id, { projectId: String(body.projectId) });
+    // Web leads: Viktor replies under the lead's #new-leads post with the project link (once; no-op otherwise).
+    replyToLeadPostSoon(id);
     // WEB-LEAD extension: a lead from the structured receiver (/api/intake/lead) carries an acknowledgement
     // email in its create_project op payload. Now that Goodshuffle has CONFIRMED the project id, enqueue the
     // ack as an email_send op (the proven GS email write-back) so it only ever fires once the project really

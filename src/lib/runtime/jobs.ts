@@ -39,6 +39,7 @@ import { runActionItemsJob, actionItemsConfigured } from "@/lib/salesos/actionIt
 import { openphoneApiKey } from "@/lib/comms/openphone";
 import { runEsignCutoffSweep, esignCutoffEnabled } from "@/lib/salesos/esignCutoff";
 import { runWebsiteMonitor } from "@/lib/monitor/websiteHealth";
+import { runLeadSlackReplySweep } from "@/lib/intake/leadSlackReply";
 import { getRiskQueue } from "@/lib/risk/store";
 import { responderHealthNow, recordJobAlert, formatAge } from "@/lib/ai/responderHealth";
 import { runOutboxHealthTick } from "@/lib/aiorg/outboxHealth";
@@ -357,6 +358,14 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
       const r = await runOutboxHealthTick();
       return { ok: r.ok, detail: r.detail };
     },
+  },
+  {
+    key: "lead-slack-reply",
+    label: "Web lead Slack replies (project link)",
+    bucket: "server",
+    configured: () => true, // a silent no-op when no lead is waiting; reports when the bot token is missing
+    note: "Backstop for Viktor's thread reply under each web lead's #new-leads post (\"Received. I created the Goodshuffle project ... here is the link\"). The reply normally fires right after Goodshuffle confirms the project; this sweep catches any that missed (Slack hiccup, late post, deploy restart). One channel read per tick; matches the post by the lead's email or phone; at most one reply per lead and per post (sales_intake.slack_reply_at / slack_reply_ts). Leads with no matching post are left alone, never posted top-level.",
+    run: async () => runLeadSlackReplySweep(),
   },
   {
     key: "exception-resolution",
