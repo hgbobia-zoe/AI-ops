@@ -28,7 +28,7 @@ async function callIntakeResult(body: LeadBody) {
 }
 
 // A valid lead with a per-test email/phone — the in-memory DB persists across tests in this file and the
-// 48h dedupe window would otherwise make a reused contact a "duplicate", so each test gets its own.
+// 10 minute dedupe window would otherwise make a reused contact a "duplicate", so each test gets its own.
 function validLead(over: LeadBody = {}): LeadBody {
   return { source: "web_form", firstName: "Pat", lastName: "Smith", email: "pat@example.com", phone: "5555550111", eventType: "wedding", eventDate: "2027-06-20", guestCount: 120, message: "Need tables + chairs", ...over };
 }
@@ -142,8 +142,22 @@ describe("web-lead acknowledgement email (tied to /api/gs/intake-result)", () =>
   beforeEach(() => {
     delete process.env.INTAKE_TOKEN;
     process.env.WEB_INTAKE_ENABLED = "true";
+    process.env.WEB_INTAKE_ACK_EMAIL = "true";
   });
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+    delete process.env.WEB_INTAKE_ACK_EMAIL;
+  });
+
+  it("sends NO ack email by default (the website Zap already thanks the customer)", async () => {
+    delete process.env.WEB_INTAKE_ACK_EMAIL;
+    const j = (await (await callLead(validLead({ email: "noack@example.com", phone: "5550000010" }))).json()) as { intakeId: string };
+    expect(createOpsFor(j.intakeId)).toHaveLength(1); // the project is still queued
+    const res = await callIntakeResult({ intakeId: j.intakeId, projectId: "99003", ok: true });
+    expect(res.status).toBe(200);
+    const emails = listGsOps(200).filter((o) => o.op === "email_send" && o.transactionId === "99003");
+    expect(emails).toHaveLength(0);
+  });
 
   it("enqueues an email_send ack ONLY once Goodshuffle confirms the project id", async () => {
     const j = (await (await callLead(validLead({ email: "ack@example.com", phone: "5550000008" }))).json()) as { intakeId: string };

@@ -3,7 +3,9 @@
 // Quo contact cleanup screen. Loads the duplicate report (GET /api/integrations/quo/contacts), shows the
 // counts, and merges groups one at a time through POST /api/integrations/quo/contacts/merge. "Exact" groups
 // (same name or no name) can be merged in bulk; "needs review" groups (different names on a shared number
-// or email) need a per-group "same person" confirm. The server re-checks every group before it touches Quo.
+// or email) need a per-group "same person" confirm. Merges only DELETE copies: a group whose kept contact
+// is missing something a copy carries is marked "merge by hand in Quo" and has no Merge button. The server
+// re-checks every group before it touches Quo.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Check, Loader2, RefreshCw, Users, Merge, Square } from "lucide-react";
@@ -86,7 +88,8 @@ export function QuoContactCleanup(): React.JSX.Element {
 
   const groups = useMemo(() => (report?.groups ?? []).filter((g) => g.confidence === tab), [report, tab]);
   const exactPending = useMemo(
-    () => (report?.groups ?? []).filter((g) => g.confidence === "exact" && states[g.key]?.status !== "merged"),
+    () =>
+      (report?.groups ?? []).filter((g) => g.confidence === "exact" && g.deleteOnly && states[g.key]?.status !== "merged"),
     [report, states],
   );
   const removedSoFar = Object.values(states).reduce((n, s) => n + (s.status === "merged" ? s.removed : 0), 0);
@@ -159,8 +162,8 @@ export function QuoContactCleanup(): React.JSX.Element {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Contacts in Quo" value={st.totalContacts} />
         <Stat label="Duplicate groups" value={st.groups} />
-        <Stat label="Extra copies (exact)" value={st.exactDuplicateContacts} hint={`${st.exactGroups} groups`} />
-        <Stat label="Needs review" value={st.reviewGroups} hint="groups with different names" />
+        <Stat label="Ready to remove" value={st.readyCopies} hint={`extra copies in ${st.readyGroups} exact groups`} />
+        <Stat label="Merge by hand" value={st.handMergeGroups} hint="groups needing details copied in Quo" />
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
         <span>
@@ -250,9 +253,10 @@ export function QuoContactCleanup(): React.JSX.Element {
         )}
         {authError && <p className="text-sm text-red-400">That admin code was not accepted. Nothing was merged.</p>}
         <p className="text-xs text-muted-foreground">
-          Each merge re-reads the contacts from Quo first, keeps the most complete one, copies every phone number and
-          email onto it, checks they all landed, saves a full backup in the audit log, and only then removes the extra
-          copies.
+          Each merge re-reads the contacts from Quo, checks the kept contact already has every phone number, email and
+          detail the copies carry, saves a full backup in the audit log, and only then removes the extra copies. The
+          kept contact itself is never changed. Groups where it is missing something are left for you to merge by hand
+          in Quo.
         </p>
       </section>
 
@@ -340,11 +344,16 @@ function GroupCard({
             <Users className="size-4" /> {group.names.join(" / ") || "No name"}
           </div>
           <p className="text-xs text-muted-foreground">{group.reason}</p>
+          {!group.deleteOnly && group.keptLacks.length > 0 && (
+            <p className="text-xs text-amber-200">The kept contact is missing {group.keptLacks.join(", ")}.</p>
+          )}
         </div>
         {merged ? (
           <span className="inline-flex items-center gap-1.5 text-sm text-emerald-300">
             <Check className="size-4" /> Merged, {state.removed} removed
           </span>
+        ) : !group.deleteOnly ? (
+          <span className="rounded-md bg-amber-500/10 px-2 py-1 text-xs text-amber-200">Merge by hand in Quo</span>
         ) : (
           <div className="flex items-center gap-3">
             {review && (

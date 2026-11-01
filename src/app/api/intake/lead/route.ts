@@ -23,6 +23,7 @@ import {
   buildAckEmail,
   webIntakeEnabled,
   webIntakeSalesPingEnabled,
+  webIntakeAckEmailEnabled,
   type WebLeadInput,
 } from "@/lib/intake/webLead";
 import { enqueueGsOp, recentLeadCreateOpExists } from "@/lib/db/repo";
@@ -72,9 +73,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ ok: true, created: false, reason: "intake disabled", intakeId: intake.id }, { headers: CORS });
   }
 
-  // Dedupe: a create for the same contact within the window (default 48h) → do not make a second project.
+  // Dedupe: a create for the same contact within the window (default 10 minutes) → do not make a second project.
   if (recentLeadCreateOpExists(lead.emailKey, lead.phoneKey)) {
-    logImport(`intake:${lead.source}`, true, { rowsIn: 1, rowsWritten: 0, rowsSkipped: 1, detail: "duplicate (within 48h)" });
+    logImport(`intake:${lead.source}`, true, { rowsIn: 1, rowsWritten: 0, rowsSkipped: 1, detail: "duplicate (within 10 minutes)" });
     await logIntakeEvent("WEB_LEAD_DUPLICATE", intake.id, { source: lead.source });
     return NextResponse.json({ ok: true, created: false, reason: "duplicate", intakeId: intake.id }, { headers: CORS });
   }
@@ -85,7 +86,8 @@ export async function POST(req: Request): Promise<NextResponse> {
   const eventName = webLeadEventName(lead);
   const details = { ...gsEventDetails(intake), eventName };
   const notes = `${formatIntakeNotes(intake)}\n\nLead source: ${lead.source} (web intake)`;
-  const ack = buildAckEmail(lead);
+  // Thank-you email only when its own flag is on (the website Zap already emails + texts the customer).
+  const ack = webIntakeAckEmailEnabled() ? buildAckEmail(lead) : undefined;
 
   enqueueGsOp({
     op: "create_project",
@@ -106,7 +108,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       source: lead.source,
       leadEmail: lead.emailKey,
       leadPhone: lead.phoneKey,
-      webLeadAck: ack, // enqueued as email_send by /api/gs/intake-result once the project id is confirmed
+      ...(ack ? { webLeadAck: ack } : {}), // enqueued as email_send by /api/gs/intake-result once the project id is confirmed
     },
   });
   updateIntake(intake.id, { status: "creating", gsStatus: "queued" });

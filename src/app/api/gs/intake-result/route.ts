@@ -7,6 +7,8 @@ import { NextResponse } from "next/server";
 import { getIntake, updateIntake } from "@/lib/intake/store";
 import { logIntakeEvent } from "@/lib/intake/audit";
 import { enqueueGsOp, webLeadAckForIntake, recentEmailSendOpExists } from "@/lib/db/repo";
+import { notify } from "@/lib/notify/channels";
+import { replyToLeadPostSoon } from "@/lib/intake/leadSlackReply";
 
 export const dynamic = "force-dynamic";
 
@@ -33,9 +35,22 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "invalid_json" }, { status: 400, headers: CORS });
   }
   const id = (body.intakeId ?? "").trim();
-  if (!id || !getIntake(id)) return NextResponse.json({ error: "intake not found" }, { status: 404, headers: CORS });
+  const existing = id ? getIntake(id) : null;
+  if (!id || !existing) return NextResponse.json({ error: "intake not found" }, { status: 404, headers: CORS });
 
   const now = new Date().toISOString();
+  // A SECOND, different project for an intake that already has one is a duplicate (two drainers raced, e.g.
+  // an older extension without the claim step). Keep the first project as the record and tell ops which one
+  // to delete, instead of silently re-pointing the intake at the newer copy.
+  if (body.ok && body.projectId && existing.gsProjectId && String(existing.gsProjectId) !== String(body.projectId)) {
+    const dup = String(body.projectId);
+    await logIntakeEvent("GS_DUPLICATE_PROJECT", id, { kept: String(existing.gsProjectId), duplicate: dup });
+    void notify(
+      "ops",
+      `Duplicate Goodshuffle project for one lead. Keep ${existing.gsProjectId}, delete ${dup}: https://pro.goodshuffle.com/app/project/detail?id=${dup}`,
+    ).catch(() => {});
+    return NextResponse.json({ ok: true, duplicate: true }, { headers: CORS });
+  }
   if (body.ok && body.projectId) {
     updateIntake(id, {
       status: "created",
@@ -47,6 +62,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       completedAt: now,
     });
     await logIntakeEvent("GS_SHELL_CREATED", id, { projectId: String(body.projectId) });
+    // Web leads: Viktor replies under the lead's #new-leads post with the project link (once; no-op otherwise).
+    replyToLeadPostSoon(id);
     // WEB-LEAD extension: a lead from the structured receiver (/api/intake/lead) carries an acknowledgement
     // email in its create_project op payload. Now that Goodshuffle has CONFIRMED the project id, enqueue the
     // ack as an email_send op (the proven GS email write-back) so it only ever fires once the project really

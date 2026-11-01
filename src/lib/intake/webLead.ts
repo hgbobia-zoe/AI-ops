@@ -21,6 +21,12 @@ export function webIntakeEnabled(): boolean {
 export function webIntakeSalesPingEnabled(): boolean {
   return process.env.WEB_INTAKE_SALES_PING === "true";
 }
+// The app's own thank-you email to the customer, sent once the Goodshuffle project exists. Default OFF:
+// the website Zap already emails and texts the customer before it calls us, so this would be a second
+// thank-you. Turn on only for a source whose Zap does not acknowledge the customer itself.
+export function webIntakeAckEmailEnabled(): boolean {
+  return process.env.WEB_INTAKE_ACK_EMAIL === "true";
+}
 
 /** The tolerant body a source Zap POSTs. Everything optional; unknown/extra fields are ignored. */
 export interface WebLeadInput {
@@ -80,6 +86,9 @@ function mapEventType(raw: string): { eventType: IntakeEventType; eventTypeOther
   if (/wedding/.test(s)) return { eventType: "wedding", eventTypeOther: "" };
   if (/(corporate|company|business|conference|gala|meeting)/.test(s)) return { eventType: "corporate", eventTypeOther: "" };
   if (/(social|party|birthday|private|baby|graduation|shower|anniversary|reunion|holiday)/.test(s)) return { eventType: "social", eventTypeOther: "" };
+  // The website form's own "Other" choice carries no detail; keep it as plain "other" (labelled "Event")
+  // rather than echoing the word "other" into the project name.
+  if (/^\s*other\s*$/.test(s)) return { eventType: "other", eventTypeOther: "" };
   return { eventType: "other", eventTypeOther: raw };
 }
 

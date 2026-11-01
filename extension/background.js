@@ -12,17 +12,20 @@
 //   • Handshake: logging into Zoe Ops posts {type:"zoe-sync-now"} via externally_connectable; we ensure
 //     the tab + pull immediately, and if GS is signed out we open a login tab (active) so the user can
 //     sign in.
-//   • create_project drain (default ON — toggle off in Options via createDrainEnabled): background-orchestrated. We
-//     fetch the outbox (background fetch, no CORS gate), and for each create op open a background tab to
-//     createNewProject; the declared create.js content script claims the op for that exact tab, runs the
-//     populate sequence, and asks us to close the tab. One create tab at a time. A stuck tab is reaped
-//     by a watchdog and the op is left pending — the read-pull is never disturbed.
+//   • create_project drain (default ON — toggle off in Options via createDrainEnabled): WORKER-driven
+//     (v1.18.2). We fetch the outbox, open ONE background tab to createNewProject, poll the tab until
+//     Goodshuffle shows the new project id (address /app/project/detail?id=… or the title), run the
+//     populate sequence in that tab with chrome.scripting.executeScript, report intake-result + ack, and
+//     close the tab. No content-script claim: since late Oct 2026 Goodshuffle serves createNewProject in
+//     place and rewrites the address, so a content script declared for the detail page never loaded and
+//     every retry left a blank draft. A failure to find the id is acked with the tab's path, so the
+//     server's retry budget caps attempts and the error explains itself.
 //   • create_project is ALSO drained ON DEMAND so a guided-intake submit doesn't wait up to `intervalMin`
 //     for the next read-pull: (1) a dedicated short CREATE_DRAIN_ALARM (every CREATE_DRAIN_MIN) drains ONLY
 //     creates — a cheap outbox GET that opens a tab only when one is pending — decoupling create latency
 //     from the read-pull cadence; and (2) the Zoe app pokes us with {type:"zoe-create-now"} right after a
 //     submit (externally_connectable) so the common office-machine case fires within ~1s. Both reuse the
-//     SAME drainCreates + create.js claim flow (no parallel drain); the one-at-a-time + watchdog guards hold.
+//     SAME worker-driven drainCreates (no parallel drain); the one-at-a-time + watchdog guards hold.
 //   • The GENERAL outbox (photos / notes / delivery-fee / email / tasks / team adds) is drained INSIDE the
 //     read-pull by pull-injected.js's drainOutbox(), so it normally shares the FAST-lane read cadence. It is
 //     ALSO drained ON DEMAND by the SAME path (no parallel drain function here): (1) a dedicated short
@@ -526,7 +529,24 @@ async function setPending(p) {
   else await chrome.storage.local.remove("pendingCreate");
 }
 
+// In-worker lock: the alarm, the app's "create now" poke and the chain can all call drainCreates at once.
+// Checked and set synchronously, so only one runs per worker; the server claim covers other browsers.
+let createDrainBusy = false;
+
 async function drainCreates(reason) {
+  if (createDrainBusy) return;
+  createDrainBusy = true;
+  try {
+    // One create at a time; keep going while each run created something (a burst of leads), capped.
+    for (let i = 0; i < 10; i++) {
+      if (!(await drainCreatesOnce(reason))) break;
+    }
+  } finally {
+    createDrainBusy = false;
+  }
+}
+
+async function drainCreatesOnce(reason) {
   const { apiBase, enabled, createDrainEnabled } = await cfg();
   if (!enabled || !createDrainEnabled) return;
 
@@ -537,27 +557,200 @@ async function drainCreates(reason) {
     return;
   }
 
-  let ops = [];
-  try {
-    const r = await fetch(apiBase + "/api/gs/outbox", { headers: { accept: "application/json" } });
-    const j = await r.json();
-    ops = ((j && j.ops) || []).filter((o) => o && o.op === "create_project" && o.payload && o.payload.intakeId);
-  } catch (e) {
-    return; // outbox unreachable — try again next cycle
-  }
-  if (!ops.length) return;
-
-  const op = { id: ops[0].id, payload: ops[0].payload };
+  // v1.18.4: ask the server's create GATE for the next create. It picks one ready op, claims it for this
+  // install and returns it in one atomic step, so no two drainers (any number of browsers, any version) can
+  // get the same lead. While a gated drainer like this one is alive, the server also hides creates from the
+  // plain outbox list, which stops older copies from creating at all. No op → nothing to do.
+  const op = await nextCreate(apiBase);
+  if (!op) return;
   let tab;
   try {
     tab = await chrome.tabs.create({ url: GS_CREATE, active: false });
   } catch (e) {
     return;
   }
-  await setPending({ tabId: tab.id, op, startedAt: Date.now(), claimed: false });
-  // Watchdog to reap a tab that never claims/finishes (e.g. GS signed out → redirect to auth, where
-  // create.js doesn't run). Leaves the op pending for a later cycle.
+  // v1.18.2: the WORKER drives the whole create (no content-script claim). `claimed: true` marks the tab as
+  // owned so the watchdog only closes it and never double-reports. Watchdog still reaps a hung tab.
+  await setPending({ tabId: tab.id, op, startedAt: Date.now(), claimed: true });
   chrome.alarms.create(CREATE_WATCHDOG, { delayInMinutes: CREATE_TIMEOUT_MS / 60000 });
+
+  // 1. Wait for Goodshuffle to show the new project's id. Since late Oct 2026 createNewProject is served
+  //    in place and the address is rewritten to /app/project/detail?id=<id> (the title also carries
+  //    "(<id>)"), so poll the tab. Each chrome.tabs.get keeps this worker awake.
+  let pid = null;
+  let seenUrl = "";
+  let seenStatus = "";
+  for (let i = 0; i < 90 && !pid; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    let t;
+    try {
+      t = await chrome.tabs.get(tab.id);
+    } catch (e) {
+      seenStatus = "tab_closed";
+      break;
+    }
+    seenUrl = t.url || t.pendingUrl || "";
+    seenStatus = t.status || "";
+    const m = seenUrl.match(/[?&]id=(\d+)/) || String(t.title || "").match(/\((\d{6,})\)/);
+    if (m) pid = m[1];
+  }
+
+  if (!pid) {
+    // No project id: report WHERE the tab ended up (path only, no query) so a failure explains itself, e.g.
+    // a sign-in page. The server's retry budget then caps further attempts.
+    let path = "";
+    try {
+      path = new URL(seenUrl).pathname;
+    } catch (e) {
+      path = "unknown";
+    }
+    await ackCreate(apiBase, op, false, `create_no_project_id at ${path} (${seenStatus})`);
+    await reapPending(await getPending(), "done");
+    return;
+  }
+
+  // 2. Fill the project in, inside that tab (same-origin fetches carry the operator's Goodshuffle cookies).
+  let res = null;
+  try {
+    const [r] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: populateInPage, args: [op.payload || {}, pid] });
+    res = r && r.result;
+  } catch (e) {
+    res = { ok: false, error: "inject_failed: " + String(e && e.message ? e.message : e).slice(0, 120) };
+  }
+
+  // 3. Report back. The shell exists either way, so it is ALWAYS reported as created (a retry would make a
+  //    duplicate project); a fill-in problem is noted in the ack's error text for the office to see.
+  const url = "https://pro.goodshuffle.com/app/project/detail?id=" + pid;
+  try {
+    await fetch(apiBase + "/api/gs/intake-result", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ intakeId: (op.payload || {}).intakeId, projectId: pid, url, ok: true }),
+    });
+  } catch (e) {
+    /* best-effort: the ack below still clears the op */
+  }
+  await ackCreate(apiBase, op, true, res && res.ok ? undefined : (res && res.error) || "populate_unknown");
+  await reapPending(await getPending(), "done");
+  return true; // created one: drainCreates looks for the next
+}
+
+// A stable random id for this install, sent with each claim so the server can tell drainers apart.
+async function drainerId() {
+  const { drainerId: have } = await chrome.storage.local.get("drainerId");
+  if (have) return have;
+  const id = "ext-" + crypto.randomUUID();
+  await chrome.storage.local.set({ drainerId: id });
+  return id;
+}
+
+// The create gate: the server claims one ready create op for this install and returns it ({ op }), or null.
+// Fails closed: any error or unexpected answer → no create this cycle.
+async function nextCreate(apiBase) {
+  try {
+    const r = await fetch(apiBase + "/api/gs/outbox", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nextCreate: true, holder: await drainerId() }),
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const o = j && j.op;
+    if (!o || o.op !== "create_project" || !o.payload || !o.payload.intakeId) return null;
+    return { id: o.id, payload: o.payload };
+  } catch (e) {
+    return null;
+  }
+}
+
+async function ackCreate(apiBase, op, ok, error) {
+  try {
+    await fetch(apiBase + "/api/gs/outbox", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(error ? { id: op.id, ok, error } : { id: op.id, ok }),
+    });
+  } catch (e) {
+    /* outbox unreachable: the watchdog/next cycle reports it */
+  }
+}
+
+// Runs INSIDE the Goodshuffle tab via chrome.scripting.executeScript, so it must be self-contained (no
+// outer variables). Mirrors the proven populate sequence (src/lib/gsPull.ts, scripts/zoe-pull/run.mts):
+// saveEventDetails → saveEventNotes → saveNewContact (create + attach the client) → location → line items
+// → logistics legs → window upgrade. Returns { ok, error? }; never throws.
+async function populateInPage(p, pid) {
+  const GH = { "x-requested-with": "XMLHttpRequest", "content-type": "application/x-www-form-urlencoded", accept: "application/json" };
+  const JH = { "content-type": "application/json", "x-requested-with": "XMLHttpRequest", accept: "application/json" };
+  const post = (path, body, headers) => fetch(path, { method: "POST", headers: headers || GH, credentials: "include", body });
+  const form = (o) => new URLSearchParams(o).toString();
+  const problems = [];
+  const step = async (name, fn) => {
+    try {
+      const r = await fn();
+      if (r && r.ok === false) problems.push(name + " " + r.status);
+      return r;
+    } catch (e) {
+      problems.push(name + " error");
+      return null;
+    }
+  };
+  const d = p.details || {};
+
+  await step("details", () => post("/app/vendorTransaction/saveEventDetails", form({ transactionID: String(pid), eventName: String(d.eventName || ""), fromDateStr: String(d.fromDateStr || ""), fromTimeStr: String(d.fromTimeStr || ""), toDateStr: String(d.toDateStr || ""), toTimeStr: String(d.toTimeStr || ""), eventType: String(d.eventType || ""), headCount: String(d.headCount || "") })));
+  await step("notes", () => post("/app/vendorTransaction/saveEventNotes", form({ transactionID: String(pid), clientVisibleNotes: "", internalNotes: String(p.notes || ""), fulfillmentNotes: "" })));
+
+  const cl = p.client || null;
+  if (cl && (cl.firstName || cl.lastName || cl.email || cl.mobilePhone)) {
+    await step("contact", () => post("/app/contact/saveNewContact", form({ transactionID: String(pid), dayOfContactTransactionID: "", existingBusinessContactID: "", contactType: "Client", contactFirstName: String(cl.firstName || ""), contactLastName: String(cl.lastName || ""), referredBy: "", useAddressAsVenue: "false", contactMobilePhoneNumber: String(cl.mobilePhone || ""), mobilePhoneExtension: "", contactWorkPhoneNumber: "", workPhoneExtension: "", contactEmail: String(cl.email || ""), contactAddress_venueName: "", contactAddress: "", contactAddress_line2: "", contactAddress_city: "", contactAddress_state: "", contactAddress_zipCode: "", contactAddress_country: "", contactAddress_latitude: "", contactAddress_longitude: "", notes: "", taxResaleCertificateOnFile: "false", taxExemptCertificateOnFile: "false", defaultPaymentPolicyID: "", defaultTermsID: "", discountPercentage: "", eventInsuranceEnabled: "true", vendorEnabledTextMessages: "true" })));
+  }
+
+  const loc = p.location || null;
+  if (loc) {
+    await step("location", () => post("/app/vendorTransaction/saveDefaultEventLocation", form({ transactionID: String(pid), venueName: String(loc.venueName || ""), venuePhoneNumber: "", venueAddress: String(loc.address || ""), venueAddress_line2: String(loc.line2 || ""), venueCity: String(loc.city || ""), venueCounty: String(loc.county || ""), venueState: String(loc.state || ""), venueZipCode: String(loc.zip || ""), venueCountry: String(loc.country || "US"), venueLatitude: String(loc.latitude || ""), venueLongitude: String(loc.longitude || ""), venueNotes: "" })));
+  }
+
+  const gdate = String(p.eventDateMDY || "") || new Date().toLocaleDateString("en-US");
+  const makeGroup = async (name) => {
+    try {
+      const r = await post("/app/lineItemGroup/saveLineItemGroupEdits", form({ transactionID: String(pid), lineItemGroupID: "", lineItemGroupName: String(name), lineItemGroupFromDate: gdate, lineItemGroupToDate: gdate, recalculateDailyItems: "false" }));
+      const gj = await r.json();
+      return (gj && gj.newLineItemGroup && gj.newLineItemGroup.id) || null;
+    } catch (e) {
+      problems.push("group error");
+      return null;
+    }
+  };
+  const addSvc = (gid, it) => step("item", () => post("/app/transactionItemRelation/addInventoryItemToContract", JSON.stringify({ transactionID: Number(pid), lineItemGroupID: gid, parentRelationID: null, relationType: null, fulfillment: false, inventoryTypeStr: it.inventoryTypeStr, rateType: it.rateType, itemID: it.itemID, unitPrice: it.unitPrice || 0, quantity: it.quantity || 1 }), JH));
+
+  const items = p.addItems || [];
+  if (items.length) {
+    const rg = await makeGroup("Rental Items");
+    if (rg) for (const it of items) await addSvc(rg, it);
+  }
+
+  const legs = p.logisticsLegs || [];
+  if (legs.length && loc) {
+    try {
+      const cv = await (await fetch("/app/vendorTransaction/initContractView?transactionID=" + pid, { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" })).json();
+      let logiGrp = null;
+      for (const g of (cv && cv.lineItemGroupsToLoad) || []) if (g.logisticsContainer) { logiGrp = g.id; break; }
+      const evDate = String(d.fromDateStr || "");
+      if (logiGrp) for (const lg of legs) {
+        await step("leg", () => post("/app/transactionItemRelation/addInventoryItemToContract", JSON.stringify({ inventoryInjection: true, itemID: lg.itemID, fulfillment: false, transactionID: Number(pid), lineItemGroupID: logiGrp, relationID: null, relationType: null, parentRelationID: null, inventoryTypeStr: "SERVICE", rateType: lg.rateType, title: lg.title, description: null, isSubrental: false, internalNotes: "", showItemDescription: true, showItemAttributes: true, quantity: 1, unitPriceOverridden: false, unitPrice: 0, mileageFee: 0, discountDollarAmount: 0, discountPercentage: 0, itemStartDate: evDate, itemStartTime: null, itemEndDate: evDate, itemEndTime: null, itemHoursRented: null, eventTimeLineMarker: lg.eventTimeLineMarker, selectedTaxTypes: [], serviceStoreLocationID: null, venueName: loc.venueName, venueAddress: loc.address, venueAddress_line2: loc.line2, venueAddress_city: loc.city, venueAddress_state: loc.state, venueAddress_zipCode: loc.zip, venueAddress_county: loc.county, venueAddress_country: loc.country, venueAddress_latitude: loc.latitude, venueAddress_longitude: loc.longitude }), JH));
+      }
+    } catch (e) {
+      problems.push("legs error");
+    }
+  }
+
+  const wu = p.windowUpgrade || null;
+  if (wu && wu.item) {
+    const g = await makeGroup(wu.groupName || "Delivery Timing");
+    if (g) await addSvc(g, wu.item);
+  }
+
+  return problems.length ? { ok: false, error: "populate: " + problems.join(", ").slice(0, 150) } : { ok: true };
 }
 
 async function reapPending(pending, why) {
@@ -565,6 +758,21 @@ async function reapPending(pending, why) {
     if (pending && pending.tabId != null) await chrome.tabs.remove(pending.tabId);
   } catch (e) {
     /* tab already gone */
+  }
+  // A create tab that timed out WITHOUT being claimed still made a blank Goodshuffle draft. Report the failed
+  // attempt so the server's retry budget applies (backoff, then dead-letter) instead of a new blank draft
+  // every minute forever (live 2026-10-31). A worker-driven create (claimed: true) reports its own outcome.
+  if ((why === "stale" || why === "watchdog") && pending && pending.op && !pending.claimed) {
+    try {
+      const { apiBase } = await cfg();
+      await fetch(apiBase + "/api/gs/outbox", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: pending.op.id, ok: false, error: "create_tab_never_claimed" }),
+      });
+    } catch (e) {
+      /* outbox unreachable: the next timeout reports it */
+    }
   }
   await setPending(null);
   try {
@@ -903,34 +1111,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         try { if (sender.tab.windowId != null) await chrome.windows.update(sender.tab.windowId, { focused: true }); } catch (e) { /* no window */ }
       }
       sendResponse({ ok: true });
-    })();
-    return true;
-  }
-
-  // create.js on a detail page → "am I a create tab? which op?" Return the op only for the exact tab we
-  // opened, and only once (claim atomically to avoid double-processing).
-  if (msg.type === "zoe-create-claim") {
-    (async () => {
-      const p = await getPending();
-      if (p && sender.tab && sender.tab.id === p.tabId && !p.claimed) {
-        p.claimed = true;
-        await setPending(p);
-        sendResponse({ op: p.op });
-      } else {
-        sendResponse({ op: null });
-      }
-    })();
-    return true;
-  }
-
-  // create.js finished (ok or not) → close its tab, clear pending, then try the next create op.
-  if (msg.type === "zoe-create-done") {
-    (async () => {
-      const p = await getPending();
-      await reapPending(p, msg.ok ? "done" : "failed");
-      sendResponse({ ok: true });
-      // Chain to the next pending create op (still one-at-a-time).
-      drainCreates("chain").catch(() => {});
     })();
     return true;
   }

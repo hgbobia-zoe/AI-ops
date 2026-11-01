@@ -3,27 +3,26 @@
 //
 //   1. re-fetch every member fresh by id (the report may be minutes old; a member may already be gone),
 //   2. re-check the members still form exactly one duplicate group (the endpoint can't merge strangers),
-//   3. PATCH the survivor with the complete merged phone/email/custom-field lists (Quo REPLACES, so
-//      partial lists would wipe data),
-//   4. GET the survivor back and confirm it holds every phone + email from the group,
-//   5. write an audit row holding the FULL JSON of every member (the backup: a deleted contact can be
-//      re-created from it), and only then
-//   6. DELETE the other members.
+//   3. require the kept contact to ALREADY hold every phone, email, company, role and custom value in the
+//      group. The kept contact is never written to. (The first live merge, 2026-10-31, used PATCH to copy
+//      details over and Quo wiped the kept contact's phone and email instead. Groups that need details
+//      copied are left for a hand merge in Quo.)
+//   4. write an audit row holding the FULL JSON of every member (the backup: a deleted contact can be
+//      re-created from it) BEFORE any write, and only then
+//   5. DELETE the other members.
 //
-// Any failure before step 6 deletes nothing. Deleting a contact does not delete call or text history in
+// Any failure before step 5 changes nothing. Deleting a contact does not delete call or text history in
 // Quo (that history belongs to the phone number, not the contact card). Rate limit is 10 req/s per key;
 // calls are spaced to ~8/s with retry on 429.
 
 import { openphoneApiKey } from "@/lib/comms/openphone";
 import { insertAudit } from "@/lib/db/repo";
 import {
-  buildMergePatch,
   dedupeStats,
   displayName,
   emailsOf,
   findDuplicateGroups,
   formsOneGroup,
-  missingAfterMerge,
   phonesOf,
   type DedupeStats,
   type DuplicateGroup,
@@ -195,35 +194,28 @@ export async function mergeQuoContacts(
     return { ok: false, reason: "These contacts carry different names. Confirm they are the same person to merge them." };
   }
 
+  // 3. Delete-only: the kept contact must already hold everything the copies carry. Never written to.
+  if (!group.deleteOnly) {
+    return {
+      ok: false,
+      reason: `Merge this one by hand in Quo: the kept contact is missing ${group.keptLacks.join(", ")}. Nothing was changed.`,
+      detail: { keptLacks: group.keptLacks },
+    };
+  }
   const survivor = fresh.find((c) => c.id === group.survivorId)!;
   const others = fresh.filter((c) => c.id !== survivor.id);
-  const patch = buildMergePatch(survivor, others);
 
-  // 3. Update the survivor.
-  const upd = await quo("PATCH", `/contacts/${encodeURIComponent(survivor.id)}`, apiKey, patch);
-  if (upd.status < 200 || upd.status >= 300) {
-    return { ok: false, reason: `Quo refused the update (HTTP ${upd.status}). Nothing was deleted.`, detail: upd.json };
-  }
-
-  // 4. Verify before deleting anything.
-  const after = await getQuoContact(survivor.id, apiKey);
-  if (!after) return { ok: false, reason: "The kept contact could not be read back. Nothing was deleted." };
-  const missing = missingAfterMerge(after, fresh);
-  if (missing.phones.length || missing.emails.length) {
-    return { ok: false, reason: "The kept contact is missing some details after the update. Nothing was deleted.", detail: missing };
-  }
-
-  // 5. Backup (full JSON of every member) BEFORE the deletes.
+  // 4. Backup (full JSON of every member) BEFORE any write.
   insertAudit({
     actor: opts.actor,
     action: "QUO_CONTACT_MERGE",
     entity: "quo_contact",
     entityId: survivor.id,
     before: { contacts: fresh },
-    after: { survivor: after, patch, deleteIds: others.map((c) => c.id), confidence: group.confidence },
+    after: { keptId: survivor.id, deleteIds: others.map((c) => c.id), confidence: group.confidence },
   });
 
-  // 6. Delete the duplicates. A failed delete is reported; the merged survivor already holds its details.
+  // 5. Delete the duplicates. A failed delete is reported; the kept contact already holds their details.
   const deletedIds: string[] = [];
   const failed: { id: string; status: number }[] = [];
   for (const c of others) {
@@ -234,7 +226,7 @@ export async function mergeQuoContacts(
   invalidateQuoDedupeReport();
   if (failed.length) {
     insertAudit({ actor: opts.actor, action: "QUO_CONTACT_MERGE_DELETE_FAILED", entity: "quo_contact", entityId: survivor.id, after: { failed } });
-    return { ok: false, reason: `Merged into the kept contact, but ${failed.length} duplicate(s) could not be deleted. Try again.`, detail: { failed, deletedIds } };
+    return { ok: false, reason: `${deletedIds.length} copies removed, but ${failed.length} could not be deleted. Try again.`, detail: { failed, deletedIds } };
   }
   return { ok: true, survivorId: survivor.id, deletedIds, skippedIds };
 }

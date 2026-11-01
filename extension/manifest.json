@@ -24,11 +24,6 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://pro.goodshuffle.com/app/project/detail*"],
-      "js": ["create.js"],
-      "run_at": "document_idle"
-    },
-    {
       "matches": ["https://app.instawork.com/*"],
       "js": ["instawork.js"],
       "run_at": "document_idle"
