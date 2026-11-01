@@ -28,9 +28,13 @@ import {
 } from "@/lib/notify/slack";
 import { BOTS } from "@/lib/notify/aiBots";
 
-/** The leads channel. Override with SLACK_CHANNEL_NEW_LEADS (a name or an id). */
+/** The #new-leads channel ID. An ID, not the name: reading history needs the ID, and turning a name into an
+ *  ID needs the channels:read scope, which the Viktor app does not have (live 2026-11-01: channel_not_found). */
+export const NEW_LEADS_CHANNEL_ID = "C09FMGDJE13";
+
+/** The leads channel. Override with SLACK_CHANNEL_NEW_LEADS (preferably an id). */
 export function newLeadsChannel(): string {
-  return process.env.SLACK_CHANNEL_NEW_LEADS?.trim() || "new-leads";
+  return process.env.SLACK_CHANNEL_NEW_LEADS?.trim() || NEW_LEADS_CHANNEL_ID;
 }
 
 /** Lookback for a lead's post, relative to when the lead was recorded. */
