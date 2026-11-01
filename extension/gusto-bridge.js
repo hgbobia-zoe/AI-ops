@@ -44,6 +44,19 @@
     } catch (e) { /* extension context gone */ }
   }
 
+  // CONTRACTOR staging (gusto-contractor.js): same claim handshake, its own marker + channel.
+  function claimContractorJob() {
+    try {
+      chrome.runtime.sendMessage({ type: "zoe-gusto-contractor-claim" }, (resp) => {
+        try {
+          if (chrome.runtime && chrome.runtime.lastError) return;
+          const job = resp && resp.job;
+          if (job) window.postMessage({ __zoeGustoContractor: true, type: "job", job }, location.origin);
+        } catch (e) { /* no-op */ }
+      });
+    } catch (e) { /* extension context gone */ }
+  }
+
   window.addEventListener("message", (e) => {
     try {
       // Only trust same-window messages carrying our markers (ignore anything else the page posts).
@@ -64,6 +77,13 @@
         // the operator can sign in to Gusto. Relay to the background, which owns chrome.tabs/windows.
         if (d.type === "reveal") { chrome.runtime.sendMessage({ type: "zoe-gusto-push-reveal" }); return; }
         if (d.type === "done") { chrome.runtime.sendMessage({ type: "zoe-gusto-push-done", ok: !!d.ok }); return; }
+      }
+
+      // CONTRACTOR staging handshakes (gusto-contractor.js).
+      if (d.__zoeGustoContractor === true) {
+        if (d.type === "ready") { claimContractorJob(); return; }
+        if (d.type === "reveal") { chrome.runtime.sendMessage({ type: "zoe-gusto-contractor-reveal" }); return; }
+        if (d.type === "done") { chrome.runtime.sendMessage({ type: "zoe-gusto-contractor-done", ok: !!d.ok }); return; }
       }
 
       // SUBMIT / CONFIRM-WIRE handshakes (gusto-submit.js). Same shape as the push, separate channel.

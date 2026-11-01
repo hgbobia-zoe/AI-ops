@@ -40,6 +40,7 @@ import { WorkerEditor, type GustoPick } from "@/components/payroll/WorkerEditor"
 import { SyncButton } from "@/components/payroll/SyncButton";
 import { SyncGustoButton } from "@/components/payroll/SyncGustoButton";
 import { PushGustoHoursButton } from "@/components/payroll/PushGustoHoursButton";
+import { ContractorPayPanel } from "@/components/payroll/ContractorPayPanel";
 import { gustoPushDisabled, readGustoPushResult } from "@/lib/payroll/gustoPushState";
 import { RunPayrollButton } from "@/components/payroll/RunPayrollButton";
 import { ConfirmWireButton } from "@/components/payroll/ConfirmWireButton";
@@ -128,7 +129,12 @@ export default async function PayrollPage({
       {tab === "review" && <ReviewTab period={period} statusFilter={sp.status ?? "all"} q={(sp.q ?? "").trim()} weeksAgo={weeksAgo} />}
       {tab === "sync" && <SyncTab period={period} weeksAgo={weeksAgo} />}
       {tab === "workers" && <WorkersTab period={period} mode="all" />}
-      {tab === "contractors" && <WorkersTab period={period} mode="contractors" />}
+      {tab === "contractors" && (
+        <div className="space-y-4">
+          <ContractorPayPanel />
+          <WorkersTab period={period} mode="contractors" />
+        </div>
+      )}
       {tab === "exceptions" && <ExceptionsTab />}
       {tab === "history" && <HistoryTab />}
       {tab === "settings" && <SettingsTab />}
