@@ -91,7 +91,7 @@ describe("replyForIntake", () => {
     expect((await replyForIntake(i, [post])).status).toBe("posted");
     expect(slack.slackPostAs).toHaveBeenCalledTimes(1);
     const [channel, persona, , opts] = slack.slackPostAs.mock.calls[0] as unknown as [string, { name: string }, string, { threadTs: string }];
-    expect(channel).toBe("new-leads");
+    expect(channel).toBe("C09FMGDJE13");
     expect(persona.name).toBe("Viktor");
     expect(opts.threadTs).toBe(post.ts);
     expect((await replyForIntake(getIntake(i.id)!, [post])).status).toBe("already");
@@ -132,7 +132,7 @@ describe("replyToLeadPost / sweep", () => {
       .mockResolvedValueOnce({ ok: false, error: "not_in_channel", messages: [] })
       .mockResolvedValueOnce({ ok: true, messages: [post] });
     expect((await replyToLeadPost(i.id)).status).toBe("posted");
-    expect(slack.slackJoinChannel).toHaveBeenCalledWith("new-leads");
+    expect(slack.slackJoinChannel).toHaveBeenCalledWith("C09FMGDJE13");
   });
 
   it("the sweep replies to every waiting lead with one channel read", async () => {
