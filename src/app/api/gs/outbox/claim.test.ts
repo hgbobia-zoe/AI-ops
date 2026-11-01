@@ -14,6 +14,9 @@ import {
   GS_CLAIM_LEASE_MS,
   nextCreateGsOp,
   gatedCreateDrainerAlive,
+  drainerRecentlySignedOut,
+  isSignedOutCreateError,
+  SIGNED_OUT_DRAINER_MS,
 } from "@/lib/db/repo";
 import { createIntake, getIntake, updateIntake } from "@/lib/intake/store";
 import { notify } from "@/lib/notify/channels";
@@ -121,6 +124,51 @@ describe("the create gate (nextCreate)", () => {
     expect((first.op as { id: string }).id).toBe(id);
     const second = await post("outbox", { nextCreate: true, holder: "ext-2" });
     expect(second.op).toBeNull();
+  });
+});
+
+describe("a signed-out browser never holds a create", () => {
+  beforeEach(() => {
+    getDb().prepare("DELETE FROM settings WHERE key LIKE 'gs_create_drainer_signed_out:%'").run();
+  });
+
+  it("a sign-in page failure hands the lead straight to a signed-in browser, no retry wait, no attempt used", () => {
+    const id = queueCreate(createIntake().id);
+    expect(nextCreateGsOp("ext-signed-out")?.id).toBe(id);
+    expect(ackGsOp(id, false, "create_no_project_id at /ui/auth (complete)").status).toBe("pending");
+    const row = getDb().prepare("SELECT attempts, next_attempt_at, claimed_at FROM gs_outbox WHERE id = ?").get(id) as {
+      attempts: number;
+      next_attempt_at: string | null;
+      claimed_at: string | null;
+    };
+    expect(row).toEqual({ attempts: 0, next_attempt_at: null, claimed_at: null });
+    expect(drainerRecentlySignedOut("ext-signed-out")).toBe(true);
+    expect(nextCreateGsOp("ext-signed-out")).toBeNull(); // passed over while signed out
+    expect(nextCreateGsOp("ext-signed-in")?.id).toBe(id);
+  });
+
+  it("the signed-out browser is eligible again after 15 minutes", () => {
+    const id = queueCreate(createIntake().id);
+    nextCreateGsOp("ext-a");
+    ackGsOp(id, false, "create_no_project_id at /login (complete)");
+    expect(drainerRecentlySignedOut("ext-a", Date.now() + SIGNED_OUT_DRAINER_MS + 1000)).toBe(false);
+  });
+
+  it("any other failure still counts and waits (normal retry policy)", () => {
+    const id = queueCreate(createIntake().id);
+    nextCreateGsOp("ext-a");
+    ackGsOp(id, false, "create_no_project_id at /app/project/createNewProject (loading)");
+    const row = getDb().prepare("SELECT attempts, next_attempt_at FROM gs_outbox WHERE id = ?").get(id) as { attempts: number; next_attempt_at: string | null };
+    expect(row.attempts).toBe(1);
+    expect(row.next_attempt_at).not.toBeNull();
+    expect(drainerRecentlySignedOut("ext-a")).toBe(false);
+  });
+
+  it("recognizes only Goodshuffle sign-in pages, only for creates", () => {
+    expect(isSignedOutCreateError("create_project", "create_no_project_id at /ui/auth (complete)")).toBe(true);
+    expect(isSignedOutCreateError("create_project", "create_no_project_id at /login (loading)")).toBe(true);
+    expect(isSignedOutCreateError("create_project", "create_no_project_id at /app/project/detail (complete)")).toBe(false);
+    expect(isSignedOutCreateError("note_append", "create_no_project_id at /ui/auth (complete)")).toBe(false);
   });
 });
 

@@ -2445,6 +2445,35 @@ const GATED_CREATE_DRAINER_KEY = "gs_gated_create_drainer_seen_at";
 export const GATED_CREATE_DRAINER_FRESH_MS = 10 * 60 * 1000;
 
 /** True when a drainer that takes creates through the gate is alive. Then only the gate hands out creates. */
+/** A create that ended on Goodshuffle's sign-in page failed because THAT browser is signed out, not because
+ *  of the lead (the extension acks "create_no_project_id at /ui/auth (complete)"). */
+export function isSignedOutCreateError(op: string, error?: string | null): boolean {
+  return op === "create_project" && /create_no_project_id at \/(ui\/auth|login|auth)\b/i.test(error ?? "");
+}
+const SIGNED_OUT_DRAINER_PREFIX = "gs_create_drainer_signed_out:";
+/** How long a drainer that hit the sign-in page is passed over by the create gate. */
+export const SIGNED_OUT_DRAINER_MS = 15 * 60 * 1000;
+
+function markDrainerSignedOut(holder: string): void {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    )
+    .run(SIGNED_OUT_DRAINER_PREFIX + holder, now, now);
+}
+
+/** True when this drainer reported Goodshuffle's sign-in page within the last 15 minutes. */
+export function drainerRecentlySignedOut(holder: string, now: number = Date.now()): boolean {
+  if (!holder) return false;
+  const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(SIGNED_OUT_DRAINER_PREFIX + holder) as
+    | { value: string }
+    | undefined;
+  const at = row ? Date.parse(row.value) : NaN;
+  return Number.isFinite(at) && now - at < SIGNED_OUT_DRAINER_MS;
+}
+
 export function gatedCreateDrainerAlive(now: number = Date.now()): boolean {
   const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(GATED_CREATE_DRAINER_KEY) as
     | { value: string }
@@ -2468,6 +2497,8 @@ export function nextCreateGsOp(holder: string): GsOutboxItem | null {
       `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
     ).run(GATED_CREATE_DRAINER_KEY, nowIso, nowIso);
+    // A browser that is signed out of Goodshuffle can't create anything: let a signed-in one take the lead.
+    if (drainerRecentlySignedOut(holder)) return null;
     const leaseCutoff = new Date(Date.now() - GS_CLAIM_LEASE_MS).toISOString();
     const row = db
       .prepare(
@@ -2642,8 +2673,8 @@ export function ackGsOp(
   error?: string,
 ): { status: OutboxAckStatus | "noop"; approvalReconciledTo?: string } {
   const db = getDb();
-  const row = db.prepare("SELECT status, attempts, max_attempts FROM gs_outbox WHERE id = ?").get(id) as
-    | { status: string; attempts: number; max_attempts: number | null }
+  const row = db.prepare("SELECT op, status, attempts, max_attempts, claimed_by FROM gs_outbox WHERE id = ?").get(id) as
+    | { op: string; status: string; attempts: number; max_attempts: number | null; claimed_by: string | null }
     | undefined;
   if (!row) return { status: "noop" }; // unknown id — nothing to ack (idempotent)
   // Finished is final. A late failure report from a second drainer must never put a done op back in the
@@ -2651,6 +2682,18 @@ export function ackGsOp(
   // SUCCESS on a dead-lettered op still records done (the write really happened).
   if (row.status === "done") return { status: "noop" };
   if (row.status === "dead" && !ok) return { status: "noop" };
+
+  // The claiming browser landed on Goodshuffle's sign-in page: that browser is the problem, not the lead.
+  // Pass that browser over for a while and hand the create straight back, with no retry delay and no
+  // attempt counted, so a signed-in browser creates it on its next turn (live 2026-11-01: a signed-out
+  // browser kept taking one lead and pushing it into longer and longer retry waits).
+  if (!ok && row.status === "pending" && row.claimed_by && isSignedOutCreateError(row.op, error)) {
+    markDrainerSignedOut(row.claimed_by);
+    db.prepare(
+      `UPDATE gs_outbox SET last_error = @lastError, claimed_at = NULL, claimed_by = NULL, updated_at = @now WHERE id = @id`,
+    ).run({ id, lastError: (error ?? "").slice(0, 500), now: new Date().toISOString() });
+    return { status: "pending" };
+  }
 
   const t = decideAckTransition({ attempts: row.attempts, maxAttempts: row.max_attempts }, ok, error, Date.now());
   db.prepare(
