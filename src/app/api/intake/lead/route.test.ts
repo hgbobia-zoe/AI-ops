@@ -28,7 +28,7 @@ async function callIntakeResult(body: LeadBody) {
 }
 
 // A valid lead with a per-test email/phone — the in-memory DB persists across tests in this file and the
-// 48h dedupe window would otherwise make a reused contact a "duplicate", so each test gets its own.
+// 10 minute dedupe window would otherwise make a reused contact a "duplicate", so each test gets its own.
 function validLead(over: LeadBody = {}): LeadBody {
   return { source: "web_form", firstName: "Pat", lastName: "Smith", email: "pat@example.com", phone: "5555550111", eventType: "wedding", eventDate: "2027-06-20", guestCount: 120, message: "Need tables + chairs", ...over };
 }

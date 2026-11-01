@@ -505,26 +505,11 @@ async function drainCreatesOnce(reason) {
     return;
   }
 
-  let ops = [];
-  try {
-    const r = await fetch(apiBase + "/api/gs/outbox", { headers: { accept: "application/json" } });
-    const j = await r.json();
-    ops = ((j && j.ops) || []).filter((o) => o && o.op === "create_project" && o.payload && o.payload.intakeId);
-  } catch (e) {
-    return; // outbox unreachable — try again next cycle
-  }
-  if (!ops.length) return;
-
-  // v1.18.3: claim the op on the server BEFORE opening Goodshuffle. Every browser running this extension (and
-  // the office bookmarklet) sees the same pending op, and each one that acts makes its own project: one lead
-  // became two projects live on 2026-10-31. Only the drainer that wins the claim creates; the rest skip.
-  let op = null;
-  for (const o of ops) {
-    if (await claimCreate(apiBase, o)) {
-      op = { id: o.id, payload: o.payload };
-      break;
-    }
-  }
+  // v1.18.4: ask the server's create GATE for the next create. It picks one ready op, claims it for this
+  // install and returns it in one atomic step, so no two drainers (any number of browsers, any version) can
+  // get the same lead. While a gated drainer like this one is alive, the server also hides creates from the
+  // plain outbox list, which stops older copies from creating at all. No op → nothing to do.
+  const op = await nextCreate(apiBase);
   if (!op) return;
   let tab;
   try {
@@ -607,19 +592,22 @@ async function drainerId() {
   return id;
 }
 
-// Ask the server for the single-runner lease on a create op. Fails closed: no clear "claimed" → do not create.
-async function claimCreate(apiBase, o) {
+// The create gate: the server claims one ready create op for this install and returns it ({ op }), or null.
+// Fails closed: any error or unexpected answer → no create this cycle.
+async function nextCreate(apiBase) {
   try {
     const r = await fetch(apiBase + "/api/gs/outbox", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: o.id, claim: true, holder: await drainerId() }),
+      body: JSON.stringify({ nextCreate: true, holder: await drainerId() }),
     });
-    if (!r.ok) return false;
+    if (!r.ok) return null;
     const j = await r.json();
-    return !!(j && j.claimed === true);
+    const o = j && j.op;
+    if (!o || o.op !== "create_project" || !o.payload || !o.payload.intakeId) return null;
+    return { id: o.id, payload: o.payload };
   } catch (e) {
-    return false;
+    return null;
   }
 }
 

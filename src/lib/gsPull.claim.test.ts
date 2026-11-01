@@ -16,4 +16,9 @@ describe("office pull bookmarklet: create claim", () => {
     expect(openAt).toBeGreaterThan(claimAt);
     expect(src).toContain("cj.claimed===true");
   });
+
+  it("only claims on a real click (a timer cycle can't open the popup)", () => {
+    expect(src).toContain("navigator.userActivation.isActive");
+    expect(src).toContain("(createOps.length && activeClick)");
+  });
 });

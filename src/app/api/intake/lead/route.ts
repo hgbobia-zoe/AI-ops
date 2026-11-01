@@ -73,9 +73,9 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ ok: true, created: false, reason: "intake disabled", intakeId: intake.id }, { headers: CORS });
   }
 
-  // Dedupe: a create for the same contact within the window (default 48h) → do not make a second project.
+  // Dedupe: a create for the same contact within the window (default 10 minutes) → do not make a second project.
   if (recentLeadCreateOpExists(lead.emailKey, lead.phoneKey)) {
-    logImport(`intake:${lead.source}`, true, { rowsIn: 1, rowsWritten: 0, rowsSkipped: 1, detail: "duplicate (within 48h)" });
+    logImport(`intake:${lead.source}`, true, { rowsIn: 1, rowsWritten: 0, rowsSkipped: 1, detail: "duplicate (within 10 minutes)" });
     await logIntakeEvent("WEB_LEAD_DUPLICATE", intake.id, { source: lead.source });
     return NextResponse.json({ ok: true, created: false, reason: "duplicate", intakeId: intake.id }, { headers: CORS });
   }
