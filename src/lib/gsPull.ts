@@ -313,10 +313,13 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         // close it. Activation is consumed by one window.open, so we create at most ONE project per pull
         // cycle; any extra create ops wait for the next cycle. If the popup is blocked (no gesture / blocker),
         // we skip creating this cycle and leave the op pending to retry.
+        // Claim the op on the server FIRST (the Auto-Pull extension may be draining the same op in another
+        // browser; without one owner, one lead became two projects, live 2026-10-31). Only a winning claim
+        // opens the popup. The claim is one quick call, so the popup still opens inside the click's activation.
         var createPopup=null;
-        if(createOps.length){ try{ createPopup=window.open("/app/project/createNewProject","gscreate","width=520,height=640,left=40,top=40"); }catch(e){ createPopup=null; } }
+        var claimFirst=createOps.length ? fetch(API+"/api/gs/outbox",{method:"POST",headers:POSTH(),body:JSON.stringify({id:createOps[0].id,claim:true,holder:"bookmarklet"})}).then(function(r){ return r.ok?r.json():null; }).then(function(cj){ if(cj && cj.claimed===true){ try{ createPopup=window.open("/app/project/createNewProject","gscreate","width=520,height=640,left=40,top=40"); }catch(e){ createPopup=null; } } }).catch(function(){}) : Promise.resolve();
         function popNewId(w){ return new Promise(function(resolve){ if(!w){ resolve(null); return; } var n=0; var iv=setInterval(function(){ n++; var got=null; try{ var h=w.location.href; if(h && h.indexOf("about:blank")<0){ var m=h.match(/[?&]id=(\\d+)/); if(m) got=m[1]; } }catch(e){} if(got){ clearInterval(iv); resolve(got); } else if(n>80){ clearInterval(iv); resolve(null); } }, 250); }); }
-        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, provisioned=0, esigns=0, chain=Promise.resolve();
+        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, provisioned=0, esigns=0, chain=claimFirst;
         // disable_esignature: turn OFF online signing N business days before the event (queued by
         // src/lib/salesos/esignCutoff.ts) so a contract signs IN PERSON, not last-minute online. CAPTURE-NEEDED:
         // the Goodshuffle request that disables online signing has NOT been captured. Do it ONCE in the GSPRO UI
@@ -446,8 +449,9 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         // the project's internal notes (saveEventNotes), then post the new id back so our app + the success
         // screen update. No inventory, no pricing — the salesperson adds those in Goodshuffle.
         // Only the first pending create uses the popup (one navigation per gesture); the rest retry next cycle.
-        (createOps.length && createPopup ? [createOps[0]] : []).forEach(function(o){
+        (createOps.length ? [createOps[0]] : []).forEach(function(o){
           chain=chain.then(function(){
+            if(!createPopup) return; // claim lost (another drainer owns it) or popup blocked: leave it
             var GH={"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"};
             var pid=null;
             return popNewId(createPopup).then(function(newId){

@@ -2419,11 +2419,39 @@ export function enqueueWarehouseTeamAdds(limit = 50): number {
  *  doesn't hammer a failing write every cycle. A dead-lettered op (status 'dead') is never returned. */
 export function listPendingGsOps(limit = 50): GsOutboxItem[] {
   const now = new Date().toISOString();
+  const leaseCutoff = new Date(Date.now() - GS_CLAIM_LEASE_MS).toISOString();
   return (
     getDb()
-      .prepare("SELECT * FROM gs_outbox WHERE status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at LIMIT ?")
-      .all(now, limit) as GsOutboxRow[]
+      .prepare(
+        `SELECT * FROM gs_outbox WHERE status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+           AND (claimed_at IS NULL OR claimed_at <= ?) ORDER BY created_at LIMIT ?`,
+      )
+      .all(now, leaseCutoff, limit) as GsOutboxRow[]
   ).map(toGsItem);
+}
+
+/** How long a drainer's claim on an op holds before another drainer may take it over (a crashed or closed
+ *  browser never acks). Comfortably longer than one create (tab open + id wait + fill-in, about 2 minutes). */
+export const GS_CLAIM_LEASE_MS = 5 * 60 * 1000;
+
+/**
+ * Atomically claim one pending op for a single drainer. Several drainers can see the same op (the Auto-Pull
+ * extension in more than one browser, the office bookmarklet), and for create_project each one that acts
+ * makes its own Goodshuffle project, so two drainers meant two projects for one lead (live 2026-10-31).
+ * Exactly one caller gets `true`: the UPDATE only matches while the op is pending and unclaimed (or its
+ * lease has run out). A claimed op is hidden from listPendingGsOps until it is acked or the lease expires.
+ */
+export function claimGsOp(id: string, holder: string): boolean {
+  if (!id) return false;
+  const now = new Date();
+  const leaseCutoff = new Date(now.getTime() - GS_CLAIM_LEASE_MS).toISOString();
+  const res = getDb()
+    .prepare(
+      `UPDATE gs_outbox SET claimed_at = @now, claimed_by = @holder, updated_at = @now
+         WHERE id = @id AND status = 'pending' AND (claimed_at IS NULL OR claimed_at <= @leaseCutoff)`,
+    )
+    .run({ id, holder: (holder || "unknown").slice(0, 80), now: now.toISOString(), leaseCutoff });
+  return res.changes === 1;
 }
 
 /** Dead-lettered write-backs (bounded retries exhausted) — the actionable backlog for a human. Newest first. */
@@ -2571,7 +2599,7 @@ export function ackGsOp(
   db.prepare(
     `UPDATE gs_outbox SET status = @status, attempts = @attempts, last_error = @lastError,
        next_attempt_at = @nextAttemptAt, dead_lettered_at = COALESCE(@deadLetteredAt, dead_lettered_at),
-       updated_at = @now WHERE id = @id`,
+       claimed_at = NULL, claimed_by = NULL, updated_at = @now WHERE id = @id`,
   ).run({
     id,
     status: t.status,

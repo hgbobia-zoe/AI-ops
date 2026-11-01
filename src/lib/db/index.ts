@@ -2453,6 +2453,10 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "gs_outbox", column: "max_attempts", type: "INTEGER" },   // per-op retry budget (null => DEFAULT_MAX_ATTEMPTS)
   { table: "gs_outbox", column: "next_attempt_at", type: "TEXT" },   // ISO; a retryable failure is held until this time (backoff). null = eligible now
   { table: "gs_outbox", column: "dead_lettered_at", type: "TEXT" },  // ISO; set when bounded retries are exhausted (status => 'dead')
+  // Single-runner lease for ops that must never run twice (create_project): a drainer claims the op before
+  // acting; a live claim hides it from every other drainer until it is acked or the lease runs out.
+  { table: "gs_outbox", column: "claimed_at", type: "TEXT" },        // ISO; null = unclaimed
+  { table: "gs_outbox", column: "claimed_by", type: "TEXT" },        // opaque drainer id (extension install / bookmarklet run)
   // Website Studio browse-and-edit upgrade (feat/website-studio-browser): the edit context captured from the
   // embedded browser. Additive + nullable so jobs queued before the upgrade keep working (null context_url =>
   // no page captured; null environment => treated as 'production').

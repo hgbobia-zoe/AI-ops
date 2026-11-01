@@ -477,7 +477,24 @@ async function setPending(p) {
   else await chrome.storage.local.remove("pendingCreate");
 }
 
+// In-worker lock: the alarm, the app's "create now" poke and the chain can all call drainCreates at once.
+// Checked and set synchronously, so only one runs per worker; the server claim covers other browsers.
+let createDrainBusy = false;
+
 async function drainCreates(reason) {
+  if (createDrainBusy) return;
+  createDrainBusy = true;
+  try {
+    // One create at a time; keep going while each run created something (a burst of leads), capped.
+    for (let i = 0; i < 10; i++) {
+      if (!(await drainCreatesOnce(reason))) break;
+    }
+  } finally {
+    createDrainBusy = false;
+  }
+}
+
+async function drainCreatesOnce(reason) {
   const { apiBase, enabled, createDrainEnabled } = await cfg();
   if (!enabled || !createDrainEnabled) return;
 
@@ -498,7 +515,17 @@ async function drainCreates(reason) {
   }
   if (!ops.length) return;
 
-  const op = { id: ops[0].id, payload: ops[0].payload };
+  // v1.18.3: claim the op on the server BEFORE opening Goodshuffle. Every browser running this extension (and
+  // the office bookmarklet) sees the same pending op, and each one that acts makes its own project: one lead
+  // became two projects live on 2026-10-31. Only the drainer that wins the claim creates; the rest skip.
+  let op = null;
+  for (const o of ops) {
+    if (await claimCreate(apiBase, o)) {
+      op = { id: o.id, payload: o.payload };
+      break;
+    }
+  }
+  if (!op) return;
   let tab;
   try {
     tab = await chrome.tabs.create({ url: GS_CREATE, active: false });
@@ -568,7 +595,32 @@ async function drainCreates(reason) {
   }
   await ackCreate(apiBase, op, true, res && res.ok ? undefined : (res && res.error) || "populate_unknown");
   await reapPending(await getPending(), "done");
-  drainCreates("chain").catch(() => {}); // next pending create, still one at a time
+  return true; // created one: drainCreates looks for the next
+}
+
+// A stable random id for this install, sent with each claim so the server can tell drainers apart.
+async function drainerId() {
+  const { drainerId: have } = await chrome.storage.local.get("drainerId");
+  if (have) return have;
+  const id = "ext-" + crypto.randomUUID();
+  await chrome.storage.local.set({ drainerId: id });
+  return id;
+}
+
+// Ask the server for the single-runner lease on a create op. Fails closed: no clear "claimed" → do not create.
+async function claimCreate(apiBase, o) {
+  try {
+    const r = await fetch(apiBase + "/api/gs/outbox", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: o.id, claim: true, holder: await drainerId() }),
+    });
+    if (!r.ok) return false;
+    const j = await r.json();
+    return !!(j && j.claimed === true);
+  } catch (e) {
+    return false;
+  }
 }
 
 async function ackCreate(apiBase, op, ok, error) {
