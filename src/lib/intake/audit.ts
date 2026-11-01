@@ -11,6 +11,7 @@ export type IntakeAction =
   | "GS_SHELL_QUEUED"
   | "GS_SHELL_CREATED"
   | "GS_SHELL_FAILED"
+  | "GS_DUPLICATE_PROJECT" // a second Goodshuffle project was reported for an intake that already had one
   | "GS_QUOTE_OPENED"
   | "WEB_LEAD_DISABLED" // structured web/connector lead accepted while the master switch is off
   | "WEB_LEAD_DUPLICATE" // a web lead for the same contact within the dedupe window
