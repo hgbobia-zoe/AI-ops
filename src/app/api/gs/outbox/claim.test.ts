@@ -5,7 +5,16 @@ vi.mock("@/lib/intake/audit", () => ({ logIntakeEvent: vi.fn(async () => {}) }))
 vi.mock("@/lib/notify/channels", () => ({ notify: vi.fn(async () => ({ ok: true })) }));
 
 import { getDb } from "@/lib/db";
-import { enqueueGsOp, claimGsOp, listPendingGsOps, ackGsOp, getGsOpStatus, GS_CLAIM_LEASE_MS } from "@/lib/db/repo";
+import {
+  enqueueGsOp,
+  claimGsOp,
+  listPendingGsOps,
+  ackGsOp,
+  getGsOpStatus,
+  GS_CLAIM_LEASE_MS,
+  nextCreateGsOp,
+  gatedCreateDrainerAlive,
+} from "@/lib/db/repo";
 import { createIntake, getIntake, updateIntake } from "@/lib/intake/store";
 import { notify } from "@/lib/notify/channels";
 
@@ -57,6 +66,61 @@ describe("claimGsOp (single runner per op)", () => {
     getDb().prepare("UPDATE gs_outbox SET claimed_at = ? WHERE id = ?").run(old, id);
     expect(listPendingGsOps().map((o) => o.id)).toContain(id);
     expect(claimGsOp(id, "browser-b")).toBe(true);
+  });
+});
+
+describe("finished is final", () => {
+  it("a late failure report never puts a done op back in the queue", () => {
+    const id = queueCreate(createIntake().id);
+    ackGsOp(id, true); // browser A created it
+    ackGsOp(id, false, "create_tab_never_claimed"); // browser B reports late
+    expect(getGsOpStatus(id)?.status).toBe("done");
+    expect(listPendingGsOps().map((o) => o.id)).not.toContain(id);
+  });
+
+  it("a create whose intake already has its project is never listed or handed out", () => {
+    const intake = createIntake();
+    const id = queueCreate(intake.id);
+    updateIntake(intake.id, { gsProjectId: "231976222" });
+    expect(listPendingGsOps().map((o) => o.id)).not.toContain(id);
+    expect(nextCreateGsOp("ext-1")).toBeNull();
+  });
+});
+
+describe("the create gate (nextCreate)", () => {
+  beforeEach(() => {
+    getDb().prepare("DELETE FROM settings WHERE key = 'gs_gated_create_drainer_seen_at'").run();
+  });
+
+  it("hands each create to exactly one caller, oldest first", () => {
+    const a = queueCreate(createIntake().id);
+    const b = queueCreate(createIntake().id);
+    expect(nextCreateGsOp("browser-1")?.id).toBe(a);
+    expect(nextCreateGsOp("browser-2")?.id).toBe(b);
+    expect(nextCreateGsOp("browser-3")).toBeNull();
+  });
+
+  it("once a gated drainer is alive, the plain list stops showing creates (old copies can't act)", async () => {
+    const createId = queueCreate(createIntake().id);
+    const noteId = enqueueGsOp({ op: "note_append", transactionId: "1", payload: { line: "x" } }).id;
+    const mod = await import("./route");
+    const list = async () =>
+      ((await (await mod.GET(new Request("http://localhost/api/gs/outbox"))).json()) as { ops: { id: string }[] }).ops.map((o) => o.id);
+    expect(await list()).toContain(createId); // no gated drainer yet: legacy behaviour
+    expect(gatedCreateDrainerAlive()).toBe(false);
+    await post("outbox", { nextCreate: true, holder: "ext-new" }); // a 1.18.4 install asks (and gets it)
+    expect(gatedCreateDrainerAlive()).toBe(true);
+    const after = await list();
+    expect(after).not.toContain(createId);
+    expect(after).toContain(noteId); // other ops are unaffected
+  });
+
+  it("the route returns the claimed op, then null for the next caller", async () => {
+    const id = queueCreate(createIntake().id);
+    const first = await post("outbox", { nextCreate: true, holder: "ext-1" });
+    expect((first.op as { id: string }).id).toBe(id);
+    const second = await post("outbox", { nextCreate: true, holder: "ext-2" });
+    expect(second.op).toBeNull();
   });
 });
 

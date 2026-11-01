@@ -6,12 +6,13 @@
 //   GET  /api/gs/outbox            → { ops: [ pending write-backs ] }
 //   POST /api/gs/outbox { id, ok } → mark one done/failed (optional { error })
 //   POST /api/gs/outbox { id, claim: true, holder } → { claimed }: take a single-runner lease first
+//   POST /api/gs/outbox { nextCreate: true, holder } → { op }: the create gate (claims + returns one create)
 //
 // CORS-open to the Goodshuffle origin so the bookmarklet (running on pro.goodshuffle.com)
 // can read + ack. Same trust model as /api/route/import.
 
 import { NextResponse } from "next/server";
-import { listPendingGsOps, ackGsOp, claimGsOp, getGsOpById } from "@/lib/db/repo";
+import { listPendingGsOps, ackGsOp, claimGsOp, getGsOpById, nextCreateGsOp, gatedCreateDrainerAlive } from "@/lib/db/repo";
 import { getIntake } from "@/lib/intake/store";
 
 export const dynamic = "force-dynamic";
@@ -39,17 +40,25 @@ function tokenDenied(req: Request): NextResponse | null {
 export function GET(req: Request): NextResponse {
   const denied = tokenDenied(req);
   if (denied) return denied;
-  return NextResponse.json({ ops: listPendingGsOps() }, { headers: CORS });
+  // While a gated create drainer is alive, creates go ONLY through nextCreate: leave them out of this plain
+  // list so an older extension copy (any version, any number of browsers) never sees one to act on.
+  const gated = gatedCreateDrainerAlive();
+  const ops = listPendingGsOps().filter((o) => !(gated && o.op === "create_project"));
+  return NextResponse.json({ ops }, { headers: CORS });
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
   const denied = tokenDenied(req);
   if (denied) return denied;
-  let body: { id?: string; ok?: boolean; error?: string; claim?: boolean; holder?: string };
+  let body: { id?: string; ok?: boolean; error?: string; claim?: boolean; holder?: string; nextCreate?: boolean };
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400, headers: CORS });
+  }
+  // The create gate: { nextCreate: true, holder } → { op } (claimed for this caller) or { op: null }.
+  if (body.nextCreate === true) {
+    return NextResponse.json({ ok: true, op: nextCreateGsOp(String(body.holder ?? "")) }, { headers: CORS });
   }
   if (!body.id) {
     return NextResponse.json({ error: "id required" }, { status: 400, headers: CORS });

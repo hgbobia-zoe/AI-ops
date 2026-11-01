@@ -317,7 +317,9 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         // browser; without one owner, one lead became two projects, live 2026-10-31). Only a winning claim
         // opens the popup. The claim is one quick call, so the popup still opens inside the click's activation.
         var createPopup=null;
-        var claimFirst=createOps.length ? fetch(API+"/api/gs/outbox",{method:"POST",headers:POSTH(),body:JSON.stringify({id:createOps[0].id,claim:true,holder:"bookmarklet"})}).then(function(r){ return r.ok?r.json():null; }).then(function(cj){ if(cj && cj.claimed===true){ try{ createPopup=window.open("/app/project/createNewProject","gscreate","width=520,height=640,left=40,top=40"); }catch(e){ createPopup=null; } } }).catch(function(){}) : Promise.resolve();
+        // Only on a real click: a timer cycle can't open the popup, so claiming there would just park the op.
+        var activeClick=!!(navigator.userActivation && navigator.userActivation.isActive);
+        var claimFirst=(createOps.length && activeClick) ? fetch(API+"/api/gs/outbox",{method:"POST",headers:POSTH(),body:JSON.stringify({id:createOps[0].id,claim:true,holder:"bookmarklet"})}).then(function(r){ return r.ok?r.json():null; }).then(function(cj){ if(cj && cj.claimed===true){ try{ createPopup=window.open("/app/project/createNewProject","gscreate","width=520,height=640,left=40,top=40"); }catch(e){ createPopup=null; } } }).catch(function(){}) : Promise.resolve();
         function popNewId(w){ return new Promise(function(resolve){ if(!w){ resolve(null); return; } var n=0; var iv=setInterval(function(){ n++; var got=null; try{ var h=w.location.href; if(h && h.indexOf("about:blank")<0){ var m=h.match(/[?&]id=(\\d+)/); if(m) got=m[1]; } }catch(e){} if(got){ clearInterval(iv); resolve(got); } else if(n>80){ clearInterval(iv); resolve(null); } }, 250); }); }
         var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, provisioned=0, esigns=0, chain=claimFirst;
         // disable_esignature: turn OFF online signing N business days before the event (queued by

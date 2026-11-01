@@ -2424,10 +2424,62 @@ export function listPendingGsOps(limit = 50): GsOutboxItem[] {
     getDb()
       .prepare(
         `SELECT * FROM gs_outbox WHERE status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
-           AND (claimed_at IS NULL OR claimed_at <= ?) ORDER BY created_at LIMIT ?`,
+           AND (claimed_at IS NULL OR claimed_at <= ?) AND NOT (${CREATE_ALREADY_DONE_SQL})
+           ORDER BY created_at LIMIT ?`,
       )
       .all(now, leaseCutoff, limit) as GsOutboxRow[]
   ).map(toGsItem);
+}
+
+// A create_project op whose intake already has its Goodshuffle project is finished, whatever its own status
+// says: never hand it to a drainer again (that is how one lead became three projects on 2026-10-31).
+const CREATE_ALREADY_DONE_SQL = `gs_outbox.op = 'create_project' AND EXISTS (
+  SELECT 1 FROM sales_intake si WHERE si.id = json_extract(gs_outbox.payload, '$.intakeId')
+    AND si.gs_project_id IS NOT NULL AND si.gs_project_id != '')`;
+
+/** Settings key: when a drainer last asked for creates through nextCreateGsOp (the gated path). */
+const GATED_CREATE_DRAINER_KEY = "gs_gated_create_drainer_seen_at";
+/** While a gated drainer has been seen this recently, create ops are left OUT of the plain outbox list, so an
+ *  older extension copy (which acts on whatever it lists) can never create. Comfortably above the 1 minute
+ *  create alarm, so a gated drainer that is alive always counts. */
+export const GATED_CREATE_DRAINER_FRESH_MS = 10 * 60 * 1000;
+
+/** True when a drainer that takes creates through the gate is alive. Then only the gate hands out creates. */
+export function gatedCreateDrainerAlive(now: number = Date.now()): boolean {
+  const row = getDb().prepare("SELECT value FROM settings WHERE key = ?").get(GATED_CREATE_DRAINER_KEY) as
+    | { value: string }
+    | undefined;
+  const at = row ? Date.parse(row.value) : NaN;
+  return Number.isFinite(at) && now - at < GATED_CREATE_DRAINER_FRESH_MS;
+}
+
+/**
+ * THE create gate. Atomically picks the oldest create_project op that is ready (pending, not backing off,
+ * not claimed, intake has no project yet), claims it for `holder`, and returns it; null when there is none.
+ * better-sqlite3 runs this transaction start to finish with no other request in between, so two drainers
+ * calling at the same moment can never get the same op. Also records that a gated drainer is alive, which
+ * hides creates from the plain outbox list (see gatedCreateDrainerAlive).
+ */
+export function nextCreateGsOp(holder: string): GsOutboxItem | null {
+  const db = getDb();
+  return db.transaction((): GsOutboxItem | null => {
+    const nowIso = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    ).run(GATED_CREATE_DRAINER_KEY, nowIso, nowIso);
+    const leaseCutoff = new Date(Date.now() - GS_CLAIM_LEASE_MS).toISOString();
+    const row = db
+      .prepare(
+        `SELECT * FROM gs_outbox WHERE op = 'create_project' AND status = 'pending'
+           AND (next_attempt_at IS NULL OR next_attempt_at <= ?) AND (claimed_at IS NULL OR claimed_at <= ?)
+           AND json_extract(payload, '$.intakeId') IS NOT NULL AND NOT (${CREATE_ALREADY_DONE_SQL})
+         ORDER BY created_at LIMIT 1`,
+      )
+      .get(nowIso, leaseCutoff) as GsOutboxRow | undefined;
+    if (!row || !claimGsOp(row.id, holder)) return null;
+    return toGsItem(db.prepare("SELECT * FROM gs_outbox WHERE id = ?").get(row.id) as GsOutboxRow);
+  })();
 }
 
 /** How long a drainer's claim on an op holds before another drainer may take it over (a crashed or closed
@@ -2590,10 +2642,15 @@ export function ackGsOp(
   error?: string,
 ): { status: OutboxAckStatus | "noop"; approvalReconciledTo?: string } {
   const db = getDb();
-  const row = db.prepare("SELECT attempts, max_attempts FROM gs_outbox WHERE id = ?").get(id) as
-    | { attempts: number; max_attempts: number | null }
+  const row = db.prepare("SELECT status, attempts, max_attempts FROM gs_outbox WHERE id = ?").get(id) as
+    | { status: string; attempts: number; max_attempts: number | null }
     | undefined;
   if (!row) return { status: "noop" }; // unknown id — nothing to ack (idempotent)
+  // Finished is final. A late failure report from a second drainer must never put a done op back in the
+  // queue: it did exactly that on 2026-10-31 and the same lead was created again hours later. A late
+  // SUCCESS on a dead-lettered op still records done (the write really happened).
+  if (row.status === "done") return { status: "noop" };
+  if (row.status === "dead" && !ok) return { status: "noop" };
 
   const t = decideAckTransition({ attempts: row.attempts, maxAttempts: row.max_attempts }, ok, error, Date.now());
   db.prepare(
@@ -4242,11 +4299,13 @@ export function getEmailEventsForLead(bookingId: string, limit = 50): EmailEvent
 // ── Web lead intake (append-only; see src/lib/intake/webLead.ts + /api/intake/lead) ────────────────────
 
 /** Dedupe guard for the structured web-lead receiver: has a create_project op for the SAME contact
- *  (normalized email and/or phone) been enqueued within the window (default 48h)? Keyed on the `leadEmail`
+ *  (normalized email and/or phone) been enqueued within the window (default 10 minutes: catches a
+ *  double-submit or a Zap retry, while a real repeat inquiry later the same day still gets its own project,
+ *  per the owner 2026-11-01)? Keyed on the `leadEmail`
  *  / `leadPhone` the web-lead create op stashes in its payload — guided-intake create ops carry neither,
  *  so they never match. Matches ANY status within the window (a project already made for this contact is
  *  still a duplicate). Mirrors the pendingCreateOpExists / pendingDeliveryFeeOp payload-match shape. */
-export function recentLeadCreateOpExists(emailKey: string, phoneKey: string, windowMs = 48 * 60 * 60 * 1000): boolean {
+export function recentLeadCreateOpExists(emailKey: string, phoneKey: string, windowMs = 10 * 60 * 1000): boolean {
   if (!emailKey && !phoneKey) return false;
   const cutoff = new Date(Date.now() - windowMs).toISOString();
   const row = getDb()
