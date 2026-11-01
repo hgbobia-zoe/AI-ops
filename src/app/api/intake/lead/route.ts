@@ -23,6 +23,7 @@ import {
   buildAckEmail,
   webIntakeEnabled,
   webIntakeSalesPingEnabled,
+  webIntakeAckEmailEnabled,
   type WebLeadInput,
 } from "@/lib/intake/webLead";
 import { enqueueGsOp, recentLeadCreateOpExists } from "@/lib/db/repo";
@@ -85,7 +86,8 @@ export async function POST(req: Request): Promise<NextResponse> {
   const eventName = webLeadEventName(lead);
   const details = { ...gsEventDetails(intake), eventName };
   const notes = `${formatIntakeNotes(intake)}\n\nLead source: ${lead.source} (web intake)`;
-  const ack = buildAckEmail(lead);
+  // Thank-you email only when its own flag is on (the website Zap already emails + texts the customer).
+  const ack = webIntakeAckEmailEnabled() ? buildAckEmail(lead) : undefined;
 
   enqueueGsOp({
     op: "create_project",
@@ -106,7 +108,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       source: lead.source,
       leadEmail: lead.emailKey,
       leadPhone: lead.phoneKey,
-      webLeadAck: ack, // enqueued as email_send by /api/gs/intake-result once the project id is confirmed
+      ...(ack ? { webLeadAck: ack } : {}), // enqueued as email_send by /api/gs/intake-result once the project id is confirmed
     },
   });
   updateIntake(intake.id, { status: "creating", gsStatus: "queued" });

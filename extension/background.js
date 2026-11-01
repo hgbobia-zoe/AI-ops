@@ -514,6 +514,21 @@ async function reapPending(pending, why) {
   } catch (e) {
     /* tab already gone */
   }
+  // A create tab that timed out WITHOUT being claimed still made a blank Goodshuffle draft. Report the failed
+  // attempt so the server's retry budget applies (backoff, then dead-letter) instead of a new blank draft
+  // every minute forever (live 2026-10-31). A claimed tab reports its own outcome from create.js.
+  if ((why === "stale" || why === "watchdog") && pending && pending.op && !pending.claimed) {
+    try {
+      const { apiBase } = await cfg();
+      await fetch(apiBase + "/api/gs/outbox", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: pending.op.id, ok: false, error: "create_tab_never_claimed" }),
+      });
+    } catch (e) {
+      /* outbox unreachable: the next timeout reports it */
+    }
+  }
   await setPending(null);
   try {
     await chrome.alarms.clear(CREATE_WATCHDOG);

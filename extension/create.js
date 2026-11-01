@@ -16,10 +16,30 @@
 // shell exists we ack success (avoids creating a duplicate shell on retry), mirroring the proven path.
 
 (function () {
-  // Only a createNewProject redirect lands here with ?id=<digits>. A normal detail page a human opens
-  // also matches, but the worker will not hand it an op (claim returns null), so we no-op there.
-  const idMatch = location.href.match(/[?&]id=(\d+)/);
-  if (!idMatch) return;
+  // Runs on /app/project/createNewProject* AND /app/project/detail*. Since late Oct 2026 Goodshuffle no
+  // longer server-redirects createNewProject: it serves the new project at the createNewProject URL and then
+  // rewrites the address in place (history API) to /app/project/detail?id=<newId>. Chrome injects content
+  // scripts only on real page loads, so a detail-only match never ran, the op was never claimed, and every
+  // retry left another blank "Unnamed Project" draft (live 2026-10-31). So we also run on createNewProject
+  // and wait for the id to appear in the address. A page a human opens is never handed an op (the claim
+  // returns null for any tab the worker did not open), so we no-op there.
+  const onCreatePage = /\/app\/project\/createNewProject/.test(location.pathname);
+  const onDetailPage = /\/app\/project\/detail/.test(location.pathname);
+  if (!onCreatePage && !onDetailPage) return;
+  const ID_RE = /[?&]id=(\d+)/;
+  const idMatch = [null, ""]; // filled by waitForId(); populate() reads idMatch[1]
+
+  // The new project's id: from the address (rewritten in place a moment after load), else from the title
+  // Goodshuffle sets ("Unnamed Project (231976162) | Goodshuffle Pro"). Polls up to ~30s.
+  async function waitForId() {
+    for (let i = 0; i < 60; i++) {
+      const m = location.href.match(ID_RE) || (onCreatePage ? document.title.match(/\((\d{6,})\)/) : null);
+      if (m) return m[1];
+      if (onDetailPage && i === 0 && !ID_RE.test(location.href)) return null; // a detail page without an id
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return null;
+  }
 
   function claim() {
     return new Promise((resolve) => {
@@ -100,16 +120,37 @@
     return { pid };
   }
 
+  // Report a failed attempt to the server. The server retries with backoff and dead-letters after its attempt
+  // budget, so a create that keeps failing stops instead of opening a new blank draft every minute.
+  async function failOp(op, api, why) {
+    try {
+      await fetch(api + "/api/gs/outbox", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: op.id, ok: false, error: why }) });
+    } catch (e) { /* the worker's watchdog reports it instead */ }
+  }
+
   (async () => {
     const op = await claim();
     if (!op) return; // not a create tab (or already claimed) → leave this page alone
+    const api = await apiBase();
+    const pid = await waitForId();
+    if (!pid) {
+      await failOp(op, api, "create_no_project_id");
+      done(false);
+      return;
+    }
+    idMatch[1] = pid;
     try {
-      const api = await apiBase();
       await populate(op, api);
       done(true);
     } catch (e) {
-      // Hard failure before/at shell creation: do NOT ack — leave the op pending to retry next cycle.
-      done(false);
+      // The project shell already exists: report it as created (so a retry never makes a duplicate). The
+      // customer's details are in the intake record; the salesperson finishes the shell in Goodshuffle.
+      const url = "https://pro.goodshuffle.com/app/project/detail?id=" + pid;
+      try {
+        await fetch(api + "/api/gs/intake-result", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ intakeId: (op.payload || {}).intakeId, projectId: pid, url, ok: true }) });
+        await fetch(api + "/api/gs/outbox", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: op.id, ok: true }) });
+      } catch (e2) { /* best-effort */ }
+      done(true);
     }
   })();
 })();

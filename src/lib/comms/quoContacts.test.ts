@@ -14,7 +14,6 @@ import { invalidateQuoDedupeReport, listAllQuoContacts, mergeQuoContacts } from 
 
 // ── Fake Quo API ─────────────────────────────────────────────────────────────────────────────────────
 let store: Map<string, QuoContact>;
-let patchBehavior: "apply" | "drop-phones" | "fail";
 
 function contact(id: string, first: string | null, phones: string[], emails: string[] = [], createdAt = "2025-01-01T00:00:00Z"): QuoContact {
   return {
@@ -50,13 +49,10 @@ async function fakeFetch(input: string | URL, init?: RequestInit): Promise<Respo
   const c = store.get(id);
   if (method === "GET") return c ? json(200, { data: c }) : json(404, { message: "not found" });
   if (method === "PATCH") {
+    // Mirrors the live Quo behaviour seen 2026-10-31: the update wiped the phone and email.
     if (!c) return json(404, {});
-    if (patchBehavior === "fail") return json(400, { message: "bad" });
-    const body = JSON.parse(String(init?.body));
-    const next: QuoContact = { ...c, defaultFields: { ...body.defaultFields }, customFields: body.customFields };
-    if (patchBehavior === "drop-phones") next.defaultFields = { ...next.defaultFields, phoneNumbers: [] };
-    store.set(id, next);
-    return json(200, { data: next });
+    store.set(id, { ...c, defaultFields: { ...c.defaultFields, phoneNumbers: [], emails: [] } });
+    return json(200, {});
   }
   if (method === "DELETE") {
     store.delete(id);
@@ -68,7 +64,6 @@ async function fakeFetch(input: string | URL, init?: RequestInit): Promise<Respo
 beforeEach(() => {
   log.length = 0;
   vi.mocked(insertAudit).mockClear();
-  patchBehavior = "apply";
   invalidateQuoDedupeReport();
   store = new Map();
   vi.stubGlobal("fetch", vi.fn(fakeFetch));
@@ -84,39 +79,31 @@ describe("listAllQuoContacts", () => {
 });
 
 describe("mergeQuoContacts", () => {
-  it("updates the survivor, verifies, backs up, then deletes the copies in that order", async () => {
+  it("never writes to the kept contact: backs up, then deletes the copies, in that order", async () => {
     store.set("keep", contact("keep", "Pat", ["+13015550101"], ["pat@example.com"], "2021-01-01T00:00:00Z"));
-    store.set("copy", contact("copy", null, ["(301) 555-0101", "202-555-0199"]));
+    store.set("copy", contact("copy", null, ["(301) 555-0101"]));
+    const before = JSON.stringify(store.get("keep"));
     const res = await mergeQuoContacts(["keep", "copy"], { actor: "Owner" });
     expect(res).toEqual({ ok: true, survivorId: "keep", deletedIds: ["copy"], skippedIds: [] });
     const writes = log.filter((l) => !l.startsWith("GET"));
-    expect(writes).toEqual(["PATCH /contacts/keep", "AUDIT QUO_CONTACT_MERGE keep", "DELETE /contacts/copy"]);
-    const kept = store.get("keep")!;
-    expect(kept.defaultFields?.phoneNumbers?.map((p) => p.value)).toEqual(["+13015550101", "202-555-0199"]);
+    expect(writes).toEqual(["AUDIT QUO_CONTACT_MERGE keep", "DELETE /contacts/copy"]);
+    expect(log.some((l) => l.startsWith("PATCH"))).toBe(false);
+    expect(JSON.stringify(store.get("keep"))).toBe(before); // untouched
     expect(store.has("copy")).toBe(false);
     // The audit backup holds the full original JSON of every member.
     const backup = vi.mocked(insertAudit).mock.calls[0][0].before as { contacts: QuoContact[] };
     expect(backup.contacts.map((c) => c.id).sort()).toEqual(["copy", "keep"]);
   }, 10_000);
 
-  it("deletes nothing when the survivor comes back missing a phone", async () => {
-    patchBehavior = "drop-phones";
+  it("refuses (and changes nothing) when a copy holds a detail the kept contact lacks", async () => {
     store.set("keep", contact("keep", "Pat", ["3015550101"], ["pat@example.com"]));
-    store.set("copy", contact("copy", "Pat", ["3015550101"]));
+    store.set("copy", contact("copy", "Pat", ["3015550101", "2025550199"], ["pat.work@example.com"]));
     const res = await mergeQuoContacts(["keep", "copy"], { actor: "Owner" });
     expect(res.ok).toBe(false);
-    expect(log.some((l) => l.startsWith("DELETE"))).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("by hand");
+    expect(log.some((l) => l.startsWith("PATCH") || l.startsWith("DELETE"))).toBe(false);
     expect(insertAudit).not.toHaveBeenCalled();
-    expect(store.has("copy")).toBe(true);
-  }, 10_000);
-
-  it("deletes nothing when Quo rejects the update", async () => {
-    patchBehavior = "fail";
-    store.set("keep", contact("keep", "Pat", ["3015550101"]));
-    store.set("copy", contact("copy", "Pat", ["3015550101"]));
-    const res = await mergeQuoContacts(["keep", "copy"], { actor: "Owner" });
-    expect(res.ok).toBe(false);
-    expect(log.some((l) => l.startsWith("DELETE"))).toBe(false);
+    expect(store.size).toBe(2);
   }, 10_000);
 
   it("refuses contacts that do not share a phone or email", async () => {
