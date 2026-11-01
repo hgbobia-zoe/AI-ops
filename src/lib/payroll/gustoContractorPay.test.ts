@@ -6,8 +6,16 @@ import {
   parseSubmitPayGroupResponse,
   parseReviewPayGroupResponse,
   parseContractorPayItems,
-  buildUpdateWorkedHoursInput,
+  buildHoursUpdatesInput,
+  buildPaymentPurposeInput,
+  buildContractorPlan,
+  matchEntriesToMembers,
+  parseContractorMembers,
   contractorPayGate,
+  CONTRACTOR_DOCS,
+  DEFAULT_TRANSFER_PURPOSE,
+  type ContractorPlanEntry,
+  type ContractorPlanInput,
 } from "./gustoContractorPay";
 
 const PG = "contractor_adhoc.87437f30-0c73-41f1-b3a7-5babf47bf7a4.165f220b-89a2-45cb-b6ca-91f42b3f782c";
@@ -131,9 +139,79 @@ describe("parseContractorPayItems", () => {
   });
 });
 
-describe("buildUpdateWorkedHoursInput (provisional)", () => {
-  it("builds the per-pay-item push input", () => {
-    expect(buildUpdateWorkedHoursInput({ payGroupId: PG, payItemId: "pi_us", workedHoursId: "wh_us", regularHours: 8 })).toEqual({ payGroupId: PG, payItemId: "pi_us", workedHoursId: "wh_us", regularHours: 8 });
+describe("buildHoursUpdatesInput (captured AutoSaveContractorHours)", () => {
+  it("batches every contractor in one input with hours as 2-decimal strings", () => {
+    expect(buildHoursUpdatesInput(PG, [{ memberUuid: "m1", hours: 1.5 }, { memberUuid: "m2", hours: 7.3333 }])).toEqual({
+      payGroupId: PG,
+      hoursUpdates: [{ memberUuid: "m1", hours: "1.5" }, { memberUuid: "m2", hours: "7.33" }],
+    });
+  });
+  it("builds the transfer-purpose input with the default code", () => {
+    expect(buildPaymentPurposeInput(PG, ["p1"])).toEqual({ payGroupId: PG, paymentPurposeUpdates: [{ memberUuid: "p1", paymentPurpose: DEFAULT_TRANSFER_PURPOSE }] });
+  });
+  it("never ships a pay (SubmitPayGroup) document to the extension", () => {
+    expect(Object.values(CONTRACTOR_DOCS).some((d) => /SubmitPayGroup|submitPayGroup/.test(d))).toBe(false);
+  });
+});
+
+describe("parseContractorMembers", () => {
+  it("reads the draft's contractors with country + international flag", () => {
+    const json = { data: { company: { payGroupInterface: { payItemsMetadata: [
+      { memberUuid: "a", preferredFirstName: "Mayerlin", lastName: "Alvarado Montegut", country: "United States" },
+      { memberUuid: "b", legalFirstName: "Princess", lastName: "Malajito", country: "Philippines" },
+      { id: "no-uuid" },
+    ] } } } };
+    expect(parseContractorMembers(json)).toEqual([
+      { memberUuid: "a", name: "Mayerlin Alvarado Montegut", country: "United States", international: false },
+      { memberUuid: "b", name: "Princess Malajito", country: "Philippines", international: true },
+    ]);
+    expect(parseContractorMembers(null)).toEqual([]);
+  });
+});
+
+describe("buildContractorPlan", () => {
+  const w = (o: Partial<ContractorPlanInput>): ContractorPlanInput => ({ key: "k", name: "N", workerType: "US_CONTRACTOR", hours: 10, payRate: 18, gustoId: "g", ...o });
+  it("readies mapped contractors with hours and skips W2 staff", () => {
+    const p = buildContractorPlan([w({ key: "may" }), w({ key: "emp", workerType: "EMPLOYEE" })]);
+    expect(p.rows.map((r) => r.key)).toEqual(["may"]);
+    expect(p.entries).toEqual([{ key: "may", gustoId: "g", name: "N", hours: 10, international: false }]);
+    expect(p.estTotal).toBe(180);
+  });
+  it("flags a contractor with no Gusto match for a decision, and exclusion clears it (Raquel rule)", () => {
+    const raquel = w({ key: "raq", name: "Raquel", gustoId: null });
+    const before = buildContractorPlan([raquel]);
+    expect(before.rows[0].status).toBe("no_gusto_match");
+    expect(before.entries).toHaveLength(0);
+    expect(before.needsDecision).toBe(1);
+    const after = buildContractorPlan([raquel], ["raq"]);
+    expect(after.rows[0].status).toBe("excluded");
+    expect(after.needsDecision).toBe(0);
+  });
+  it("flags international pay under $25 (Gusto minimum, seen live)", () => {
+    const p = buildContractorPlan([w({ key: "pri", workerType: "INTERNATIONAL_CONTRACTOR", hours: 2, payRate: 10 })]);
+    expect(p.rows[0].status).toBe("below_minimum");
+    expect(p.entries).toHaveLength(0);
+  });
+  it("does not push contractors with no hours or no rate", () => {
+    const p = buildContractorPlan([w({ key: "a", hours: 0 }), w({ key: "b", payRate: null })]);
+    expect(p.rows.map((r) => r.status)).toEqual(["no_hours", "no_rate"]);
+    expect(p.entries).toHaveLength(0);
+  });
+});
+
+describe("matchEntriesToMembers", () => {
+  const members = [
+    { memberUuid: "u-may", name: "Mayerlin Alvarado Montegut", country: "United States", international: false },
+    { memberUuid: "u-jes", name: "Jessie Medalla", country: "Philippines", international: true },
+  ];
+  const e = (o: Partial<ContractorPlanEntry>): ContractorPlanEntry => ({ key: "k", gustoId: null, name: "", hours: 1, international: false, ...o });
+  it("matches by Gusto id first, then by name tokens (accents/order ignored)", () => {
+    const r = matchEntriesToMembers([e({ key: "a", gustoId: "u-jes", name: "whatever" }), e({ key: "b", name: "Mayerlín Alvarado" })], members);
+    expect(r.matched.map((m) => [m.entry.key, m.member.memberUuid, m.by])).toEqual([["a", "u-jes", "id"], ["b", "u-may", "name"]]);
+    expect(r.unmatched).toHaveLength(0);
+  });
+  it("never guesses: unknown names stay unmatched", () => {
+    expect(matchEntriesToMembers([e({ name: "Raquel Someone" })], members).unmatched).toHaveLength(1);
   });
 });
 

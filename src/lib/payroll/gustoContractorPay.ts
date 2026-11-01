@@ -292,22 +292,215 @@ export function parseContractorPayItems(json: unknown): ContractorPayItem[] {
   return out;
 }
 
-// ── Push hours (UpdateContractorPayItemWorkedHours) — PROVISIONAL input shape ────────────────────────────
-// The mutation NAME + its error type are captured (UpdateContractorPayItemWorkedHours / …Error), but the exact
-// input VARIABLES were NOT captured yet (it only fires when an hours value is edited). This builder is the
-// best-effort shape from the pay-item model (workedHours.id + regularHours); it MUST be reconciled against a
-// real UpdateContractorPayItemWorkedHours capture before the push is wired to the extension. Pushing hours to
-// a DRAFT moves no money (it is caught at the human review step and the pay is separately hard-confirmed), so
-// verifying this on a throwaway draft is safe.
-export interface UpdateWorkedHoursInput {
-  payGroupId: string;
-  payItemId: string;
-  workedHoursId: string | null;
-  regularHours: number;
+// ── Push hours (AutoSaveContractorHours) — CAPTURED LIVE 2026-10-31 ─────────────────────────────────────────
+// The worksheet saves hours with `AutoSaveContractorHours` → updatePayItemHours(input: UpdatePayItemHoursInput),
+// input = { payGroupId, hoursUpdates: [{ memberUuid, hours: "<decimal string>" }] }. One call carries every
+// contractor. Verified by replay on a throwaway draft (4 contractors in one call → UpdatePayItemSuccess, then
+// ReviewPayGroup → ReviewContractorPayGroupSuccess with the dataHash). Saving hours on a DRAFT moves no money.
+export interface ContractorHoursUpdate {
+  memberUuid: string;
+  hours: string;
 }
-/** PROVISIONAL — see the note above. Build the worked-hours push input for one pay item. Pure. */
-export function buildUpdateWorkedHoursInput(p: { payGroupId: string; payItemId: string; workedHoursId?: string | null; regularHours: number }): UpdateWorkedHoursInput {
-  return { payGroupId: p.payGroupId, payItemId: p.payItemId, workedHoursId: p.workedHoursId ?? null, regularHours: p.regularHours };
+export interface UpdatePayItemHoursInput {
+  payGroupId: string;
+  hoursUpdates: ContractorHoursUpdate[];
+}
+/** Build the AutoSaveContractorHours input. Hours rounded to 2 decimals and sent as a string (as the app does). */
+export function buildHoursUpdatesInput(payGroupId: string, rows: { memberUuid: string; hours: number }[]): UpdatePayItemHoursInput {
+  return {
+    payGroupId,
+    hoursUpdates: rows.map((r) => ({ memberUuid: r.memberUuid, hours: String(Math.round(r.hours * 100) / 100) })),
+  };
+}
+
+// ── Transfer purpose (AutoSaveContractorPaymentPurpose) — CAPTURED LIVE 2026-10-31 ──────────────────────────
+// Payments in PHP (foreign-currency transfer) are REJECTED at review without a transfer purpose ("required by
+// local regulations"). Input = { payGroupId, paymentPurposeUpdates: [{ memberUuid, paymentPurpose: <code> }] }.
+// 0511300008 = "Other professional & consulting services" in Gusto's list. Setting it on a USD/Wise payee is
+// harmless (Gusto shows N/A), so the extension sets it for every international contractor.
+export const DEFAULT_TRANSFER_PURPOSE = "0511300008";
+export function buildPaymentPurposeInput(payGroupId: string, memberUuids: string[], purpose: string = DEFAULT_TRANSFER_PURPOSE) {
+  return { payGroupId, paymentPurposeUpdates: memberUuids.map((memberUuid) => ({ memberUuid, paymentPurpose: purpose })) };
+}
+
+/** Gusto rejects an international contractor payment under 25 USD (code minimum_amount_not_met, seen live). */
+export const INTERNATIONAL_MIN_USD = 25;
+
+// ── The GraphQL documents the extension replays (compact; each verified live 2026-10-31) ────────────────────
+// SubmitPayGroup is deliberately NOT here: the final pay stays a human click on Gusto's own review page.
+export const CONTRACTOR_DOCS = {
+  findDraft:
+    "query UseUnprocessedContractorPayGroup($hasPayContractorCapability: Boolean!, $payTypes: [PayGroupType!]!) { company { id unprocessedContractorsPayGroups: payGroupInterfaces(filter: {payTypes: $payTypes, processingStates: [UNPROCESSED]}, first: 1) @include(if: $hasPayContractorCapability) { nodes { id uniqueIdentifier } } } }",
+  createDraft:
+    "mutation CreateContractorPayGroup($input: CreateContractorPayGroupInput) { createContractorPayGroup(input: $input) { result { __typename ... on CreatePayGroupSuccess { payGroupInterface { id uniqueIdentifier } } } } }",
+  members:
+    "query UseContractorPayPayItemsMetadata($payGroupId: ID!) { company { id payGroupInterface(uuid: $payGroupId) { __typename ... on ContractorPayGroup { id payItemsMetadata(order: {type: LAST_NAME, sortDirection: ASC}) { ... on ContractorPayItemMetadata { id memberUuid country lastName legalFirstName preferredFirstName businessName isIncludedInPayGroup } } } } } }",
+  saveHours:
+    "mutation AutoSaveContractorHours($input: UpdatePayItemHoursInput!) { updatePayItemHours(input: $input) { result { __typename ... on UpdatePayItemMemberFailure { memberErrorDetails { __typename ... on UpdatePayItemMemberErrorDetails { errors { message } member { id } } } } ... on UpdatePayItemPayGroupFailure { error { message } } } } }",
+  savePurpose:
+    "mutation AutoSaveContractorPaymentPurpose($input: UpdatePayItemPaymentPurposesInput!) { updatePayItemPaymentPurposes(input: $input) { result { __typename ... on UpdatePayItemMemberFailure { memberErrorDetails { __typename ... on UpdatePayItemMemberErrorDetails { errors { message } member { id } } } } } } }",
+  review:
+    "mutation ReviewPayGroup($acknowledgedBlockedMemberIds: [ID!], $payGroupId: ID!) { reviewPayGroup(acknowledgedBlockedMemberIds: $acknowledgedBlockedMemberIds, payGroupId: $payGroupId) { result { __typename ... on ReviewContractorPayGroupSuccess { dataHash dataHashExcludingFundingMethod riskResult { __typename wireInFunded achSpeed } } ... on ReviewPayGroupMemberFailure { memberErrorDetails { __typename ... on UpdatePayItemMemberErrorDetails { errors { message } member { id } } } } } } }",
+  debits:
+    "query UseContractorPayPayItemsByMemberIds($ids: [ID!]!, $payGroupId: ID!) { company { id payGroupInterface(uuid: $payGroupId) { __typename ... on ContractorPayGroup { id payItemInterfacesByMemberIds(ids: $ids) { id isIncludedInPayGroup member { id } ... on ContractorPayItem { calculatedAmounts { __typename ... on ContractorPayItemCalculatedAmounts { totalDebitAmount { amount currencyCode } } } } } } } } }",
+} as const;
+
+// ── Draft members (UseContractorPayPayItemsMetadata) ─────────────────────────────────────────────────────────
+export interface ContractorMember {
+  memberUuid: string;
+  name: string;
+  country: string | null;
+  international: boolean;
+}
+/** Parse the draft's contractor list. Pure + defensive. */
+export function parseContractorMembers(json: unknown): ContractorMember[] {
+  const j = json as { data?: { company?: { payGroupInterface?: { payItemsMetadata?: unknown } } } };
+  const rows = j?.data?.company?.payGroupInterface?.payItemsMetadata;
+  if (!Array.isArray(rows)) return [];
+  const out: ContractorMember[] = [];
+  for (const r of rows as Record<string, unknown>[]) {
+    if (!r || typeof r.memberUuid !== "string") continue;
+    const first = String(r.preferredFirstName ?? r.legalFirstName ?? "").trim();
+    const name = [first, String(r.lastName ?? "").trim()].filter(Boolean).join(" ") || String(r.businessName ?? "").trim();
+    const country = typeof r.country === "string" ? r.country : null;
+    out.push({ memberUuid: r.memberUuid, name, country, international: !!country && !/^(us|usa|united states)$/i.test(country) });
+  }
+  return out;
+}
+
+// ── The plan: which Connecteam contractors get pushed, which need a decision ────────────────────────────────
+export type ContractorRowStatus = "ready" | "excluded" | "no_gusto_match" | "no_hours" | "no_rate" | "below_minimum";
+export interface ContractorPlanRow {
+  key: string;
+  name: string;
+  workerType: string;
+  international: boolean;
+  hours: number | null;
+  payRate: number | null;
+  estPay: number | null;
+  gustoId: string | null;
+  status: ContractorRowStatus;
+  note: string;
+}
+export interface ContractorPlanEntry {
+  key: string;
+  gustoId: string | null; // Gusto member uuid when mapped (preferred match)
+  name: string; // fallback match against the draft's contractor names
+  hours: number;
+  international: boolean;
+}
+export interface ContractorPlan {
+  rows: ContractorPlanRow[];
+  entries: ContractorPlanEntry[]; // only status === "ready"
+  totalHours: number;
+  estTotal: number;
+  needsDecision: number; // rows a human must act on before the run is clean
+}
+export interface ContractorPlanInput {
+  key: string;
+  name: string;
+  workerType: string; // US_CONTRACTOR | INTERNATIONAL_CONTRACTOR (others ignored)
+  hours: number | null;
+  payRate: number | null;
+  gustoId: string | null;
+}
+
+const isContractorType = (t: string): boolean => t === "US_CONTRACTOR" || t === "INTERNATIONAL_CONTRACTOR";
+const r2 = (n: number): number => Math.round(n * 100) / 100;
+
+/** Build the contractor pay plan from the reconciled review. Rules (owner, 2026-10-31):
+ *  - contractors only (US + international); W2 staff are the other flow.
+ *  - a contractor with hours but NO Gusto match is never pushed and never silently dropped: "no_gusto_match"
+ *    with an Exclude option. It does not block the others.
+ *  - an explicit exclusion for this run wins over everything.
+ *  - an international payment under 25 USD would be rejected by Gusto → "below_minimum".
+ *  Hours only: Gusto applies the rate; estPay is an estimate for the reviewer, never sent. Pure. */
+export function buildContractorPlan(workers: ContractorPlanInput[], excludedKeys: Iterable<string> = []): ContractorPlan {
+  const excluded = new Set(excludedKeys);
+  const rows: ContractorPlanRow[] = [];
+  const entries: ContractorPlanEntry[] = [];
+  let totalHours = 0;
+  let estTotal = 0;
+  let needsDecision = 0;
+  for (const w of workers) {
+    if (!isContractorType(w.workerType)) continue;
+    const international = w.workerType === "INTERNATIONAL_CONTRACTOR";
+    const est = w.hours != null && w.payRate != null ? r2(w.hours * w.payRate) : null;
+    const base = { key: w.key, name: w.name, workerType: w.workerType, international, hours: w.hours, payRate: w.payRate, estPay: est, gustoId: w.gustoId };
+    let status: ContractorRowStatus;
+    let note = "";
+    if (excluded.has(w.key)) {
+      status = "excluded";
+      note = "Excluded from this run.";
+    } else if (w.hours == null || w.hours <= 0) {
+      status = "no_hours";
+      note = "No Connecteam hours this period.";
+    } else if (!w.gustoId) {
+      status = "no_gusto_match";
+      note = "No matching Gusto contractor. Exclude them from this run, or map them to Gusto.";
+      needsDecision++;
+    } else if (w.payRate == null) {
+      status = "no_rate";
+      note = "No pay rate on file. Set the rate in Gusto, or exclude them from this run.";
+      needsDecision++;
+    } else if (international && est != null && est < INTERNATIONAL_MIN_USD) {
+      status = "below_minimum";
+      note = `Gusto rejects international payments under $${INTERNATIONAL_MIN_USD}. Exclude them and carry the hours to the next run.`;
+      needsDecision++;
+    } else {
+      status = "ready";
+      entries.push({ key: w.key, gustoId: w.gustoId, name: w.name, hours: r2(w.hours), international });
+      totalHours = r2(totalHours + w.hours);
+      if (est != null) estTotal = r2(estTotal + est);
+    }
+    rows.push({ ...base, status, note });
+  }
+  return { rows, entries, totalHours, estTotal, needsDecision };
+}
+
+/** Name tokens for the fallback match: lowercase letters, accents stripped, 2+ chars, sorted. */
+export function nameTokens(name: string): string[] {
+  return String(name ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter((t) => t.length > 1)
+    .sort();
+}
+
+/** Match plan entries to the draft's Gusto contractors: by member uuid first, then by name (every token of the
+ *  shorter name appears in the longer). Ambiguous or missing → unmatched, never guessed. Pure. The extension
+ *  carries a JS mirror of this; the tests pin the behavior. */
+export function matchEntriesToMembers(entries: ContractorPlanEntry[], members: ContractorMember[]): {
+  matched: { entry: ContractorPlanEntry; member: ContractorMember; by: "id" | "name" }[];
+  unmatched: ContractorPlanEntry[];
+} {
+  const byId = new Map(members.map((m) => [m.memberUuid, m]));
+  const used = new Set<string>();
+  const matched: { entry: ContractorPlanEntry; member: ContractorMember; by: "id" | "name" }[] = [];
+  const unmatched: ContractorPlanEntry[] = [];
+  for (const e of entries) {
+    const viaId = e.gustoId ? byId.get(e.gustoId) : undefined;
+    if (viaId && !used.has(viaId.memberUuid)) {
+      matched.push({ entry: e, member: viaId, by: "id" });
+      used.add(viaId.memberUuid);
+      continue;
+    }
+    const et = nameTokens(e.name);
+    const cands = members.filter((m) => {
+      if (used.has(m.memberUuid)) return false;
+      const mt = nameTokens(m.name);
+      const [short, long] = et.length <= mt.length ? [et, mt] : [mt, et];
+      return short.length > 0 && short.every((t) => long.includes(t));
+    });
+    if (cands.length === 1) {
+      matched.push({ entry: e, member: cands[0], by: "name" });
+      used.add(cands[0].memberUuid);
+    } else unmatched.push(e);
+  }
+  return { matched, unmatched };
 }
 
 // ── Gating (mirrors runPayrollGate / confirmWireGate from gustoSubmit.ts) ────────────────────────────────

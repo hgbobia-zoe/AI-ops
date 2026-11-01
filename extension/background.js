@@ -315,6 +315,58 @@ async function startGustoPush(payload) {
   return { ok: true, tabId: tab.id };
 }
 
+// ── On-demand Gusto CONTRACTOR staging (DRAFT + REVIEW only; NOT on any loop) ─────────────────────────
+// The Zoe app (owner/admin, after the in-app review + Confirm) sends {type:"zoe-gusto-contractor", payload}.
+// We open ONE hidden app.gusto.com tab and arm the job for that exact tab; gusto-bridge.js claims it and
+// gusto-contractor.js (MAIN) stages the draft hours, has Gusto review it, and reports to Zoe. It never pays.
+const GUSTO_CONTRACTOR_WATCHDOG = "zoe-gusto-contractor-watchdog";
+const GUSTO_CONTRACTOR_TIMEOUT_MS = 180_000;
+async function getGustoContractor() {
+  const { gustoContractor } = await chrome.storage.local.get("gustoContractor");
+  return gustoContractor || null;
+}
+async function setGustoContractor(v) {
+  if (v) await chrome.storage.local.set({ gustoContractor: v });
+  else await chrome.storage.local.remove("gustoContractor");
+}
+async function reapGustoContractor(pending) {
+  try {
+    if (pending && pending.tabId != null) await chrome.tabs.remove(pending.tabId);
+  } catch (e) {
+    /* tab already gone */
+  }
+  await setGustoContractor(null);
+  try {
+    await chrome.alarms.clear(GUSTO_CONTRACTOR_WATCHDOG);
+  } catch (e) {
+    /* no-op */
+  }
+}
+async function startGustoContractor(payload) {
+  const job = payload && payload.job;
+  const entries = payload && Array.isArray(payload.entries) ? payload.entries : [];
+  if (!job || !job.docs || !entries.length) return { ok: false, reason: "no_entries" };
+  const pending = await getGustoContractor();
+  if (pending) {
+    if (Date.now() - pending.startedAt > GUSTO_CONTRACTOR_TIMEOUT_MS) await reapGustoContractor(pending);
+    else return { ok: true, already: true };
+  }
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: GUSTO_HOME, pinned: false, active: false });
+  } catch (e) {
+    return { ok: false, reason: "no_tab" };
+  }
+  await setGustoContractor({
+    tabId: tab.id,
+    startedAt: Date.now(),
+    claimed: false,
+    job: Object.assign({}, job, { entries, initiatedBy: (payload && payload.initiatedBy) || null }),
+  });
+  chrome.alarms.create(GUSTO_CONTRACTOR_WATCHDOG, { delayInMinutes: GUSTO_CONTRACTOR_TIMEOUT_MS / 60000 });
+  return { ok: true, tabId: tab.id };
+}
+
 // ── On-demand Gusto SUBMIT + wire CONFIRM (the IRREVERSIBLE side; NOT on any loop) ───────────────────
 // REAL PAYROLL. The Zoe app (Admin, after the hard confirm) sends {type:"zoe-gusto-submit", payload:{...}}
 // or {type:"zoe-gusto-confirm-wire", payload:{...}}. We open ONE dedicated hidden app.gusto.com tab and arm
@@ -678,6 +730,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     getGustoPush().then((p) => {
       if (p && Date.now() - p.startedAt > GUSTO_PUSH_TIMEOUT_MS - 1000) reapGustoPush(p);
     });
+  } else if (alarm.name === GUSTO_CONTRACTOR_WATCHDOG) {
+    getGustoContractor().then((p) => {
+      if (p && Date.now() - p.startedAt > GUSTO_CONTRACTOR_TIMEOUT_MS - 1000) reapGustoContractor(p);
+    });
   } else if (alarm.name === GUSTO_SUBMIT_WATCHDOG) {
     getGustoSubmit().then((p) => {
       if (p && Date.now() - p.startedAt > GUSTO_SUBMIT_TIMEOUT_MS - 1000) reapGustoSubmit(p);
@@ -814,6 +870,43 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // gusto-contractor.js (via the bridge) claims ITS job — only for the exact tab we opened, only once.
+  if (msg.type === "zoe-gusto-contractor-claim") {
+    (async () => {
+      const p = await getGustoContractor();
+      if (p && sender.tab && sender.tab.id === p.tabId && !p.claimed) {
+        p.claimed = true;
+        await setGustoContractor(p);
+        sendResponse({ job: p.job });
+      } else {
+        sendResponse({ job: null });
+      }
+    })();
+    return true;
+  }
+  if (msg.type === "zoe-gusto-contractor-done") {
+    (async () => {
+      const p = await getGustoContractor();
+      if (p && sender.tab && sender.tab.id === p.tabId) await reapGustoContractor(p);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+  // Signed out: bring the hidden tab forward for sign-in and stop the watchdog from reaping it.
+  if (msg.type === "zoe-gusto-contractor-reveal") {
+    (async () => {
+      const p = await getGustoContractor();
+      if (p && sender.tab && sender.tab.id === p.tabId) {
+        await setGustoContractor(null);
+        try { await chrome.alarms.clear(GUSTO_CONTRACTOR_WATCHDOG); } catch (e) { /* no-op */ }
+        try { await chrome.tabs.update(p.tabId, { active: true }); } catch (e) { /* tab gone */ }
+        try { if (sender.tab.windowId != null) await chrome.windows.update(sender.tab.windowId, { focused: true }); } catch (e) { /* no window */ }
+      }
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
   // create.js on a detail page → "am I a create tab? which op?" Return the op only for the exact tab we
   // opened, and only once (claim atomically to avoid double-processing).
   if (msg.type === "zoe-create-claim") {
@@ -914,6 +1007,15 @@ chrome.runtime.onMessageExternal.addListener((msg, _sender, sendResponse) => {
   // On-demand DRAFT hours PUSH: the Zoe app (owner/admin, after building the payload) hands us the entries to
   // write into the current Gusto draft. We open one hidden Gusto tab; gusto-push.js writes the DRAFT only and
   // never submits payroll. This is the only thing besides the sync that opens an app.gusto.com tab.
+  // On-demand CONTRACTOR staging (draft + review only; never pays). Human-triggered from /payroll.
+  if (msg.type === "zoe-gusto-contractor") {
+    (async () => {
+      const r = await startGustoContractor(msg.payload).catch(() => ({ ok: false, reason: "error" }));
+      sendResponse({ ok: true, contractor: r });
+    })();
+    return true;
+  }
+
   if (msg.type === "zoe-gusto-push") {
     (async () => {
       const r = await startGustoPush(msg.payload).catch(() => ({ ok: false, reason: "error" }));
