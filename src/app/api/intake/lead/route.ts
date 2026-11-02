@@ -48,21 +48,29 @@ export async function POST(req: Request): Promise<NextResponse> {
   // Token gate: fail-closed once INTAKE_TOKEN is set, fail-open until then (GS_INGEST_TOKEN posture).
   const token = process.env.INTAKE_TOKEN;
   if (token && req.headers.get("x-intake-token") !== token) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
+    // ?soft=1 (see below) turns even this into a 200 {ok:false}, so a rotated token can never stop a Zap's
+    // customer auto-reply; the body still says "unauthorized".
+    const soft = new URL(req.url).searchParams.get("soft") === "1";
+    return NextResponse.json(soft ? { ok: false, created: false, error: "unauthorized" } : { error: "unauthorized" }, { status: soft ? 200 : 401, headers: CORS });
   }
 
   // Query options a source Zap can set on the URL (so its webhook step needs no field mapping at all):
   //   ?source=google_ads  fills a missing source;  ?slack=1  posts the lead to #new-leads (for sources whose
   //   Zap no longer posts it);  ?dryRun=1  only parses and echoes the lead (for Zapier's "Test step").
+  //   ?soft=1  never answers with an error status: a webhook step that errors stops the rest of the Zap,
+  //   and a Zap that also auto-replies to the customer (Yelp) must keep running whatever happens here.
   const url = new URL(req.url);
   const postToSlack = url.searchParams.get("slack") === "1";
   const dryRun = url.searchParams.get("dryRun") === "1";
+  const soft = url.searchParams.get("soft") === "1";
+  const fail = (error: string, status: number) =>
+    NextResponse.json(soft ? { ok: false, created: false, error } : { error }, { status: soft ? 200 : status, headers: CORS });
 
   let body: unknown;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400, headers: CORS });
+    return fail("invalid_json", 400);
   }
   const { input: raw, yelp } = adaptLeadBody(body, url.searchParams.get("source") ?? "");
 
@@ -74,7 +82,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       { headers: CORS },
     );
   }
-  if (invalid) return NextResponse.json({ error: invalid }, { status: 400, headers: CORS });
+  if (invalid) return fail(invalid, 400);
 
   // ALWAYS record the lead first (so nothing is lost, even while disabled or on a duplicate). The raw
   // source is stored on the row + echoed into the import ledger so the office can see volume per source.

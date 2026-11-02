@@ -127,6 +127,17 @@ describe("POST /api/intake/lead", () => {
     expect(createOpsFor(second.intakeId)).toHaveLength(0); // no second create op
   });
 
+  it("soft mode never answers with an error status (a Zap's later steps keep running)", async () => {
+    const { POST } = await import("./route");
+    const bad = await POST(new Request("http://localhost/api/intake/lead?soft=1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ firstName: "No", lastName: "Contact" }) }));
+    expect(bad.status).toBe(200);
+    expect(await bad.json()).toMatchObject({ ok: false, created: false, error: "email_or_phone_required" });
+    process.env.INTAKE_TOKEN = "s3cret";
+    const unauth = await POST(new Request("http://localhost/api/intake/lead?soft=1", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }));
+    expect(unauth.status).toBe(200);
+    expect((await unauth.json()).error).toBe("unauthorized");
+  });
+
   it("dryRun only parses and echoes the lead (nothing recorded, no project)", async () => {
     process.env.WEB_INTAKE_ENABLED = "true";
     const before = listRecentIntakes(500).length;
