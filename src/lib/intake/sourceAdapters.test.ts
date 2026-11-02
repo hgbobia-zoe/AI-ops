@@ -83,6 +83,12 @@ describe("Google Ads lead email (pattern matching, no AI)", () => {
     expect(fromLabeledText(snip)).toMatchObject({ firstName: "Jade", lastName: "Johnson", phone: "+15405550123", email: "jade.j@example.com" });
   });
 
+  it("drops a placeholder message and names the project after the source", () => {
+    const lead = fromLabeledText(`${BODY}\nMessage: *`);
+    expect(lead?.message).toBe("");
+    expect(webLeadEventName(normalizeLead({ ...lead!, source: "google_ads" }))).toBe("Johnson - Google");
+  });
+
   it("returns null without a name plus a phone or email", () => {
     expect(fromLabeledText("Your Customer ID: 123-456-7890")).toBeNull();
     expect(fromLabeledText("Name: Only A Name")).toBeNull();

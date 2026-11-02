@@ -158,7 +158,8 @@ export function webLeadEventName(n: NormalizedLead): string {
   // A bare initial ("H.", Yelp's style) is not a usable surname on its own: keep "Mel H." instead.
   const initialOnly = last.replace(/\./g, "").length === 1;
   const name = (initialOnly ? `${first} ${last}`.trim() : last || first) || "New web lead";
-  const label = eventTypeLabel(n) || (/yelp/i.test(n.source) ? "Yelp" : "");
+  // No event type (Yelp and Google leads never carry one): name the source so the project still says where it came from.
+  const label = eventTypeLabel(n) || (/yelp/i.test(n.source) ? "Yelp" : /google/i.test(n.source) ? "Google" : "");
   return label ? `${name} - ${label}` : name;
 }
 
