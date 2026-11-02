@@ -153,8 +153,13 @@ export function newLeadSlackText(
  *  receiver's camelCase fields. Fields already in camelCase win. */
 export function fromLooseFields(raw: Record<string, unknown>): WebLeadInput {
   const flat = flattenPayload(raw);
+  // Exact key first, then the same field nested one level down (an AI step can wrap its JSON, e.g. output__first_name).
   const get = (...keys: string[]) => {
     for (const k of keys) if (flat[k]) return flat[k];
+    for (const k of keys) {
+      const hit = Object.entries(flat).find(([fk, v]) => v && fk.endsWith(`__${k}`));
+      if (hit) return hit[1];
+    }
     return "";
   };
   const name = get("name", "full_name", "fullname");

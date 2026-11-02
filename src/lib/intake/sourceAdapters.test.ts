@@ -73,6 +73,11 @@ describe("loose field names (an AI parser's output, or the website Zap)", () => 
     expect(web.input).toMatchObject({ source: "web_form", firstName: "Bo", email: "bo@example.com" });
   });
 
+  it("finds the fields when an AI step nests its JSON one level down", () => {
+    const { input } = adaptLeadBody({ output: { first_name: "Hal", last_name: "Ma", email_address: "hal@example.com" } }, "google_business");
+    expect(input).toMatchObject({ source: "google_business", firstName: "Hal", lastName: "Ma", email: "hal@example.com" });
+  });
+
   it("splits a single name field", () => {
     expect(splitName("Mary Ann Smith")).toEqual({ firstName: "Mary Ann", lastName: "Smith" });
     expect(adaptLeadBody({ name: "Cy Twombly", email: "c@example.com" }).input).toMatchObject({ firstName: "Cy", lastName: "Twombly" });
