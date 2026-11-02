@@ -33,6 +33,8 @@ import { assessDay, daysUntil, routeWindow, peakConcurrency } from "./engine";
 import { DEFAULT_RISK_CONFIG, SEVERITY_RANK } from "./types";
 import { reconcileRisks, expirePastRisks, getRiskQueue, type RiskChanges } from "./store";
 import { computeReadiness } from "./readiness";
+import { settleTransitions, formatRiskUpdate, updateLines, type PendingMap } from "./notify";
+import { getJson, setJson } from "@/lib/kv";
 import type { EngineRoute, EngineShift, RiskFinding } from "./types";
 import type { Stop } from "@/lib/types";
 
@@ -581,17 +583,12 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
   return { dates, findings: allFindings.length, changes, queueSize: getRiskQueue().length, connecteam: ctOn };
 }
 
-/** Slack only what changed (reuses the existing webhook). No-op when nothing meaningful moved. */
+/** Slack only what a person should act on (see risk/notify.ts): new/escalated HIGH+CRITICAL now; a
+ *  Regressed/Resolved only once a later scan confirms it (a flip-back cancels silently). No-op when empty. */
+const PENDING_KEY = "risk.notify.pending";
 async function notifyChanges(c: RiskChanges): Promise<void> {
-  const lines: string[] = [];
-  for (const r of c.created)
-    if (r.severity === "CRITICAL" || r.severity === "HIGH") lines.push(`🆕 *${r.severity}* — ${r.title} (${r.date ?? "—"})`);
-  for (const e of c.escalated) lines.push(`⬆️ *${e.from}→${e.to}* — ${e.risk.title} (${e.risk.date ?? "—"})`);
-  for (const r of c.regressed) lines.push(`↩️ *Regressed* — ${r.title} (${r.date ?? "—"})`);
-  for (const r of c.resolved) lines.push(`✅ Resolved — ${r.title} (${r.date ?? "—"})`);
-  if (lines.length === 0) return;
-  const CAP = 12;
-  const shown = lines.slice(0, CAP);
-  const more = lines.length > CAP ? `\n…and ${lines.length - CAP} more (see /risk).` : "";
-  await slackNotify(`🧭 *Event Risk update*\n${shown.join("\n")}${more}`);
+  const settled = settleTransitions(getJson<PendingMap>(PENDING_KEY, {}), c, new Date().toISOString(), todayInOpsTz());
+  setJson(PENDING_KEY, settled.pending);
+  const text = formatRiskUpdate(updateLines(c, settled.ready));
+  if (text) await slackNotify(text);
 }
