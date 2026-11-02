@@ -28,3 +28,15 @@ describe("Lockly reminder", () => {
     expect(lockReminder([t("quo", "Quo")], "provision")).toBeNull();
   });
 });
+
+import { dueCheckIn } from "./notify";
+describe("check in reminders", () => {
+  it("fires 30, 60, 90 days after start, once each, within a 7 day window", () => {
+    expect(dueCheckIn("2026-10-01", "2026-10-30", [])).toBeNull();
+    expect(dueCheckIn("2026-10-01", "2026-10-31", [])).toBe(30);
+    expect(dueCheckIn("2026-10-01", "2026-11-03", [30])).toBeNull();
+    expect(dueCheckIn("2026-10-01", "2026-11-30", [30])).toBe(60);
+    expect(dueCheckIn("2026-10-01", "2026-12-30", [30, 60])).toBe(90);
+    expect(dueCheckIn("2025-01-01", "2026-11-02", [])).toBeNull();
+  });
+});

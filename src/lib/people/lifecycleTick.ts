@@ -10,7 +10,9 @@ import { todayInOpsTz } from "@/lib/dates";
 import { executeAutomatedTask, startOnboarding } from "./lifecycle";
 import { getAdapter } from "./adapters";
 import { getEmployee, listEmployees, listTasks, tasksByStatus } from "./store";
-import { announceOnboardingStarted, orderRevokes } from "./notify";
+import { announceCheckIn, announceOnboardingStarted, dueCheckIn, orderRevokes } from "./notify";
+import { ensureSopLink } from "./sopAck";
+import { getJson, setJson } from "@/lib/kv";
 
 /** Days a manual provision/revoke task may sit before it is escalated. */
 export const PEOPLE_ESCALATE_DAYS = 3;
@@ -30,7 +32,8 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
       const r = startOnboarding(e.id, actor);
       if (r.ok) {
         onboarded++;
-        announceOnboardingStarted(getEmployee(e.id) ?? e, listTasks(e.id, "provision"));
+        const cur = getEmployee(e.id) ?? e;
+        announceOnboardingStarted(cur, listTasks(e.id, "provision"), ensureSopLink(cur));
       }
     }
   }
@@ -83,6 +86,20 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
     }).catch(() => {});
   }
 
-  const detail = `${onboarded} onboarded, ${revoked} auto-revoked, ${escalated} escalated`;
+  // 4) Manager check ins at 30 / 60 / 90 days after the start date (each posted once to #hiring).
+  const sentMap = getJson<Record<string, number[]>>("people.checkins", {});
+  let checkins = 0;
+  for (const e of employees) {
+    if (!e.startDate || !["ONBOARD", "READY", "ACTIVE"].includes(e.lifecycleState)) continue;
+    const sent = sentMap[e.id] ?? [];
+    const due = dueCheckIn(e.startDate, today, sent);
+    if (due == null) continue;
+    sentMap[e.id] = [...sent, due];
+    announceCheckIn(e, due);
+    checkins++;
+  }
+  if (checkins > 0) setJson("people.checkins", sentMap);
+
+  const detail = `${checkins} check ins, ${onboarded} onboarded, ${revoked} auto-revoked, ${escalated} escalated`;
   return { ok: true, detail };
 }

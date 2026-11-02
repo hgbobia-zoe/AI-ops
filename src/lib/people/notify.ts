@@ -60,8 +60,9 @@ export function lockReminder(tasks: LifecycleTask[], kind: "provision" | "revoke
     : "*Do this first:* delete their Lockly access key in the Lockly phone app, then Mark Complete in People.";
 }
 
-export function announceOnboardingStarted(emp: Employee, tasks: LifecycleTask[]): void {
+export function announceOnboardingStarted(emp: Employee, tasks: LifecycleTask[], sopLink: string | null = null): void {
   const lock = lockReminder(tasks, "provision");
+  const sop = sopLink ? `*Send the hire this link to read and sign their SOP:*\n${sopLink}` : null;
   post({
     emoji: "👋",
     title: "Onboarding started",
@@ -69,7 +70,7 @@ export function announceOnboardingStarted(emp: Employee, tasks: LifecycleTask[])
       { label: "Who", value: emp.displayName },
       { label: "Work email", value: emp.workEmail ?? "None" },
     ],
-    sections: [`*Access to set up*\n${taskLines(tasks).join("\n") || "No systems in this policy."}`],
+    sections: [`*Access to set up*\n${taskLines(tasks).join("\n") || "No systems in this policy."}`, ...(lock ? [lock] : []), ...(sop ? [sop] : [])],
     link: personLink(emp),
     context: "Hiring Bot",
   });
@@ -84,7 +85,7 @@ export function announceOffboardingStarted(emp: Employee, revokes: LifecycleTask
       { label: "Who", value: emp.displayName },
       { label: "Effective", value: effective ?? "Now" },
     ],
-    sections: [`*Remove access in this order*\n${taskLines(orderRevokes(revokes)).join("\n") || "Nothing to remove."}`],
+    sections: [...(lock ? [lock] : []), `*Remove access in this order*\n${taskLines(orderRevokes(revokes)).join("\n") || "Nothing to remove."}`],
     body: "The door goes first. Each step stays open here until someone confirms it is removed.",
     link: personLink(emp),
     context: "Hiring Bot",
@@ -97,6 +98,46 @@ export function announceReady(emp: Employee): void {
     title: "Hire is ready",
     fields: [{ label: "Who", value: emp.displayName }],
     body: "Every required system is set up.",
+    link: personLink(emp),
+    context: "Hiring Bot",
+  });
+}
+
+export function announceSopSigned(emp: Employee, title: string, version: string): void {
+  post({
+    emoji: "✍️",
+    title: "SOP signed",
+    fields: [
+      { label: "Who", value: emp.displayName },
+      { label: "Document", value: `${title} (v${version})` },
+    ],
+    link: personLink(emp),
+    context: "Hiring Bot",
+  });
+}
+
+/** Check-in milestones in days after the start date. */
+export const CHECKIN_DAYS = [30, 60, 90];
+
+/** The milestone due today for a start date, or null. A milestone counts for 7 days so a missed tick still
+ *  posts, but an old hire is never flooded with past ones. PURE. */
+export function dueCheckIn(startDate: string, today: string, sent: number[]): number | null {
+  const days = Math.floor((Date.parse(`${today}T12:00:00Z`) - Date.parse(`${startDate}T12:00:00Z`)) / 86_400_000);
+  for (const m of CHECKIN_DAYS) {
+    if (days >= m && days < m + 7 && !sent.includes(m)) return m;
+  }
+  return null;
+}
+
+export function announceCheckIn(emp: Employee, day: number): void {
+  post({
+    emoji: "📅",
+    title: `${day} day check in due`,
+    fields: [
+      { label: "Who", value: emp.displayName },
+      { label: "Started", value: emp.startDate ?? "Unknown" },
+    ],
+    body: "Time for the manager check in: feedback, updates, and goals.",
     link: personLink(emp),
     context: "Hiring Bot",
   });

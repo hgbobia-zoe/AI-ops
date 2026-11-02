@@ -21,6 +21,8 @@ const PUBLIC: string[] = [
   "/join", // invite acceptance — the invitee isn't logged in yet (token-gated by the invite itself)
   "/pass", // Shift Pass gateway — the visitor has no session yet; the token IS the credential
   "/pass-expired", // dead-end for an ended/invalid pass (no session)
+  "/ack", // new-hire SOP read + sign page; the random token in the URL is the credential
+  "/api/sop-ack", // the SOP sign POST from that page; token-gated in the handler
   "/api/auth",
   "/track",
   // Live truck position + ETA by truckId+stopId. Driver tablets (device-bound, no session), shift-pass

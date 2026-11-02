@@ -22,6 +22,8 @@ export const ADAPTER_LABEL: Record<string, string> = {
   weddingpro: "WeddingPro",
   yelp: "Yelp for Business",
   lockly: "Lockly door",
+  whimsical: "Whimsical",
+  sop_ack: "Sign the role SOP",
 };
 
 /** Offboarding order: physical access first, then the systems that touch customers, then the rest.
@@ -34,6 +36,7 @@ export const REVOKE_PRIORITY: string[] = [
   "yelp",
   "weddingpro",
   "slack",
+  "whimsical",
   "zoe_platform",
   "connecteam",
   "google",
@@ -93,6 +96,9 @@ export const SEED_POLICIES: AccessPolicy[] = [
       rule("yelp", "manual", true),
       rule("lockly", "manual", true),
       rule("connecteam", "manual", true),
+      rule("whimsical", "manual", true),
+      rule("slack", "manual", true),
+      rule("sop_ack", "manual", true),
       rule("zoe_platform", "automated", false),
     ],
   },

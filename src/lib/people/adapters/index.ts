@@ -256,6 +256,9 @@ const ADAPTERS: Record<string, ProvisioningAdapter> = {
   weddingpro: new ReplayAdapter("weddingpro", "WeddingPro", "weddingpro"),
   yelp: new ReplayAdapter("yelp", "Yelp for Business", "yelp"),
   // Lockly stays MANUAL on purpose: the web/API needs a paid plan; the free phone app is how keys are made.
+  whimsical: new ManualAdapter("whimsical", "Whimsical", "manual", "Whimsical has no team admin API; invite or remove the member in Whimsical"),
+  // Completed by the HIRE signing the SOP at /ack/<token> (lib/people/sopAck.ts), with name + version as evidence.
+  sop_ack: new ManualAdapter("sop_ack", "Sign the role SOP", "manual", "the hire signs it from their SOP link"),
   lockly: new ManualAdapter("lockly", "Lockly door", "manual", "Lockly keys are made in the free Lockly phone app (the web portal is a paid plan)"),
   gusto: new ManualAdapter("gusto", "Gusto", "future", "Gusto onboarding/termination is a human flow in Gusto; no admin-provisioning path exists in the app"),
   google: new ManualAdapter("google", "Google Workspace / SSO", "future", "No Google identity/SSO/SCIM is implemented anywhere in the app"),

@@ -14,6 +14,7 @@ import {
 } from "@/lib/people/lifecycle";
 import { createEmployee, getEmployee, getPolicy, listTasks } from "@/lib/people/store";
 import { deriveWorkEmail, policyIssuesWorkEmail } from "@/lib/people/policy";
+import { ensureSopLink } from "@/lib/people/sopAck";
 import { announceNewHire, announceOffboardingStarted, announceOnboardingStarted, announceReady } from "@/lib/people/notify";
 
 export const dynamic = "force-dynamic";
@@ -63,7 +64,8 @@ export async function POST(req: Request): Promise<NextResponse> {
     // Convenience: optionally kick off onboarding immediately on create.
     announceNewHire(emp, policy?.name ?? null);
     if (body.startNow && startOnboarding(emp.id, actor).ok) {
-      announceOnboardingStarted(getEmployee(emp.id) ?? emp, listTasks(emp.id, "provision"));
+      const cur = getEmployee(emp.id) ?? emp;
+      announceOnboardingStarted(cur, listTasks(emp.id, "provision"), ensureSopLink(cur));
     }
     return NextResponse.json({ ok: true, id: emp.id, workEmail });
   }
@@ -80,7 +82,7 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const emp = result.ok ? getEmployee(id) : null;
   if (emp) {
-    if (action === "start_onboarding") announceOnboardingStarted(emp, listTasks(id, "provision"));
+    if (action === "start_onboarding") announceOnboardingStarted(emp, listTasks(id, "provision"), ensureSopLink(emp));
     else if (action === "advance_ready") announceReady(emp);
     else if (action === "start_offboarding") announceOffboardingStarted(emp, listTasks(id, "revoke"), body.effectiveDate ?? null);
   }
