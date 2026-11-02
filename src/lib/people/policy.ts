@@ -18,7 +18,55 @@ export const ADAPTER_LABEL: Record<string, string> = {
   goodshuffle: "Goodshuffle Pro",
   connecteam: "Connecteam",
   gusto: "Gusto",
+  squarespace_email: "Work email (Squarespace)",
+  weddingpro: "WeddingPro",
+  yelp: "Yelp for Business",
+  lockly: "Lockly door",
 };
+
+/** Offboarding order: physical access first, then the systems that touch customers, then the rest.
+ *  Lower rank = revoked (and listed) first. Unknown adapters go last. */
+export const REVOKE_PRIORITY: string[] = [
+  "lockly",
+  "squarespace_email",
+  "quo",
+  "goodshuffle",
+  "yelp",
+  "weddingpro",
+  "slack",
+  "zoe_platform",
+  "connecteam",
+  "google",
+  "gusto",
+];
+
+export function revokeRank(adapterId: string): number {
+  const i = REVOKE_PRIORITY.indexOf(adapterId);
+  return i === -1 ? REVOKE_PRIORITY.length : i;
+}
+
+/** Zoe's work email domain. */
+export const WORK_EMAIL_DOMAIN = "zoeeventsdmv.com";
+
+/** firstname.lastname@zoeeventsdmv.com from a display name. Accents stripped, non letters dropped; with a
+ *  multi word name it uses the first and the LAST word ("Ana Maria Lopez" -> ana.lopez). Null if no name. */
+export function deriveWorkEmail(displayName: string): string | null {
+  const words = displayName
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => w.replace(/[^a-z0-9]/g, ""))
+    .filter(Boolean);
+  if (words.length === 0) return null;
+  const local = words.length === 1 ? words[0] : `${words[0]}.${words[words.length - 1]}`;
+  return `${local}@${WORK_EMAIL_DOMAIN}`;
+}
+
+/** True when a policy hands out a work mailbox (so intake should derive the email). */
+export function policyIssuesWorkEmail(policy: AccessPolicy | null): boolean {
+  return Boolean(policy?.rules.some((r) => r.adapterId === "squarespace_email"));
+}
 
 const rule = (adapterId: string, mode: AdapterMode, required: boolean, systemLabel?: string): PolicyRule => ({
   adapterId,
@@ -31,6 +79,23 @@ const rule = (adapterId: string, mode: AdapterMode, required: boolean, systemLab
 // to "automated". `required` drives READY: a person is READY only when every required provision task is
 // completed (a human may Mark Complete the manual/future ones).
 export const SEED_POLICIES: AccessPolicy[] = [
+  {
+    // The Sales Associate onboarding/offboarding set (2026-11-02). Every system is required for READY.
+    // Modes are the seed's honest default; tasks snapshot each adapter's LIVE mode when materialized.
+    id: "sales_associate",
+    name: "Sales Associate",
+    seeded: true,
+    rules: [
+      rule("squarespace_email", "manual", true),
+      rule("goodshuffle", "manual", true),
+      rule("quo", "manual", true),
+      rule("weddingpro", "manual", true),
+      rule("yelp", "manual", true),
+      rule("lockly", "manual", true),
+      rule("connecteam", "manual", true),
+      rule("zoe_platform", "automated", false),
+    ],
+  },
   {
     id: "sales",
     name: "Sales Rep",

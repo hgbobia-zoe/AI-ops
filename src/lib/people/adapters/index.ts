@@ -252,6 +252,10 @@ const ADAPTERS: Record<string, ProvisioningAdapter> = {
   quo: new ReplayAdapter("quo", "Quo (OpenPhone)", "quo"),
   slack: new ReplayAdapter("slack", "Slack", "slack"),
   goodshuffle: new ReplayAdapter("goodshuffle", "Goodshuffle Pro", "goodshuffle"),
+  squarespace_email: new ReplayAdapter("squarespace_email", "Work email (Squarespace)", "squarespace_email"),
+  weddingpro: new ReplayAdapter("weddingpro", "WeddingPro", "weddingpro"),
+  yelp: new ReplayAdapter("yelp", "Yelp for Business", "yelp"),
+  lockly: new ReplayAdapter("lockly", "Lockly door", "lockly"),
   gusto: new ManualAdapter("gusto", "Gusto", "future", "Gusto onboarding/termination is a human flow in Gusto; no admin-provisioning path exists in the app"),
   google: new ManualAdapter("google", "Google Workspace / SSO", "future", "No Google identity/SSO/SCIM is implemented anywhere in the app"),
 };
