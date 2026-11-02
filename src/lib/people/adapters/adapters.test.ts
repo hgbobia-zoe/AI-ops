@@ -49,7 +49,7 @@ describe("mode() honesty", () => {
     expect(getAdapter("goodshuffle").mode()).toBe("manual"); // endpoint capture-pending
     expect(getAdapter("quo").mode()).toBe("manual");
     expect(getAdapter("slack").mode()).toBe("manual");
-    expect(getAdapter("gusto").mode()).toBe("future");
+    expect(getAdapter("gusto").mode()).toBe("manual");
     expect(getAdapter("google").mode()).toBe("future");
     // No adapter is secretly automated beyond the ones we expect.
     const automated = allAdapters().filter((a) => a.mode() === "automated").map((a) => a.id);

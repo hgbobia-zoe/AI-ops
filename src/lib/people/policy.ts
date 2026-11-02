@@ -89,6 +89,7 @@ export const SEED_POLICIES: AccessPolicy[] = [
     name: "Sales Associate",
     seeded: true,
     rules: [
+      rule("gusto", "manual", true),
       rule("squarespace_email", "manual", true),
       rule("goodshuffle", "manual", true),
       rule("quo", "manual", true),

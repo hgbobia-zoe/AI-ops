@@ -14,6 +14,7 @@ import {
 } from "@/lib/people/lifecycle";
 import { createEmployee, getEmployee, getPolicy, listTasks } from "@/lib/people/store";
 import { deriveWorkEmail, policyIssuesWorkEmail } from "@/lib/people/policy";
+import { displayNameFor, normalizeIntake, saveIntake } from "@/lib/people/intake";
 import { ensureSopLink } from "@/lib/people/sopAck";
 import { announceNewHire, announceOffboardingStarted, announceOnboardingStarted, announceReady } from "@/lib/people/notify";
 
@@ -36,6 +37,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     startDate?: string;
     effectiveDate?: string | null;
     startNow?: boolean;
+    intake?: Record<string, unknown>;
   };
   try {
     body = (await req.json()) as typeof body;
@@ -47,7 +49,14 @@ export async function POST(req: Request): Promise<NextResponse> {
   const actor = (await currentActor()).label;
 
   if (action === "create") {
-    const name = (body.displayName ?? "").trim();
+    // Full intake (preferred): validate it and take the name + phone from it.
+    let intake = null;
+    if (body.intake) {
+      const n = normalizeIntake(body.intake, new Date().toISOString().slice(0, 10));
+      if (!n.ok) return NextResponse.json({ error: n.errors.join(" ") }, { status: 400 });
+      intake = n.intake;
+    }
+    const name = intake ? displayNameFor(intake) : (body.displayName ?? "").trim();
     if (!name) return NextResponse.json({ error: "displayName required" }, { status: 400 });
     const empRole = isRole(body.role) && body.role !== "guest" ? body.role : "member";
     // Intake by name: a role that gets a mailbox gets firstname.lastname@zoeeventsdmv.com unless one was typed.
@@ -57,10 +66,12 @@ export async function POST(req: Request): Promise<NextResponse> {
     const emp = createEmployee({
       displayName: name,
       workEmail,
+      phone: intake?.phone ?? null,
       role: empRole,
       department: body.department ?? null,
       startDate: body.startDate ?? null,
     });
+    if (intake) saveIntake(emp.id, intake);
     // Convenience: optionally kick off onboarding immediately on create.
     announceNewHire(emp, policy?.name ?? null);
     if (body.startNow && startOnboarding(emp.id, actor).ok) {

@@ -23,6 +23,7 @@ import {
 } from "@/components/console-primitives";
 import { getEmployee, getPolicy, listEmployeeAudit, listTasks } from "@/lib/people/store";
 import { computeReadiness } from "@/lib/people/lifecycle";
+import { getIntake, gustoFields } from "@/lib/people/intake";
 import type { Tone } from "@/lib/tone";
 import type { LifecycleState, LifecycleTask, TaskStatus, AdapterMode } from "@/lib/people/types";
 import { LifecycleActions } from "@/components/people/LifecycleActions";
@@ -74,6 +75,7 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
   const provision = listTasks(emp.id, "provision");
   const revoke = listTasks(emp.id, "revoke");
   const readiness = computeReadiness(provision);
+  const intake = getIntake(emp.id);
   const audit = listEmployeeAudit(emp.id, 60);
   const openRevokes = revoke.filter((t) => t.status !== "completed" && t.status !== "skipped").length;
 
@@ -122,6 +124,20 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
           </p>
         )}
       </Surface>
+
+      {intake && (
+        <section className="mb-5">
+          <h2 className="mb-2 text-[11.5px] font-medium uppercase tracking-[0.08em] text-tertiary-text">Hire intake · enter in Gusto in this order</h2>
+          <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border text-[12.5px] sm:grid-cols-2">
+            {gustoFields(intake, emp.workEmail, emp.startDate).map(([label, val]) => (
+              <div key={label} className="flex items-center justify-between gap-3 bg-[var(--panel)] px-3 py-2">
+                <span className="text-meta">{label}</span>
+                <span className="select-all text-right text-foreground">{val}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <ChecklistTable
         title="Access checklist · onboarding"

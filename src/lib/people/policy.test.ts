@@ -47,7 +47,7 @@ describe("Sales Associate policy", () => {
     const p = seedPolicy("sales_associate")!;
     expect(p.name).toBe("Sales Associate");
     const req = p.rules.filter((r) => r.required).map((r) => r.adapterId).sort();
-    expect(req).toEqual(["connecteam", "goodshuffle", "lockly", "quo", "slack", "sop_ack", "squarespace_email", "weddingpro", "whimsical", "yelp"]);
+    expect(req).toEqual(["connecteam", "goodshuffle", "gusto", "lockly", "quo", "slack", "sop_ack", "squarespace_email", "weddingpro", "whimsical", "yelp"]);
     expect(p.rules.find((r) => r.adapterId === "zoe_platform")?.required).toBe(false);
     expect(policyIssuesWorkEmail(p)).toBe(true);
     expect(policyIssuesWorkEmail(seedPolicy("warehouse"))).toBe(false);
