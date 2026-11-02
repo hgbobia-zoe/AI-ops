@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // sales-ai Slack ping. Nothing real is mocked — the DB is the in-memory SQLite the harness provisions.
 vi.mock("@/lib/intake/audit", () => ({ logIntakeEvent: vi.fn(async () => {}) }));
 vi.mock("@/lib/notify/channels", () => ({ notify: vi.fn(async () => ({ ok: true })) }));
+vi.mock("@/lib/notify/sms", () => ({ sendSms: vi.fn(async () => ({ ok: true })) }));
 
 import { listGsOps } from "@/lib/db/repo";
 import { listRecentIntakes } from "@/lib/intake/store";
 import { notify } from "@/lib/notify/channels";
+import { sendSms } from "@/lib/notify/sms";
 
 type LeadBody = Record<string, unknown>;
 
@@ -44,6 +46,28 @@ describe("POST /api/intake/lead", () => {
     delete process.env.WEB_INTAKE_SALES_PING;
   });
   afterEach(() => vi.clearAllMocks());
+
+  it("texts a Google lead once (only when WEB_LEAD_SMS is on), never a website or Yelp lead", async () => {
+    process.env.WEB_INTAKE_ENABLED = "true";
+    const g = validLead({ source: "google_ads", firstName: "Jade", email: "jade.sms@example.com", phone: "5405550199" });
+    await callLead(g);
+    expect(sendSms).not.toHaveBeenCalled(); // off by default
+    process.env.WEB_LEAD_SMS = "true";
+    try {
+      await callLead({ ...g, email: "jade.sms2@example.com", phone: "5405550198" });
+      expect(sendSms).toHaveBeenCalledTimes(1);
+      const [to, text] = vi.mocked(sendSms).mock.calls[0];
+      expect(to).toBe("5405550198");
+      expect(text).toMatch(/^Hi Jade, thanks for reaching out/);
+      expect(text).not.toMatch(/[—–-]/);
+      await callLead({ ...g, email: "jade.sms2@example.com", phone: "5405550198" }); // duplicate: no second text
+      await callLead(validLead({ email: "web.sms@example.com", phone: "5405550197" }));
+      await callLead(validLead({ source: "yelp", email: "yelp.sms@example.com", phone: "5405550196" }));
+      expect(sendSms).toHaveBeenCalledTimes(1);
+    } finally {
+      delete process.env.WEB_LEAD_SMS;
+    }
+  });
 
   it("400s when neither email nor phone is provided", async () => {
     const r = await callLead({ source: "web_form", firstName: "No", lastName: "Contact", eventType: "wedding" });
