@@ -55,7 +55,8 @@ describe("gsTemplateText", () => {
 
 describe("drainer parity", () => {
   it("the extension carries a verbatim copy of the renderer", () => {
-    const ext = readFileSync(fileURLToPath(new URL("../../../extension/pull-injected.js", import.meta.url)), "utf8");
+    // Line endings normalized: a Windows checkout turns the file's LF into CRLF.
+    const ext = readFileSync(fileURLToPath(new URL("../../../extension/pull-injected.js", import.meta.url)), "utf8").replace(/\r\n/g, "\n");
     expect(ext).toContain(GS_TEMPLATE_JS);
     expect(ext).toContain('o.op === "email_template"');
   });
