@@ -4362,30 +4362,13 @@ export function recentLeadCreateOpExists(emailKey: string, phoneKey: string, win
   return Boolean(row);
 }
 
-/** The acknowledgement-email bits a WEB-LEAD create op stashed in its payload (null for a guided intake or
- *  when no create op exists). /api/gs/intake-result reads this to enqueue the ack email_send ONLY once
- *  Goodshuffle has confirmed the project id — so the ack is tied to real project creation, never claimed
- *  early. Newest matching op wins. */
-export function webLeadAckForIntake(intakeId: string): { content: string; subject: string } | null {
-  if (!intakeId) return null;
-  const row = getDb()
-    .prepare(
-      `SELECT payload FROM gs_outbox WHERE op = 'create_project'
-         AND json_extract(payload, '$.intakeId') = ? AND json_extract(payload, '$.kind') = 'web_lead'
-       ORDER BY created_at DESC LIMIT 1`,
-    )
-    .get(intakeId) as { payload: string | null } | undefined;
-  if (!row || !row.payload) return null;
-  try {
-    const p = JSON.parse(row.payload) as { webLeadAck?: { content?: string; subject?: string } };
-    const ack = p.webLeadAck;
-    if (ack && typeof ack.content === "string" && ack.content) {
-      return { content: ack.content, subject: typeof ack.subject === "string" ? ack.subject : "" };
-    }
-  } catch {
-    /* malformed payload → no ack */
-  }
-  return null;
+/** True when an op of this type with this payload dedupeKey was EVER enqueued (any status, no time window).
+ *  For sends that must happen at most once per record, e.g. the web-lead welcome email. */
+export function gsOpDedupeKeyExists(op: string, dedupeKey: string): boolean {
+  if (!op || !dedupeKey) return false;
+  return !!getDb()
+    .prepare("SELECT 1 FROM gs_outbox WHERE op = ? AND json_extract(payload, '$.dedupeKey') = ? LIMIT 1")
+    .get(op, dedupeKey);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════════

@@ -15,7 +15,8 @@ export type IntakeAction =
   | "GS_QUOTE_OPENED"
   | "WEB_LEAD_DISABLED" // structured web/connector lead accepted while the master switch is off
   | "WEB_LEAD_DUPLICATE" // a web lead for the same contact within the dedupe window
-  | "WEB_LEAD_QUEUED"; // a web lead's create_project op was enqueued
+  | "WEB_LEAD_QUEUED" // a web lead's create_project op was enqueued
+  | "WEB_LEAD_WELCOME_QUEUED"; // the Goodshuffle welcome-template email was queued for the new project
 
 export async function logIntakeEvent(action: IntakeAction, intakeId: string, detail?: Record<string, unknown>): Promise<void> {
   try {

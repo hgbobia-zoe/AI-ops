@@ -7,7 +7,6 @@
 // unit-testable; the route does the I/O.
 
 import type { IntakeEventType, IntakePatch } from "./types";
-import { humanize } from "@/lib/salesos/outreach";
 
 // ── Flags (default OFF) ──────────────────────────────────────────────────────────────────────────────
 // Master switch. Until WEB_INTAKE_ENABLED === "true" the endpoint ACCEPTS + records a lead (nothing is
@@ -21,11 +20,23 @@ export function webIntakeEnabled(): boolean {
 export function webIntakeSalesPingEnabled(): boolean {
   return process.env.WEB_INTAKE_SALES_PING === "true";
 }
-// The app's own thank-you email to the customer, sent once the Goodshuffle project exists. Default OFF:
-// the website Zap already emails and texts the customer before it calls us, so this would be a second
-// thank-you. Turn on only for a source whose Zap does not acknowledge the customer itself.
+// The welcome email to the customer, sent from inside the new Goodshuffle project as soon as it exists.
+// Default OFF: the website Zap may still send its own Gmail thank-you, and two welcome emails would be
+// one too many. Turn on with WEB_INTAKE_ACK_EMAIL=true once the Zap's Gmail step is off.
 export function webIntakeAckEmailEnabled(): boolean {
   return process.env.WEB_INTAKE_ACK_EMAIL === "true";
+}
+
+/** Does this lead source get the welcome email? Not Yelp: the Yelp Zap already auto-replies inside Yelp,
+ *  and a Yelp lead's email is a Yelp relay address, so the template would land as a second Yelp message. */
+export function webLeadWelcomeApplies(source: string): boolean {
+  return !/yelp/i.test(source || "");
+}
+
+/** The Goodshuffle email template the welcome email uses (Messages → Templates). Read live at send time,
+ *  so the team edits the wording in Goodshuffle, never in code. Override with WEB_LEAD_EMAIL_TEMPLATE. */
+export function webLeadEmailTemplateName(): string {
+  return process.env.WEB_LEAD_EMAIL_TEMPLATE?.trim() || "New Webform Submission";
 }
 
 /** The tolerant body a source Zap POSTs. Everything optional; unknown/extra fields are ignored. */
@@ -142,8 +153,12 @@ function eventTypeLabel(n: NormalizedLead): string {
  *  "Smith - Wedding". Falls back to just the name when no type is known, and to "New web lead" when the
  *  customer gave no name at all. */
 export function webLeadEventName(n: NormalizedLead): string {
-  const name = n.lastName.trim() || n.firstName.trim() || "New web lead";
-  const label = eventTypeLabel(n);
+  const first = n.firstName.trim();
+  const last = n.lastName.trim();
+  // A bare initial ("H.", Yelp's style) is not a usable surname on its own: keep "Mel H." instead.
+  const initialOnly = last.replace(/\./g, "").length === 1;
+  const name = (initialOnly ? `${first} ${last}`.trim() : last || first) || "New web lead";
+  const label = eventTypeLabel(n) || (/yelp/i.test(n.source) ? "Yelp" : "");
   return label ? `${name} - ${label}` : name;
 }
 
@@ -161,21 +176,4 @@ export function toIntakePatch(n: NormalizedLead): IntakePatch {
     guestCount: n.guestCount,
     salesNotes: n.message,
   };
-}
-
-// Escape + wrap a one-line body into the simple HTML Goodshuffle's message editor produces.
-function toHtml(text: string): string {
-  const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return `<div>${esc}</div>`;
-}
-
-/** The short acknowledgement email enqueued once Goodshuffle confirms the project id (see intake-result).
- *  House style: no dashes, no emoji, short + natural (run through humanize()). Goodshuffle appends the
- *  company signature on send, so no sign-off is included here. */
-export function buildAckEmail(n: NormalizedLead): { content: string; subject: string } {
-  const name = n.firstName.trim() || "there";
-  const body = humanize(
-    `Hi ${name}, thanks for reaching out to Zoe Events. We received your information and someone from our team will follow up with you soon. We are looking forward to working with you.`,
-  );
-  return { content: toHtml(body), subject: "Thanks for reaching out to Zoe Events" };
 }

@@ -189,6 +189,36 @@ function zoePull(apiBase, tier) {
     }).catch(() => ({ stops: 0, days: 0, failed: 1, unmatched: [] }));
   }
 
+  // ---- Goodshuffle email template renderer: VERBATIM copy of GS_TEMPLATE_JS (src/lib/intake/gsTemplate.ts);
+  // a test checks the copy, so change it there and paste it here. ----
+  function gsRenderTemplate(html, tags) {
+  var vals = {};
+  (tags || []).forEach(function (t) { if (t && t.name) vals[String(t.name).replace(/\s+/g, "").toLowerCase()] = t.transactionValue; });
+  var FALLBACK = { firstname: "there" };
+  var esc = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+  var src = String(html || ""), out = "", i = 0, m;
+  var re = /<span\b[^>]*class="[^"]*\bmention\b[^"]*"[^>]*>/gi;
+  while ((m = re.exec(src))) {
+    var open = m[0], start = m.index, j = start + open.length, depth = 1, t;
+    var tagRe = /<\/?span\b[^>]*>/gi;
+    tagRe.lastIndex = j;
+    while (depth > 0 && (t = tagRe.exec(src))) { depth += t[0].charAt(1) === "/" ? -1 : 1; j = tagRe.lastIndex; }
+    var km = /data-original="([^"]*)"/i.exec(open) || /data-value="([^"]*)"/i.exec(open);
+    var key = km ? km[1].replace(/\s+/g, "").toLowerCase() : "";
+    var v = vals[key];
+    if (v == null || v === "") v = FALLBACK[key] || "";
+    out += src.slice(i, start) + esc(v);
+    i = j;
+    re.lastIndex = j;
+  }
+  return out + src.slice(i);
+}
+function gsTemplateText(html) {
+  return String(html || "").replace(/<br\s*\/?>/gi, " ").replace(/<\/(div|p|li)>/gi, " ").replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ").trim();
+}
+
   // ---- Outbox drain: push queued Dispatch → Goodshuffle writes (photos, note appends) ----
   function ackOp(id, ok, err) { return fetch(API + "/api/gs/outbox", { method: "POST", headers: POSTH, body: JSON.stringify({ id, ok, error: ok ? undefined : err }) }).catch(() => {}); }
   function drainOutbox() {
@@ -199,6 +229,7 @@ function zoePull(apiBase, tier) {
       const teamOps = all.filter((o) => o.op === "add_team_member" && o.transactionId && o.payload && o.payload.userID);
       const feeOps = all.filter((o) => o.op === "set_delivery_fee" && o.transactionId && o.payload && o.payload.amount != null);
       const emailOps = all.filter((o) => o.op === "email_send" && o.transactionId && o.payload && o.payload.content);
+      const tplOps = all.filter((o) => o.op === "email_template" && o.transactionId && o.payload && (o.payload.templateName || o.payload.templateId));
       const taskOps = all.filter((o) => o.op === "create_gs_task" && o.transactionId && o.payload && o.payload.title);
       const provOps = all.filter((o) => (o.op === "provision_user" || o.op === "revoke_user") && o.payload && o.payload.system);
       const esignOps = all.filter((o) => o.op === "disable_esignature" && o.transactionId);
@@ -206,7 +237,7 @@ function zoePull(apiBase, tier) {
       // from a real user gesture — a timer-driven content script has none, so the office bookmarklet or a
       // Playwright runner drains those). Surfaced in the result so they're VISIBLE, never silently
       // ignored forever. Keep this set in sync with the handlers below + gsPull.ts.
-      const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1, disable_esignature: 1 };
+      const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, email_template: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1, disable_esignature: 1 };
       const unhandledOps = all.filter((o) => !HANDLED[o.op]);
       let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, emails = 0, tasks = 0, provisioned = 0, esigns = 0, chain = Promise.resolve();
       // provision_user / revoke_user: People Lifecycle access provisioning via REPLAY. Mirrors
@@ -278,6 +309,33 @@ function zoePull(apiBase, tier) {
           const payload = { messageID: last.id, transactionID: txID, content: o.payload.content, recipients: recips, subject: subj, messageType: "CLIENT", attachments: [] };
           return fetch("/app/conversation/sendMessage", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include", body: JSON.stringify(payload) }).then((r) => r.ok);
         }).then((ok) => { if (ok) emails++; else failed++; return ackOp(o.id, ok, "email_send_failed"); }).catch((e) => { failed++; return ackOp(o.id, false, "email_send_" + (typeof e === "string" ? e : "error")); });
+      }); });
+      // email_template: send a Goodshuffle email TEMPLATE (e.g. the web-lead welcome) as a NEW client email.
+      // The template list for this project comes back with every variable filled in (templateTags[].
+      // transactionValue); gsRenderTemplate swaps the #variable chips for those values. Recipients are the
+      // project's client participants (present even before any message). If an email with the same subject
+      // is already in the client thread (an earlier send whose ack was lost), it acks done without sending.
+      tplOps.forEach((o) => { chain = chain.then(() => {
+        const GH = { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" };
+        const tx = o.transactionId; let txID = Number(tx); if (!txID) txID = tx;
+        let tpl = null;
+        return fetch("/app/messageTemplate/list?transactionID=" + encodeURIComponent(tx), GH).then((r) => { if (!r.ok) throw "template_list_" + r.status; return r.json(); }).then((j) => {
+          const want = String(o.payload.templateName || "").trim().toLowerCase();
+          tpl = ((j && j.templates) || []).filter((t) => (o.payload.templateId && String(t.id) === String(o.payload.templateId)) || (want && String(t.name || "").trim().toLowerCase() === want))[0] || null;
+          if (!tpl) throw "template_not_found";
+          if (tpl.medium && tpl.medium !== "EMAIL") throw "template_not_email";
+          return fetch("/app/conversation/getMessagesForTransaction?transactionID=" + encodeURIComponent(tx), GH);
+        }).then((r) => { if (!r.ok) throw "thread_" + r.status; return r.json(); }).then((cv) => {
+          const subject = gsTemplateText(gsRenderTemplate(tpl.subject, tpl.templateTags));
+          const content = gsRenderTemplate(tpl.content, tpl.templateTags);
+          if (!subject || !gsTemplateText(content)) throw "template_empty";
+          const msgs = (cv && cv.client && cv.client.messages) || [];
+          if (msgs.some((m) => gsTemplateText(m.subject) === subject)) return true; // already sent
+          const recips = ((cv && cv.client && cv.client.participants) || []).filter((p) => p && p.email).map((p) => ({ contactID: p.contactID, email: p.email, name: p.name, isCurrentUser: false, isEmailValid: true, deliveryConfirmedDate: null, messageOpenedDate: null, hardBouncedDate: null, droppedMessageDate: null }));
+          if (!recips.length) throw "no_recipient";
+          const payload = { messageID: null, templateID: tpl.id, transactionID: txID, content, recipients: recips, subject, messageType: "CLIENT", attachments: (tpl.attachments || []).map((a) => a && a.id).filter(Boolean) };
+          return fetch("/app/conversation/sendMessage", { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include", body: JSON.stringify(payload) }).then((r) => r.ok);
+        }).then((ok) => { if (ok) emails++; else failed++; return ackOp(o.id, ok, "email_template_failed"); }).catch((e) => { failed++; return ackOp(o.id, false, "email_template_" + (typeof e === "string" ? e : "error")); });
       }); });
       // create_gs_task: queue a to-do on the GSPRO project. Form-urlencoded POST /app/task/createTask
       // (captured + verified live in gsPull.ts). On success ack; on FAILURE leave the op PENDING (no ack)
