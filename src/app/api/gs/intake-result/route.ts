@@ -6,9 +6,10 @@
 import { NextResponse } from "next/server";
 import { getIntake, updateIntake } from "@/lib/intake/store";
 import { logIntakeEvent } from "@/lib/intake/audit";
-import { enqueueGsOp, webLeadAckForIntake, recentEmailSendOpExists } from "@/lib/db/repo";
+import { enqueueGsOp, gsOpDedupeKeyExists } from "@/lib/db/repo";
 import { notify } from "@/lib/notify/channels";
-import { replyToLeadPostSoon } from "@/lib/intake/leadSlackReply";
+import { isWebLead, replyToLeadPostSoon } from "@/lib/intake/leadSlackReply";
+import { webIntakeAckEmailEnabled, webLeadEmailTemplateName, webLeadWelcomeApplies } from "@/lib/intake/webLead";
 
 export const dynamic = "force-dynamic";
 
@@ -64,23 +65,25 @@ export async function POST(req: Request): Promise<NextResponse> {
     await logIntakeEvent("GS_SHELL_CREATED", id, { projectId: String(body.projectId) });
     // Web leads: Viktor replies under the lead's #new-leads post with the project link (once; no-op otherwise).
     replyToLeadPostSoon(id);
-    // WEB-LEAD extension: a lead from the structured receiver (/api/intake/lead) carries an acknowledgement
-    // email in its create_project op payload. Now that Goodshuffle has CONFIRMED the project id, enqueue the
-    // ack as an email_send op (the proven GS email write-back) so it only ever fires once the project really
-    // exists. Guided intakes carry no ack (webLeadAckForIntake returns null) and are unaffected. The office
-    // session threads it into the project's client email; see the caveat in the PR notes if no thread exists.
-    const ack = webLeadAckForIntake(id);
-    // Idempotency: the office session may report the same created project back more than once (a retry, a
-    // lost-response re-POST, a re-pull). Dedup on consume is producer-side only (recentEmailSendOpExists),
-    // so guard the ack enqueue here too — otherwise a repeat callback would send the customer two acks.
-    const ackDedupeKey = `weback:${id}`;
-    if (ack && !recentEmailSendOpExists(ackDedupeKey)) {
+    // Web leads with an email: send the team's Goodshuffle welcome template ("New Webform Submission") from
+    // inside the new project, now that the project really exists. The office drainer fills the template's
+    // variables for this project and starts the client email thread (email_template op). Once per lead,
+    // ever: a repeat callback for the same project never enqueues a second email.
+    const welcomeKey = `welcome:${id}`;
+    if (
+      webIntakeAckEmailEnabled() &&
+      isWebLead(existing) &&
+      webLeadWelcomeApplies(existing.source ?? "") &&
+      existing.email.trim() &&
+      !gsOpDedupeKeyExists("email_template", welcomeKey)
+    ) {
       enqueueGsOp({
-        op: "email_send",
+        op: "email_template",
         transactionId: String(body.projectId),
-        label: "web lead acknowledgement",
-        payload: { content: ack.content, subject: ack.subject || undefined, dedupeKey: ackDedupeKey },
+        label: "web lead welcome email",
+        payload: { templateName: webLeadEmailTemplateName(), dedupeKey: welcomeKey },
       });
+      await logIntakeEvent("WEB_LEAD_WELCOME_QUEUED", id, { projectId: String(body.projectId) });
     }
   } else {
     updateIntake(id, { status: "failed", gsStatus: "failed", gsError: (body.error ?? "unknown").slice(0, 300) });

@@ -9,6 +9,7 @@
 // captures contract totals (revenue) + customer identity. Shows an on-page banner (a human clicks it).
 
 import { PROVISION_ENDPOINTS } from "@/lib/people/provisioningEndpoints";
+import { GS_TEMPLATE_JS } from "@/lib/intake/gsTemplate";
 
 // ── Note/comms capture id-selection (PURE, shared contract) ──────────────────────────────────────────────
 // The set of Goodshuffle project ids whose notes/comms (internalNotes + client notes + email thread) the
@@ -97,6 +98,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
   return `(function(){
     var PUB=${PUB}; var AUTO=${AUTO}; var FULLAUTO=${FULLAUTO}; var SKIP_CREATE=${SKIP}; var PROVISION_EP=${PROV};
     function POSTH(){ return PUB ? {"content-type":"application/json","x-publish-token":PUB} : {"content-type":"application/json"}; }
+${GS_TEMPLATE_JS}
   function banner(msg,color){ try{ var id="__zoePull"; var e=document.getElementById(id); if(!e){e=document.createElement("div");e.id=id;e.style.cssText="position:fixed;z-index:2147483647;top:14px;right:14px;padding:11px 15px;border-radius:8px;font:600 13px system-ui,sans-serif;color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:360px";document.body.appendChild(e);} e.style.background=color; e.textContent=msg; }catch(x){} }
   function done(){ setTimeout(function(){var e=document.getElementById("__zoePull");if(e)e.remove();},7000); }
   try{
@@ -300,6 +302,7 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
         var noteOps=all.filter(function(o){ return o.op==="note_append" && o.transactionId && o.payload && o.payload.line; });
         var teamOps=all.filter(function(o){ return o.op==="add_team_member" && o.transactionId && o.payload && o.payload.userID; });
         var emailOps=all.filter(function(o){ return o.op==="email_send" && o.transactionId && o.payload && o.payload.content; });
+        var tplOps=all.filter(function(o){ return o.op==="email_template" && o.transactionId && o.payload && (o.payload.templateName||o.payload.templateId); });
         var feeOps=all.filter(function(o){ return o.op==="set_delivery_fee" && o.transactionId && o.payload && o.payload.amount!=null; });
         var taskOps=all.filter(function(o){ return o.op==="create_gs_task" && o.transactionId && o.payload && o.payload.title; });
         var provOps=all.filter(function(o){ return (o.op==="provision_user"||o.op==="revoke_user") && o.payload && o.payload.system; });
@@ -401,6 +404,31 @@ export function buildOfficePullScript(apiBase: string, publishToken?: string, au
               var payload={ messageID:last.id, transactionID:txID, content:o.payload.content, recipients:recips, subject:subj, messageType:"CLIENT", attachments:[] };
               return fetch("/app/conversation/sendMessage",{method:"POST",headers:{"content-type":"application/json","x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include",body:JSON.stringify(payload)}).then(function(r){ return r.ok; });
             }).then(function(ok){ if(ok)emails++; else failed++; return ackOp(o.id,ok,"email_send_failed"); }).catch(function(e){ failed++; return ackOp(o.id,false,"email_send_"+(typeof e==="string"?e:"error")); });
+          });
+        });
+        // email_template: send a Goodshuffle email TEMPLATE (the web-lead welcome) as a NEW client email,
+        // variables filled for this project. Same logic as extension/pull-injected.js (see gsTemplate.ts).
+        tplOps.forEach(function(o){
+          chain=chain.then(function(){
+            var GH={headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"};
+            var tx=o.transactionId, txID=Number(tx)||tx, tpl=null;
+            return fetch("/app/messageTemplate/list?transactionID="+encodeURIComponent(tx),GH).then(function(r){ if(!r.ok) throw "template_list_"+r.status; return r.json(); }).then(function(j){
+              var want=String(o.payload.templateName||"").trim().toLowerCase();
+              tpl=((j&&j.templates)||[]).filter(function(t){ return (o.payload.templateId && String(t.id)===String(o.payload.templateId)) || (want && String(t.name||"").trim().toLowerCase()===want); })[0]||null;
+              if(!tpl) throw "template_not_found";
+              if(tpl.medium && tpl.medium!=="EMAIL") throw "template_not_email";
+              return fetch("/app/conversation/getMessagesForTransaction?transactionID="+encodeURIComponent(tx),GH);
+            }).then(function(r){ if(!r.ok) throw "thread_"+r.status; return r.json(); }).then(function(cv){
+              var subject=gsTemplateText(gsRenderTemplate(tpl.subject,tpl.templateTags));
+              var content=gsRenderTemplate(tpl.content,tpl.templateTags);
+              if(!subject || !gsTemplateText(content)) throw "template_empty";
+              var msgs=(cv&&cv.client&&cv.client.messages)||[];
+              if(msgs.some(function(m){ return gsTemplateText(m.subject)===subject; })) return true; // already sent
+              var recips=((cv&&cv.client&&cv.client.participants)||[]).filter(function(p){ return p&&p.email; }).map(function(p){ return {contactID:p.contactID, email:p.email, name:p.name, isCurrentUser:false, isEmailValid:true, deliveryConfirmedDate:null, messageOpenedDate:null, hardBouncedDate:null, droppedMessageDate:null}; });
+              if(!recips.length) throw "no_recipient";
+              var payload={ messageID:null, templateID:tpl.id, transactionID:txID, content:content, recipients:recips, subject:subject, messageType:"CLIENT", attachments:(tpl.attachments||[]).map(function(a){ return a&&a.id; }).filter(Boolean) };
+              return fetch("/app/conversation/sendMessage",{method:"POST",headers:{"content-type":"application/json","x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include",body:JSON.stringify(payload)}).then(function(r){ return r.ok; });
+            }).then(function(ok){ if(ok)emails++; else failed++; return ackOp(o.id,ok,"email_template_failed"); }).catch(function(e){ failed++; return ackOp(o.id,false,"email_template_"+(typeof e==="string"?e:"error")); });
           });
         });
         // create_gs_task: queue a to-do on the GSPRO project (e.g. "confirm the linen sub-rental was

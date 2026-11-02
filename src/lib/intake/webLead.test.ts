@@ -4,7 +4,7 @@ import {
   leadValidationError,
   webLeadEventName,
   toIntakePatch,
-  buildAckEmail,
+  webLeadEmailTemplateName,
 } from "./webLead";
 
 // Pure-function layer for the structured web-lead receiver. The route's I/O (record → gate → dedupe →
@@ -134,23 +134,12 @@ describe("toIntakePatch", () => {
   });
 });
 
-describe("buildAckEmail", () => {
-  it("greets by first name and mentions Zoe Events", () => {
-    const ack = buildAckEmail(normalizeLead({ firstName: "Pat", email: "a@b.com" }));
-    expect(ack.content).toContain("Hi Pat");
-    expect(ack.content).toContain("Zoe Events");
-    expect(ack.subject).toBe("Thanks for reaching out to Zoe Events");
-  });
-  it("falls back to 'Hi there' when no first name", () => {
-    expect(buildAckEmail(normalizeLead({ email: "a@b.com" })).content).toContain("Hi there");
-  });
-  it("obeys house comms style: no dashes and no emoji", () => {
-    const ack = buildAckEmail(normalizeLead({ firstName: "Pat", email: "a@b.com" }));
-    expect(ack.content).not.toMatch(/[—–]/); // em / en dash
-    expect(ack.content).not.toMatch(/ - /); // spaced hyphen used as a dash
-    expect(ack.content).not.toMatch(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u); // emoji
-  });
-  it("wraps the body in the simple HTML the GS editor produces", () => {
-    expect(buildAckEmail(normalizeLead({ firstName: "Pat", email: "a@b.com" })).content).toMatch(/^<div>.*<\/div>$/s);
+describe("webLeadEmailTemplateName", () => {
+  it("defaults to the Goodshuffle template the team made for web leads, and can be overridden", () => {
+    delete process.env.WEB_LEAD_EMAIL_TEMPLATE;
+    expect(webLeadEmailTemplateName()).toBe("New Webform Submission");
+    process.env.WEB_LEAD_EMAIL_TEMPLATE = "  Yelp Welcome ";
+    expect(webLeadEmailTemplateName()).toBe("Yelp Welcome");
+    delete process.env.WEB_LEAD_EMAIL_TEMPLATE;
   });
 });

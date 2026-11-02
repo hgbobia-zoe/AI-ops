@@ -127,6 +127,39 @@ describe("POST /api/intake/lead", () => {
     expect(createOpsFor(second.intakeId)).toHaveLength(0); // no second create op
   });
 
+  it("soft mode never answers with an error status (a Zap's later steps keep running)", async () => {
+    const { POST } = await import("./route");
+    const bad = await POST(new Request("http://localhost/api/intake/lead?soft=1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ firstName: "No", lastName: "Contact" }) }));
+    expect(bad.status).toBe(200);
+    expect(await bad.json()).toMatchObject({ ok: false, created: false, error: "email_or_phone_required" });
+    process.env.INTAKE_TOKEN = "s3cret";
+    const unauth = await POST(new Request("http://localhost/api/intake/lead?soft=1", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }));
+    expect(unauth.status).toBe(200);
+    expect((await unauth.json()).error).toBe("unauthorized");
+  });
+
+  it("dryRun only parses and echoes the lead (nothing recorded, no project)", async () => {
+    process.env.WEB_INTAKE_ENABLED = "true";
+    const before = listRecentIntakes(500).length;
+    const { POST } = await import("./route");
+    const r = await POST(new Request("http://localhost/api/intake/lead?dryRun=1&slack=1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ temporary_email_address: "leadsapi+dry@messaging.yelp.com", user: { display_name: "Dee R." } }) }));
+    const j = (await r.json()) as { ok: boolean; dryRun: boolean; eventName: string; slackText: string };
+    expect(j).toMatchObject({ ok: true, dryRun: true, eventName: "Dee R. - Yelp" });
+    expect(j.slackText).toContain("leadsapi+dry@messaging.yelp.com");
+    expect(listRecentIntakes(500).length).toBe(before);
+  });
+
+  it("accepts a raw Yelp lead and creates the project", async () => {
+    process.env.WEB_INTAKE_ENABLED = "true";
+    const { POST } = await import("./route");
+    const r = await POST(new Request("http://localhost/api/intake/lead?slack=1", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ temporary_email_address: "leadsapi+raw@messaging.yelp.com", user: { display_name: "Ray W." }, project: { additional_info: "Need 40 chairs" } }) }));
+    const j = (await r.json()) as { created: boolean; intakeId: string };
+    expect(j.created).toBe(true);
+    const p = createOpsFor(j.intakeId)[0].payload as Record<string, unknown>;
+    expect(p.source).toBe("yelp");
+    expect(p.eventName).toBe("Ray W. - Yelp");
+  });
+
   it("fires the sales-ai ping only when its flag is on", async () => {
     process.env.WEB_INTAKE_ENABLED = "true";
     await callLead(validLead({ email: "ping1@example.com", phone: "5550000006" }));
@@ -138,9 +171,12 @@ describe("POST /api/intake/lead", () => {
   });
 });
 
-describe("web-lead acknowledgement email (tied to /api/gs/intake-result)", () => {
+describe("web-lead welcome email (Goodshuffle template, tied to /api/gs/intake-result)", () => {
+  const welcomeOps = (projectId: string) => listGsOps(200).filter((o) => o.op === "email_template" && o.transactionId === projectId);
+
   beforeEach(() => {
     delete process.env.INTAKE_TOKEN;
+    delete process.env.WEB_LEAD_EMAIL_TEMPLATE;
     process.env.WEB_INTAKE_ENABLED = "true";
     process.env.WEB_INTAKE_ACK_EMAIL = "true";
   });
@@ -149,45 +185,52 @@ describe("web-lead acknowledgement email (tied to /api/gs/intake-result)", () =>
     delete process.env.WEB_INTAKE_ACK_EMAIL;
   });
 
-  it("sends NO ack email by default (the website Zap already thanks the customer)", async () => {
+  it("sends NO welcome email while its switch is off (default)", async () => {
     delete process.env.WEB_INTAKE_ACK_EMAIL;
     const j = (await (await callLead(validLead({ email: "noack@example.com", phone: "5550000010" }))).json()) as { intakeId: string };
     expect(createOpsFor(j.intakeId)).toHaveLength(1); // the project is still queued
     const res = await callIntakeResult({ intakeId: j.intakeId, projectId: "99003", ok: true });
     expect(res.status).toBe(200);
-    const emails = listGsOps(200).filter((o) => o.op === "email_send" && o.transactionId === "99003");
-    expect(emails).toHaveLength(0);
+    expect(welcomeOps("99003")).toHaveLength(0);
   });
 
-  it("enqueues an email_send ack ONLY once Goodshuffle confirms the project id", async () => {
+  it("queues the template email ONLY once Goodshuffle confirms the project id", async () => {
     const j = (await (await callLead(validLead({ email: "ack@example.com", phone: "5550000008" }))).json()) as { intakeId: string };
+    expect(welcomeOps("99001")).toHaveLength(0); // nothing before the project exists
 
-    // Before the callback: no ack email yet for this project.
-    const before = listGsOps(200).filter((o) => o.op === "email_send" && o.transactionId === "99001");
-    expect(before).toHaveLength(0);
-
-    // Office session reports the created project id back.
     const res = await callIntakeResult({ intakeId: j.intakeId, projectId: "99001", ok: true });
     expect(res.status).toBe(200);
 
-    const emails = listGsOps(200).filter((o) => o.op === "email_send" && o.transactionId === "99001");
-    expect(emails).toHaveLength(1);
-    const p = emails[0].payload as { content?: string; dedupeKey?: string };
-    expect(String(p.content)).toContain("Zoe Events");
-    expect(String(p.content)).not.toMatch(/[—–]/); // house style: no dashes
-    expect(p.dedupeKey).toBe(`weback:${j.intakeId}`);
+    const ops = welcomeOps("99001");
+    expect(ops).toHaveLength(1);
+    expect(ops[0].payload).toEqual({ templateName: "New Webform Submission", dedupeKey: `welcome:${j.intakeId}` });
+    // The old reply-into-thread acknowledgement is gone (a new project has no thread to reply into).
+    expect(listGsOps(200).filter((o) => o.op === "email_send" && o.transactionId === "99001")).toHaveLength(0);
   });
 
-  it("does NOT enqueue a second ack when the office reports the same project twice (idempotent)", async () => {
+  it("never queues a second welcome when the office reports the same project twice", async () => {
     const j = (await (await callLead(validLead({ email: "ack2@example.com", phone: "5550000009" }))).json()) as { intakeId: string };
+    expect((await callIntakeResult({ intakeId: j.intakeId, projectId: "99002", ok: true })).status).toBe(200);
+    expect((await callIntakeResult({ intakeId: j.intakeId, projectId: "99002", ok: true })).status).toBe(200);
+    expect(welcomeOps("99002")).toHaveLength(1);
+  });
 
-    const first = await callIntakeResult({ intakeId: j.intakeId, projectId: "99002", ok: true });
-    expect(first.status).toBe(200);
-    // A duplicate callback (retry / lost-response re-POST / re-pull) for the same project id.
-    const second = await callIntakeResult({ intakeId: j.intakeId, projectId: "99002", ok: true });
-    expect(second.status).toBe(200);
+  it("skips a lead with no email (phone-only)", async () => {
+    const j = (await (await callLead({ source: "yelp", firstName: "Phone", lastName: "Only", phone: "5550000011" })).json()) as { intakeId: string };
+    expect((await callIntakeResult({ intakeId: j.intakeId, projectId: "99004", ok: true })).status).toBe(200);
+    expect(welcomeOps("99004")).toHaveLength(0);
+  });
 
-    const emails = listGsOps(200).filter((o) => o.op === "email_send" && o.transactionId === "99002");
-    expect(emails).toHaveLength(1); // still exactly one ack — the customer is not double-emailed
+  it("skips Yelp leads (the Yelp Zap already auto-replies inside Yelp)", async () => {
+    const j = (await (await callLead(validLead({ source: "yelp", email: "leadsapi+abc@messaging.yelp.com", phone: "5550000013" }))).json()) as { intakeId: string };
+    expect((await callIntakeResult({ intakeId: j.intakeId, projectId: "99006", ok: true })).status).toBe(200);
+    expect(welcomeOps("99006")).toHaveLength(0);
+  });
+
+  it("uses the template named in WEB_LEAD_EMAIL_TEMPLATE", async () => {
+    process.env.WEB_LEAD_EMAIL_TEMPLATE = "Yelp Welcome";
+    const j = (await (await callLead(validLead({ email: "named@example.com", phone: "5550000012" }))).json()) as { intakeId: string };
+    await callIntakeResult({ intakeId: j.intakeId, projectId: "99005", ok: true });
+    expect((welcomeOps("99005")[0].payload as { templateName: string }).templateName).toBe("Yelp Welcome");
   });
 });

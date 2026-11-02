@@ -3,7 +3,7 @@
 // an import-ledger line, so a lead is never lost), and — when the master switch is on and it is not a
 // duplicate — it creates a Goodshuffle project by REUSING the guided-intake create_project gs_outbox op
 // (the logged-in office session drains it and reports the id back to /api/gs/intake-result, which then
-// enqueues the acknowledgement email). No email/LLM parsing: all sources send structured fields.
+// enqueues the Goodshuffle welcome-template email). No email/LLM parsing: all sources send structured fields.
 //
 // Auth: a dedicated token header `x-intake-token` vs env INTAKE_TOKEN. Fail-CLOSED when INTAKE_TOKEN is
 // set (must match, else 401); fail-OPEN until it is set, mirroring the GS_INGEST_TOKEN posture used by the
@@ -20,16 +20,16 @@ import {
   leadValidationError,
   toIntakePatch,
   webLeadEventName,
-  buildAckEmail,
   webIntakeEnabled,
   webIntakeSalesPingEnabled,
-  webIntakeAckEmailEnabled,
   type WebLeadInput,
 } from "@/lib/intake/webLead";
 import { enqueueGsOp, recentLeadCreateOpExists } from "@/lib/db/repo";
 import { logImport } from "@/lib/pull/state";
 import { logIntakeEvent } from "@/lib/intake/audit";
 import { notify } from "@/lib/notify/channels";
+import { adaptLeadBody, newLeadSlackText } from "@/lib/intake/sourceAdapters";
+import { postNewLeadToSlack } from "@/lib/intake/leadSlackReply";
 
 export const dynamic = "force-dynamic";
 
@@ -48,23 +48,51 @@ export async function POST(req: Request): Promise<NextResponse> {
   // Token gate: fail-closed once INTAKE_TOKEN is set, fail-open until then (GS_INGEST_TOKEN posture).
   const token = process.env.INTAKE_TOKEN;
   if (token && req.headers.get("x-intake-token") !== token) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
+    // ?soft=1 (see below) turns even this into a 200 {ok:false}, so a rotated token can never stop a Zap's
+    // customer auto-reply; the body still says "unauthorized".
+    const soft = new URL(req.url).searchParams.get("soft") === "1";
+    return NextResponse.json(soft ? { ok: false, created: false, error: "unauthorized" } : { error: "unauthorized" }, { status: soft ? 200 : 401, headers: CORS });
   }
 
-  let raw: WebLeadInput;
+  // Query options a source Zap can set on the URL (so its webhook step needs no field mapping at all):
+  //   ?source=google_ads  fills a missing source;  ?slack=1  posts the lead to #new-leads (for sources whose
+  //   Zap no longer posts it);  ?dryRun=1  only parses and echoes the lead (for Zapier's "Test step").
+  //   ?soft=1  never answers with an error status: a webhook step that errors stops the rest of the Zap,
+  //   and a Zap that also auto-replies to the customer (Yelp) must keep running whatever happens here.
+  const url = new URL(req.url);
+  const postToSlack = url.searchParams.get("slack") === "1";
+  const dryRun = url.searchParams.get("dryRun") === "1";
+  const soft = url.searchParams.get("soft") === "1";
+  const fail = (error: string, status: number) =>
+    NextResponse.json(soft ? { ok: false, created: false, error } : { error }, { status: soft ? 200 : status, headers: CORS });
+
+  let body: unknown;
   try {
-    raw = (await req.json()) as WebLeadInput;
+    body = await req.json();
   } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400, headers: CORS });
+    return fail("invalid_json", 400);
   }
+  const { input: raw, yelp } = adaptLeadBody(body, url.searchParams.get("source") ?? "");
 
-  const lead = normalizeLead(raw);
+  const lead = normalizeLead(raw as WebLeadInput);
   const invalid = leadValidationError(lead);
-  if (invalid) return NextResponse.json({ error: invalid }, { status: 400, headers: CORS });
+  if (dryRun) {
+    return NextResponse.json(
+      { ok: !invalid, dryRun: true, error: invalid ?? undefined, eventName: webLeadEventName(lead), lead, slackText: postToSlack ? newLeadSlackText(lead, yelp) : undefined },
+      { headers: CORS },
+    );
+  }
+  if (invalid) return fail(invalid, 400);
 
   // ALWAYS record the lead first (so nothing is lost, even while disabled or on a duplicate). The raw
   // source is stored on the row + echoed into the import ledger so the office can see volume per source.
   const intake = createIntake({ source: lead.source, ...toIntakePatch(lead) });
+
+  // Post the lead to #new-leads first (before the project exists), so Viktor can reply under it with the
+  // project link once Goodshuffle confirms. Never blocks the lead on a Slack failure.
+  if (postToSlack) {
+    await postNewLeadToSlack(lead.source, newLeadSlackText(lead, yelp)).catch(() => {});
+  }
 
   // Gated OFF by default: accept + record, but do not create a project or send anything.
   if (!webIntakeEnabled()) {
@@ -86,8 +114,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   const eventName = webLeadEventName(lead);
   const details = { ...gsEventDetails(intake), eventName };
   const notes = `${formatIntakeNotes(intake)}\n\nLead source: ${lead.source} (web intake)`;
-  // Thank-you email only when its own flag is on (the website Zap already emails + texts the customer).
-  const ack = webIntakeAckEmailEnabled() ? buildAckEmail(lead) : undefined;
+  // The welcome email is decided later, by /api/gs/intake-result, once the project really exists.
 
   enqueueGsOp({
     op: "create_project",
@@ -108,7 +135,6 @@ export async function POST(req: Request): Promise<NextResponse> {
       source: lead.source,
       leadEmail: lead.emailKey,
       leadPhone: lead.phoneKey,
-      ...(ack ? { webLeadAck: ack } : {}), // enqueued as email_send by /api/gs/intake-result once the project id is confirmed
     },
   });
   updateIntake(intake.id, { status: "creating", gsStatus: "queued" });

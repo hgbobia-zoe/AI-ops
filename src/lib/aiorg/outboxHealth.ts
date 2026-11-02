@@ -23,6 +23,7 @@ export const KNOWN_DRAINABLE_OPS: ReadonlySet<string> = new Set([
   "add_team_member",
   "set_delivery_fee",
   "email_send",
+  "email_template",
   "create_gs_task",
   "provision_user",
   "revoke_user",
