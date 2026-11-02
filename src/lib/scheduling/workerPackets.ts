@@ -38,6 +38,7 @@ import type { CommsTouch } from "./commsTemplates";
 import { getUsers, connecteamConfigured, type CrewMember } from "@/lib/connecteam";
 import { recordSchedulingAlarm } from "./autoAssignAlarm";
 import { slackNotify } from "@/lib/notify/slack";
+import { knownNotTruckCrew } from "./truckCrewGuard";
 import type { StaffShift } from "./types";
 
 /** How far ahead we look for shifts to debrief. Matches the lifecycle tick's window so the two stay in
@@ -184,6 +185,13 @@ export async function runWorkerPacketsTick(now: Date = new Date()): Promise<Work
       }
 
       for (const a of live) {
+        // Asset prep / office never go on a route (owner rule): never mint them a route pass or send a route
+        // debrief, even if a stale or manual assignment left them on the seat. The truck crew guard removes
+        // them from the seat; this keeps the window before that from issuing anything.
+        if (a.workerKind === "internal" && a.connecteamUserId != null && knownNotTruckCrew(users.get(a.connecteamUserId)?.role)) {
+          skipped += 1;
+          continue;
+        }
         const { ctx, workerPhone, link } = assignmentPacketInputs(shift, a, live, shared, users, origin, actor);
         for (const touch of due) {
           // STRICT IDEMPOTENCY: never re-send a touch. The key is recorded only on a real send below.

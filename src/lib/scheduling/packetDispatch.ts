@@ -16,6 +16,7 @@ import type { CrewMember } from "@/lib/connecteam";
 import type { PacketContext, PacketCoworker } from "./packet";
 import type { ShiftAssignment, StaffShift } from "./types";
 import { ROLE_WORD } from "./commsTemplates";
+import { knownNotTruckCrew } from "./truckCrewGuard";
 import type { ShiftDebriefContext, ShiftDebriefStop } from "./shiftDebrief";
 
 /** The app's public origin for links built OUTSIDE a request (the runtime job has no Request). Mirrors
@@ -210,6 +211,9 @@ export function assignmentPacketInputs(
         ? users.get(a.connecteamUserId)?.phone ?? null
         : null
       : findInstaworkPhone({ workerName: a.instaworkWorker ?? a.displayName, workerId: null });
-  const link = mintRoutePass({ name: a.displayName ?? a.instaworkWorker ?? "Worker" }, shift, shared.truck, origin, actor);
+  // Asset prep / office are never route crew: no route pass for them, from any path (owner rule).
+  const notTruckCrew =
+    a.workerKind === "internal" && a.connecteamUserId != null && knownNotTruckCrew(users.get(a.connecteamUserId)?.role);
+  const link = notTruckCrew ? null : mintRoutePass({ name: a.displayName ?? a.instaworkWorker ?? "Worker" }, shift, shared.truck, origin, actor);
   return { ctx, workerPhone, link };
 }

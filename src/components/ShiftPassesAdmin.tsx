@@ -8,7 +8,8 @@ import { useCallback, useEffect, useState } from "react";
 import { KeyRound, Plus, Copy, Check, Send, Ban, Loader2, Clock, ShieldCheck, Truck, LayoutGrid } from "lucide-react";
 
 type Scope = "driver" | "board";
-const SCOPE_LABEL: Record<string, string> = { driver: "Driver (kiosk)", drive: "Driver (kiosk)", board: "Dispatcher (board)" };
+// A truck pass is given to everyone on the route (driver AND helper), so it says "Route crew", not "Driver".
+const SCOPE_LABEL: Record<string, string> = { driver: "Route crew (kiosk)", drive: "Route crew (kiosk)", board: "Dispatcher (board)" };
 
 interface Pass {
   id: string;
