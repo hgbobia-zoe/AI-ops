@@ -30,7 +30,7 @@ export const BOTS: Record<BotId, BotConfig> = {
   inventory: { name: "Inventory Bot", icon: ":package:", defaultChannel: "inventory-conflicts" },
   hiring: { name: "Hiring Bot", icon: ":handshake:", defaultChannel: "hiring" },
   data: { name: "Data Bot", icon: ":mag:", defaultChannel: "data-scraping-results" },
-  ops: { name: "Viktor", icon: ":robot_face:", defaultChannel: "general" },
+  ops: { name: "Viktor", icon: ":office_worker:", defaultChannel: "general" },
 };
 
 /** Bridge the AI-org employee/agent ids (aiorg/registry.ts) to a notify BotId, so code holding an agentId
