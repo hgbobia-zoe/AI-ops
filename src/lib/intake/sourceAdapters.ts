@@ -136,7 +136,9 @@ export function fromLabeledText(text: string): WebLeadInput | null {
   const email = t.match(/\bEmail(?:\s*address)?:\s*([\w.+-]+@[\w-]+(?:\.[\w-]+)+)/i)?.[1]?.trim() ?? "";
   if (!name || (!phone && !email)) return null;
   const { firstName, lastName } = splitName(name);
-  const message = t.match(/\b(?:Message|Comments?|Details):\s*([^\n]+)/i)?.[1]?.trim() ?? "";
+  const rawMessage = t.match(/\b(?:Message|Comments?|Details):\s*([^\n]+)/i)?.[1]?.trim() ?? "";
+  // Google leaves an empty field as a placeholder ("*"): keep only a message with real words in it.
+  const message = /[a-z0-9]/i.test(rawMessage) ? rawMessage : "";
   return { firstName, lastName, phone, email, message };
 }
 
