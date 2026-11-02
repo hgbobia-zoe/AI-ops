@@ -29,6 +29,7 @@ import { scanImprovementSignals, openFromSignal } from "@/lib/ai/improvement/sig
 import { selfAuditAutoOpen } from "@/lib/ai/improvement/config";
 import { runPreCheckAlerts } from "@/lib/scheduling/preCheckNotify";
 import { runWorkerPacketsTick } from "@/lib/scheduling/workerPackets";
+import { runTruckCrewGuardTick } from "@/lib/scheduling/truckCrewGuard";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { runGpsVisitPoll } from "@/lib/finance/gpsPoll";
 import { visitReconcileConfig } from "@/lib/finance/config";
@@ -345,6 +346,14 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
           : `responder ${health.state} but queue empty`;
       return { ok: health.alive || pending === 0, detail };
     },
+  },
+  {
+    key: "truck-crew-guard",
+    label: "Truck crew guard (asset prep never on a route)",
+    bucket: "server",
+    configured: () => connecteamConfigured(),
+    note: "Owner rule: asset prep (Event Asset Processor) and office staff never go on a route. Finds anyone on a route driver or helper seat (today and the next 14 days) whose Connecteam title is not truck crew, removes them from that seat in the app, revokes their live route pass, and posts one note to the scheduling channel. Never edits Connecteam; an unknown role never removes anyone. Runs before the auto worker debriefs.",
+    run: async () => runTruckCrewGuardTick(),
   },
   {
     key: "worker-packets",
