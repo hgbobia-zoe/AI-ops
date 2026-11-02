@@ -69,7 +69,12 @@ export function fromYelpLead(raw: unknown): { lead: WebLeadInput; yelp: YelpLead
   const { firstName, lastName } = splitName(name);
   const info = pick(flat, ["additional_info"]);
   const postalCode = pick(flat, ["postal_code"], ["business"]);
-  const jobs = Object.entries(flat).filter(([k]) => k.includes("job_name")).map(([, v]) => v);
+  // Zapier can hand a list over as Python-style text: "['Party equipment rental']".
+  const jobs = Object.entries(flat)
+    .filter(([k]) => k.includes("job_name"))
+    .flatMap(([, v]) => v.replace(/^\[|\]$/g, "").split(/',\s*'|",\s*"/))
+    .map((v) => v.replace(/^['"\s]+|['"\s]+$/g, ""))
+    .filter(Boolean);
 
   // Survey answers come flattened as ...survey_answers__<i>__question_text and ...__answer_text(__<j>).
   const answers: string[] = [];
@@ -148,6 +153,13 @@ function labeledLeadFromEmail(flat: Flat): WebLeadInput | null {
   return null;
 }
 
+/** The raw output of an email trigger (Gmail and similar): a subject plus a sender or a body. */
+function isRawEmailPayload(flat: Flat): boolean {
+  const keys = Object.keys(flat);
+  const has = (re: RegExp) => keys.some((k) => re.test(k));
+  return has(/(^|__)subject$/) && (has(/(^|__)from(__|_)/) || has(/(^|__)(body_plain|body_html|snippet)$/));
+}
+
 /** Any POSTed body → the receiver's WebLeadInput. A raw Yelp lead is recognized by shape; anything else goes
  *  through the loose field-name mapping. `sourceHint` (the ?source= query param) fills a missing source. */
 export function adaptLeadBody(body: unknown, sourceHint = ""): { input: WebLeadInput; yelp: YelpLeadExtras | null } {
@@ -160,6 +172,12 @@ export function adaptLeadBody(body: unknown, sourceHint = ""): { input: WebLeadI
   const flat = flattenPayload(obj);
   const hasFields = ["firstname", "first_name", "email", "email_address", "phone", "phone_number", "name"].some((k) => flat[k]);
   const labeled = hasFields ? null : labeledLeadFromEmail(flat);
+  // A raw email with no labeled lead in it (a billing notice, a newsletter) must not fall through to the loose
+  // mapping, which would read the SENDER (ads-noreply@google.com) as the lead and create a project for it.
+  // An empty lead fails validation, so nothing is created.
+  if (!hasFields && !labeled && isRawEmailPayload(flat)) {
+    return { input: { source: sourceHint.trim(), firstName: "", lastName: "", email: "", phone: "", message: "" }, yelp: null };
+  }
   const input = labeled ?? fromLooseFields(obj);
   if (!String(input.source ?? "").trim() && sourceHint.trim()) input.source = sourceHint.trim();
   return { input, yelp: null };

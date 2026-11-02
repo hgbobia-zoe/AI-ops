@@ -49,6 +49,11 @@ describe("Yelp lead", () => {
     expect(yelp.emailExpiry).toBe("2026-11-27T17:51:05Z");
   });
 
+  it("cleans a list Zapier passed as text", () => {
+    const { lead } = fromYelpLead({ ...YELP, project: { ...YELP.project, job_names: "['Party equipment rental', 'Tent rental']" } });
+    expect(String(lead.message)).toContain("Yelp request: Party equipment rental, Tent rental");
+  });
+
   it("names the project 'Pat Q. - Yelp' (a bare initial is not a surname)", () => {
     const n = normalizeLead(adaptLeadBody(YELP).input);
     expect(webLeadEventName(n)).toBe("Pat Q. - Yelp");
@@ -92,6 +97,16 @@ describe("Google Ads lead email (pattern matching, no AI)", () => {
     };
     const { input } = adaptLeadBody(gmail, "google_ads");
     expect(input).toMatchObject({ source: "google_ads", firstName: "Jade", lastName: "Johnson", email: "jade.j@example.com", phone: "+15405550123" });
+  });
+
+  it("never reads the sender as the lead when the email has no lead in it", () => {
+    const notice = {
+      subject: "Your Google Ads receipt",
+      from: { email: "ads-noreply@google.com", name: "Google Ads" },
+      body_plain: "Thanks for advertising with Google. Your payment was received.",
+    };
+    const { input } = adaptLeadBody(notice, "google_ads");
+    expect(input).toMatchObject({ source: "google_ads", firstName: "", lastName: "", email: "", phone: "" });
   });
 });
 
