@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adaptLeadBody, flattenPayload, fromYelpLead, isYelpLeadPayload, newLeadSlackText, splitName } from "./sourceAdapters";
+import { adaptLeadBody, flattenPayload, fromLabeledText, fromYelpLead, isYelpLeadPayload, newLeadSlackText, splitName } from "./sourceAdapters";
 import { normalizeLead, webLeadEventName } from "./webLead";
 
 // The shape the Yelp Leads trigger hands a webhook step with an empty Data field (made-up values).
@@ -62,6 +62,36 @@ describe("Yelp lead", () => {
     expect(text).toContain("Reply in Yelp: https://biz.yelp.com/leads_center/BIZ9/leads/LEAD123");
     // House style for our own wording (the customer's answers, like "1–25", are passed through as written).
     expect(text.split("\n").filter((l) => /^(Name|Email|Reply in Yelp):/.test(l)).join("\n")).not.toMatch(/[—–]/);
+  });
+});
+
+describe("Google Ads lead email (pattern matching, no AI)", () => {
+  const BODY =
+    "Find out who's been in touch.\nYour Customer ID: 123-456-7890\nA customer has reached out through your ad\nGet in touch and start a conversation today.\nName: Jade Johnson\nPhone: +15405550123\nEmail: jade.j@example.com\nView lead";
+
+  it("reads the labeled fields from a multi-line body", () => {
+    expect(fromLabeledText(BODY)).toMatchObject({ firstName: "Jade", lastName: "Johnson", phone: "+15405550123", email: "jade.j@example.com" });
+  });
+
+  it("reads the one-line snippet layout too", () => {
+    const snip = "Find out who&#39;s been in touch. Name: Jade Johnson Phone: +15405550123 Email: jade.j@example.com";
+    expect(fromLabeledText(snip)).toMatchObject({ firstName: "Jade", lastName: "Johnson", phone: "+15405550123", email: "jade.j@example.com" });
+  });
+
+  it("returns null without a name plus a phone or email", () => {
+    expect(fromLabeledText("Your Customer ID: 123-456-7890")).toBeNull();
+    expect(fromLabeledText("Name: Only A Name")).toBeNull();
+  });
+
+  it("adapts a raw Gmail trigger payload, preferring the full body over the cut-off snippet", () => {
+    const gmail = {
+      subject: "You have a new lead through your Google ad",
+      from: { email: "ads-noreply@google.com" },
+      raw: { snippet: "Name: Jade Johnson Phone: +15405550123 Email:" },
+      body_plain: BODY,
+    };
+    const { input } = adaptLeadBody(gmail, "google_ads");
+    expect(input).toMatchObject({ source: "google_ads", firstName: "Jade", lastName: "Johnson", email: "jade.j@example.com", phone: "+15405550123" });
   });
 });
 
