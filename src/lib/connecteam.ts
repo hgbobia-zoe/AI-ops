@@ -231,12 +231,19 @@ const _unavailCache = ttlCache<UnavailabilityResult>(5 * 60_000, (r) => r.ok);
  *  silently truncates). Dedup-terminated: stops on a short page OR when a page adds nothing new —
  *  so it can't loop even if the endpoint ignores `offset` (worst case = today's single-page behavior). */
 async function ctGetAllPages<T>(base: string, extract: (j: unknown) => T[], keyOf: (t: T) => string | number, pageSize = 200): Promise<T[]> {
+  return (await ctGetAllPagesChecked(base, extract, keyOf, pageSize)).items;
+}
+
+/** ctGetAllPages that also says whether every page actually arrived. ok:false means a page failed
+ *  (rate limit, timeout, outage), so `items` may be partial or empty and must NOT be read as "there are
+ *  none". Callers that turn an empty list into a conclusion ("nobody is scheduled") need this. */
+async function ctGetAllPagesChecked<T>(base: string, extract: (j: unknown) => T[], keyOf: (t: T) => string | number, pageSize = 200): Promise<{ ok: boolean; items: T[] }> {
   const seen = new Set<string | number>();
   const out: T[] = [];
   const sep = base.includes("?") ? "&" : "?";
   for (let offset = 0, guard = 0; guard < 100; guard++, offset += pageSize) {
     const j = await ctGet(`${base}${sep}offset=${offset}&limit=${pageSize}`);
-    if (!j) break;
+    if (!j) return { ok: false, items: out };
     const page = extract(j);
     let added = 0;
     for (const it of page) {
@@ -249,7 +256,7 @@ async function ctGetAllPages<T>(base: string, extract: (j: unknown) => T[], keyO
     }
     if (page.length < pageSize || added === 0) break;
   }
-  return out;
+  return { ok: true, items: out };
 }
 
 /** Ops role, derived from the Connecteam "Title" custom field.
@@ -506,8 +513,10 @@ async function getSchedulersUncached(): Promise<Scheduler[]> {
     }));
 }
 
-async function getShifts(sched: Scheduler, startUnix: number, endUnix: number): Promise<Array<Record<string, unknown>>> {
-  return ctGetAllPages<Record<string, unknown>>(
+/** All shifts for a scheduler in a window. ok:false = the fetch failed (do not read an empty list as
+ *  "no shifts"; that is how a rate-limited minute turned into "nobody is scheduled" risk alerts). */
+async function getShifts(sched: Scheduler, startUnix: number, endUnix: number): Promise<{ ok: boolean; items: Array<Record<string, unknown>> }> {
+  return ctGetAllPagesChecked<Record<string, unknown>>(
     `/scheduler/v1/schedulers/${sched.schedulerId}/shifts?startTime=${startUnix}&endTime=${endUnix}`,
     (j) => ((j as ShiftsResp)?.data?.shifts ?? []) as Record<string, unknown>[],
     (s) => String(s.id ?? `${s.userId}|${s.startTime}|${s.endTime}`),
@@ -586,11 +595,12 @@ async function getCrewForDateSafeUncached(date: string): Promise<CrewDayResult> 
   const [users, schedulers] = await Promise.all([getUsers(), getSchedulers()]);
   // A working Connecteam always returns at least one scheduler (+ users). Zero means the
   // fetch failed/was unreachable, not that the day is empty → report ok:false (unverified).
-  const reachable = schedulers.length > 0 && users.size > 0;
+  let reachable = schedulers.length > 0 && users.size > 0;
   const out: CrewShift[] = [];
   for (const sched of schedulers) {
-    const raw = await getShifts(sched, from, to);
-    for (const s of raw) {
+    const res = await getShifts(sched, from, to);
+    if (!res.ok) reachable = false; // a failed shift read is "unverified", never "nobody is scheduled"
+    for (const s of res.items) {
       const startUnix = Number(s.startTime);
       if (!startUnix) continue;
       if (localYmd(startUnix, sched.timezone) !== date) continue; // keep only this local day
@@ -837,8 +847,9 @@ async function getPlannedHoursUncached(startYmd: string, endYmd: string): Promis
   const schedulers = await getSchedulers();
   if (schedulers.length === 0) return { ok: false, hours }; // unreachable
   for (const sched of schedulers) {
-    const raw = await getShifts(sched, from, to);
-    for (const s of raw) {
+    const res = await getShifts(sched, from, to);
+    if (!res.ok) return { ok: false, hours: new Map() }; // partial hours would read as "under-scheduled"
+    for (const s of res.items) {
       const start = Number(s.startTime);
       const end = Number(s.endTime);
       if (!start || !end || end <= start) continue;
