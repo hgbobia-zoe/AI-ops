@@ -98,7 +98,9 @@ describe("syncTouchpointNote — gate + match + idempotency", () => {
     clientName: "Sarah Lee", snippet: "hello", dateYmd: "2026-10-09", ...over,
   } as Touchpoint);
 
-  it("does NOTHING when the gate is off (default)", () => {
+  it("is ON by default and does NOTHING when turned off", () => {
+    expect(noteSyncEnabled()).toBe(true);
+    process.env.GS_NOTE_SYNC_ENABLED = "false";
     expect(noteSyncEnabled()).toBe(false);
     const res = syncTouchpointNote(tp());
     expect(res).toEqual({ enqueued: false, skipped: "disabled" });
@@ -143,6 +145,7 @@ describe("syncTouchpointNote — gate + match + idempotency", () => {
   });
 
   it("does NOTHING for a dispatch note when the gate is off", () => {
+    process.env.GS_NOTE_SYNC_ENABLED = "false";
     const res = syncTouchpointNote({
       kind: "dispatch", stopId: "stop-off", action: "arrived", transactionId: "TEST-DISP-OFF",
       clientName: "Sarah Lee", dateYmd: "2026-10-09",

@@ -9,14 +9,14 @@
 // `method` records HOW the verdict was reached so an alert never overstates its confidence.
 
 import { chat, llmConfigured } from "@/lib/llm";
+import { flagOn } from "@/lib/flags";
 
 // Call-tone LLM is a SEPARATE opt-in from the quote-review LLM: an Anthropic key may be set for quote
 // review while we still want call tone judged by the free deterministic heuristic (the owner's choice).
-// So the LLM path here is OFF unless CALL_SENTIMENT_LLM is explicitly enabled ("1"/"true"/"on"/"llm"/
-// "ollama"/"anthropic"). Unset ⇒ heuristic-only, no surprise model calls or cost.
+// Live in prod, so ON by default like every shipped feature (src/lib/flags.ts). Set CALL_SENTIMENT_LLM to
+// "false" (or "heuristic") for the free heuristic only.
 function sentimentLlmEnabled(): boolean {
-  const v = (process.env.CALL_SENTIMENT_LLM ?? "").trim().toLowerCase();
-  return v === "1" || v === "true" || v === "on" || v === "llm" || v === "ollama" || v === "anthropic";
+  return flagOn("CALL_SENTIMENT_LLM") && (process.env.CALL_SENTIMENT_LLM ?? "").trim().toLowerCase() !== "heuristic";
 }
 
 export interface Sentiment {

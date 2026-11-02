@@ -23,11 +23,11 @@
 import { createHash } from "node:crypto";
 import { enqueueGsOp, gsNoteOpExists } from "@/lib/db/repo";
 import { shortDate } from "@/lib/salesos/noteFormat";
+import { flagOn } from "@/lib/flags";
 
-/** Master switch. Unset/anything-but-"true" ⇒ the whole feature is dormant (same convention as
- *  SMS_SEND_ENABLED / EMAIL_SEND_ENABLED). */
+/** Master switch. ON by default (src/lib/flags.ts); GS_NOTE_SYNC_ENABLED=false makes it dormant. */
 export function noteSyncEnabled(): boolean {
-  return process.env.GS_NOTE_SYNC_ENABLED === "true";
+  return flagOn("GS_NOTE_SYNC_ENABLED");
 }
 
 export type CallOutcome = "conversation" | "voicemail_left" | "voicemail_received";

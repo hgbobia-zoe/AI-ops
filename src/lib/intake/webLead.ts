@@ -7,30 +7,32 @@
 // unit-testable; the route does the I/O.
 
 import type { IntakeEventType, IntakePatch } from "./types";
+import { flagOn } from "@/lib/flags";
 
-// ── Flags (default OFF) ──────────────────────────────────────────────────────────────────────────────
-// Master switch. Until WEB_INTAKE_ENABLED === "true" the endpoint ACCEPTS + records a lead (nothing is
-// lost) but creates NO Goodshuffle project and sends NO email — so a Zap can be wired + tested safely
-// before go-live. Mirrors the EMAIL_SEND_ENABLED / SMS_SEND_ENABLED env-flag convention.
+// ── Flags (ON by default, src/lib/flags.ts; set one to "false" to turn that piece off) ───────────────
+// Master switch. With WEB_INTAKE_ENABLED=false the endpoint still ACCEPTS + records a lead (nothing is
+// lost) but creates NO Goodshuffle project and sends NO email.
 export function webIntakeEnabled(): boolean {
-  return process.env.WEB_INTAKE_ENABLED === "true";
+  return flagOn("WEB_INTAKE_ENABLED");
 }
-// Separate, also-default-OFF flag for the quiet sales-ai Slack ping. Off by default so it does not double
-// up with the lead source's own Slack notification (e.g. Yelp's native alert).
+// The one flag that stays OFF by default: the quiet sales-ai Slack ping would double up with the lead
+// source's own Slack notification (e.g. Yelp's native alert). Turn on with WEB_INTAKE_SALES_PING=true.
 export function webIntakeSalesPingEnabled(): boolean {
   return process.env.WEB_INTAKE_SALES_PING === "true";
 }
 // The welcome email to the customer, sent from inside the new Goodshuffle project as soon as it exists.
-// Turn on with WEB_INTAKE_ACK_EMAIL=true. Website leads also get the Zap's Gmail thank-you: the owner wants
+// Turn off with WEB_INTAKE_ACK_EMAIL=false. Website leads also get the Zap's Gmail thank-you: the owner wants
 // both (by design, 2026-11-02).
 export function webIntakeAckEmailEnabled(): boolean {
-  return process.env.WEB_INTAKE_ACK_EMAIL === "true";
+  return flagOn("WEB_INTAKE_ACK_EMAIL");
 }
 
-/** Does this lead source get the welcome email? Not Yelp: the Yelp Zap already auto-replies inside Yelp,
- *  and a Yelp lead's email is a Yelp relay address, so the template would land as a second Yelp message. */
-export function webLeadWelcomeApplies(source: string): boolean {
-  return !/yelp/i.test(source || "");
+/** Does this lead source get the welcome email? Every outside source: website, Google Business Profile and
+ *  Yelp (owner, 2026-11-02). A Yelp lead's email is a Yelp relay address, so for Yelp the template lands in
+ *  the Yelp conversation next to the Zap's own Yelp auto-reply. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function webLeadWelcomeApplies(_source: string): boolean {
+  return true;
 }
 
 /** The Goodshuffle email template the welcome email uses (Messages → Templates). Read live at send time,
@@ -180,9 +182,9 @@ export function toIntakePatch(n: NormalizedLead): IntakePatch {
 }
 
 /** The welcome TEXT for lead sources whose Zap does not text the customer itself (Google today; the website
- *  Zap texts through Quo, Yelp replies inside Yelp). Gated by WEB_LEAD_SMS=true. */
+ *  Zap texts through Quo, Yelp replies inside Yelp). ON by default; WEB_LEAD_SMS=false turns it off. */
 export function webLeadSmsEnabled(): boolean {
-  return process.env.WEB_LEAD_SMS === "true";
+  return flagOn("WEB_LEAD_SMS");
 }
 export function webLeadSmsApplies(source: string): boolean {
   return /google/i.test(source || "");

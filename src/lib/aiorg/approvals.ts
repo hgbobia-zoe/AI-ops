@@ -15,6 +15,7 @@ import { getDb } from "@/lib/db";
 import { enqueueGsOp, insertAudit, getGsOpById, type GsOutboxItem } from "@/lib/db/repo";
 import { botAnnounce, botForAgent } from "@/lib/notify/aiBots";
 import { stripSignOff } from "@/lib/salesos/outreach";
+import { flagOn } from "@/lib/flags";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 /** Every action an approval can carry. Only the first four are EXECUTABLE in v2 (via the proven
@@ -409,7 +410,7 @@ export function decideApproval(
   }
 
   // Outbox op. Respect the send gate as a SECOND safety: gate off => record the decision, hold the send.
-  if (plan.gate && process.env[plan.gate] !== "true") {
+  if (plan.gate && !flagOn(plan.gate)) {
     const reason = `${plan.gate} is off. Approved and recorded, but nothing was enqueued — turn the gate on to send.`;
     db.prepare("UPDATE ai_approvals SET status='approved', action_payload=@payload, decision_note=@note, decided_by=@by, decided_at=@at WHERE id=@id").run({
       id, payload: JSON.stringify(payload), note: reason, by: actor, at: now,

@@ -115,7 +115,7 @@ describe("decideThrottle", () => {
   });
 });
 
-describe("SALES_AI_ENABLED master switch (default OFF)", () => {
+describe("SALES_AI_ENABLED master switch (default ON, =false stops it)", () => {
   beforeEach(() => {
     delete process.env.SALES_AI_ENABLED;
   });
@@ -123,13 +123,15 @@ describe("SALES_AI_ENABLED master switch (default OFF)", () => {
     delete process.env.SALES_AI_ENABLED;
   });
 
-  it("is OFF by default", () => {
-    expect(salesAiEnabled()).toBe(false);
+  it("is ON by default", () => {
+    expect(salesAiEnabled()).toBe(true);
   });
 
-  it("only 'true' turns it on", () => {
-    process.env.SALES_AI_ENABLED = "1";
-    expect(salesAiEnabled()).toBe(false);
+  it("false / 0 / off turn it off", () => {
+    for (const v of ["false", "0", "off", "FALSE"]) {
+      process.env.SALES_AI_ENABLED = v;
+      expect(salesAiEnabled()).toBe(false);
+    }
     process.env.SALES_AI_ENABLED = "true";
     expect(salesAiEnabled()).toBe(true);
   });
@@ -137,6 +139,7 @@ describe("SALES_AI_ENABLED master switch (default OFF)", () => {
   it("the whole job is inert (no DB/LLM touched) when the switch is off", async () => {
     // With the switch off, runSalesAiJob returns the disabled no-op BEFORE reading leads, calling the LLM,
     // creating approvals, or posting to Slack — so it is safe to run unconfigured.
+    process.env.SALES_AI_ENABLED = "false";
     const r = await runSalesAiJob();
     expect(r.ok).toBe(true);
     expect(r.detail).toMatch(/disabled/i);

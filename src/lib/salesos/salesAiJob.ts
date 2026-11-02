@@ -36,12 +36,13 @@ import { botAnnounce, appUrl } from "@/lib/notify/aiBots";
 import { recordQuoteInsight } from "./quoteInsights";
 import { logSalesEventBy } from "./audit";
 import { getSettings, businessHoursGate } from "@/lib/settings";
+import { flagOn } from "@/lib/flags";
 
 // ── Master switch + bounds (env, with safe defaults) ─────────────────────────────
 
-/** The master switch. Mirrors shiftCommsEnabled(): nothing runs until this is explicitly "true". */
+/** The master switch. ON by default (src/lib/flags.ts); SALES_AI_ENABLED=false stops it. */
 export function salesAiEnabled(): boolean {
-  return process.env.SALES_AI_ENABLED === "true";
+  return flagOn("SALES_AI_ENABLED");
 }
 
 function numEnv(name: string, def: number): number {

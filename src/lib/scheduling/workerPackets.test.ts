@@ -124,10 +124,10 @@ describe("dueTouches (pure)", () => {
 });
 
 // ── Master-switch gate ───────────────────────────────────────────────────────────────────────────────
-describe("runWorkerPacketsTick — master-switch gate (default OFF)", () => {
+describe("runWorkerPacketsTick — master-switch gate (=false stops it)", () => {
   it("is a healthy no-op that sends nothing when AUTO_PACKET_ENABLED is off", async () => {
     const m = await mods();
-    delete process.env.AUTO_PACKET_ENABLED; // the owner has not opted in
+    process.env.AUTO_PACKET_ENABLED = "false"; // the owner turned auto-debriefs off
     await committedShift(m, Date.now() + 2 * 3_600_000, Date.now() + 5 * 3_600_000).then((s) =>
       m.upsertAssignment({ shiftId: s.id, workerKind: "internal", connecteamUserId: 101, displayName: "Pat", role: "driver", state: "ASSIGNED" }),
     );
