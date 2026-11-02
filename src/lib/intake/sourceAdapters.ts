@@ -118,6 +118,36 @@ export function fromYelpLead(raw: unknown): { lead: WebLeadInput; yelp: YelpLead
   };
 }
 
+/** Labeled lead text, as in the Google Ads lead email: "... Name: Jade Johnson Phone: +1 555 010 0000
+ *  Email: jade@example.com ...". Pattern matching, no AI. Returns null when the text has no "Name:" plus a
+ *  "Phone:" or "Email:" label. Handles one-line (snippet) and multi-line (body) layouts. */
+export function fromLabeledText(text: string): WebLeadInput | null {
+  const t = text
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/\r/g, "");
+  const name = t.match(/\bName:\s*([^\n]+?)(?=\s+(?:Phone|Email|Message|Company)\s*:|\n|$)/i)?.[1]?.trim() ?? "";
+  const phone = t.match(/\bPhone(?:\s*number)?:\s*(\+?[\d][\d\s().-]{6,}\d)/i)?.[1]?.trim() ?? "";
+  const email = t.match(/\bEmail(?:\s*address)?:\s*([\w.+-]+@[\w-]+(?:\.[\w-]+)+)/i)?.[1]?.trim() ?? "";
+  if (!name || (!phone && !email)) return null;
+  const { firstName, lastName } = splitName(name);
+  const message = t.match(/\b(?:Message|Comments?|Details):\s*([^\n]+)/i)?.[1]?.trim() ?? "";
+  return { firstName, lastName, phone, email, message };
+}
+
+/** A forwarded lead EMAIL (the raw Gmail trigger output): find the body that carries the labeled lead. The
+ *  plain body is preferred; the snippet is cut short by Gmail (the email address is often missing). */
+function labeledLeadFromEmail(flat: Flat): WebLeadInput | null {
+  const bodies = Object.entries(flat)
+    .filter(([k, v]) => /name:/i.test(v) && /(phone|email)/i.test(v) && !/(headers|received)/.test(k))
+    .sort(([a], [b]) => Number(/snippet/.test(a)) - Number(/snippet/.test(b)));
+  for (const [, v] of bodies) {
+    const lead = fromLabeledText(v);
+    if (lead) return lead;
+  }
+  return null;
+}
+
 /** Any POSTed body → the receiver's WebLeadInput. A raw Yelp lead is recognized by shape; anything else goes
  *  through the loose field-name mapping. `sourceHint` (the ?source= query param) fills a missing source. */
 export function adaptLeadBody(body: unknown, sourceHint = ""): { input: WebLeadInput; yelp: YelpLeadExtras | null } {
@@ -126,7 +156,11 @@ export function adaptLeadBody(body: unknown, sourceHint = ""): { input: WebLeadI
     const { lead, yelp } = fromYelpLead(obj);
     return { input: lead, yelp };
   }
-  const input = fromLooseFields(obj);
+  // A raw lead email (Gmail trigger output): no camelCase/snake_case lead fields, but a labeled body.
+  const flat = flattenPayload(obj);
+  const hasFields = ["firstname", "first_name", "email", "email_address", "phone", "phone_number", "name"].some((k) => flat[k]);
+  const labeled = hasFields ? null : labeledLeadFromEmail(flat);
+  const input = labeled ?? fromLooseFields(obj);
   if (!String(input.source ?? "").trim() && sourceHint.trim()) input.source = sourceHint.trim();
   return { input, yelp: null };
 }
