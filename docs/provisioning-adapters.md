@@ -21,7 +21,7 @@ that gate. We never store a third-party password.
 | **Work email (Squarespace)** | `squarespace_email` | **Replay** from Squarespace → Email (or Google Admin Directory API if seats live in admin.google.com) | `manual` (capture-pending) | Capture "add user" once. Intake derives `firstname.lastname@zoeeventsdmv.com`. Suspend, never delete, on offboarding. |
 | **WeddingPro** | `weddingpro` | **Replay** from WeddingPro admin | `manual` (capture-pending) | Capture "add team member" once. |
 | **Yelp for Business** | `yelp` | **Replay** from biz.yelp.com → Users | `manual` (capture-pending) | Capture "add user" once. |
-| **Lockly door** | `lockly` | **Replay** from the Lockly web portal, if one exists | `manual` (capture-pending) | App-only = stays manual. **Revoked first** on offboarding. |
+| **Lockly door** | `lockly` | Manual: keys are made in the free Lockly phone app (web portal is a paid plan) | `manual` (permanent) | Slack reminds to create the key on onboarding and to delete it FIRST on offboarding. |
 | **Gusto** | `gusto` | None | `future` | No admin-provisioning mechanism exists; onboarding/termination is a human flow in Gusto. |
 | **Google Workspace / SSO** | `google` | None | `future` | No identity/SSO/SCIM is implemented in the app. |
 

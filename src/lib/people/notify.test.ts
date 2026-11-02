@@ -19,3 +19,12 @@ describe("people notify", () => {
     for (const l of lines) expect(l).not.toMatch(/[—–-]/);
   });
 });
+
+import { lockReminder } from "./notify";
+describe("Lockly reminder", () => {
+  it("reminds to create the key on onboarding and delete it on offboarding", () => {
+    expect(lockReminder([t("lockly", "Lockly door")], "provision")).toMatch(/create their Lockly access key/);
+    expect(lockReminder([t("lockly", "Lockly door")], "revoke")).toMatch(/delete their Lockly access key/);
+    expect(lockReminder([t("quo", "Quo")], "provision")).toBeNull();
+  });
+});

@@ -52,7 +52,16 @@ export function announceNewHire(emp: Employee, policyName: string | null): void 
   });
 }
 
+/** The Lockly reminder line, when the policy includes the door. PURE. */
+export function lockReminder(tasks: LifecycleTask[], kind: "provision" | "revoke"): string | null {
+  if (!tasks.some((t) => t.adapterId === "lockly")) return null;
+  return kind === "provision"
+    ? "*Reminder:* create their Lockly access key in the Lockly phone app, then Mark Complete in People."
+    : "*Do this first:* delete their Lockly access key in the Lockly phone app, then Mark Complete in People.";
+}
+
 export function announceOnboardingStarted(emp: Employee, tasks: LifecycleTask[]): void {
+  const lock = lockReminder(tasks, "provision");
   post({
     emoji: "👋",
     title: "Onboarding started",
@@ -67,6 +76,7 @@ export function announceOnboardingStarted(emp: Employee, tasks: LifecycleTask[])
 }
 
 export function announceOffboardingStarted(emp: Employee, revokes: LifecycleTask[], effective: string | null): void {
+  const lock = lockReminder(revokes, "revoke");
   post({
     emoji: "🔒",
     title: "Offboarding started",

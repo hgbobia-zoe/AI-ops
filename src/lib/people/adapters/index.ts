@@ -255,7 +255,8 @@ const ADAPTERS: Record<string, ProvisioningAdapter> = {
   squarespace_email: new ReplayAdapter("squarespace_email", "Work email (Squarespace)", "squarespace_email"),
   weddingpro: new ReplayAdapter("weddingpro", "WeddingPro", "weddingpro"),
   yelp: new ReplayAdapter("yelp", "Yelp for Business", "yelp"),
-  lockly: new ReplayAdapter("lockly", "Lockly door", "lockly"),
+  // Lockly stays MANUAL on purpose: the web/API needs a paid plan; the free phone app is how keys are made.
+  lockly: new ManualAdapter("lockly", "Lockly door", "manual", "Lockly keys are made in the free Lockly phone app (the web portal is a paid plan)"),
   gusto: new ManualAdapter("gusto", "Gusto", "future", "Gusto onboarding/termination is a human flow in Gusto; no admin-provisioning path exists in the app"),
   google: new ManualAdapter("google", "Google Workspace / SSO", "future", "No Google identity/SSO/SCIM is implemented anywhere in the app"),
 };

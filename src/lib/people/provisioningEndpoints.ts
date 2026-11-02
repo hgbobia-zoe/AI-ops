@@ -32,7 +32,7 @@ export interface SystemReplayEndpoints {
   notes?: string;
 }
 
-export type ReplaySystem = "goodshuffle" | "quo" | "slack" | "squarespace_email" | "weddingpro" | "yelp" | "lockly";
+export type ReplaySystem = "goodshuffle" | "quo" | "slack" | "squarespace_email" | "weddingpro" | "yelp";
 
 // All null = capture-pending. Fill a system's provision/revoke with the EXACT captured request + body
 // encoding, then the adapter flips to automated and the drainer starts replaying it.
@@ -89,14 +89,6 @@ export const PROVISION_ENDPOINTS: Record<ReplaySystem, SystemReplayEndpoints> = 
     provision: null,
     revoke: null,
   },
-  lockly: {
-    origin: "https://lockly.com",
-    // CAPTURE-PENDING: door access (eKey / access code). If Lockly is app-only this stays a manual step.
-    // Offboarding revokes this FIRST (physical access).
-    provision: null,
-    revoke: null,
-    notes: "Physical door access. Revoked first on offboarding.",
-  },
 };
 
 /** True when the given system has a captured endpoint for this action (so it can be replayed). */
@@ -106,4 +98,4 @@ export function hasCapturedEndpoint(system: ReplaySystem, kind: "provision" | "r
 }
 
 /** The replay systems in id order (for the Systems view / the drainer). */
-export const REPLAY_SYSTEMS: ReplaySystem[] = ["goodshuffle", "quo", "slack", "squarespace_email", "weddingpro", "yelp", "lockly"];
+export const REPLAY_SYSTEMS: ReplaySystem[] = ["goodshuffle", "quo", "slack", "squarespace_email", "weddingpro", "yelp"];
