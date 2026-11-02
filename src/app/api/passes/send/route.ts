@@ -8,6 +8,7 @@ import { sendSms } from "@/lib/notify/sms";
 import { getSettings } from "@/lib/settings";
 import { viewerQuoUserId } from "@/lib/auth/getSession";
 import { publicOrigin } from "@/lib/http/origin";
+import { flagOn } from "@/lib/flags";
 
 export const dynamic = "force-dynamic";
 
@@ -27,8 +28,8 @@ function whenLabel(iso: string): string {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  if (process.env.SMS_SEND_ENABLED !== "true") {
-    return NextResponse.json({ ok: false, disabled: true, error: "Texting is off — set SMS_SEND_ENABLED=true to enable." });
+  if (!flagOn("SMS_SEND_ENABLED")) {
+    return NextResponse.json({ ok: false, disabled: true, error: "Texting is turned off (SMS_SEND_ENABLED=false)." });
   }
 
   let body: { id?: string; phone?: string };

@@ -79,7 +79,7 @@ describe("runFanout → Goodshuffle note sync", () => {
   });
 
   it("does NOT enqueue when the gate is off", async () => {
-    delete process.env.GS_NOTE_SYNC_ENABLED;
+    process.env.GS_NOTE_SYNC_ENABLED = "false";
     await runFanout(ctx());
     expect(notesFor("TX-900").length).toBe(0);
   });

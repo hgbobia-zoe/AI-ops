@@ -20,6 +20,7 @@ import { todayInOpsTz } from "@/lib/dates";
 import { leadTouchContext, type LeadTouchpoint } from "./timeline";
 import { createApproval, decideApproval, type ApprovalActionType, type ApprovalCard } from "@/lib/aiorg/approvals";
 import { sendLeadSms } from "./smsSend";
+import { flagOn } from "@/lib/flags";
 
 /** Default email subject for a quote-sent follow-up — matches the single-send outreach proposer. */
 export const BULK_EMAIL_SUBJECT = "Following up on your event";
@@ -250,8 +251,8 @@ export async function buildBulkOutreachCohort(repFirstName?: string | null): Pro
   return {
     today,
     rows,
-    emailGateOn: process.env.EMAIL_SEND_ENABLED === "true",
-    smsGateOn: process.env.SMS_SEND_ENABLED === "true",
+    emailGateOn: flagOn("EMAIL_SEND_ENABLED"),
+    smsGateOn: flagOn("SMS_SEND_ENABLED"),
   };
 }
 

@@ -9,12 +9,13 @@ import { getBookingById } from "@/lib/db/repo";
 import { sendLeadSms, SMS_MAX_LEN } from "@/lib/salesos/smsSend";
 import { viewerInitials, viewerQuoUserId, authEnabled } from "@/lib/auth/getSession";
 import { openphoneUserInitials } from "@/lib/comms/openphone";
+import { flagOn } from "@/lib/flags";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request): Promise<NextResponse> {
-  if (process.env.SMS_SEND_ENABLED !== "true") {
-    return NextResponse.json({ ok: false, disabled: true, error: "SMS sending is off — set SMS_SEND_ENABLED=true to enable." });
+  if (!flagOn("SMS_SEND_ENABLED")) {
+    return NextResponse.json({ ok: false, disabled: true, error: "SMS sending is turned off (SMS_SEND_ENABLED=false)." });
   }
 
   let body: { id?: string; body?: string; userId?: string; edited?: boolean };

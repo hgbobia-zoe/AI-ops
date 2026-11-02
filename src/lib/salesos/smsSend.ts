@@ -12,6 +12,7 @@ import { getSettings } from "@/lib/settings";
 import { syncTouchpointNote, shortHash } from "@/lib/comms/noteSync";
 import { todayInOpsTz } from "@/lib/dates";
 import { logSalesEvent } from "./audit";
+import { flagOn } from "@/lib/flags";
 
 export const SMS_MAX_LEN = 1000;
 const DEDUPE_MS = 120_000;
@@ -29,8 +30,8 @@ export interface LeadSmsResult {
  *  lead's own phone on file (never a caller-supplied recipient). Gated by SMS_SEND_ENABLED exactly like
  *  the route. `userId` attributes the message to a Quo rep; `initials` label the note/audit/timeline. */
 export async function sendLeadSms(input: { id: string; body: string; userId?: string; initials?: string | null; edited?: boolean }): Promise<LeadSmsResult> {
-  if (process.env.SMS_SEND_ENABLED !== "true") {
-    return { ok: false, disabled: true, error: "SMS sending is off — set SMS_SEND_ENABLED=true to enable." };
+  if (!flagOn("SMS_SEND_ENABLED")) {
+    return { ok: false, disabled: true, error: "SMS sending is turned off (SMS_SEND_ENABLED=false)." };
   }
   const id = (input.id ?? "").trim();
   const text = (input.body ?? "").trim();

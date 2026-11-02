@@ -235,7 +235,7 @@ describe("queueBulkOutreach — email (governed outbox op)", () => {
   });
 
   it("email with the gate OFF is approved+held — nothing enqueued", async () => {
-    delete process.env.EMAIL_SEND_ENABLED;
+    process.env.EMAIL_SEND_ENABLED = "false";
     seedQuoteSent();
     const summary = await queueBulkOutreach([{ leadId: "QS1", email: { body: "Hi Pat." } }], "Owner");
     expect(summary.heldEmail).toBe(1);
@@ -285,7 +285,7 @@ describe("queueBulkOutreach — SMS (real live send through the gated sender)", 
   });
 
   it("gate OFF holds the SMS without calling the provider (never a fake 'sent')", async () => {
-    delete process.env.SMS_SEND_ENABLED;
+    process.env.SMS_SEND_ENABLED = "false";
     seedQuoteSent();
     const summary = await queueBulkOutreach([{ leadId: "QS1", sms: { body: "Hi Pat." } }], "Owner");
     expect(sendSmsMock).not.toHaveBeenCalled();

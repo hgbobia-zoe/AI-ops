@@ -51,9 +51,11 @@ describe("routeStaffing shared selector", () => {
   });
 
   it("confirmation state is UNKNOWN (0, not fabricated) when the comms loop is not wired", () => {
+    process.env.SHIFT_COMMS_ENABLED = "false";
     writeRoute(mockRoute("NPR-1", DATE));
     const summary = getDayStaffingSummary(DATE);
-    // SHIFT_COMMS_ENABLED is off in the test env → confirmations are not knowable.
+    delete process.env.SHIFT_COMMS_ENABLED;
+    // SHIFT_COMMS_ENABLED off → confirmations are not knowable.
     expect(summary.confirmationsKnown).toBe(false);
     expect(summary.pendingConfirmations).toBe(0);
   });

@@ -5,7 +5,14 @@ import {
   webLeadEventName,
   toIntakePatch,
   webLeadEmailTemplateName,
+  webLeadWelcomeApplies,
 } from "./webLead";
+
+describe("webLeadWelcomeApplies", () => {
+  it("website, Google Business Profile and Yelp leads all get the welcome email", () => {
+    for (const s of ["web", "website", "google", "google_business", "yelp"]) expect(webLeadWelcomeApplies(s)).toBe(true);
+  });
+});
 
 // Pure-function layer for the structured web-lead receiver. The route's I/O (record → gate → dedupe →
 // enqueue) is covered in src/app/api/intake/lead/route.test.ts; this file pins the normalize / validate /

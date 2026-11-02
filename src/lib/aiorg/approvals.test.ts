@@ -112,6 +112,7 @@ const mkEmail = (key = "e1") =>
 
 describe("decideApproval execution routing", () => {
   it("holds the send when EMAIL_SEND_ENABLED is off (records decision, enqueues nothing)", () => {
+    process.env.EMAIL_SEND_ENABLED = "false";
     const a = mkEmail();
     const r = decideApproval(a.id, "approve", "Tester");
     expect(r.outcome).toBe("held_gate_off");

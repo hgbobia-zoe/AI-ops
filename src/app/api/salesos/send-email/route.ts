@@ -12,6 +12,7 @@ import { viewerInitials } from "@/lib/auth/getSession";
 import { syncTouchpointNote, shortHash } from "@/lib/comms/noteSync";
 import { todayInOpsTz } from "@/lib/dates";
 import { stripSignOff } from "@/lib/salesos/outreach";
+import { flagOn } from "@/lib/flags";
 
 export const dynamic = "force-dynamic";
 
@@ -29,8 +30,8 @@ function toHtml(text: string): string {
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
-  if (process.env.EMAIL_SEND_ENABLED !== "true") {
-    return NextResponse.json({ ok: false, disabled: true, error: "Email sending is off — set EMAIL_SEND_ENABLED=true to enable." });
+  if (!flagOn("EMAIL_SEND_ENABLED")) {
+    return NextResponse.json({ ok: false, disabled: true, error: "Email sending is turned off (EMAIL_SEND_ENABLED=false)." });
   }
 
   let body: { id?: string; content?: string; subject?: string };

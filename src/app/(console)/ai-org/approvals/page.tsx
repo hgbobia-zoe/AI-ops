@@ -13,6 +13,7 @@ import { asLastMessageSnapshot } from "@/lib/aiorg/lastMessage";
 import { OrgTabs } from "@/components/aiorg/AiOrgBits";
 import { ApprovalCard, type ApprovalCardData } from "@/components/aiorg/ApprovalCard";
 import { ProposeButtons } from "@/components/aiorg/ProposeButtons";
+import { flagOn } from "@/lib/flags";
 
 export const dynamic = "force-dynamic";
 
@@ -59,8 +60,8 @@ export default async function AiOrgApprovalsPage(): Promise<React.JSX.Element> {
   const visible = pending.filter((a) => showMoney || !a.financial);
   const hiddenFinancial = pending.length - visible.length;
 
-  const emailGate = process.env.EMAIL_SEND_ENABLED === "true";
-  const smsGate = process.env.SMS_SEND_ENABLED === "true";
+  const emailGate = flagOn("EMAIL_SEND_ENABLED");
+  const smsGate = flagOn("SMS_SEND_ENABLED");
 
   return (
     <main className="max-w-[1000px] p-6">

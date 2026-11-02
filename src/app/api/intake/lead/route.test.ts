@@ -47,12 +47,13 @@ describe("POST /api/intake/lead", () => {
   });
   afterEach(() => vi.clearAllMocks());
 
-  it("texts a Google lead once (only when WEB_LEAD_SMS is on), never a website or Yelp lead", async () => {
+  it("texts a Google lead once (on by default, WEB_LEAD_SMS=false stops it), never a website or Yelp lead", async () => {
     process.env.WEB_INTAKE_ENABLED = "true";
     const g = validLead({ source: "google_ads", firstName: "Jade", email: "jade.sms@example.com", phone: "5405550199" });
+    process.env.WEB_LEAD_SMS = "false";
     await callLead(g);
-    expect(sendSms).not.toHaveBeenCalled(); // off by default
-    process.env.WEB_LEAD_SMS = "true";
+    expect(sendSms).not.toHaveBeenCalled(); // switched off
+    delete process.env.WEB_LEAD_SMS; // default: on
     try {
       await callLead({ ...g, email: "jade.sms2@example.com", phone: "5405550198" });
       expect(sendSms).toHaveBeenCalledTimes(1);
@@ -103,7 +104,8 @@ describe("POST /api/intake/lead", () => {
     expect((await r.json()).created).toBe(true);
   });
 
-  it("records but does NOT create when the master switch is off (default)", async () => {
+  it("records but does NOT create when the master switch is off", async () => {
+    process.env.WEB_INTAKE_ENABLED = "false";
     const r = await callLead(validLead({ email: "disabled@example.com", phone: "5550000003" }));
     const j = (await r.json()) as { ok: boolean; created: boolean; reason: string; intakeId: string };
     expect(j.ok).toBe(true);
@@ -209,8 +211,8 @@ describe("web-lead welcome email (Goodshuffle template, tied to /api/gs/intake-r
     delete process.env.WEB_INTAKE_ACK_EMAIL;
   });
 
-  it("sends NO welcome email while its switch is off (default)", async () => {
-    delete process.env.WEB_INTAKE_ACK_EMAIL;
+  it("sends NO welcome email while its switch is off", async () => {
+    process.env.WEB_INTAKE_ACK_EMAIL = "false";
     const j = (await (await callLead(validLead({ email: "noack@example.com", phone: "5550000010" }))).json()) as { intakeId: string };
     expect(createOpsFor(j.intakeId)).toHaveLength(1); // the project is still queued
     const res = await callIntakeResult({ intakeId: j.intakeId, projectId: "99003", ok: true });
@@ -245,10 +247,13 @@ describe("web-lead welcome email (Goodshuffle template, tied to /api/gs/intake-r
     expect(welcomeOps("99004")).toHaveLength(0);
   });
 
-  it("skips Yelp leads (the Yelp Zap already auto-replies inside Yelp)", async () => {
-    const j = (await (await callLead(validLead({ source: "yelp", email: "leadsapi+abc@messaging.yelp.com", phone: "5550000013" }))).json()) as { intakeId: string };
-    expect((await callIntakeResult({ intakeId: j.intakeId, projectId: "99006", ok: true })).status).toBe(200);
-    expect(welcomeOps("99006")).toHaveLength(0);
+  it("Yelp and Google Business Profile leads get the welcome email too", async () => {
+    const y = (await (await callLead(validLead({ source: "yelp", email: "leadsapi+abc@messaging.yelp.com", phone: "5550000013" }))).json()) as { intakeId: string };
+    expect((await callIntakeResult({ intakeId: y.intakeId, projectId: "99006", ok: true })).status).toBe(200);
+    expect(welcomeOps("99006")).toHaveLength(1);
+    const g = (await (await callLead(validLead({ source: "google", email: "gbp.lead@example.com", phone: "5550000014" }))).json()) as { intakeId: string };
+    expect((await callIntakeResult({ intakeId: g.intakeId, projectId: "99007", ok: true })).status).toBe(200);
+    expect(welcomeOps("99007")).toHaveLength(1);
   });
 
   it("uses the template named in WEB_LEAD_EMAIL_TEMPLATE", async () => {
