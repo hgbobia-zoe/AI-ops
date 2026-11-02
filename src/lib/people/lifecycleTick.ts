@@ -5,12 +5,14 @@
 //   3. escalates overdue manual provision/revoke tasks (manual_required beyond a grace window → Slack).
 // App-owned: safe when nothing matches (a silent no-op). No external writes beyond the proven adapters.
 
-import { slackNotify } from "@/lib/notify/slack";
 import { botAnnounce, appUrl } from "@/lib/notify/aiBots";
 import { todayInOpsTz } from "@/lib/dates";
 import { executeAutomatedTask, startOnboarding } from "./lifecycle";
 import { getAdapter } from "./adapters";
-import { listEmployees, listTasks, tasksByStatus } from "./store";
+import { getEmployee, listEmployees, listTasks, tasksByStatus } from "./store";
+import { announceCheckIn, announceOnboardingStarted, dueCheckIn, orderRevokes } from "./notify";
+import { ensureSopLink } from "./sopAck";
+import { getJson, setJson } from "@/lib/kv";
 
 /** Days a manual provision/revoke task may sit before it is escalated. */
 export const PEOPLE_ESCALATE_DAYS = 3;
@@ -30,17 +32,8 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
       const r = startOnboarding(e.id, actor);
       if (r.ok) {
         onboarded++;
-        void botAnnounce("hiring", {
-          emoji: "👋",
-          title: "Onboarding started",
-          fields: [
-            { label: "Who", value: e.displayName },
-            { label: "Role", value: e.role ?? "role TBD" },
-          ],
-          body: "Their access tasks are created.",
-          link: { text: "Open People", url: appUrl("/people") },
-          context: "Hiring Bot",
-        }).catch(() => {});
+        const cur = getEmployee(e.id) ?? e;
+        announceOnboardingStarted(cur, listTasks(e.id, "provision"), ensureSopLink(cur));
       }
     }
   }
@@ -50,7 +43,7 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
   for (const e of employees) {
     if (e.lifecycleState !== "OFFBOARD") continue;
     if (e.endDate && e.endDate > today) continue; // not yet effective
-    for (const t of listTasks(e.id, "revoke")) {
+    for (const t of orderRevokes(listTasks(e.id, "revoke"))) {
       if (t.status !== "pending") continue;
       if (getAdapter(t.adapterId).mode() !== "automated") continue;
       const r = await executeAutomatedTask(t.id, actor);
@@ -79,12 +72,34 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
   );
   if (overdue.length > 0) {
     escalated = overdue.length;
-    const lines = overdue.slice(0, 8).map((t) => `• ${t.kind} ${t.system} (${t.status})`);
-    await slackNotify(
-      `People Lifecycle: ${overdue.length} manual access task(s) outstanding > ${PEOPLE_ESCALATE_DAYS}d:\n${lines.join("\n")}`,
-    );
+    const lines = overdue.slice(0, 8).map((t) => {
+      const who = getEmployee(t.employeeId)?.displayName ?? "someone";
+      return `• ${t.kind === "revoke" ? "Remove" : "Set up"} ${t.system} for ${who}`;
+    });
+    await botAnnounce("hiring", {
+      emoji: "⏰",
+      title: `${overdue.length} access step${overdue.length === 1 ? "" : "s"} still open`,
+      sections: [lines.join("\n")],
+      body: `Open for more than ${PEOPLE_ESCALATE_DAYS} days. Do them in the system, then Mark Complete in People.`,
+      link: { text: "Open People", url: appUrl("/people") },
+      context: "Hiring Bot",
+    }).catch(() => {});
   }
 
-  const detail = `${onboarded} onboarded, ${revoked} auto-revoked, ${escalated} escalated`;
+  // 4) Manager check ins at 30 / 60 / 90 days after the start date (each posted once to #hiring).
+  const sentMap = getJson<Record<string, number[]>>("people.checkins", {});
+  let checkins = 0;
+  for (const e of employees) {
+    if (!e.startDate || !["ONBOARD", "READY", "ACTIVE"].includes(e.lifecycleState)) continue;
+    const sent = sentMap[e.id] ?? [];
+    const due = dueCheckIn(e.startDate, today, sent);
+    if (due == null) continue;
+    sentMap[e.id] = [...sent, due];
+    announceCheckIn(e, due);
+    checkins++;
+  }
+  if (checkins > 0) setJson("people.checkins", sentMap);
+
+  const detail = `${checkins} check ins, ${onboarded} onboarded, ${revoked} auto-revoked, ${escalated} escalated`;
   return { ok: true, detail };
 }

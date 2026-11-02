@@ -12,7 +12,10 @@ import {
   startOffboarding,
   startOnboarding,
 } from "@/lib/people/lifecycle";
-import { createEmployee } from "@/lib/people/store";
+import { createEmployee, getEmployee, getPolicy, listTasks } from "@/lib/people/store";
+import { deriveWorkEmail, policyIssuesWorkEmail } from "@/lib/people/policy";
+import { ensureSopLink } from "@/lib/people/sopAck";
+import { announceNewHire, announceOffboardingStarted, announceOnboardingStarted, announceReady } from "@/lib/people/notify";
 
 export const dynamic = "force-dynamic";
 
@@ -47,16 +50,24 @@ export async function POST(req: Request): Promise<NextResponse> {
     const name = (body.displayName ?? "").trim();
     if (!name) return NextResponse.json({ error: "displayName required" }, { status: 400 });
     const empRole = isRole(body.role) && body.role !== "guest" ? body.role : "member";
+    // Intake by name: a role that gets a mailbox gets firstname.lastname@zoeeventsdmv.com unless one was typed.
+    const policy = body.department ? getPolicy(body.department) : null;
+    const typedEmail = (body.workEmail ?? "").trim();
+    const workEmail = typedEmail || (policyIssuesWorkEmail(policy) ? deriveWorkEmail(name) : null);
     const emp = createEmployee({
       displayName: name,
-      workEmail: body.workEmail ?? null,
+      workEmail,
       role: empRole,
       department: body.department ?? null,
       startDate: body.startDate ?? null,
     });
     // Convenience: optionally kick off onboarding immediately on create.
-    if (body.startNow) startOnboarding(emp.id, actor);
-    return NextResponse.json({ ok: true, id: emp.id });
+    announceNewHire(emp, policy?.name ?? null);
+    if (body.startNow && startOnboarding(emp.id, actor).ok) {
+      const cur = getEmployee(emp.id) ?? emp;
+      announceOnboardingStarted(cur, listTasks(emp.id, "provision"), ensureSopLink(cur));
+    }
+    return NextResponse.json({ ok: true, id: emp.id, workEmail });
   }
 
   const id = (body.id ?? "").trim();
@@ -68,6 +79,13 @@ export async function POST(req: Request): Promise<NextResponse> {
     : action === "activate" ? activate(id, actor)
     : action === "start_offboarding" ? startOffboarding(id, actor, body.effectiveDate ?? null)
     : completeOffboarding(id, actor);
+
+  const emp = result.ok ? getEmployee(id) : null;
+  if (emp) {
+    if (action === "start_onboarding") announceOnboardingStarted(emp, listTasks(id, "provision"), ensureSopLink(emp));
+    else if (action === "advance_ready") announceReady(emp);
+    else if (action === "start_offboarding") announceOffboardingStarted(emp, listTasks(id, "revoke"), body.effectiveDate ?? null);
+  }
 
   return NextResponse.json({ ok: result.ok, state: result.state, message: result.message }, { status: result.ok ? 200 : 409 });
 }

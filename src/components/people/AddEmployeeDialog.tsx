@@ -8,6 +8,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { deriveWorkEmail } from "@/lib/people/policy";
 import { UserPlus, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,20 +27,21 @@ const ROLES = [
   { value: "owner", label: "Owner" },
 ] as const;
 
-export function AddEmployeeDialog({ policies }: { policies: { id: string; name: string }[] }): React.JSX.Element {
+export function AddEmployeeDialog({ policies }: { policies: { id: string; name: string; issuesEmail?: boolean }[] }): React.JSX.Element {
   const router = useRouter();
+  const defaultPolicy = policies.find((p) => p.id === "sales_associate")?.id ?? policies[0]?.id ?? "";
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; tone: "ok" | "bad" } | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("member");
-  const [department, setDepartment] = useState(policies[0]?.id ?? "");
+  const [department, setDepartment] = useState(defaultPolicy);
   const [startDate, setStartDate] = useState("");
   const [startNow, setStartNow] = useState(true);
 
   function reset(): void {
-    setName(""); setEmail(""); setRole("member"); setDepartment(policies[0]?.id ?? "");
+    setName(""); setEmail(""); setRole("member"); setDepartment(defaultPolicy);
     setStartDate(""); setStartNow(true); setMsg(null);
   }
 
@@ -72,6 +74,9 @@ export function AddEmployeeDialog({ policies }: { policies: { id: string; name: 
     }
   }
 
+  const selectedPolicy = policies.find((p) => p.id === department);
+  const derivedEmail = selectedPolicy?.issuesEmail ? deriveWorkEmail(name) : null;
+
   const selectCls = "h-9 w-full rounded-md border border-input bg-[var(--panel)] px-2.5 text-[13px] text-foreground focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50";
   const policyName = policies.find((p) => p.id === department)?.name ?? "the selected";
 
@@ -97,8 +102,8 @@ export function AddEmployeeDialog({ policies }: { policies: { id: string; name: 
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="emp-email" className="text-[12px]">Work email <span className="text-meta">(optional)</span></Label>
-              <Input id="emp-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@zoeeventsdmv.com" />
+              <Label htmlFor="emp-email" className="text-[12px]">Work email <span className="text-meta">{derivedEmail ? "(filled in from the name)" : "(optional)"}</span></Label>
+              <Input id="emp-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={derivedEmail ?? "name@zoeeventsdmv.com"} />
             </div>
 
             <div className="grid grid-cols-2 gap-3">

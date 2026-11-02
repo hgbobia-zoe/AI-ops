@@ -39,3 +39,36 @@ describe("seed policies", () => {
     expect(seedPolicy("nope")).toBeNull();
   });
 });
+
+import { deriveWorkEmail, policyIssuesWorkEmail, revokeRank } from "./policy";
+
+describe("Sales Associate policy", () => {
+  it("covers the seven systems, all required, plus an optional Zoe login", () => {
+    const p = seedPolicy("sales_associate")!;
+    expect(p.name).toBe("Sales Associate");
+    const req = p.rules.filter((r) => r.required).map((r) => r.adapterId).sort();
+    expect(req).toEqual(["connecteam", "goodshuffle", "lockly", "quo", "slack", "sop_ack", "squarespace_email", "weddingpro", "whimsical", "yelp"]);
+    expect(p.rules.find((r) => r.adapterId === "zoe_platform")?.required).toBe(false);
+    expect(policyIssuesWorkEmail(p)).toBe(true);
+    expect(policyIssuesWorkEmail(seedPolicy("warehouse"))).toBe(false);
+  });
+  it("offboarding removes the Lockly door first", () => {
+    const ids = seedPolicy("sales_associate")!.rules.map((r) => r.adapterId);
+    const ordered = [...ids].sort((a, b) => revokeRank(a) - revokeRank(b));
+    expect(ordered[0]).toBe("lockly");
+    expect(revokeRank("something_new")).toBeGreaterThan(revokeRank("gusto"));
+  });
+});
+
+describe("deriveWorkEmail", () => {
+  it("is firstname.lastname at the Zoe domain", () => {
+    expect(deriveWorkEmail("Jordan Rivera")).toBe("jordan.rivera@zoeeventsdmv.com");
+  });
+  it("uses the first and last word, strips accents and punctuation", () => {
+    expect(deriveWorkEmail("  José  María O'Brien ")).toBe("jose.obrien@zoeeventsdmv.com");
+  });
+  it("one word or no name", () => {
+    expect(deriveWorkEmail("Cher")).toBe("cher@zoeeventsdmv.com");
+    expect(deriveWorkEmail("   ")).toBeNull();
+  });
+});

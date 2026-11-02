@@ -18,6 +18,10 @@ that gate. We never store a third-party password.
 | **Goodshuffle Pro** | `goodshuffle` | **Replay** a captured internal invite/disable request from a logged-in GSPRO session | `manual` (endpoint capture-pending) | Capture the endpoint once (below) → `automated` (drains in the office pull). |
 | **Quo (OpenPhone)** | `quo` | **Replay** from a logged-in Quo admin session | `manual` (endpoint capture-pending) | Capture the endpoint once → `automated` (drains from a logged-in Quo tab). |
 | **Slack** | `slack` | **Replay** from a logged-in Slack admin session | `manual` (endpoint capture-pending) | Capture the endpoint once → `automated` (drains from a logged-in Slack tab). |
+| **Work email (Squarespace)** | `squarespace_email` | **Replay** from Squarespace → Email (or Google Admin Directory API if seats live in admin.google.com) | `manual` (capture-pending) | Capture "add user" once. Intake derives `firstname.lastname@zoeeventsdmv.com`. Suspend, never delete, on offboarding. |
+| **WeddingPro** | `weddingpro` | **Replay** from WeddingPro admin | `manual` (capture-pending) | Capture "add team member" once. |
+| **Yelp for Business** | `yelp` | **Replay** from biz.yelp.com → Users | `manual` (capture-pending) | Capture "add user" once. |
+| **Lockly door** | `lockly` | Manual: keys are made in the free Lockly phone app (web portal is a paid plan) | `manual` (permanent) | Slack reminds to create the key on onboarding and to delete it FIRST on offboarding. |
 | **Gusto** | `gusto` | None | `future` | No admin-provisioning mechanism exists; onboarding/termination is a human flow in Gusto. |
 | **Google Workspace / SSO** | `google` | None | `future` | No identity/SSO/SCIM is implemented in the app. |
 
@@ -91,3 +95,16 @@ Drainer locations:
 Always test replay writes on throwaway TEST accounts first (as CLAUDE.md requires for Goodshuffle). The
 adapters are covered by `src/lib/people/adapters/adapters.test.ts` and the Connecteam client by
 `src/lib/connecteam.provision.test.ts`.
+
+## Sales Associate (2026-11-02)
+
+Policy `sales_associate`: Work email, Goodshuffle, Quo, WeddingPro, Yelp, Lockly, Connecteam (all required),
+Zoe login optional. Intake takes the person's name; the work email is derived as
+`firstname.lastname@zoeeventsdmv.com` unless typed. Offboarding order is `REVOKE_PRIORITY` in
+`src/lib/people/policy.ts` (Lockly door first). Every milestone posts to the Hiring Bot channel
+(`SLACK_CHANNEL_HIRING` overrides): new hire, onboarding started (checklist), ready, offboarding started
+(ordered removals), and steps open more than 3 days.
+
+**Goodshuffle notes (mapped live, read-only):** team list = `GET /app/subscriptionSeat/list`. Invite Teammate
+= email + seat type (Full) + interval (Monthly) and **buys a $49/mo seat**, so it always goes through the
+approval card. The invite request itself is still to be recorded on the next real hire.

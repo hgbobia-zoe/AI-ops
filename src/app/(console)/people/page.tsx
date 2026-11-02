@@ -28,6 +28,7 @@ import {
 import { filterPeople, parseStageFilter, stageCounts, type StageFilter } from "@/lib/people/list";
 import { ADAPTER_LABEL } from "@/lib/people/policy";
 import type { AdapterMode } from "@/lib/people/types";
+import { policyIssuesWorkEmail } from "@/lib/people/policy";
 import { AddEmployeeDialog } from "@/components/people/AddEmployeeDialog";
 import { PeopleSubnav, type PeopleTab } from "@/components/people/PeopleSubnav";
 
@@ -45,7 +46,7 @@ export default async function PeoplePage({ searchParams }: { searchParams: Promi
 
   const ov = peopleOverview();
   const policies = listPolicies();
-  const policyOptions = policies.map((p) => ({ id: p.id, name: p.name }));
+  const policyOptions = policies.map((p) => ({ id: p.id, name: p.name, issuesEmail: policyIssuesWorkEmail(p) }));
 
   return (
     <div className="flex flex-col lg:flex-row lg:items-start">
@@ -87,7 +88,7 @@ export default async function PeoplePage({ searchParams }: { searchParams: Promi
 }
 
 // ══ ONBOARDING — the unified, searchable/filterable lifecycle list ══════════════════════════════════════
-function OnboardingTab({ stage, q, policies }: { stage?: string; q?: string; policies: { id: string; name: string }[] }): React.JSX.Element {
+function OnboardingTab({ stage, q, policies }: { stage?: string; q?: string; policies: { id: string; name: string; issuesEmail?: boolean }[] }): React.JSX.Element {
   const scope = lifecycleList().filter((p) => STAGE_META[p.stage].group === "onboarding");
   const active = parseStageFilter(stage, ONBOARDING_STAGES);
   const query = (q ?? "").trim();

@@ -13,6 +13,7 @@ import { createApproval, decideApproval, getApproval } from "@/lib/aiorg/approva
 import { insertAudit } from "@/lib/db/repo";
 import { canTransition } from "./machine";
 import { getAdapter } from "./adapters";
+import { revokeRank } from "./policy";
 import {
   getEmployee,
   getPolicy,
@@ -93,7 +94,8 @@ export function materializeOffboardingTasks(emp: Employee): LifecycleTask[] {
   const rules = policy?.rules ?? [];
   const provisioned = new Set(listTasks(emp.id, "provision").filter((t) => t.status === "completed").map((t) => t.adapterId));
   // Revoke every system the policy covers; a system that was actually provisioned is the priority grant.
-  return rules.map((r) => {
+  // Ordered physical access first (Lockly), then customer-facing systems (REVOKE_PRIORITY).
+  return [...rules].sort((a, b) => revokeRank(a.adapterId) - revokeRank(b.adapterId)).map((r) => {
     const mode = getAdapter(r.adapterId).mode();
     return insertTaskIfAbsent({
       employeeId: emp.id,
