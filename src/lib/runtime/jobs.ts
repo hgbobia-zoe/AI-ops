@@ -18,6 +18,7 @@ import { configured as ubersuggestConfigured } from "@/lib/seo/ubersuggest";
 import { connecteamConfigured, refreshConnecteamHealth, warmConnecteamCaches } from "@/lib/connecteam";
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { runScheduledPayrollSyncIfDue, runScheduledPrecheckIfDue } from "@/lib/payroll/scheduler";
+import { runWireReminderTick } from "@/lib/payroll/wireReminder";
 import { runShiftLifecycleTick } from "@/lib/scheduling/lifecycleTick";
 import { runRouteHandoffTick } from "@/lib/dispatch/handoffTick";
 import { getHandoffConfig } from "@/lib/dispatch/handoffConfig";
@@ -178,6 +179,14 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
       const r = await runScheduledPrecheckIfDue();
       return { ok: true, detail: r.detail }; // "waiting"/"already ran" are healthy no-ops, not failures
     },
+  },
+  {
+    key: "payroll-wire-reminder",
+    label: "Payroll wire reminder",
+    bucket: "server",
+    configured: () => true, // a silent no-op when no payroll was submitted in the last 2 days
+    note: "After payroll is submitted in Gusto, reminds the payroll channel if no wire to Gusto has shown up from Mercury: once 2 hours after the submit, again at 10am ET the next day, then stops. Stops early as soon as a Mercury payroll wire is detected, the wire is confirmed in Gusto, or Gusto's wire-received email arrives. Read-only; never moves money.",
+    run: async () => runWireReminderTick(),
   },
   {
     key: "route-precheck",
