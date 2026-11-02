@@ -21,8 +21,8 @@ export function webIntakeSalesPingEnabled(): boolean {
   return process.env.WEB_INTAKE_SALES_PING === "true";
 }
 // The welcome email to the customer, sent from inside the new Goodshuffle project as soon as it exists.
-// Default OFF: the website Zap may still send its own Gmail thank-you, and two welcome emails would be
-// one too many. Turn on with WEB_INTAKE_ACK_EMAIL=true once the Zap's Gmail step is off.
+// Turn on with WEB_INTAKE_ACK_EMAIL=true. Website leads also get the Zap's Gmail thank-you: the owner wants
+// both (by design, 2026-11-02).
 export function webIntakeAckEmailEnabled(): boolean {
   return process.env.WEB_INTAKE_ACK_EMAIL === "true";
 }
@@ -177,4 +177,20 @@ export function toIntakePatch(n: NormalizedLead): IntakePatch {
     guestCount: n.guestCount,
     salesNotes: n.message,
   };
+}
+
+/** The welcome TEXT for lead sources whose Zap does not text the customer itself (Google today; the website
+ *  Zap texts through Quo, Yelp replies inside Yelp). Gated by WEB_LEAD_SMS=true. */
+export function webLeadSmsEnabled(): boolean {
+  return process.env.WEB_LEAD_SMS === "true";
+}
+export function webLeadSmsApplies(source: string): boolean {
+  return /google/i.test(source || "");
+}
+/** Wording: WEB_LEAD_SMS_TEXT overrides it; "{firstName}" is filled in. House style: no dashes, no emoji. */
+export function webLeadSmsText(firstName: string): string {
+  const tpl =
+    process.env.WEB_LEAD_SMS_TEXT?.trim() ||
+    "Hi {firstName}, thanks for reaching out to Zoe Events & Party Rentals! We got your request and will follow up shortly. Feel free to reply here with your event date and what you have in mind.";
+  return tpl.replace(/\{firstName\}/g, firstName.trim() || "there");
 }

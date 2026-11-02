@@ -30,6 +30,8 @@ import { logIntakeEvent } from "@/lib/intake/audit";
 import { notify } from "@/lib/notify/channels";
 import { adaptLeadBody, newLeadSlackText } from "@/lib/intake/sourceAdapters";
 import { postNewLeadToSlack } from "@/lib/intake/leadSlackReply";
+import { sendSms } from "@/lib/notify/sms";
+import { webLeadSmsApplies, webLeadSmsEnabled, webLeadSmsText } from "@/lib/intake/webLead";
 
 export const dynamic = "force-dynamic";
 
@@ -140,6 +142,13 @@ export async function POST(req: Request): Promise<NextResponse> {
   updateIntake(intake.id, { status: "creating", gsStatus: "queued" });
   logImport(`intake:${lead.source}`, true, { rowsIn: 1, rowsWritten: 1, detail: `queued create: ${eventName}` });
   await logIntakeEvent("WEB_LEAD_QUEUED", intake.id, { source: lead.source, name: eventName });
+
+  // Welcome text for sources whose Zap does not text the customer (Google). Past the duplicate check, so
+  // once per lead. Never blocks the lead on a send failure.
+  if (webLeadSmsEnabled() && webLeadSmsApplies(lead.source) && lead.phone.trim()) {
+    const sms = await sendSms(lead.phone, webLeadSmsText(lead.firstName)).catch((e) => ({ ok: false, error: String(e) }));
+    await logIntakeEvent(sms.ok ? "WEB_LEAD_SMS_SENT" : "WEB_LEAD_SMS_FAILED", intake.id, { source: lead.source, error: sms.ok ? undefined : (sms as { error?: string }).error });
+  }
 
   // Optional quiet sales-ai ping (default OFF). Honest wording: the project is QUEUED, not yet created
   // (the office session creates it on its next pull) — never claim a project that does not exist yet.
