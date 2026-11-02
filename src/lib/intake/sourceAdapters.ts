@@ -69,7 +69,12 @@ export function fromYelpLead(raw: unknown): { lead: WebLeadInput; yelp: YelpLead
   const { firstName, lastName } = splitName(name);
   const info = pick(flat, ["additional_info"]);
   const postalCode = pick(flat, ["postal_code"], ["business"]);
-  const jobs = Object.entries(flat).filter(([k]) => k.includes("job_name")).map(([, v]) => v);
+  // Zapier can hand a list over as Python-style text: "['Party equipment rental']".
+  const jobs = Object.entries(flat)
+    .filter(([k]) => k.includes("job_name"))
+    .flatMap(([, v]) => v.replace(/^\[|\]$/g, "").split(/',\s*'|",\s*"/))
+    .map((v) => v.replace(/^['"\s]+|['"\s]+$/g, ""))
+    .filter(Boolean);
 
   // Survey answers come flattened as ...survey_answers__<i>__question_text and ...__answer_text(__<j>).
   const answers: string[] = [];

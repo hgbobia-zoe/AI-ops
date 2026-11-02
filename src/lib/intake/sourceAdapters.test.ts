@@ -49,6 +49,11 @@ describe("Yelp lead", () => {
     expect(yelp.emailExpiry).toBe("2026-11-27T17:51:05Z");
   });
 
+  it("cleans a list Zapier passed as text", () => {
+    const { lead } = fromYelpLead({ ...YELP, project: { ...YELP.project, job_names: "['Party equipment rental', 'Tent rental']" } });
+    expect(String(lead.message)).toContain("Yelp request: Party equipment rental, Tent rental");
+  });
+
   it("names the project 'Pat Q. - Yelp' (a bare initial is not a surname)", () => {
     const n = normalizeLead(adaptLeadBody(YELP).input);
     expect(webLeadEventName(n)).toBe("Pat Q. - Yelp");
