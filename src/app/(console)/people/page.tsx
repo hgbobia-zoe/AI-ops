@@ -31,10 +31,15 @@ import type { AdapterMode } from "@/lib/people/types";
 import { policyIssuesWorkEmail } from "@/lib/people/policy";
 import { AddEmployeeDialog } from "@/components/people/AddEmployeeDialog";
 import { PeopleSubnav, type PeopleTab } from "@/components/people/PeopleSubnav";
+import { getAdapter } from "@/lib/people/adapters";
+import { connecteamScopeStatus } from "@/lib/people/connecteamScope";
+import { lastMatchReport, type MatchReport } from "@/lib/people/matchRun";
+import type { MatchException } from "@/lib/people/match";
+import { RunMatchButton, ConfirmLinkButton, VerifyConnecteamButton } from "@/components/people/PeopleControls";
 
 export const dynamic = "force-dynamic";
 
-const TABS: PeopleTab[] = ["onboarding", "offboarding", "policies", "activity"];
+const TABS: PeopleTab[] = ["onboarding", "offboarding", "matching", "policies", "activity"];
 const MODE_LABEL: Record<AdapterMode, string> = { automated: "Automated", partial: "Partial", manual: "Manual", future: "Future" };
 const MODE_TONE: Record<AdapterMode, "positive" | "attention" | "neutral"> = { automated: "positive", partial: "attention", manual: "neutral", future: "neutral" };
 
@@ -78,8 +83,10 @@ export default async function PeoplePage({ searchParams }: { searchParams: Promi
           <Metric label="Open access revokes" value={ov.counts.outstandingRevokes} tone={ov.counts.outstandingRevokes > 0 ? "attention" : "neutral"} sub={ov.counts.outstandingRevokes > 0 ? "awaiting confirmation" : "all confirmed"} />
         </MetricGrid>
 
+        {tab !== "matching" && <MatchBanner report={lastMatchReport()} />}
         {tab === "onboarding" && <OnboardingTab stage={sp.stage} q={sp.q} policies={policyOptions} />}
         {tab === "offboarding" && <OffboardingTab stage={sp.stage} q={sp.q} />}
+        {tab === "matching" && <MatchingTab report={lastMatchReport()} />}
         {tab === "policies" && <PoliciesTab policies={policies} />}
         {tab === "activity" && <ActivityTab />}
       </main>
@@ -240,9 +247,10 @@ function PoliciesTab({ policies }: { policies: ReturnType<typeof listPolicies> }
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[12px] text-meta">
-        Seeded, config-driven policies. A rule&apos;s mode is its HONEST capability today — not a promise the UI invents.
+        Seeded, config-driven policies. Each mode is what the app can really do today for that system.
         Only <span className="text-foreground">Automated</span> steps can be executed in-app; the rest are tracked manual steps. Editing is read-only in this phase.
       </p>
+      <ConnecteamCard />
       {policies.map((p) => (
         <Surface key={p.id} aria-labelledby={`policy-${p.id}`}>
           <h3 id={`policy-${p.id}`} className="mb-2.5 flex items-center gap-2 text-[14px] font-medium text-foreground">
@@ -256,7 +264,7 @@ function PoliciesTab({ policies }: { policies: ReturnType<typeof listPolicies> }
                   <span className="truncate">{ADAPTER_LABEL[rr.adapterId] ?? rr.system}</span>
                   {rr.required && <span className="ml-1.5 text-[10px] uppercase tracking-[0.05em] text-meta">required</span>}
                 </span>
-                <StatusBadge tone={MODE_TONE[rr.mode]} size="sm">{MODE_LABEL[rr.mode]}</StatusBadge>
+                <StatusBadge tone={MODE_TONE[getAdapter(rr.adapterId).mode()]} size="sm">{MODE_LABEL[getAdapter(rr.adapterId).mode()]}</StatusBadge>
               </li>
             ))}
           </ul>
@@ -268,7 +276,7 @@ function PoliciesTab({ policies }: { policies: ReturnType<typeof listPolicies> }
 
 // ══ ACTIVITY ════════════════════════════════════════════════════════════════════════════════════════════
 function ActivityTab(): React.JSX.Element {
-  const rows = getRecentAudit(["ONBOARDING_STARTED", "MARKED_READY", "ACTIVATED", "OFFBOARDING_STARTED", "OFFBOARDED", "ACCESS_GRANTED", "ACCESS_REVOKED", "TASK_RETRIED", "TASK_SKIPPED"], 80);
+  const rows = getRecentAudit(["ONBOARDING_STARTED", "MARKED_READY", "ACTIVATED", "OFFBOARDING_STARTED", "OFFBOARDED", "ACCESS_GRANTED", "ACCESS_REVOKED", "TASK_RETRIED", "TASK_SKIPPED", "EMPLOYEE_IMPORTED", "IDENTITY_LINKED", "PHONE_SET", "POLICY_SET", "SOP_SIGNED", "CONNECTEAM_SCOPE_VERIFIED", "CONNECTEAM_SCOPE_CHECK_FAILED", "CONNECTEAM_SCOPE_CLEARED"], 80);
   if (rows.length === 0) {
     return <EmptyState title="No lifecycle activity yet" body="Onboarding, access grants/revokes, activations and offboardings are recorded here with who did them." />;
   }
@@ -286,6 +294,128 @@ function ActivityTab(): React.JSX.Element {
           </div>
         </div>
       ))}
+    </Surface>
+  );
+}
+
+// ══ MATCHING — existing staff tied to People records, and what could not be matched ═══════════════════
+const EXCEPTION_LABEL: Record<MatchException["kind"], string> = {
+  ambiguous: "Two or more possible people",
+  probable: "Probable match, needs a yes",
+  no_match: "No People record",
+  new_in_connecteam: "New in Connecteam",
+  missing_in_connecteam: "Not linked to Connecteam",
+  no_policy: "No access policy",
+};
+const SYSTEM_LABEL: Record<MatchException["system"], string> = { connecteam: "Connecteam", zoe: "Zoe login", payroll: "Payroll", people: "People" };
+
+function MatchBanner({ report }: { report: MatchReport | null }): React.JSX.Element | null {
+  const n = report?.exceptions.length ?? 0;
+  if (n === 0) return null;
+  return (
+    <StatusBanner
+      tone="attention"
+      title={`${n} account${n === 1 ? "" : "s"} could not be matched to a person`}
+      className="mb-5"
+      action={<Link href="/people?tab=matching" className="text-[12px] text-foreground underline-offset-2 hover:underline">Review</Link>}
+    >
+      Until they are matched, offboarding someone may miss these accounts.
+    </StatusBanner>
+  );
+}
+
+function MatchingTab({ report }: { report: MatchReport | null }): React.JSX.Element {
+  return (
+    <section className="flex flex-col gap-4">
+      <Surface>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1 text-[12.5px] text-secondary-text">
+            <p>
+              Ties everyone who already works here to a People record, across Connecteam, Zoe logins and payroll, so offboarding
+              anyone has real accounts to act on. It links only on an exact id, phone, email or full name, never overwrites a
+              link, and lists everything else below. It runs every 15 minutes.
+            </p>
+            <p className="mt-1.5 text-meta">
+              {report
+                ? <>Last run {new Date(report.ranAt).toLocaleString()} by {report.by ?? "the scheduled job"}: {report.created.length} added, {report.linked.length} linked, {report.exceptions.length} to sort out.{report.rosterOk ? "" : " Connecteam did not answer, so roster checks were skipped."}</>
+                : "Not run yet."}
+            </p>
+          </div>
+          <RunMatchButton />
+        </div>
+      </Surface>
+
+      {report && report.created.length > 0 && (
+        <Surface>
+          <h3 className="mb-2 text-[13px] font-medium text-foreground">Added as existing staff on the last run</h3>
+          <ul className="flex flex-wrap gap-2 text-[12px]">
+            {report.created.map((c) => (
+              <li key={c.employeeId}>
+                <Link href={`/people/${c.employeeId}`} className="rounded border border-border px-2 py-0.5 text-secondary-text hover:text-foreground">{c.name}</Link>
+              </li>
+            ))}
+          </ul>
+        </Surface>
+      )}
+
+      {!report || report.exceptions.length === 0 ? (
+        <EmptyState
+          title={report ? "Everyone is matched" : "Matching has not run yet"}
+          body={report ? "Every account found is tied to a person." : "Press Match now, or wait for the next scheduled run."}
+        />
+      ) : (
+        <Surface pad="none" className="divide-y divide-[var(--row-rule)] overflow-hidden">
+          {report.exceptions.map((x) => (
+            <div key={x.key} className="flex flex-wrap items-start justify-between gap-3 px-3.5 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[13px] font-medium text-foreground">{x.subject}</span>
+                  <StatusBadge tone={x.kind === "probable" ? "info" : "attention"} size="sm">{EXCEPTION_LABEL[x.kind]}</StatusBadge>
+                  <span className="text-[11px] text-meta">{SYSTEM_LABEL[x.system]}</span>
+                </div>
+                <p className="mt-0.5 text-[12px] text-secondary-text">{x.detail}</p>
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                {x.suggestions.map((sg) => (
+                  <ConfirmLinkButton key={`${sg.employeeId}:${sg.field}`} employeeId={sg.employeeId} employeeName={sg.employeeName} field={sg.field} value={sg.value} />
+                ))}
+                {x.employeeId && (
+                  <Link href={`/people/${x.employeeId}`} className="text-[12px] text-meta underline-offset-2 hover:text-foreground hover:underline">Open person</Link>
+                )}
+              </div>
+            </div>
+          ))}
+        </Surface>
+      )}
+    </section>
+  );
+}
+
+function ConnecteamCard(): React.JSX.Element {
+  const st = connecteamScopeStatus();
+  return (
+    <Surface aria-labelledby="ct-scope-h">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 id="ct-scope-h" className="flex items-center gap-2 text-[14px] font-medium text-foreground">
+            Connecteam
+            <StatusBadge tone={st.verified ? "positive" : "neutral"} size="sm">{st.verified ? "Automated" : "Manual"}</StatusBadge>
+          </h3>
+          <p className="mt-1 text-[12px] text-secondary-text">
+            {!st.configured
+              ? "No Connecteam API key is set, so Connecteam steps stay manual."
+              : st.verified
+                ? "Write access is verified. Approving a Connecteam step creates the user (no activation text) and offboarding archives them."
+                : "Check that the API key can create users. The check creates nobody. If it passes, Connecteam steps run from People after you approve them."}
+          </p>
+          {st.last && (
+            <p className="mt-1 text-[11.5px] text-meta">
+              Last check {new Date(st.last.checkedAt).toLocaleString()} by {st.last.by}: {st.last.detail}.
+            </p>
+          )}
+        </div>
+        {st.configured && <VerifyConnecteamButton verified={st.verified} />}
+      </div>
     </Surface>
   );
 }

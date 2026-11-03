@@ -15,7 +15,17 @@ import {
   startOffboarding,
   startOnboarding,
 } from "./lifecycle";
-import { createEmployee, getEmployee, listTasks } from "./store";
+import { createEmployee, getEmployee, getTask, listTasks } from "./store";
+import { acceptInvite } from "@/lib/auth/invites";
+import { inviteTokenFromRef, reconcileZoeLogin } from "./zoeLink";
+
+/** Simulate the hire opening their /join link and creating a login, then the link back. */
+function hireAccepts(employeeId: string, taskId: string, username: string): void {
+  const token = inviteTokenFromRef(getTask(taskId)!.externalRef)!;
+  const r = acceptInvite(token, { username, password: "a-long-test-password-123" });
+  expect(r.ok).toBe(true);
+  reconcileZoeLogin(employeeId);
+}
 
 function newSalesHire(name = "Pat Sales") {
   return createEmployee({ displayName: name, role: "member", department: "sales" });
@@ -66,8 +76,10 @@ describe("readiness", () => {
 
     // Complete every REQUIRED provision task (zoe via automate, the rest via manual mark-complete).
     for (const t of listTasks(e.id, "provision").filter((t) => t.required)) {
-      if (t.mode === "automated") await executeAutomatedTask(t.id, "tester");
-      else markTaskComplete(t.id, "tester");
+      if (t.mode === "automated") {
+        await executeAutomatedTask(t.id, "tester");
+        if (t.adapterId === "zoe_platform") hireAccepts(e.id, t.id, "pat.sales");
+      } else markTaskComplete(t.id, "tester");
     }
     readiness = readinessFor(e.id);
     expect(readiness.ready).toBe(true);
@@ -91,16 +103,62 @@ describe("readiness", () => {
 });
 
 describe("automated Zoe provision", () => {
-  it("executes the in-app invite, completes the task, and audits ACCESS_GRANTED", async () => {
+  it("mints the invite and WAITS for the hire (in progress), auditing ACCESS_GRANTED", async () => {
     const e = newSalesHire();
     startOnboarding(e.id, "tester");
     const zoe = listTasks(e.id, "provision").find((t) => t.adapterId === "zoe_platform")!;
     const res = await executeAutomatedTask(zoe.id, "Hermann");
     expect(res.ok).toBe(true);
-    expect(res.task!.status).toBe("completed");
+    expect(res.task!.status).toBe("in_progress"); // closes only when the hire creates the login
     expect(res.task!.externalRef).toMatch(/\/join\?token=/); // a real invite link, no password stored
     expect(res.task!.approvalId).toMatch(/^AP-/); // a governance card was raised + decided
     expect(auditCount("ACCESS_GRANTED", `${e.id}:zoe_platform`)).toBe(1);
+  });
+
+  it("links the login and completes the step once the hire accepts; offboarding then turns it off", async () => {
+    const e = newSalesHire("Lee Accept");
+    startOnboarding(e.id, "tester");
+    const zoe = listTasks(e.id, "provision").find((t) => t.adapterId === "zoe_platform")!;
+    await executeAutomatedTask(zoe.id, "Hermann");
+    expect(reconcileZoeLogin(e.id)).toBe("waiting");
+    hireAccepts(e.id, zoe.id, "lee.accept");
+    const linked = getEmployee(e.id)!;
+    expect(linked.userId).toBeTruthy();
+    expect(getTask(zoe.id)!.status).toBe("completed");
+    expect(reconcileZoeLogin(e.id)).toBe("already_linked"); // idempotent
+
+    startOffboarding(e.id, "tester", null);
+    const rv = listTasks(e.id, "revoke").find((t) => t.adapterId === "zoe_platform")!;
+    const res = await executeAutomatedTask(rv.id, "tester");
+    expect(res.task!.status).toBe("completed"); // a real deactivation now, not manual_required
+  });
+
+  it("an invite that expires unused fails the step so it can be retried", async () => {
+    const e = newSalesHire("Kim Late");
+    startOnboarding(e.id, "tester");
+    const zoe = listTasks(e.id, "provision").find((t) => t.adapterId === "zoe_platform")!;
+    await executeAutomatedTask(zoe.id, "Hermann");
+    expect(reconcileZoeLogin(e.id, new Date(Date.now() + 30 * 86_400_000))).toBe("expired");
+    expect(getTask(zoe.id)!.status).toBe("failed");
+  });
+});
+
+describe("SOP sign off gate", () => {
+  it("Mark Complete cannot close the SOP step; only a signature can", () => {
+    const e = createEmployee({ displayName: "Ana Sign", role: "member", department: "sales_associate" });
+    startOnboarding(e.id, "tester");
+    const sop = listTasks(e.id, "provision").find((t) => t.adapterId === "sop_ack")!;
+    const r = markTaskComplete(sop.id, "Hermann");
+    expect(r.ok).toBe(false);
+    expect(getTask(sop.id)!.status).toBe("manual_required");
+    expect(markTaskComplete(sop.id, "Ana Sign (signed SOP v1)", "signed", { sopSigned: true }).ok).toBe(true);
+  });
+
+  it("offboarding has no revoke step for the SOP", () => {
+    const e = createEmployee({ displayName: "Bo Leave", role: "member", department: "sales_associate" });
+    startOnboarding(e.id, "tester");
+    startOffboarding(e.id, "tester", null);
+    expect(listTasks(e.id, "revoke").some((t) => t.adapterId === "sop_ack")).toBe(false);
   });
 });
 

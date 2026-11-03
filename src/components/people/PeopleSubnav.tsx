@@ -5,13 +5,14 @@
 // a horizontal scroller so it never eats vertical space.
 
 import Link from "next/link";
-import { Contact, UserPlus, LogOut, ShieldCheck, History, type LucideIcon } from "lucide-react";
+import { Contact, UserPlus, LogOut, ShieldCheck, History, Link2, type LucideIcon } from "lucide-react";
 
-export type PeopleTab = "onboarding" | "offboarding" | "policies" | "activity";
+export type PeopleTab = "onboarding" | "offboarding" | "matching" | "policies" | "activity";
 
 const SECTIONS: { tab: PeopleTab; label: string; icon: LucideIcon }[] = [
   { tab: "onboarding", label: "Onboarding", icon: UserPlus },
   { tab: "offboarding", label: "Offboarding", icon: LogOut },
+  { tab: "matching", label: "Matching", icon: Link2 },
   { tab: "policies", label: "Access Policies", icon: ShieldCheck },
   { tab: "activity", label: "Activity", icon: History },
 ];

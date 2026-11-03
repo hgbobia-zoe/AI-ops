@@ -12,15 +12,17 @@ import {
   startOffboarding,
   startOnboarding,
 } from "@/lib/people/lifecycle";
-import { createEmployee, getEmployee, getPolicy, listTasks } from "@/lib/people/store";
+import { createEmployee, getEmployee, getPolicy, listTasks, setEmployeeDepartment, setEmployeePhone } from "@/lib/people/store";
+import { insertAudit } from "@/lib/db/repo";
+import { toE164 } from "@/lib/notify/sms";
 import { deriveWorkEmail, policyIssuesWorkEmail } from "@/lib/people/policy";
 import { ensureSopLink } from "@/lib/people/sopAck";
 import { announceNewHire, announceOffboardingStarted, announceOnboardingStarted, announceReady } from "@/lib/people/notify";
 
 export const dynamic = "force-dynamic";
 
-type Action = "create" | "start_onboarding" | "advance_ready" | "activate" | "start_offboarding" | "complete_offboarding";
-const ACTIONS: Action[] = ["create", "start_onboarding", "advance_ready", "activate", "start_offboarding", "complete_offboarding"];
+type Action = "create" | "start_onboarding" | "advance_ready" | "activate" | "start_offboarding" | "complete_offboarding" | "set_phone" | "set_policy";
+const ACTIONS: Action[] = ["create", "start_onboarding", "advance_ready", "activate", "start_offboarding", "complete_offboarding", "set_phone", "set_policy"];
 
 export async function POST(req: Request): Promise<NextResponse> {
   const role = await viewerRole();
@@ -31,6 +33,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     id?: string;
     displayName?: string;
     workEmail?: string;
+    phone?: string | null;
     role?: string;
     department?: string;
     startDate?: string;
@@ -54,24 +57,46 @@ export async function POST(req: Request): Promise<NextResponse> {
     const policy = body.department ? getPolicy(body.department) : null;
     const typedEmail = (body.workEmail ?? "").trim();
     const workEmail = typedEmail || (policyIssuesWorkEmail(policy) ? deriveWorkEmail(name) : null);
+    const rawPhone = (body.phone ?? "").trim();
+    const phone = rawPhone ? toE164(rawPhone) : "";
+    if (rawPhone && !phone) return NextResponse.json({ error: "Phone must be a full mobile number, like 301 555 0123." }, { status: 400 });
     const emp = createEmployee({
       displayName: name,
       workEmail,
+      phone: phone || null,
       role: empRole,
       department: body.department ?? null,
       startDate: body.startDate ?? null,
     });
     // Convenience: optionally kick off onboarding immediately on create.
-    announceNewHire(emp, policy?.name ?? null);
+    announceNewHire(emp, policy?.name ?? null, actor);
     if (body.startNow && startOnboarding(emp.id, actor).ok) {
       const cur = getEmployee(emp.id) ?? emp;
-      announceOnboardingStarted(cur, listTasks(emp.id, "provision"), ensureSopLink(cur));
+      announceOnboardingStarted(cur, listTasks(emp.id, "provision"), ensureSopLink(cur), actor);
     }
     return NextResponse.json({ ok: true, id: emp.id, workEmail });
   }
 
   const id = (body.id ?? "").trim();
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+
+  if (action === "set_phone" || action === "set_policy") {
+    const cur = getEmployee(id);
+    if (!cur) return NextResponse.json({ error: "not found" }, { status: 404 });
+    if (action === "set_phone") {
+      const raw = (body.phone ?? "").trim();
+      const phone = raw ? toE164(raw) : "";
+      if (raw && !phone) return NextResponse.json({ ok: false, message: "Phone must be a full mobile number, like 301 555 0123." }, { status: 400 });
+      setEmployeePhone(id, phone || null);
+      insertAudit({ actor, action: "PHONE_SET", entity: "employee", entityId: id, before: { phone: cur.phone }, after: { phone: phone || null } });
+      return NextResponse.json({ ok: true, message: phone ? `Phone set to ${phone}.` : "Phone cleared." });
+    }
+    const dept = (body.department ?? "").trim();
+    if (!dept || !getPolicy(dept)) return NextResponse.json({ ok: false, message: "Pick an access policy." }, { status: 400 });
+    setEmployeeDepartment(id, dept);
+    insertAudit({ actor, action: "POLICY_SET", entity: "employee", entityId: id, before: { department: cur.department }, after: { department: dept } });
+    return NextResponse.json({ ok: true, message: `Policy set to ${getPolicy(dept)?.name ?? dept}.` });
+  }
 
   const result =
     action === "start_onboarding" ? startOnboarding(id, actor)
@@ -82,9 +107,9 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const emp = result.ok ? getEmployee(id) : null;
   if (emp) {
-    if (action === "start_onboarding") announceOnboardingStarted(emp, listTasks(id, "provision"), ensureSopLink(emp));
-    else if (action === "advance_ready") announceReady(emp);
-    else if (action === "start_offboarding") announceOffboardingStarted(emp, listTasks(id, "revoke"), body.effectiveDate ?? null);
+    if (action === "start_onboarding") announceOnboardingStarted(emp, listTasks(id, "provision"), ensureSopLink(emp), actor);
+    else if (action === "advance_ready") announceReady(emp, actor);
+    else if (action === "start_offboarding") announceOffboardingStarted(emp, listTasks(id, "revoke"), body.effectiveDate ?? null, actor);
   }
 
   return NextResponse.json({ ok: result.ok, state: result.state, message: result.message }, { status: result.ok ? 200 : 409 });

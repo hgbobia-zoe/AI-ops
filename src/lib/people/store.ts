@@ -66,6 +66,8 @@ export interface NewEmployee {
   openphoneUserId?: string | null;
   gustoId?: string | null;
   aiOrgHumanName?: string | null;
+  /** Starting state. New hires start at HIRE; existing staff found by matching start ACTIVE. */
+  lifecycleState?: "HIRE" | "ACTIVE";
 }
 
 export function createEmployee(input: NewEmployee): Employee {
@@ -76,13 +78,14 @@ export function createEmployee(input: NewEmployee): Employee {
       `INSERT INTO employee (id, display_name, work_email, phone, lifecycle_state, role, department, start_date,
         user_id, hr_worker_id, connecteam_user_id, instawork_worker, openphone_user_id, gusto_id,
         ai_org_human_name, created_at, updated_at)
-       VALUES (@id,@name,@email,@phone,'HIRE',@role,@dept,@start,@userId,@hrId,@ctId,NULL,@opId,@gustoId,@aiName,@now,@now)`,
+       VALUES (@id,@name,@email,@phone,@state,@role,@dept,@start,@userId,@hrId,@ctId,NULL,@opId,@gustoId,@aiName,@now,@now)`,
     )
     .run({
       id,
       name: input.displayName.trim(),
       email: input.workEmail?.trim() || null,
       phone: input.phone?.trim() || null,
+      state: input.lifecycleState ?? "HIRE",
       role: input.role,
       dept: input.department ?? null,
       start: input.startDate ?? null,
@@ -118,6 +121,16 @@ export function setEmployeeEndDate(id: string, endDate: string | null): void {
 /** Link an employee to an external identity (nullable FK set). Only one column per call. */
 export function linkEmployee(id: string, field: "user_id" | "hr_worker_id" | "openphone_user_id" | "gusto_id", value: string | null): void {
   getDb().prepare(`UPDATE employee SET ${field} = ?, updated_at = ? WHERE id = ?`).run(value, new Date().toISOString(), id);
+}
+
+/** Set (or clear) the hire's mobile. Callers normalize to E.164 first (normalizeUsPhone). */
+export function setEmployeePhone(id: string, phone: string | null): void {
+  getDb().prepare("UPDATE employee SET phone = ?, updated_at = ? WHERE id = ?").run(phone, new Date().toISOString(), id);
+}
+
+/** Set the access policy (department) for an employee. */
+export function setEmployeeDepartment(id: string, department: string | null): void {
+  getDb().prepare("UPDATE employee SET department = ?, updated_at = ? WHERE id = ?").run(department, new Date().toISOString(), id);
 }
 
 /** Link (or clear) the Connecteam userId — INTEGER column, so it gets its own setter. Set when the
@@ -267,6 +280,8 @@ export function listTasks(employeeId: string, kind?: TaskKind): LifecycleTask[] 
 
 export interface TaskUpdate {
   status?: TaskStatus;
+  mode?: LifecycleTask["mode"];
+  source?: LifecycleTask["source"];
   externalRef?: string | null;
   error?: string | null;
   approvalId?: string | null;
@@ -279,6 +294,8 @@ export function updateTask(id: string, patch: TaskUpdate): LifecycleTask | null 
   if (!cur) return null;
   const next = {
     status: patch.status ?? cur.status,
+    mode: patch.mode ?? cur.mode,
+    source: patch.source ?? cur.source,
     externalRef: patch.externalRef !== undefined ? patch.externalRef : cur.externalRef,
     error: patch.error !== undefined ? patch.error : cur.error,
     approvalId: patch.approvalId !== undefined ? patch.approvalId : cur.approvalId,
@@ -287,7 +304,7 @@ export function updateTask(id: string, patch: TaskUpdate): LifecycleTask | null 
   };
   getDb()
     .prepare(
-      "UPDATE lifecycle_task SET status=@status, external_ref=@externalRef, error=@error, approval_id=@approvalId, actor=@actor, completed_at=@completedAt WHERE id=@id",
+      "UPDATE lifecycle_task SET status=@status, mode=@mode, source=@source, external_ref=@externalRef, error=@error, approval_id=@approvalId, actor=@actor, completed_at=@completedAt WHERE id=@id",
     )
     .run({ id, ...next });
   return getTask(id);

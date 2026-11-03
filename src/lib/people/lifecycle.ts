@@ -14,6 +14,10 @@ import { insertAudit } from "@/lib/db/repo";
 import { canTransition } from "./machine";
 import { getAdapter } from "./adapters";
 import { revokeRank } from "./policy";
+import { clearConnecteamScope } from "./connecteamScope";
+
+/** The SOP sign off adapter id (kept here so lifecycle does not import sopAck, which imports lifecycle). */
+export const SOP_ADAPTER_ID = "sop_ack";
 import {
   getEmployee,
   getPolicy,
@@ -95,7 +99,9 @@ export function materializeOffboardingTasks(emp: Employee): LifecycleTask[] {
   const provisioned = new Set(listTasks(emp.id, "provision").filter((t) => t.status === "completed").map((t) => t.adapterId));
   // Revoke every system the policy covers; a system that was actually provisioned is the priority grant.
   // Ordered physical access first (Lockly), then customer-facing systems (REVOKE_PRIORITY).
-  return [...rules].sort((a, b) => revokeRank(a.adapterId) - revokeRank(b.adapterId)).map((r) => {
+  // The SOP signature is a record, not access, so it has nothing to revoke.
+  const revocable = rules.filter((r) => r.adapterId !== SOP_ADAPTER_ID);
+  return [...revocable].sort((a, b) => revokeRank(a.adapterId) - revokeRank(b.adapterId)).map((r) => {
     const mode = getAdapter(r.adapterId).mode();
     return insertTaskIfAbsent({
       employeeId: emp.id,
@@ -194,6 +200,17 @@ export interface TaskActionResult {
 
 const ACCESS_ACTION: Record<TaskKind, string> = { provision: "ACCESS_GRANTED", revoke: "ACCESS_REVOKED" };
 
+/** What approving an automated step actually does, per system. PURE. */
+export function approvalOutcome(adapterId: string, isProvision: boolean): string {
+  if (adapterId === "zoe_platform") {
+    return isProvision ? "A one time Zoe login invite link is made; the hire sets their own password." : "The Zoe login is deactivated.";
+  }
+  if (adapterId === "connecteam") {
+    return isProvision ? "A Connecteam user is created (no activation text is sent)." : "The Connecteam user is archived (reversible).";
+  }
+  return isProvision ? "The access is created in the system." : "The access is removed in the system.";
+}
+
 /** Ensure a governance approval card exists for a side-effectful automated task (idempotent via its
  *  change_key). Returns the approval id. The card is honest INTENT: hiring/firing are forbidden to execute
  *  via the AI outbox, so the real in-app action is performed by executeAutomatedTask, not by the outbox. */
@@ -210,8 +227,8 @@ function ensureApproval(emp: Employee, task: LifecycleTask): string {
       what: `${isProvision ? "Create" : "Remove"} the ${task.system} access for ${emp.displayName} (${emp.role}).`,
       why: `${isProvision ? "Onboarding" : "Offboarding"} per the ${emp.department ?? "—"} access policy.`,
       dataUsed: `Employee ${emp.id}; access_policy ${emp.department ?? "—"}; adapter ${task.adapterId}.`,
-      expectedOutcome: isProvision ? "A Zoe login invite is issued (hire sets their own password)." : "The Zoe login is deactivated.",
-      risk: isProvision ? "Grants console access — scoped to the employee's role." : "Removes console access immediately.",
+      expectedOutcome: approvalOutcome(task.adapterId, isProvision),
+      risk: isProvision ? `Grants ${task.system} access, scoped to the employee's role.` : `Removes ${task.system} access immediately.`,
       whatIfApproved: "The People engine performs the in-app action and records the grant/revoke in the audit log.",
     },
     idempotencyKey: `people:${task.changeKey}`,
@@ -253,9 +270,17 @@ export async function executeAutomatedTask(taskId: string, actor: string): Promi
     return { ok: false, task: getTask(task.id), message: `Failed: ${detail}` };
   }
 
+  // A scope denial at run time means the verified record no longer matches reality: clear it so the
+  // adapter reports manual again until someone re-verifies.
+  if (task.adapterId === "connecteam" && !result.ok && /lacks the users\.write scope/.test(result.detail)) {
+    clearConnecteamScope(actor, result.detail);
+  }
+
   // 3) Record.
   const now = new Date().toISOString();
   const updated = updateTask(task.id, {
+    mode: "automated",
+    source: "automated",
     status: result.status,
     externalRef: result.externalRef ?? task.externalRef,
     error: result.ok ? null : result.detail,
@@ -268,10 +293,14 @@ export async function executeAutomatedTask(taskId: string, actor: string): Promi
 
 /** Mark a MANUAL/future task complete — the human did it in the external system and is attesting to it.
  *  Records who + when (evidence), never a bare acknowledge. */
-export function markTaskComplete(taskId: string, actor: string, note?: string): TaskActionResult {
+export function markTaskComplete(taskId: string, actor: string, note?: string, opts: { sopSigned?: boolean } = {}): TaskActionResult {
   const task = getTask(taskId);
   if (!task) return { ok: false, task: null, message: "task not found" };
   if (task.status === "completed") return { ok: true, task, message: "Already completed." };
+  // The SOP step closes only when the hire signs it at their /ack link (sopAck.signSop), never by a click here.
+  if (task.adapterId === SOP_ADAPTER_ID && task.kind === "provision" && !opts.sopSigned) {
+    return { ok: false, task, message: "Only the hire can complete this, by signing the SOP from their link." };
+  }
   const emp = getEmployee(task.employeeId);
   const now = new Date().toISOString();
   const updated = updateTask(task.id, { status: "completed", actor, error: null, completedAt: now });
