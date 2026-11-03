@@ -8,7 +8,7 @@ const OPS = [{ op: "email_template" }, { op: "email_send" }, { op: "note_append"
 describe("email sender hold", () => {
   it("defaults to Jessie Medalla; env overrides; 'any' turns it off", () => {
     expect(emailSenderName({})).toBe(DEFAULT_EMAIL_SENDER);
-    expect(DEFAULT_EMAIL_SENDER).toBe("Jessie Medalla");
+    expect(DEFAULT_EMAIL_SENDER).toBe("hello@zoeeventsdmv.com"); // the Cindy Gbobia profile
     expect(emailSenderName({ GS_EMAIL_SENDER: "  Lisa McRae " })).toBe("Lisa McRae");
     expect(emailSenderName({ GS_EMAIL_SENDER: "any" })).toBeNull();
     expect(emailSenderName({ GS_EMAIL_SENDER: "off" })).toBeNull();
