@@ -12,6 +12,7 @@
 import { NextResponse } from "next/server";
 import { setJobPreview, completeJob, failJob } from "@/lib/website/jobs";
 import { checkRunnerToken } from "@/lib/website/runnerAuth";
+import { syncPublishState } from "@/lib/seo/publish";
 
 export const dynamic = "force-dynamic";
 
@@ -51,11 +52,13 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (body.status === "done") {
     const job = completeJob(id, { summary: body.summary ?? null, prUrl: body.prUrl ?? null });
     if (!job) return NextResponse.json({ error: "not_approved_or_missing" }, { status: 409 });
+    await syncPublishState(job); // an SEO draft sent here moves to Published only on a real merge (never throws)
     return NextResponse.json({ ok: true, job });
   }
   if (body.status === "failed") {
     const job = failJob(id, body.error ?? "unknown error");
     if (!job) return NextResponse.json({ error: "not_failable_or_missing" }, { status: 409 });
+    await syncPublishState(job);
     return NextResponse.json({ ok: true, job });
   }
   return NextResponse.json({ error: "status must be 'preview', 'done', or 'failed'" }, { status: 400 });

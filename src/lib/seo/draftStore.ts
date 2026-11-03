@@ -46,6 +46,7 @@ interface DraftRow {
   reviewed_by: string | null;
   reviewed_at: string | null;
   created_by: string | null;
+  website_job_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -96,13 +97,14 @@ function toDraft(r: DraftRow): PageDraft {
     reviewedAt: r.reviewed_at,
     createdBy: r.created_by,
     createdAt: r.created_at,
+    websiteJobId: r.website_job_id ?? null,
     updatedAt: r.updated_at,
   };
 }
 
 // Append one draft-lifecycle transition to the shared decision history (keyed by the owning opportunity, so
 // a draft's review trail sits alongside its opportunity's stage history).
-function recordDraftAudit(opportunityId: string, from: string | null, to: string, actor: string | null, note: string | null): void {
+export function recordDraftAudit(opportunityId: string, from: string | null, to: string, actor: string | null, note: string | null): void {
   getDb()
     .prepare("INSERT INTO seo_status_history (id, opportunity_id, from_status, to_status, actor, note, ts) VALUES (?, ?, ?, ?, ?, ?, ?)")
     .run(`SEOH-${randomUUID()}`, opportunityId, from, to, actor, note, new Date().toISOString());
