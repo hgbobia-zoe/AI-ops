@@ -14,6 +14,7 @@
 import { NextResponse } from "next/server";
 import { listPendingGsOps, ackGsOp, claimGsOp, getGsOpById, nextCreateGsOp, gatedCreateDrainerAlive } from "@/lib/db/repo";
 import { getIntake } from "@/lib/intake/store";
+import { emailSenderName, opsForDrainer } from "@/lib/intake/emailSender";
 
 export const dynamic = "force-dynamic";
 
@@ -43,8 +44,11 @@ export function GET(req: Request): NextResponse {
   // While a gated create drainer is alive, creates go ONLY through nextCreate: leave them out of this plain
   // list so an older extension copy (any version, any number of browsers) never sees one to act on.
   const gated = gatedCreateDrainerAlive();
-  const ops = listPendingGsOps().filter((o) => !(gated && o.op === "create_project"));
-  return NextResponse.json({ ops }, { headers: CORS });
+  // Client emails send as whoever is signed in, so they go only to a drainer that checks it is the sender.
+  const emailSender = emailSenderName();
+  const honorsSenderHold = new URL(req.url).searchParams.get("senderHold") === "1";
+  const ops = opsForDrainer(listPendingGsOps().filter((o) => !(gated && o.op === "create_project")), honorsSenderHold, emailSender);
+  return NextResponse.json({ ops, emailSender }, { headers: CORS });
 }
 
 export async function POST(req: Request): Promise<NextResponse> {

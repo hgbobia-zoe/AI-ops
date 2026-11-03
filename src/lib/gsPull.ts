@@ -295,8 +295,17 @@ ${GS_TEMPLATE_JS}
     // multipart upload to the project's Files tab (POST /app/files/uploadFileToProject?transactionID=…)
     // from THIS logged-in session, then acks so it's never pushed twice.
     function ackOp(id,ok,err){ return fetch(API+"/api/gs/outbox",{method:"POST",headers:POSTH(),body:JSON.stringify({id:id, ok:ok, error:ok?undefined:err})}).catch(function(){}); }
+    // Sender hold (parity with the extension): client emails go out only from the configured sender's
+    // session (server's emailSender); Goodshuffle sends as whoever is signed in. Signed-in user = initHeader.
+    function gsNorm(s){ return String(s||"").trim().toLowerCase().split(" ").filter(Boolean).join(" "); }
+    function gsSignedInAs(sender){
+      return fetch("/app/rms/initHeader",{headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}).then(function(r){ return r.ok?r.json():null; }).then(function(h){
+        var u=h&&h.currentUser; if(!u) return false; var want=gsNorm(sender);
+        return want.indexOf("@")>=0 ? gsNorm(u.email)===want : gsNorm((u.firstName||"")+" "+(u.lastName||""))===want;
+      }).catch(function(){ return false; });
+    }
     function drainOutbox(){
-      return fetch(API+"/api/gs/outbox",{headers:POSTH()}).then(function(r){return r.json();}).then(function(j){
+      return fetch(API+"/api/gs/outbox?senderHold=1",{headers:POSTH()}).then(function(r){return r.json();}).then(function(j){
         var all=((j&&j.ops)||[]);
         var photoOps=all.filter(function(o){ return o.op==="photo_upload" && o.transactionId && o.payload && o.payload.photoIds && o.payload.photoIds.length; });
         var noteOps=all.filter(function(o){ return o.op==="note_append" && o.transactionId && o.payload && o.payload.line; });
@@ -324,7 +333,9 @@ ${GS_TEMPLATE_JS}
         var activeClick=!!(navigator.userActivation && navigator.userActivation.isActive);
         var claimFirst=(createOps.length && activeClick) ? fetch(API+"/api/gs/outbox",{method:"POST",headers:POSTH(),body:JSON.stringify({id:createOps[0].id,claim:true,holder:"bookmarklet"})}).then(function(r){ return r.ok?r.json():null; }).then(function(cj){ if(cj && cj.claimed===true){ try{ createPopup=window.open("/app/project/createNewProject","gscreate","width=520,height=640,left=40,top=40"); }catch(e){ createPopup=null; } } }).catch(function(){}) : Promise.resolve();
         function popNewId(w){ return new Promise(function(resolve){ if(!w){ resolve(null); return; } var n=0; var iv=setInterval(function(){ n++; var got=null; try{ var h=w.location.href; if(h && h.indexOf("about:blank")<0){ var m=h.match(/[?&]id=(\\d+)/); if(m) got=m[1]; } }catch(e){} if(got){ clearInterval(iv); resolve(got); } else if(n>80){ clearInterval(iv); resolve(null); } }, 250); }); }
-        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, provisioned=0, esigns=0, chain=claimFirst;
+        var emailSender=(j&&j.emailSender)||null, senderOk=!emailSender, emailsHeld=0;
+        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, provisioned=0, esigns=0;
+        var chain=(emailSender && (emailOps.length||tplOps.length)) ? claimFirst.then(function(){ return gsSignedInAs(emailSender); }).then(function(ok){ senderOk=ok; }) : claimFirst;
         // disable_esignature: turn OFF online signing N business days before the event (queued by
         // src/lib/salesos/esignCutoff.ts) so a contract signs IN PERSON, not last-minute online. CAPTURE-NEEDED:
         // the Goodshuffle request that disables online signing has NOT been captured. Do it ONCE in the GSPRO UI
@@ -392,6 +403,7 @@ ${GS_TEMPLATE_JS}
         // signature). Read the thread, take the latest message's id + recipients + subject, POST sendMessage.
         emailOps.forEach(function(o){
           chain=chain.then(function(){
+            if(!senderOk){ emailsHeld++; return; } // not the sender's session: leave it pending
             return fetch("/app/conversation/getMessagesForTransaction?transactionID="+encodeURIComponent(o.transactionId),{headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(cv){
               var msgs=(cv&&cv.client&&cv.client.messages)||[];
               if(!msgs.length) throw "no_thread";
@@ -410,6 +422,7 @@ ${GS_TEMPLATE_JS}
         // variables filled for this project. Same logic as extension/pull-injected.js (see gsTemplate.ts).
         tplOps.forEach(function(o){
           chain=chain.then(function(){
+            if(!senderOk){ emailsHeld++; return; } // not the sender's session: leave it pending
             var GH={headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"};
             var tx=o.transactionId, txID=Number(tx)||tx, tpl=null;
             return fetch("/app/messageTemplate/list?transactionID="+encodeURIComponent(tx),GH).then(function(r){ if(!r.ok) throw "template_list_"+r.status; return r.json(); }).then(function(j){
@@ -565,7 +578,7 @@ ${GS_TEMPLATE_JS}
             });
           });
         });
-        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, created:created, fees:fees, tasks:tasks, provisioned:provisioned, esigns:esigns}; });
+        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, emailsHeld:emailsHeld, emailSender:emailSender, created:created, fees:fees, tasks:tasks, provisioned:provisioned, esigns:esigns}; });
       }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0, created:0, fees:0, tasks:0, provisioned:0, esigns:0}; });
     }
 

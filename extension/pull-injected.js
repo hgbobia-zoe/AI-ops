@@ -247,8 +247,21 @@ function gsTemplateText(html) {
 
   // ---- Outbox drain: push queued Dispatch → Goodshuffle writes (photos, note appends) ----
   function ackOp(id, ok, err) { return fetch(API + "/api/gs/outbox", { method: "POST", headers: POSTH, body: JSON.stringify({ id, ok, error: ok ? undefined : err }) }).catch(() => {}); }
+  // Sender hold: Goodshuffle sends an email as whoever is signed in, so client emails go out only from the
+  // configured sender's session (server's emailSender, e.g. "Jessie Medalla"). Any other session leaves them
+  // pending. The signed-in user comes from /app/rms/initHeader (currentUser firstName/lastName/email).
+  function gsNorm(s) { return String(s || "").trim().toLowerCase().replace(/\s+/g, " "); }
+  function gsSignedInAs(sender) {
+    return fetch("/app/rms/initHeader", { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null)).then((h) => {
+        const u = h && h.currentUser; if (!u) return false;
+        const want = gsNorm(sender);
+        return want.indexOf("@") >= 0 ? gsNorm(u.email) === want : gsNorm((u.firstName || "") + " " + (u.lastName || "")) === want;
+      }).catch(() => false);
+  }
   function drainOutbox() {
-    return fetch(API + "/api/gs/outbox", { headers: POSTH }).then((r) => r.json()).then((j) => {
+    // senderHold=1 tells the server this copy enforces the sender hold; older copies get no email ops.
+    return fetch(API + "/api/gs/outbox?senderHold=1", { headers: POSTH }).then((r) => r.json()).then((j) => {
       const all = (j && j.ops) || [];
       const photoOps = all.filter((o) => o.op === "photo_upload" && o.transactionId && o.payload && o.payload.photoIds && o.payload.photoIds.length);
       const noteOps = all.filter((o) => o.op === "note_append" && o.transactionId && o.payload && o.payload.line);
@@ -265,7 +278,10 @@ function gsTemplateText(html) {
       // ignored forever. Keep this set in sync with the handlers below + gsPull.ts.
       const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, email_template: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1, disable_esignature: 1 };
       const unhandledOps = all.filter((o) => !HANDLED[o.op]);
-      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, emails = 0, tasks = 0, provisioned = 0, esigns = 0, chain = Promise.resolve();
+      const emailSender = (j && j.emailSender) || null;
+      let senderOk = !emailSender, emailsHeld = 0;
+      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, emails = 0, tasks = 0, provisioned = 0, esigns = 0;
+      let chain = (emailSender && (emailOps.length || tplOps.length)) ? gsSignedInAs(emailSender).then((ok) => { senderOk = ok; }) : Promise.resolve();
       // provision_user / revoke_user: People Lifecycle access provisioning via REPLAY. Mirrors
       // src/lib/gsPull.ts — gated on the captured endpoint (src/lib/people/provisioningEndpoints.ts). This
       // content script runs ONLY on pro.goodshuffle.com, so it can replay the GOODSHUFFLE invite/disable once
@@ -323,6 +339,7 @@ function gsTemplateText(html) {
       // "executed" upstream but sat in the outbox forever (never actually sent) whenever this extension was
       // the active drainer. Pure fetch, no popup, so it runs fine on the drain timer.
       emailOps.forEach((o) => { chain = chain.then(() => {
+        if (!senderOk) { emailsHeld++; return; } // not the sender's session: leave it pending
         return fetch("/app/conversation/getMessagesForTransaction?transactionID=" + encodeURIComponent(o.transactionId), { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" }).then((r) => { if (!r.ok) throw 0; return r.json(); }).then((cv) => {
           const msgs = (cv && cv.client && cv.client.messages) || [];
           if (!msgs.length) throw "no_thread";
@@ -342,6 +359,7 @@ function gsTemplateText(html) {
       // project's client participants (present even before any message). If an email with the same subject
       // is already in the client thread (an earlier send whose ack was lost), it acks done without sending.
       tplOps.forEach((o) => { chain = chain.then(() => {
+        if (!senderOk) { emailsHeld++; return; } // not the sender's session: leave it pending
         const GH = { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" };
         const tx = o.transactionId; let txID = Number(tx); if (!txID) txID = tx;
         let tpl = null;
@@ -389,7 +407,7 @@ function gsTemplateText(html) {
         else { headers["content-type"] = "application/x-www-form-urlencoded"; body = new URLSearchParams(data).toString(); }
         return fetch(ep.path, { method: ep.method || "POST", headers, credentials: "include", body }).then((r) => r.ok).then((ok) => { if (ok) esigns++; else failed++; return ackOp(o.id, ok, "disable_esignature_failed"); }).catch(() => { failed++; return ackOp(o.id, false, "disable_esignature_error"); });
       }); });
-      return chain.then(() => ({ pushed, failed, notes, team, fees, emails, tasks, provisioned, esigns, unhandled: unhandledOps.length }));
+      return chain.then(() => ({ pushed, failed, notes, team, fees, emails, emailsHeld, emailSender, tasks, provisioned, esigns, unhandled: unhandledOps.length }));
     }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0, fees: 0, emails: 0, tasks: 0, provisioned: 0, esigns: 0, unhandled: 0 }));
   }
 
@@ -408,7 +426,7 @@ function gsTemplateText(html) {
       const r = res[0] || { stops: 0, failed: 0, unmatched: [] };
       const bk = res[1] || { saved: 0, partial: false, notes: 0 };
       const ph = res[2] || { pushed: 0, failed: 0, emails: 0, tasks: 0, unhandled: 0 };
-      return { ok: !r.failed && !bk.partial, loggedIn: true, tier: "active", stops: r.stops || 0, bookings: bk.saved || 0, notes: bk.notes || 0, photos: ph.pushed || 0, emails: ph.emails || 0, tasks: ph.tasks || 0, unhandled: ph.unhandled || 0, unmatched: r.unmatched || [], partial: !!bk.partial, error: r.failed ? "routes failed to save" : bk.partial ? "bookings incomplete" : null };
+      return { ok: !r.failed && !bk.partial, loggedIn: true, tier: "active", stops: r.stops || 0, bookings: bk.saved || 0, notes: bk.notes || 0, photos: ph.pushed || 0, emails: ph.emails || 0, emailsHeld: ph.emailsHeld || 0, tasks: ph.tasks || 0, unhandled: ph.unhandled || 0, unmatched: r.unmatched || [], partial: !!bk.partial, error: r.failed ? "routes failed to save" : bk.partial ? "bookings incomplete" : null };
     }).catch((e) => ({ ok: false, loggedIn: true, tier: "active", stops: 0, bookings: 0, notes: 0, photos: 0, error: String(e).slice(0, 120) }));
   });
 }
