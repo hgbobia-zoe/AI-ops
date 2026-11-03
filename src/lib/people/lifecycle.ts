@@ -13,7 +13,7 @@ import { createApproval, decideApproval, getApproval } from "@/lib/aiorg/approva
 import { insertAudit } from "@/lib/db/repo";
 import { canTransition } from "./machine";
 import { getAdapter } from "./adapters";
-import { revokeRank } from "./policy";
+import { revokeRank, policyAllows, ADAPTER_LABEL } from "./policy";
 import { clearConnecteamScope } from "./connecteamScope";
 
 /** The SOP sign off adapter id (kept here so lifecycle does not import sopAck, which imports lifecycle). */
@@ -72,7 +72,8 @@ function initialStatus(mode: LifecycleTask["mode"]): LifecycleTask["status"] {
 
 export function materializeOnboardingTasks(emp: Employee): LifecycleTask[] {
   const policy = emp.department ? getPolicy(emp.department) : null;
-  const rules = policy?.rules ?? [];
+  // Office-only systems (the Zoe login) are never set up for a field role, whatever is stored.
+  const rules = (policy?.rules ?? []).filter((r) => policyAllows(emp.department, r.adapterId));
   return rules.map((r) => {
     // Snapshot the adapter's LIVE capability (not the static seed mode): a system is automated here only if
     // its adapter can truly act right now — Connecteam once its write scope is verified, a replay system
@@ -95,7 +96,12 @@ export function materializeOnboardingTasks(emp: Employee): LifecycleTask[] {
 
 export function materializeOffboardingTasks(emp: Employee): LifecycleTask[] {
   const policy = emp.department ? getPolicy(emp.department) : null;
-  const rules = policy?.rules ?? [];
+  const rules = [...(policy?.rules ?? [])];
+  // A Zoe login that exists is always turned off, even when the person's policy has no Zoe rule (a field
+  // role, or a login made by hand): offboarding revokes what is actually there.
+  if (emp.userId && !rules.some((r) => r.adapterId === "zoe_platform")) {
+    rules.push({ adapterId: "zoe_platform", system: ADAPTER_LABEL.zoe_platform, required: true, mode: "automated" });
+  }
   const provisioned = new Set(listTasks(emp.id, "provision").filter((t) => t.status === "completed").map((t) => t.adapterId));
   // Revoke every system the policy covers; a system that was actually provisioned is the priority grant.
   // Ordered physical access first (Lockly), then customer-facing systems (REVOKE_PRIORITY).

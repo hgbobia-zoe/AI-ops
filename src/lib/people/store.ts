@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
 import type { Role } from "@/lib/auth/roles";
-import { SEED_POLICIES } from "./policy";
+import { SEED_POLICIES, FIELD_POLICY_IDS, OFFICE_ONLY_ADAPTERS } from "./policy";
 import type { AccessPolicy, Employee, LifecycleState, LifecycleTask, PolicyRule, TaskKind, TaskStatus } from "./types";
 
 // ── Employee ────────────────────────────────────────────────────────────────────────────────────────
@@ -157,8 +157,26 @@ export function ensureSeedPolicies(): void {
       insertPolicy.run(p.id, p.name, 1, now, now);
       for (const r of p.rules) insertRule.run(`${p.id}:${r.adapterId}`, p.id, r.adapterId, r.system, r.required ? 1 : 0, r.mode);
     }
+    enforceOfficeOnly(db);
   });
   tx();
+}
+
+/** Zoe Dispatch is office only (policy.ts OFFICE_ONLY_ADAPTERS / FIELD_POLICY_IDS). Seeds never overwrite
+ *  stored rules, so this removes an office-only rule from a field policy wherever it is stored, and closes
+ *  any open office-only SETUP task for a field person (an existing login is still revoked at offboarding). */
+function enforceOfficeOnly(db: ReturnType<typeof getDb>): void {
+  const field = [...FIELD_POLICY_IDS];
+  const office = [...OFFICE_ONLY_ADAPTERS];
+  const fq = field.map(() => "?").join(",");
+  const oq = office.map(() => "?").join(",");
+  db.prepare(`DELETE FROM access_policy_rule WHERE policy_id IN (${fq}) AND adapter_id IN (${oq})`).run(...field, ...office);
+  db.prepare(
+    `UPDATE lifecycle_task SET status = 'skipped', error = 'Zoe Dispatch is for office staff only.'
+       WHERE kind = 'provision' AND adapter_id IN (${oq})
+         AND status IN ('pending','in_progress','manual_required','blocked','failed')
+         AND employee_id IN (SELECT id FROM employee WHERE department IN (${fq}))`,
+  ).run(...office, ...field);
 }
 
 function rulesFor(policyId: string): PolicyRule[] {

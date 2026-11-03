@@ -48,6 +48,18 @@ export function revokeRank(adapterId: string): number {
   return i === -1 ? REVOKE_PRIORITY.length : i;
 }
 
+/** Zoe Dispatch (the AI Ops platform) is for office staff only (owner rule, 2026-11-03). Field roles
+ *  (warehouse, asset prep, drivers) never get a Zoe login: their policies carry no zoe_platform rule, a
+ *  stored rule is removed on read (store.ensureSeedPolicies), onboarding never materializes one, and staff
+ *  matching flags any Zoe login held by a field person. Asset prep maps to the warehouse policy. */
+export const OFFICE_ONLY_ADAPTERS: ReadonlySet<string> = new Set(["zoe_platform"]);
+export const FIELD_POLICY_IDS: ReadonlySet<string> = new Set(["warehouse", "driver", "prep", "asset_prep"]);
+
+/** Can this policy hand out this system? False only for an office-only system on a field role. PURE. */
+export function policyAllows(policyId: string | null | undefined, adapterId: string): boolean {
+  return !(OFFICE_ONLY_ADAPTERS.has(adapterId) && policyId != null && FIELD_POLICY_IDS.has(policyId));
+}
+
 /** Zoe's work email domain. */
 export const WORK_EMAIL_DOMAIN = "zoeeventsdmv.com";
 
@@ -125,10 +137,8 @@ export const SEED_POLICIES: AccessPolicy[] = [
     id: "driver",
     name: "Driver",
     seeded: true,
-    rules: [
-      rule("connecteam", "manual", true),
-      rule("zoe_platform", "automated", true, "Zoe Dispatch login"),
-    ],
+    // No Zoe login: drivers run routes on the truck tablet, never with their own account (OFFICE_ONLY).
+    rules: [rule("connecteam", "manual", true)],
   },
   {
     id: "operations",

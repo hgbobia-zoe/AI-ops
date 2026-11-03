@@ -11,6 +11,7 @@
 //    who is going through onboarding is never imported twice.
 
 import type { Employee } from "./types";
+import { FIELD_POLICY_IDS } from "./policy";
 
 export const NEW_STAFF_GRACE_DAYS = 14;
 
@@ -66,6 +67,13 @@ export interface CreateAction {
   workEmail: string | null;
 }
 
+/** A paid worker with no People record and no Connecteam roster entry to import from (People was built after
+ *  they started). Imported as existing staff from the payroll record. */
+export interface PayrollCreateAction {
+  kind: "create_payroll";
+  worker: PayrollWorker;
+}
+
 export interface LinkAction {
   kind: "link";
   employeeId: string;
@@ -81,7 +89,7 @@ export interface MatchSuggestion {
   value: string | number;
 }
 
-export type ExceptionKind = "ambiguous" | "probable" | "no_match" | "new_in_connecteam" | "missing_in_connecteam" | "no_policy";
+export type ExceptionKind = "ambiguous" | "probable" | "no_match" | "new_in_connecteam" | "missing_in_connecteam" | "no_policy" | "field_login";
 
 export interface MatchException {
   key: string; // stable, for dedupe
@@ -95,6 +103,7 @@ export interface MatchException {
 
 export interface MatchPlan {
   creates: CreateAction[];
+  payrollCreates: PayrollCreateAction[];
   links: LinkAction[];
   exceptions: MatchException[];
 }
@@ -165,6 +174,7 @@ function daysBetween(fromYmd: string, toYmd: string): number {
 // ── The planner (PURE) ───────────────────────────────────────────────────────────────────────────────
 export function planMatches(input: MatchInput): MatchPlan {
   const creates: CreateAction[] = [];
+  const payrollCreates: PayrollCreateAction[] = [];
   const links: LinkAction[] = [];
   const exceptions: MatchException[] = [];
 
@@ -309,6 +319,9 @@ export function planMatches(input: MatchInput): MatchPlan {
       });
       continue;
     }
+    // Without the Connecteam roster, existing staff have not been imported yet, so "nobody in People" would
+    // be wrong. Wait for the next run with the roster.
+    if (!input.rosterOk) continue;
     exceptions.push({
       key: `no_match:zoe:${l.id}`,
       kind: "no_match",
@@ -338,9 +351,17 @@ export function planMatches(input: MatchInput): MatchPlan {
       if (!pick.gustoId && w.gustoId) link(pick.id, "gusto_id", w.gustoId, "payroll Gusto mapping");
       continue;
     }
-    // A roster person about to be imported will match on the next pass; do not flag them now.
-    if (w.connecteamUserId != null && creates.some((c) => c.person.userId === w.connecteamUserId)) continue;
+    // Someone on the Connecteam roster is handled by step 1 (imported, linked, or flagged as new). When the
+    // roster is unavailable, wait for it: that import carries their Title, so they get the right policy.
+    if (w.connecteamUserId != null && (!input.rosterOk || rosterById.has(w.connecteamUserId))) continue;
     const cands = viaCt.length > 1 ? viaCt : viaName;
+    if (cands.length === 0) {
+      // Paid staff with no People record and nothing on the roster to import from: People was built after
+      // they started, so add them as existing staff from the payroll record.
+      payrollCreates.push({ kind: "create_payroll", worker: w });
+      takenHw.add(w.id);
+      continue;
+    }
     exceptions.push({
       key: `${cands.length > 1 ? "ambiguous" : "no_match"}:payroll:${w.id}`,
       kind: cands.length > 1 ? "ambiguous" : "no_match",
@@ -350,6 +371,22 @@ export function planMatches(input: MatchInput): MatchPlan {
         ? `Payroll worker ${w.name} could be ${cands.map((e) => e.displayName).join(" or ")}. Pick the right person.`
         : `Payroll worker ${w.name} is not in People.`,
       suggestions: cands.map((e) => sugg(e, "hr_worker_id", w.id)),
+    });
+  }
+
+  // 3b) Zoe Dispatch is office only: flag an active Zoe login held by a field person (driver, warehouse,
+  //     asset prep). Never turned off automatically; a person decides.
+  for (const l of input.logins.filter((x) => x.active)) {
+    const holder = live.find((e) => uid.get(e.id) === l.id);
+    if (!holder || !holder.department || !FIELD_POLICY_IDS.has(holder.department)) continue;
+    exceptions.push({
+      key: `field_login:${l.id}`,
+      kind: "field_login",
+      system: "zoe",
+      subject: holder.displayName,
+      detail: `${holder.displayName} (${holder.department}) has Zoe login ${l.username}. Zoe Dispatch is for office staff only, so turn this login off.`,
+      employeeId: holder.id,
+      suggestions: [],
     });
   }
 
@@ -389,5 +426,5 @@ export function planMatches(input: MatchInput): MatchPlan {
       });
     }
   }
-  return { creates, links, exceptions };
+  return { creates, payrollCreates, links, exceptions };
 }

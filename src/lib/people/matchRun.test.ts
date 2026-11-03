@@ -15,7 +15,10 @@ describe("runStaffMatching", () => {
     const r = await runStaffMatching("Hermann");
     expect(getEmployee(e.id)!.userId).toBe(u.id);
     expect(r.linked.some((l) => l.employeeId === e.id && l.field === "user_id")).toBe(true);
-    expect(r.exceptions.some((x) => x.key === `no_match:zoe:${stray.id}`)).toBe(true);
+    // Connecteam is not configured in tests, so there is no roster: a login with nobody in People is NOT
+    // flagged yet (existing staff have not been imported), it waits for a run with the roster.
+    expect(r.rosterOk).toBe(false);
+    expect(r.exceptions.some((x) => x.key === `no_match:zoe:${stray.id}`)).toBe(false);
     expect(lastMatchReport()?.by).toBe("Hermann");
   });
 

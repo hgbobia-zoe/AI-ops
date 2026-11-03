@@ -120,6 +120,33 @@ describe("payroll and People gaps", () => {
     expect(keys).toContain("missing_in_connecteam:B");
   });
 
+  it("imports paid staff with nothing on the roster as existing staff (People came later), no exception", () => {
+    const w = { id: "HW2", name: "Alex Payroll", email: null, connecteamUserId: null, gustoId: "G2", active: true, excluded: false };
+    const p = planMatches(input({ roster: [{ userId: 9, name: "Someone Else", seniorityDate: "2020-01-01" }], workers: [w] }));
+    expect(p.payrollCreates).toEqual([{ kind: "create_payroll", worker: w }]);
+    expect(p.exceptions.filter((x) => x.system === "payroll")).toEqual([]);
+  });
+
+  it("leaves a roster person to the roster import, and waits when Connecteam did not answer", () => {
+    const w = { id: "HW3", name: "Rita Roster", email: null, connecteamUserId: 5, gustoId: "G3", active: true, excluded: false };
+    const up = planMatches(input({ roster: [{ userId: 5, name: "Rita Roster", title: "Driver", seniorityDate: "2025-01-01" }], workers: [w] }));
+    expect(up.creates.map((c) => c.person.userId)).toEqual([5]);
+    expect(up.payrollCreates).toEqual([]);
+    const down = planMatches(input({ rosterOk: false, workers: [w], logins: [{ id: "U9", username: "jess", name: "Jess", role: "admin", active: true, openphoneUserId: null }] }));
+    expect(down.creates).toEqual([]);
+    expect(down.payrollCreates).toEqual([]);
+    expect(down.exceptions).toEqual([]); // no "not in People" noise while the roster is missing
+  });
+
+  it("flags a field person holding a Zoe login (office only)", () => {
+    const p = planMatches(input({
+      employees: [emp({ id: "D", displayName: "Dan Driver", department: "driver", userId: "U5", connecteamUserId: 4 })],
+      roster: [{ userId: 4, name: "Dan Driver" }],
+      logins: [{ id: "U5", username: "dan", name: "Dan Driver", role: "member", active: true, openphoneUserId: null }],
+    }));
+    expect(p.exceptions.find((x) => x.kind === "field_login")?.detail).toContain("office staff only");
+  });
+
   it("a HIRE not set up yet is not flagged", () => {
     const p = planMatches(input({ employees: [emp({ id: "A", displayName: "Fresh Hire", lifecycleState: "HIRE" })], roster: [{ userId: 9, name: "X Y", seniorityDate: "2020-01-01" }] }));
     expect(p.exceptions.filter((x) => x.employeeId === "A")).toHaveLength(0);

@@ -306,6 +306,7 @@ const EXCEPTION_LABEL: Record<MatchException["kind"], string> = {
   new_in_connecteam: "New in Connecteam",
   missing_in_connecteam: "Not linked to Connecteam",
   no_policy: "No access policy",
+  field_login: "Field role with a Zoe login",
 };
 const SYSTEM_LABEL: Record<MatchException["system"], string> = { connecteam: "Connecteam", zoe: "Zoe login", payroll: "Payroll", people: "People" };
 
