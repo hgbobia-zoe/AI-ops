@@ -52,8 +52,19 @@ export const IGNITION_RECOVERED_ALERT = "Ignition is signed back in on the offic
 export function ignitionDotStatus(opts: {
   health: Pick<IgnitionHealth, "ok" | "configured" | "lastReadyAt">;
   hasDeliveriesToday: boolean;
+  /** Pending links waiting past the stuck threshold (see ./mintBacklog). A fresh check-in with a stuck
+   *  queue is NOT green: links aren't being made. */
+  stuckMints?: { count: number; oldestMin: number | null };
 }): IgnitionDot {
   const { ok, configured } = opts.health;
+  const stuck = opts.stuckMints?.count ?? 0;
+  if (ok && stuck > 0) {
+    return {
+      status: "attention",
+      headline: "Links stuck",
+      detail: `Checking in, but ${stuck} tracking ${stuck === 1 ? "link is" : "links are"} still waiting${opts.stuckMints?.oldestMin != null ? ` (oldest ${opts.stuckMints.oldestMin} min)` : ""}. Reload the Ignition tab on the office machine.`,
+    };
+  }
   if (ok) {
     return { status: "ok", headline: "Live", detail: "Signed in on the office machine — customer links are the real live map." };
   }

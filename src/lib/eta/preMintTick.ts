@@ -22,6 +22,7 @@ import { getRoutesForDate, enqueueEtaLinkMint, hasCurrentEtaLinkForStop } from "
 import { todayInOpsTz, shiftYmd, endOfOpsDayISO } from "@/lib/dates";
 import { ignitionHealth, recordIgnitionProbe } from "@/lib/pull/state";
 import { slackNotify } from "@/lib/notify/slack";
+import { checkMintBacklog } from "./mintBacklog";
 import type { Route } from "@/lib/types";
 
 export interface PreMintTickResult {
@@ -64,6 +65,12 @@ export async function runEtaPreMintTick(now: Date = new Date()): Promise<PreMint
   const health = ignitionHealth(20, now.getTime());
   const { alert } = recordIgnitionProbe(health.ok, hasDeliveriesToday, health.configured, now);
   if (alert) void slackNotify(alert);
+
+  // ── Stuck links: the heartbeat can look healthy while requests sit unmade for hours. Watch the queue
+  // itself. Skipped when the "signed out" alert above already covers it (no double message).
+  const signedOutAlertCovers = !health.ok && health.configured && hasDeliveriesToday;
+  const backlogCheck = checkMintBacklog({ signedOutAlertCovers, now });
+  if (backlogCheck.alert) void slackNotify(backlogCheck.alert);
 
   // ── Pre-mint the upcoming stops ──
   const plan = selectStopsToPreMint({ routes, now });
@@ -111,5 +118,6 @@ export async function runEtaPreMintTick(now: Date = new Date()): Promise<PreMint
   const parts = [`${enqueued} pre-minted`, `${alreadyCovered} already set`];
   if (noGeo) parts.push(`${noGeo} no geo`);
   parts.push(health.ok ? "ignition ok" : hasDeliveriesToday ? "ignition signed out" : "ignition idle");
+  if (backlogCheck.backlog.stuck) parts.push(`${backlogCheck.backlog.stuck} stuck (oldest ${backlogCheck.backlog.oldestMin}m)`);
   return { ok: true, detail: parts.join(", ") };
 }

@@ -17,6 +17,7 @@ import { zonarConfigured, rateLimitedUntil } from "@/lib/eta/zonar";
 import { getHealth as seoHealth } from "@/lib/seo/ubersuggest";
 import { ignitionHealth } from "@/lib/pull/state";
 import { ignitionDotStatus } from "@/lib/eta/ignitionStatus";
+import { currentMintBacklog } from "@/lib/eta/mintBacklog";
 import { hasUpcomingDeliveries } from "@/lib/eta/preMint";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate } from "@/lib/db/repo";
@@ -328,7 +329,14 @@ export function computeConnections(now: number = Date.now()): Connection[] {
     deliveriesToday = false; // DB hiccup → treat as nothing to track (don't fabricate an alarm)
   }
   const ign = ignitionHealth(20, now);
-  const ignDot = ignitionDotStatus({ health: ign, hasDeliveriesToday: deliveriesToday });
+  let stuckMints: { count: number; oldestMin: number | null } | undefined;
+  try {
+    const b = currentMintBacklog(now);
+    stuckMints = { count: b.stuck, oldestMin: b.oldestMin };
+  } catch {
+    stuckMints = undefined; // DB hiccup → fall back to the heartbeat-only dot
+  }
+  const ignDot = ignitionDotStatus({ health: ign, hasDeliveriesToday: deliveriesToday, stuckMints });
   out.push({
     key: "ignition",
     label: "Ignition live tracking",
