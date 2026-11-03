@@ -55,6 +55,11 @@ function hasQuoteOut(c: LeadCard): boolean {
   return !!c.quoteSentDate || QUOTE_OUT_LABEL.test(c.statusLabel);
 }
 
+/** Every open lead with a quote out (the bulk cohort, before drafting). Shared with the morning outreach. */
+export function openQuoteCards(): LeadCard[] {
+  return salesLeadCards().filter((c) => OPEN_QUOTE_STATUSES.has(c.status as BoardStatus) && hasQuoteOut(c));
+}
+
 /** The at-a-glance sub-status chip label for an open-quote row — the board nuance Goodshuffle flattens. */
 export const SUBSTATUS_LABEL: Record<"quote_sent" | "follow_up" | "action_needed", string> = {
   quote_sent: "Recent",
@@ -147,7 +152,7 @@ export async function buildBulkOutreachCohort(repFirstName?: string | null): Pro
   const today = todayInOpsTz();
   // EVERY open lead with a quote out (quote_sent + follow_up + action_needed), not just the recent slice —
   // the dormant and replied quotes are exactly the ones that most need a nudge. See OPEN_QUOTE_STATUSES.
-  const cohort = salesLeadCards().filter((c) => OPEN_QUOTE_STATUSES.has(c.status as BoardStatus) && hasQuoteOut(c));
+  const cohort = openQuoteCards();
 
   // Build one row. `skipLlm` returns the deterministic template draft (no model call) so a row never blocks
   // on the LLM; the fast per-lead work (lead lookup, merged timeline, availability) always runs.
