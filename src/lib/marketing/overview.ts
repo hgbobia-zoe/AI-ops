@@ -43,11 +43,13 @@ export interface MarketingOverviewModel {
     content: string;
     campaigns: string;
     outreach: string;
+    leads: string;
   };
   hasCampaignData: boolean;
   hasContentData: boolean;
   hasReviewData: boolean;
   hasOutreachData: boolean;
+  hasLeadData: boolean;
 }
 
 // Attention is surfaced in a fixed, deterministic priority: time-sensitive relationship work
@@ -55,7 +57,7 @@ export interface MarketingOverviewModel {
 // reputation replies. Within the chosen primary we prefer whatever is actually overdue.
 const PRIORITY: AttentionItem["key"][] = ["outreach", "content", "reviews"];
 
-export function buildMarketingOverview(d: MarketingDashboard): MarketingOverviewModel {
+export function buildMarketingOverview(d: MarketingDashboard, opts: { hasLeadData?: boolean } = {}): MarketingOverviewModel {
   const today = d.today;
 
   // ── Outreach follow-ups: open prospects whose next action is due this week or already past. ──
@@ -125,7 +127,9 @@ export function buildMarketingOverview(d: MarketingDashboard): MarketingOverview
   const linkCount = Object.values(d.links).filter((v) => typeof v === "string" && v.trim().length > 0).length;
   const hasLinks = linkCount > 0;
 
-  const isSetup = !hasCampaignData && !hasContentData && !hasReviewData && !hasOutreachData && !hasLinks;
+  // Inbound leads arrive on their own (lead Zaps), so any lead in the window means the blade has data.
+  const hasLeadData = !!opts.hasLeadData;
+  const isSetup = !hasCampaignData && !hasContentData && !hasReviewData && !hasOutreachData && !hasLinks && !hasLeadData;
 
   // Primary action: clear the top attention bucket if there is one; otherwise grow the top of the
   // funnel. Prefer an overdue bucket for the primary even if it is lower in the base priority.
@@ -150,10 +154,13 @@ export function buildMarketingOverview(d: MarketingDashboard): MarketingOverview
       content: "Planned items you logged, next 3 weeks",
       campaigns: "Campaigns tracked in this blade",
       outreach: "Prospects you're tracking before Goodshuffle · wins = last 30 days",
+      leads:
+        "Leads from the website form, Yelp and Google Zaps, by office day. The same person again within a day counts once. Goodshuffle wishlists, calls and intakes entered by sales are not counted.",
     },
     hasCampaignData,
     hasContentData,
     hasReviewData,
     hasOutreachData,
+    hasLeadData,
   };
 }
