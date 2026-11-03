@@ -9,7 +9,50 @@
 // Bounded per request and resumable with `before`; dry run unless apply is set.
 
 import { getDb } from "@/lib/db";
-import { getCallDetails } from "@/lib/comms/openphone";
+import { getBookingById } from "@/lib/db/repo";
+import { getCallDetails, getOpenphonePhoneNumbers, listOpenphoneCalls, type QuoCall, type QuoNumber } from "@/lib/comms/openphone";
+
+/** Quo's GET /calls/<id> returns nothing for many calls, but its per number call list has them. Match a
+ *  stored call there by id, else by time (within 2 minutes). The list is read once per lead. */
+const LIST_PAGES = 3;
+const MATCH_MS = 120_000;
+
+async function leadCalls(leadId: string, numbers: QuoNumber[], cache: Map<string, QuoCall[]>): Promise<QuoCall[]> {
+  const hit = cache.get(leadId);
+  if (hit) return hit;
+  const d10 = (getBookingById(leadId)?.clientPhone ?? "").replace(/\D/g, "").slice(-10);
+  const out: QuoCall[] = [];
+  if (d10.length === 10) {
+    for (const n of numbers) {
+      let token: string | null = null;
+      for (let p = 0; p < LIST_PAGES; p++) {
+        const page: { calls: QuoCall[]; nextPageToken: string | null } = await listOpenphoneCalls(n.id, `+1${d10}`, token).catch(() => ({ calls: [] as QuoCall[], nextPageToken: null }));
+        out.push(...page.calls);
+        token = page.nextPageToken;
+        if (!token) break;
+      }
+    }
+  }
+  cache.set(leadId, out);
+  return out;
+}
+
+export function matchListedCall(calls: QuoCall[], callId: string, at: string): QuoCall | null {
+  const byId = calls.find((c) => c.id === callId);
+  if (byId) return byId;
+  const t = Date.parse(at);
+  if (!Number.isFinite(t)) return null;
+  let best: QuoCall | null = null;
+  let gap = MATCH_MS;
+  for (const c of calls) {
+    const d = c.occurredAt ? Math.abs(Date.parse(c.occurredAt) - t) : Infinity;
+    if (d < gap) {
+      gap = d;
+      best = c;
+    }
+  }
+  return best;
+}
 
 export interface CallDirectionRepairResult {
   apply: boolean;
@@ -44,11 +87,17 @@ export async function repairCallDirections(opts: { apply: boolean; limit: number
   const fixComms = db.prepare("UPDATE comms_events SET direction = 'outbound' WHERE id = ? AND direction = 'inbound'");
   const fillCall = db.prepare("UPDATE call_events SET direction = ? WHERE provider_id = ? AND direction IS NULL");
 
+  const cache = new Map<string, QuoCall[]>();
+  let numbers: QuoNumber[] | null = null;
   for (const r of rows) {
     res.checked++;
     const callId = r.provider_id.slice("call:".length);
     const det = await getCallDetails(callId).catch(() => null);
-    const dir = det?.direction ?? null;
+    let dir = det?.direction ?? null;
+    if (!dir && r.lead_id) {
+      numbers ??= await getOpenphonePhoneNumbers().catch(() => []);
+      dir = matchListedCall(await leadCalls(r.lead_id, numbers, cache), callId, r.at)?.direction ?? null;
+    }
     if (dir === "outgoing") {
       res.outbound++;
       if (r.lead_id && !res.fixedLeads.includes(r.lead_id)) res.fixedLeads.push(r.lead_id);

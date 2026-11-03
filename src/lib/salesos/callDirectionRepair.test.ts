@@ -9,13 +9,15 @@ vi.mock("@/lib/comms/openphone", async (orig) => ({
   getCallTranscript: vi.fn(async () => null),
   getCallSummary: vi.fn(async () => null),
   getCallDetails: vi.fn(async () => null),
+  getOpenphonePhoneNumbers: vi.fn(async () => [{ id: "PN1", number: "+13012915296" }]),
+  listOpenphoneCalls: vi.fn(async () => ({ calls: [], nextPageToken: null })),
   openphoneUserInitials: vi.fn(async () => "JM"),
 }));
 vi.mock("@/lib/notify/slack", () => ({ slackNotifyAlert: vi.fn(async () => ({ ok: true })) }));
 
 import { getDb } from "@/lib/db";
 import { saveBookings, insertCommsEventIfNew, getCommsForLead, getCallEventByProviderId } from "@/lib/db/repo";
-import { getCallDetails } from "@/lib/comms/openphone";
+import { getCallDetails, listOpenphoneCalls } from "@/lib/comms/openphone";
 import { ingestCallEvent } from "@/lib/comms/service";
 import { repairCallDirections } from "./callDirectionRepair";
 
@@ -69,6 +71,16 @@ describe("repairCallDirections", () => {
     await repairCallDirections({ apply: true, limit: 50 });
     const byId = Object.fromEntries(getCommsForLead("CD1").map((c) => [c.providerId, c.direction]));
     expect(byId).toEqual({ "call:OUT1": "outbound", "call:IN1": "inbound", "call:GONE": "inbound" });
+  });
+
+  it("when Quo's lookup by id comes back empty, matches the lead's Quo call list by time", async () => {
+    seed("NOID", "2026-10-28T18:16:38Z");
+    const list = listOpenphoneCalls as unknown as Mock;
+    list.mockResolvedValueOnce({ calls: [{ id: "AC9", direction: "outgoing", participants: [CLIENT], durationSec: 20, occurredAt: "2026-10-28T18:16:10Z" }], nextPageToken: null });
+    const r = await repairCallDirections({ apply: true, limit: 50 });
+    expect(r).toMatchObject({ checked: 1, outbound: 1, unknown: 0 });
+    expect(getCommsForLead("CD1")[0].direction).toBe("outbound");
+    expect(list).toHaveBeenCalledWith("PN1", CLIENT, null);
   });
 
   it("pages with nextBefore", async () => {
