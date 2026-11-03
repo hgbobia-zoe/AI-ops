@@ -18,9 +18,14 @@ can't do this work, so a machine you control does.
   deterministic, clearly-**non-master** branch. The app derives + displays the SAME name.
 - **Deploy branch:** `WEBSITE_DEPLOY_BRANCH` (default **`master`**) — the PR base. A push to `master`
   auto-deploys to **Kinsta** (GitHub Actions on push to master), so **master = production/live**.
-- **Approval = go-live.** The marketer approves the *rendered preview*; the runner then merges to master
-  **immediately** (the in-app approval is the only gate). Set `WEBSITE_AUTO_MERGE=1` to instead prefer GitHub
-  native auto-merge so required checks gate the deploy.
+- **Approval = go-live, after the site checks.** The marketer approves the *rendered preview*; the runner opens
+  the PR, waits for the website repo's **Site checks** workflow (`.github/workflows/site-checks.yml`: PHP syntax
+  on every theme file, `style.css` theme header, front-end build when front-end files change) and merges to
+  master **only when they pass**. Failed, missing or timed-out checks leave the PR open, fail the job, and
+  publish nothing. `WEBSITE_REQUIRE_CHECKS=0` turns the gate off (not recommended).
+- **Dedicated clone.** `WEBSITE_REPO_PATH` must be a clone only the runner uses (e.g.
+  `C:\Git\zoe-website-studio\repo`), never someone's working copy: the runner commits with `git add -A` and
+  cleans up with `git reset --hard`. A job refuses to start on a dirty checkout.
 
 ## What it does, one job at a time (single-flight)
 
@@ -34,6 +39,7 @@ can't do this work, so a machine you control does.
    the summary + the changed-file list, and set the job to **`preview`**.
 7. Wait for the human decision in the app:
    - **Approved** → push the working branch + `gh pr create --repo <slug> --base <deploy branch>`, then
+     wait for the **Site checks** to pass (otherwise: job failed, PR left open, nothing published), then
      **merge** it into the deploy branch. **Default:** an immediate `gh pr merge --squash` (the in-app approval
      is the only gate). With `WEBSITE_AUTO_MERGE=1` it instead does `gh pr merge --auto --squash` (GitHub
      native auto-merge — the PR merges once required checks pass), falling back to an immediate
@@ -100,7 +106,7 @@ regardless of environment — the environment only tells the agent which page th
 |-----|------|
 | `ANTHROPIC_API_KEY`     | The **centralized org** Anthropic API key. The marketing team needs no Claude subscription of their own — this one key powers every job. |
 | `WEBSITE_RUNNER_TOKEN`  | Shared secret; must equal the app's `WEBSITE_RUNNER_TOKEN`. Sent as `x-website-runner-token`. The app's runner endpoints are **fail-closed** (HTTP 503) until this is set on the app, so nothing runs until you configure it on both sides. |
-| `WEBSITE_REPO_PATH`     | Absolute path to the local website repo checkout (e.g. `C:\git\zer\website`). |
+| `WEBSITE_REPO_PATH`     | Absolute path to a **dedicated** clone of the website repo that only the runner uses (e.g. `C:\Git\zoe-website-studio\repo`). Never a person's working copy. |
 | `APP_URL`               | Base URL of the AI-OPS app (e.g. `https://<your-app>.fly.dev`). |
 
 ## Optional environment variables
@@ -111,6 +117,9 @@ regardless of environment — the environment only tells the agent which page th
 | `WEBSITE_DEPLOY_BRANCH` | `master` | The PR base / deploy branch (push → Kinsta). Empty auto-detects the checkout's default branch. |
 | `WEBSITE_WORKING_BRANCH_PREFIX` | `website-studio` | Prefix for the non-master working branch (`<prefix>/<jobId>`). Must match the app's so the displayed branch is correct. |
 | `WEBSITE_AUTO_MERGE` | *(unset)* → immediate merge | **Default (unset): immediate `gh pr merge --squash` on approval** — the in-app approval is the only gate. Set to a truthy value (`1`/`true`/`yes`/`on`) to opt into GitHub native auto-merge (merge when required checks pass, falling back to immediate). `0`/`false`/`no`/`off` is the same as unset. |
+| `WEBSITE_REQUIRE_CHECKS` | *(unset)* → on | Merge only after the PR's Site checks pass. Only `0`/`false`/`no`/`off` turns it off. |
+| `WEBSITE_CHECKS_TIMEOUT_MS` | `1200000` (20 min) | Give up waiting for running checks (job fails, PR stays open). |
+| `WEBSITE_CHECKS_APPEAR_MS` | `180000` (3 min) | If no checks appear on the PR within this, treat it as "no checks" (job fails, PR stays open). |
 | `WEBSITE_MERGE_METHOD` | `squash` | Merge method for the PR: `squash`, `merge`, or `rebase`. |
 | `WEBSITE_PREVIEW_URL` | *(none)* | Base URL the local DevKinsta site is served at (e.g. `http://zoeeventsdmv.local`). **Needed for screenshots** — without it the preview has no images. |
 | `DEVKINSTA_CONTAINER` | *(none)* | Docker container name/id of the DevKinsta WordPress container. Used by the `docker cp` fallback **only if the website repo has no `sync.ps1`**. |
@@ -152,3 +161,15 @@ Keep it running whenever marketing might submit requests. If it isn't running, j
   approval — and therefore auto-deploy — is now wired; see the branch/merge model above.)
 - **Security:** run the agent in a sandbox/container or as a lower-privilege user so even file writes can't
   escape the repo (the file tools run under `bypassPermissions`, so they can still write by absolute path).
+
+## Running it on the office PC
+
+Installed at `C:\Git\zoe-website-studio` (runner files + `node_modules` + Playwright Chromium), with the dedicated
+clone at `C:\Git\zoe-website-studio\repo`. Settings live in `C:\Git\zoe-website-studio\.env` (private). Start:
+
+```
+powershell -ExecutionPolicy Bypass -File C:\Git\zoe-website-studio\start.ps1
+```
+
+`start.ps1` loads `.env` and runs `runner.js`. Start Docker Desktop + DevKinsta first so previews have screenshots.
+

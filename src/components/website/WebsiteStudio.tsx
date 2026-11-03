@@ -8,8 +8,8 @@
 // repo on a NON-MASTER working branch (website-studio/<jobId>), renders THAT branch locally, screenshots it,
 // and posts the shots back; the job shows a PREVIEW (desktop/mobile screenshots + a summary + the changed
 // files + the working branch) with "Approve & publish to master" and "Discard". A non-technical team judges
-// the RENDERED result, never code. Approving opens a PR into master and AUTO-MERGES it (GitHub native
-// auto-merge, so required checks still gate it); the merge to master is what deploys to the live site
+// the RENDERED result, never code. Approving opens a PR into master and merges it once the website repo's
+// "Site checks" pass (failed checks leave the PR open); the merge to master is what deploys to the live site
 // (Kinsta). Nothing reaches master until a human approves the preview here — discard throws the branch away.
 //
 // The Studio OWNS the address bar — the app always knows the current URL even on cross-origin pages where it
@@ -223,7 +223,7 @@ function JobCard({ job, onDecide }: { job: WebsiteJob; onDecide: (id: string, de
               {busy === "discard" ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
               Discard
             </Button>
-            <span className="text-[11px] text-meta">Approving opens a pull request and merges it into master once required checks pass — that publishes the change to the live site. Discard throws the working branch away.</span>
+            <span className="text-[11px] text-meta">Approving opens a pull request and merges it into master once the automatic site checks pass, which publishes the change to the live site. If a check fails, nothing is published. Discard throws the working branch away.</span>
           </div>
         </>
       )}
@@ -521,7 +521,7 @@ export function WebsiteStudio({ initialJobs, envUrls }: { initialJobs: WebsiteJo
             <Globe className="size-[18px] text-meta" /> Website Studio
           </h1>
           <p className="mt-1 text-[12px] text-meta">
-            Browse to the page you want to change on the right, then describe the change in plain English. We make it on a private working branch (never master), show you a rendered preview, and — once you approve — open a pull request and merge it into master, which publishes it to the live site. Nothing reaches master until you approve.
+            Browse to the page you want to change on the right, then describe the change in plain English. We make it on a private working branch (never master), show you a rendered preview, and — once you approve — open a pull request and merge it into master once the automatic site checks pass, which publishes it to the live site. Nothing reaches master until you approve.
           </p>
         </header>
 

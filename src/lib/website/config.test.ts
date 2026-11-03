@@ -6,6 +6,7 @@ import {
   websiteRepoSlug,
   websiteDeployBranch,
   websiteAutoMerge,
+  websiteRequireChecks,
   workingBranchPrefix,
   workingBranchForJob,
   DEFAULT_WEBSITE_PROD_URL,
@@ -13,6 +14,7 @@ import {
   DEFAULT_WEBSITE_REPO_SLUG,
   DEFAULT_WEBSITE_DEPLOY_BRANCH,
   DEFAULT_WEBSITE_AUTO_MERGE,
+  DEFAULT_WEBSITE_REQUIRE_CHECKS,
 } from "./config";
 
 const ENV_KEYS = [
@@ -23,6 +25,7 @@ const ENV_KEYS = [
   "WEBSITE_DEPLOY_BRANCH",
   "WEBSITE_WORKING_BRANCH_PREFIX",
   "WEBSITE_AUTO_MERGE",
+  "WEBSITE_REQUIRE_CHECKS",
 ] as const;
 
 afterEach(() => {
@@ -112,6 +115,24 @@ describe("website config", () => {
         for (const v of ["0", "false", "no", "off", "", "   ", "maybe", "2"]) {
           process.env.WEBSITE_AUTO_MERGE = v;
           expect(websiteAutoMerge()).toBe(false);
+        }
+      });
+    });
+
+    describe("websiteRequireChecks (default ON; only an explicit off disables)", () => {
+      it("is on when WEBSITE_REQUIRE_CHECKS is unset or anything but an explicit off", () => {
+        expect(DEFAULT_WEBSITE_REQUIRE_CHECKS).toBe(true);
+        expect(websiteRequireChecks()).toBe(true);
+        for (const v of ["1", "true", "", "  ", "maybe"]) {
+          process.env.WEBSITE_REQUIRE_CHECKS = v;
+          expect(websiteRequireChecks()).toBe(true);
+        }
+      });
+
+      it("is off only for 0/false/no/off", () => {
+        for (const v of ["0", "false", "NO", " off "]) {
+          process.env.WEBSITE_REQUIRE_CHECKS = v;
+          expect(websiteRequireChecks()).toBe(false);
         }
       });
     });
