@@ -19,5 +19,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   const sp = new URL(req.url).searchParams;
   const limit = Math.min(50, Math.max(1, Number(sp.get("limit")) || 10));
   const post = !["0", "false", "no"].includes((sp.get("post") ?? "").toLowerCase());
-  return NextResponse.json(startMorningDryRun({ limit, post }));
+  // ?rep= is the fallback first name for projects whose Goodshuffle sales lead isn't captured yet
+  const rep = (sp.get("rep") ?? "").trim().slice(0, 40) || null;
+  return NextResponse.json(startMorningDryRun({ limit, post, rep }));
 }
