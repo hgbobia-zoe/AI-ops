@@ -3806,11 +3806,12 @@ export function getCallEventByProviderId(providerId: string): CallEventView | nu
 /** Fill in call content that arrives on a later event (transcript/summary/duration), non-null only. */
 export function updateCallContent(
   id: string,
-  c: { transcript?: string | null; summary?: string | null; durationSec?: number | null; contactName?: string | null; eventType?: string | null; fromPhone?: string | null; toPhone?: string | null },
+  c: { transcript?: string | null; summary?: string | null; durationSec?: number | null; contactName?: string | null; eventType?: string | null; fromPhone?: string | null; toPhone?: string | null; direction?: string | null },
 ): void {
   getDb()
     .prepare(
       `UPDATE call_events SET
+         direction    = COALESCE(direction, @direction),
          transcript   = COALESCE(@transcript, transcript),
          summary      = COALESCE(@summary, summary),
          duration_sec = COALESCE(@durationSec, duration_sec),
@@ -3829,6 +3830,7 @@ export function updateCallContent(
       eventType: c.eventType ?? null,
       fromPhone: c.fromPhone ?? null,
       toPhone: c.toPhone ?? null,
+      direction: c.direction ?? null,
     });
 }
 

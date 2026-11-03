@@ -139,17 +139,21 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   // Match the customer's project once — shared by the note, the timeline row, and the state debrief.
   // A call's fields arrive spread across several webhook events (the summary event often omits the phone),
   // so fall back to whatever this call row already captured from an earlier event.
-  let dir = input.direction ?? existing?.direction ?? "incoming";
+  let knownDir: string | null = input.direction ?? existing?.direction ?? null;
+  let dir = knownDir ?? "incoming";
   let custPhone = (dir === "outgoing" ? (input.toPhone ?? existing?.toPhone) : (input.fromPhone ?? existing?.fromPhone)) ?? null;
-  // The transcript/summary event that triggers the alert usually omits the phone, and the call.completed
-  // event may never have been stored — so if we still don't know who called, fetch the call's metadata by
-  // id to backfill the number (and direction). This is what keeps the alert from saying "unknown caller",
-  // and it also lets the booking match below recover the caller's name + project link.
-  if (!custPhone) {
+  // The transcript/summary event that triggers the alert usually omits the phone AND the direction, and the
+  // call.completed event may never have been stored — so if we still don't know who called or which way,
+  // fetch the call's metadata by id. This keeps the alert from saying "unknown caller", lets the booking
+  // match below recover the project, and keeps an outbound call from landing on the timeline as inbound.
+  if (!custPhone || !knownDir) {
     const det = await getCallDetails(callId);
     if (det) {
-      if (det.direction) dir = det.direction === "outgoing" ? "outgoing" : "incoming";
-      custPhone = det.customerPhone; // the party that isn't one of our own Quo numbers
+      if (det.direction) {
+        dir = det.direction === "outgoing" ? "outgoing" : "incoming";
+        knownDir = dir;
+      }
+      if (det.customerPhone) custPhone = det.customerPhone; // the party that isn't one of our own Quo numbers
     }
   }
   const digits = last10(custPhone);
@@ -159,10 +163,10 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   // Caller name: Quo's contact name if any, else the matched customer, else whatever we already stored —
   // so the alert can name them instead of "unknown caller".
   const resolvedName = (input.contactName ?? "").trim() || booking?.clientName?.trim() || existing?.contactName?.trim() || null;
-  updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: resolvedName, eventType: input.eventType, fromPhone: input.fromPhone ?? (dir === "incoming" ? custPhone : null), toPhone: input.toPhone ?? (dir === "outgoing" ? custPhone : null) });
+  updateCallContent(id, { transcript, summary, durationSec: input.durationSec ?? null, contactName: resolvedName, eventType: input.eventType, fromPhone: input.fromPhone ?? (dir === "incoming" ? custPhone : null), toPhone: input.toPhone ?? (dir === "outgoing" ? custPhone : null), direction: knownDir });
 
   // Log the call to Goodshuffle notes (conversation summary or voicemail) — regardless of sentiment.
-  await maybeLogCallNote(id, input, !!existing?.noteLoggedAt, summary, booking, initials);
+  await maybeLogCallNote(id, { ...input, direction: knownDir ?? undefined }, !!existing?.noteLoggedAt, summary, booking, initials);
 
   const text = transcript ?? summary;
 
@@ -177,7 +181,9 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
     const onTimeline = insertCommsEventIfNew({
       providerId: `call:${callId}`,
       leadId: booking.bookingId,
-      direction: input.direction === "outgoing" ? "outbound" : "inbound",
+      // the resolved direction, not the event's: a summary event carries none, and defaulting it made
+      // every outbound call with a summary read as the client calling us
+      direction: dir === "outgoing" ? "outbound" : "inbound",
       channel: "call",
       fromPhone: input.fromPhone ?? null,
       toPhone: input.toPhone ?? null,
@@ -189,7 +195,7 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
     // Voicemails / quick no-answers are excluded — they stay "Insufficient Data" for the state machine.
     const isConversation = !!summary || (transcript != null && (input.durationSec ?? 0) >= 45);
     if (onTimeline && isConversation) {
-      logSalesEventBy("CALL_DEBRIEF", booking.bookingId, initials ?? "Quo", { source: transcript ? "transcript" : "summary", direction: input.direction ?? "unknown" });
+      logSalesEventBy("CALL_DEBRIEF", booking.bookingId, initials ?? "Quo", { source: transcript ? "transcript" : "summary", direction: knownDir ?? "unknown" });
       await debriefCall(booking.bookingId, text).catch(() => {});
     }
   }
