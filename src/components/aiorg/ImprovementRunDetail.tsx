@@ -55,6 +55,9 @@ export function ImprovementRunDetail({ run, events, canManage }: { run: Improvem
 
   const actions: { label: string; body: Record<string, unknown> }[] = [];
   if (canManage) {
+    if (run.state === "requested") {
+      actions.push({ label: "Draft plan with AI", body: { op: "ai_plan" } });
+    }
     if (run.state === "human_review_required") {
       actions.push({ label: "Resume: investigate", body: { op: "advance", to: "investigating" as RunState } });
       actions.push({ label: "Resume: code", body: { op: "advance", to: "coding" as RunState } });

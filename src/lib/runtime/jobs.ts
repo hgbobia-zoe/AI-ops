@@ -10,6 +10,7 @@
 // no new table. HONEST: a job with no credential is skipped and shown as "not configured", never faked.
 
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
+import { planWaitingRuns } from "@/lib/ai/improvement/planner";
 import { INSTAWORK_STALE_MIN } from "@/lib/instawork/store";
 import { runInstaworkMonitor } from "@/lib/instawork/monitor";
 import { slackNotify } from "@/lib/notify/slack";
@@ -286,8 +287,11 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     run: async () => {
       const signals = scanImprovementSignals();
       const openable = signals.filter((s) => s.autoOpenable).length;
+      // Draft a plan for the oldest run still waiting (in-app planner; plans only, never codes or ships).
+      const p = await planWaitingRuns(1);
+      const planNote = p.planned || p.failed ? `, planner: ${p.planned} planned${p.failed ? ` ${p.failed} failed` : ""}` : "";
       if (!selfAuditAutoOpen()) {
-        return { ok: true, detail: `${signals.length} candidate${signals.length === 1 ? "" : "s"} (${openable} auto-openable) — auto-open OFF` };
+        return { ok: true, detail: `${signals.length} candidate${signals.length === 1 ? "" : "s"} (${openable} auto-openable) — auto-open OFF${planNote}` };
       }
       let opened = 0;
       let skipped = 0;
@@ -295,7 +299,7 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
         if (openFromSignal(s).opened) opened++;
         else skipped++;
       }
-      return { ok: true, detail: `${signals.length} candidates, ${opened} opened, ${skipped} skipped` };
+      return { ok: true, detail: `${signals.length} candidates, ${opened} opened, ${skipped} skipped${planNote}` };
     },
   },
   {

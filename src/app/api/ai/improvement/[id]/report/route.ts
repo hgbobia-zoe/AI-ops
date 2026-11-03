@@ -9,6 +9,7 @@ import {
   advance, recordPlan, enforceScope, enforceBudget, reportValidation, reportCi, retryRepair, recordMerge, verifyAndRoute,
 } from "@/lib/ai/improvement/service";
 import { getRun, setRunArtifacts } from "@/lib/ai/improvement/store";
+import { planRun } from "@/lib/ai/improvement/planner";
 import type { RunState } from "@/lib/ai/improvement/types";
 import { bridgeTokenValid } from "@/lib/ai/provider";
 import { currentActor, viewerRole } from "@/lib/auth/getSession";
@@ -40,6 +41,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   switch (body.op) {
+    case "ai_plan": {
+      // A human asks the in-app planner to draft the plan (requested -> investigating -> planned). Owner/admin
+      // only: the token path reports plans it wrote itself via "plan".
+      if (!manager) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+      const out = await planRun(id);
+      return respond(out.ok, id, out.error);
+    }
     case "plan": {
       if (!body.plan?.trim()) return NextResponse.json({ error: "plan required" }, { status: 400 });
       const t = recordPlan(id, body.plan.trim(), actor);
