@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build:extension": "node scripts/build-extension.mjs",
+    "drop:extension": "node scripts/drop-extension.mjs",
     "prebuild": "node scripts/build-extension.mjs",
     "build": "next build",
     "start": "next start",

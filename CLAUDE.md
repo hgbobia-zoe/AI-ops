@@ -1,5 +1,17 @@
 @AGENTS.md
 
+# Auto-Pull extension releases (every change under extension/)
+
+1. Bump `version` in `extension/manifest.json`.
+2. Run `npm run drop:extension`. It builds both variants and refuses a version it already dropped:
+   - `public/zoe-autopull-extension.zip`: keyed, committed + served by /admin/pull (CI checks it is current).
+   - `C:\Git\zoe-autopull-extension\`: keyed, unpacked, for chrome://extensions "Load unpacked".
+   - `C:\Git\UPLOAD-TO-CHROME-WEB-STORE-v<version>.zip`: KEYLESS. The ONLY file to hand the owner for the
+     Chrome Web Store Developer Console. A keyed zip is rejected with "key field value in the manifest
+     doesn't match the current item".
+3. Commit the bump + `public/zoe-autopull-extension.zip`. Tell the owner the exact upload file path.
+Never send or name any other zip for a store upload. Never commit a keyless zip.
+
 # Goodshuffle Pro — read AND write (no public API)
 
 Goodshuffle has no public API. We drive it by replaying its own internal endpoints
