@@ -58,9 +58,11 @@ const PERSON_KINDS: Record<string, string> = {
   risk_status_changed: "Event Risk",
 };
 
-export function classifyChange(c: Pick<ChangeRow, "kind" | "toValue">): FeedBy {
+export function classifyChange(c: Pick<ChangeRow, "kind" | "toValue"> & { actor?: string | null }): FeedBy {
   const where = PERSON_KINDS[c.kind];
   if (!where) return { who: "platform", name: null };
+  // The signed-in person recorded with the change (newer rows). Older rows fall back to what they kept.
+  if (c.actor) return { who: "person", name: c.actor, where };
   if (c.kind === "risk_status_changed") {
     const m = /\(by (.+)\)\s*$/.exec(c.toValue ?? "");
     if (m) return { who: "person", name: m[1], where };
@@ -68,12 +70,21 @@ export function classifyChange(c: Pick<ChangeRow, "kind" | "toValue">): FeedBy {
   return { who: "person", name: null, where };
 }
 
-function changeToItem(c: ChangeRow, showMoney: boolean): FeedItem {
-  const d = describeChange(c, { showMoney });
-  // The person's name moves into "by"; drop the duplicate "by Jessie" detail.
+/** PURE. A change's line plus who did it. A risk decision's "(by Jessie)" moves into `by`; if a different
+ *  owner was stated than the person who clicked, it stays as "owner Jessie". */
+export function changeLine(c: ChangeRow, showMoney: boolean): { line: ReturnType<typeof describeChange>; by: FeedBy } {
+  const line = describeChange(c, { showMoney });
   const by = classifyChange(c);
-  const detail = c.kind === "risk_status_changed" && by.name ? null : d.detail;
-  return { id: c.id, ts: c.ts, area: d.area, tone: d.tone, title: d.title, subject: d.subject, detail, eventId: c.eventId, by };
+  if (c.kind === "risk_status_changed" && line.detail?.startsWith("by ")) {
+    const owner = line.detail.slice(3);
+    line.detail = owner === by.name ? null : `owner ${owner}`;
+  }
+  return { line, by };
+}
+
+function changeToItem(c: ChangeRow, showMoney: boolean): FeedItem {
+  const { line: d, by } = changeLine(c, showMoney);
+  return { id: c.id, ts: c.ts, area: d.area, tone: d.tone, title: d.title, subject: d.subject, detail: d.detail, eventId: c.eventId, by };
 }
 
 // ── Goodshuffle write-backs ────────────────────────────────────────────────────────────────────────

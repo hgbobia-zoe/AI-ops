@@ -79,14 +79,16 @@ export interface ChangeInput {
   toValue?: string | null;
   /** Deterministic key → the same transition is logged once (idempotent). */
   changeKey: string;
+  /** The signed-in person who made the change. Omit for platform changes or when nobody is signed in. */
+  actor?: string | null;
 }
 
 /** Append one change to the log. Returns true if newly logged (false = already recorded). */
 export function logChange(c: ChangeInput, now: Date = new Date()): boolean {
   const info = getDb()
     .prepare(
-      `INSERT OR IGNORE INTO history_changes (id, ts, source, event_id, entity, entity_id, kind, field, from_value, to_value, change_key)
-       VALUES (@id,@ts,@source,@eventId,@entity,@entityId,@kind,@field,@fromValue,@toValue,@changeKey)`,
+      `INSERT OR IGNORE INTO history_changes (id, ts, source, event_id, entity, entity_id, kind, field, from_value, to_value, change_key, actor)
+       VALUES (@id,@ts,@source,@eventId,@entity,@entityId,@kind,@field,@fromValue,@toValue,@changeKey,@actor)`,
     )
     .run({
       id: `CH-${randomUUID()}`,
@@ -100,6 +102,7 @@ export function logChange(c: ChangeInput, now: Date = new Date()): boolean {
       fromValue: c.fromValue ?? null,
       toValue: c.toValue ?? null,
       changeKey: c.changeKey,
+      actor: c.actor?.trim() || null,
     });
   return info.changes > 0;
 }
@@ -115,6 +118,8 @@ export interface ChangeRow {
   field: string | null;
   fromValue: string | null;
   toValue: string | null;
+  /** Who made the change, when a signed-in person did (null for the platform and for older rows). */
+  actor: string | null;
 }
 
 function toChange(r: Record<string, unknown>): ChangeRow {
@@ -129,6 +134,7 @@ function toChange(r: Record<string, unknown>): ChangeRow {
     field: (r.field as string) ?? null,
     fromValue: (r.from_value as string) ?? null,
     toValue: (r.to_value as string) ?? null,
+    actor: (r.actor as string) ?? null,
   };
 }
 

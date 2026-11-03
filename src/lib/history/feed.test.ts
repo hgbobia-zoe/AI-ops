@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db";
 import { logChange } from "./store";
 import {
   classifyChange,
+  changeLine,
   describeWriteBack,
   describeApproval,
   describeAudit,
@@ -22,6 +23,27 @@ describe("who did it", () => {
     expect(classifyChange({ kind: "driver_assigned", toValue: "Marco" })).toEqual({ who: "person", name: null, where: "Dispatch" });
     expect(classifyChange({ kind: "risk_detected", toValue: "HIGH" })).toEqual({ who: "platform", name: null });
     expect(byLabel({ who: "person", name: null, where: "Dispatch" })).toBe("by someone on Dispatch");
+    // A recorded signed-in actor wins.
+    expect(classifyChange({ kind: "driver_assigned", toValue: "Marco", actor: "Hermann" })).toEqual({ who: "person", name: "Hermann", where: "Dispatch" });
+    expect(classifyChange({ kind: "stop_removed", toValue: null, actor: "Cindy" }).name).toBe("Cindy");
+    // A scan change never becomes a person even if an actor were set.
+    expect(classifyChange({ kind: "risk_detected", toValue: "HIGH", actor: "Hermann" }).who).toBe("platform");
+  });
+
+  it("records who made a Dispatch change and shows it in the feed", () => {
+    logChange({ source: "dispatch", entity: "route", entityId: "AC-R1", kind: "driver_reassigned", field: "driver", fromValue: "Marco", toValue: "Dee", changeKey: "ac|1", actor: "Hermann" });
+    logChange({ source: "dispatch", entity: "stop", entityId: "AC-S1", kind: "stop_removed", field: "route", fromValue: "AC-R1", changeKey: "ac|2" });
+    const items = historyFeed({ q: "AC-R1", showMoney: true }).items;
+    expect(items.find((x) => x.title === "Driver changed")?.by).toEqual({ who: "person", name: "Hermann", where: "Dispatch" });
+    // No one signed in → recorded without a name → "someone on Dispatch", never invented.
+    expect(byLabel(items.find((x) => x.title === "Stop pulled from a route")!.by)).toBe("by someone on Dispatch");
+  });
+
+  it("keeps a stated risk owner who differs from the person who clicked", () => {
+    const row = { id: "CH-x", ts: "t", source: "dispatch", eventId: null, entity: "risk", entityId: "s", kind: "risk_status_changed", field: "No driver", fromValue: "OPEN", toValue: "ACKNOWLEDGED (by Jessie)" };
+    expect(changeLine({ ...row, actor: "Hermann" }, true)).toMatchObject({ line: { detail: "owner Jessie" }, by: { name: "Hermann" } });
+    expect(changeLine({ ...row, actor: "Jessie" }, true).line.detail).toBeNull();
+    expect(changeLine({ ...row, actor: null }, true)).toMatchObject({ line: { detail: null }, by: { name: "Jessie" } });
     expect(byLabel({ who: "platform", name: null })).toBe("by the platform");
   });
 

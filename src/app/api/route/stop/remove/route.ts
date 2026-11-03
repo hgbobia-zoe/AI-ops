@@ -10,6 +10,7 @@ import { NextResponse } from "next/server";
 import { removeStop, enqueueGsOp } from "@/lib/db/repo";
 import { slackNotify } from "@/lib/notify/slack";
 import { logChange } from "@/lib/history/store";
+import { historyActor } from "@/lib/history/actor";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     fromValue: routeId,
     toValue: null,
     changeKey: `stop_removed|${stopId}`,
+    actor: await historyActor(),
   });
 
   // Queue the Goodshuffle write-back only when we know the waypoint (transactionID) and
