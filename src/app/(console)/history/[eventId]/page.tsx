@@ -7,6 +7,7 @@ import Link from "next/link";
 import { ArrowLeft, History } from "lucide-react";
 import { getEventTimeline, getEventOutcome } from "@/lib/history/store";
 import { describeChange } from "@/lib/history/describe";
+import { classifyChange, eventWriteBacks, byLabel, type FeedBy } from "@/lib/history/feed";
 import { opsDateTime, formatDollars } from "@/lib/history/format";
 import { formatYmdLong } from "@/lib/dates";
 import { STATUS_DOT, type Tone } from "@/lib/tone";
@@ -60,9 +61,12 @@ export default async function EventTimelinePage({ params }: { params: Promise<{ 
       ),
     });
   }
+  const by = (b: FeedBy): React.ReactNode => <span className="ml-1.5 text-[11.5px] text-meta">{byLabel(b)}</span>;
   // Change log, in the same words as the History feed.
   for (const c of changes) {
     const d = describeChange(c, { showMoney });
+    const who = classifyChange(c);
+    const detail = c.kind === "risk_status_changed" && who.name ? null : d.detail;
     rows.push({
       ts: c.ts,
       tone: d.tone,
@@ -70,7 +74,22 @@ export default async function EventTimelinePage({ params }: { params: Promise<{ 
         <>
           <span className="text-foreground">{d.title}</span>
           {d.subject && d.subject !== label && <span className="text-foreground">: {d.subject}</span>}
-          {d.detail && <span> ({d.detail})</span>}
+          {detail && <span> ({detail})</span>}
+          {by(who)}
+        </>
+      ),
+    });
+  }
+  // What the app did in Goodshuffle for this event (landed or failed write-backs).
+  for (const w of eventWriteBacks(eventId, showMoney)) {
+    rows.push({
+      ts: w.ts,
+      tone: w.tone,
+      text: (
+        <>
+          <span className="text-foreground">{w.title}</span>
+          {w.detail && <span> ({w.detail})</span>}
+          {by(w.by)}
         </>
       ),
     });
