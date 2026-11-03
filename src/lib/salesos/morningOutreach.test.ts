@@ -108,6 +108,17 @@ describe("gateLead", () => {
     expect(gateLead(gate({ liveCalls: [{ direction: "in", at: "2026-11-03T14:00:00Z", secs: 120 }] })).reason).toContain("waiting on us");
   });
 
+  it("trusts Quo's live direction over a stored call logged the wrong way (Ana Flores)", () => {
+    const tl = [
+      e({ at: "2026-10-28T18:16:38Z", direction: "in", channel: "call", detail: "This call had no actionable details to summarize." }),
+      e({ at: "2026-10-23T14:50:00Z", direction: "out", channel: "sms", detail: "Hi Ana, weekly follow up" }),
+      e({ at: "2026-09-24T15:00:00Z", direction: "in", channel: "sms", detail: "Are you able to resend that email?" }),
+    ];
+    expect(gateLead(gate({ timeline: tl })).reason).toContain("waiting on us"); // the stored row alone misleads
+    const r = gateLead(gate({ timeline: tl, liveCalls: [{ direction: "out", at: "2026-10-28T18:16:10Z", secs: 20 }] }));
+    expect(r).toEqual({ send: true, reason: null });
+  });
+
   it("respects opt outs and clear no's, but not 'stop by'", () => {
     const old = "2026-10-20T15:00:00Z";
     const said = (detail: string) => gate({ timeline: [e({ at: "2026-10-25T15:00:00Z", direction: "out", detail: "Hi" }), e({ at: old, direction: "in", detail })] });
