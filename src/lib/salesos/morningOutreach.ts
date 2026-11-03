@@ -395,14 +395,14 @@ export function getMorningRunState(): MorningRunState {
   return s.status === "running" && !running ? { ...s, status: "error", error: "The run stopped (the server likely restarted). POST again." } : s;
 }
 
-export function startMorningDryRun(opts: { limit?: number; post?: boolean } = {}): MorningRunState {
+export function startMorningDryRun(opts: { limit?: number; post?: boolean; rep?: string | null } = {}): MorningRunState {
   if (running) return getMorningRunState();
   running = true;
   const startedAt = new Date().toISOString();
   setJson(KEY, { status: "running", startedAt } satisfies MorningRunState);
   void (async () => {
     try {
-      const plan = await buildMorningPlan({ limit: opts.limit });
+      const plan = await buildMorningPlan({ limit: opts.limit, repFirstName: opts.rep });
       if (opts.post !== false) plan.posted = await postPlan(plan);
       setJson(KEY, { status: "done", startedAt, finishedAt: new Date().toISOString(), plan } satisfies MorningRunState);
     } catch (e) {
