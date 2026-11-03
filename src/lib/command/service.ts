@@ -24,6 +24,16 @@ import type { FinanceSummary } from "@/lib/finance/service";
 import type { AttentionItem } from "@/lib/ops/manager";
 import { getPullState } from "@/lib/pull/state";
 import { listRecentSessions, listLiveSessions, type AiSession } from "@/lib/ai/sessions";
+import { evaluateOutbox, liveOutboxSummary } from "@/lib/aiorg/outboxHealth";
+import { countOpenExceptions } from "@/lib/payroll/store";
+import { listGustoSubmitResults, readGustoConfirmWireResult } from "@/lib/payroll/gustoSubmitState";
+import { listWireEvents } from "@/lib/payroll/wireEvent";
+import { wireSeenFor, reminderDueAt, periodLabelOf } from "@/lib/payroll/wireReminder";
+import { getActiveShiftExceptions } from "@/lib/scheduling/exceptionStore";
+import { listNeedsReviewRange } from "@/lib/scheduling/store";
+import { issueBreakdown } from "@/lib/postevent/metrics";
+import { radarBoard } from "@/lib/radar/service";
+import { buildBladeSignals, type BladeFacts, type HubItem } from "./bladeSignals";
 import { sevenDayOutlook, dayStatus, computeRevenueOutlook, todaysExceptions, dataFreshness, aiActivityState, liveAiCount, type OutlookDay, type OpStatus, type RevenueOutlook, type DataFreshness } from "./calc";
 
 /** This-MONTH path-to-target — the managerial "are we making our number?" number. Deterministic:
@@ -244,4 +254,60 @@ function safeRead<T>(fn: () => T, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+/** Live facts for the hub's blade signals. Every read is DB-only and isolated: a blade whose read
+ *  throws contributes nothing rather than breaking the dashboard, and is reported to `onError`
+ *  (logged by default) so a broken read is visible instead of silently empty. */
+export function collectBladeSignals(
+  today: string = todayInOpsTz(),
+  onError: (blade: string, err: unknown) => void = (blade, err) => console.warn(`[command] ${blade} signal read failed:`, err),
+): HubItem[] {
+  const now = Date.now();
+  const read = <T,>(blade: string, fn: () => T, fallback: T): T => {
+    try {
+      return fn();
+    } catch (err) {
+      onError(blade, err);
+      return fallback;
+    }
+  };
+  const weekEnd = shiftYmd(today, 6);
+  const facts: BladeFacts = {
+    today,
+    now,
+    outbox: read("outbox", () => evaluateOutbox(liveOutboxSummary(now), now), null),
+    payrollOpenExceptions: read("payroll-exceptions", () => countOpenExceptions(), null),
+    wiresPending: read("payroll-wire", () => {
+      const wires = listWireEvents(50);
+      return listGustoSubmitResults(10)
+        .filter((s) => s.ok && s.submitted && now - Date.parse(s.at) <= 48 * 3_600_000)
+        .filter((s) => {
+          const confirmed = readGustoConfirmWireResult(s.key);
+          return !wireSeenFor(s, wires, !!(confirmed?.ok && confirmed.confirmed)) && now >= reminderDueAt(s.at, 1);
+        })
+        .map((s) => ({ label: periodLabelOf(s), submittedAt: s.at }));
+    }, []),
+    shiftExceptions: read("shift-exceptions", () => getActiveShiftExceptions(), []),
+    needsReviewDates: read("needs-review", () => listNeedsReviewRange(today, weekEnd).map((s) => s.date), []),
+    instawork: read("instawork", () => {
+      const st = getPullState();
+      return { ok: st.instaworkOk, failingSince: st.instaworkFailingSince ?? null };
+    }, null),
+    postEventOpenIssues: read("postevent", () => issueBreakdown().open, null),
+    radarOutreach: read("radar", 
+      () =>
+        radarBoard(today)
+          .rows.filter(
+            (r) =>
+              !r.event.isSeed &&
+              r.qualification.tier === "HIGH" &&
+              r.event.salesStatus === "NONE" &&
+              (r.timing.phase === "OUTREACH_WINDOW" || r.timing.phase === "ACTIVELY_SHOPPING"),
+          )
+          .map((r) => ({ name: r.event.name, date: r.event.startDate })),
+      [],
+    ),
+  };
+  return buildBladeSignals(facts);
 }
