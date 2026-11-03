@@ -60,8 +60,8 @@ function JobsTable({ jobs, now }: { jobs: RegisterJob[]; now: number }): React.J
         <thead>
           <tr className={compactTheadRowCls}>
             <th className={compactThCls}>Job</th>
-            <th className={`${compactThCls} w-[130px]`}>Status</th>
-            <th className={`${compactThCls} w-[150px]`}>Last run</th>
+            <th className={`${compactThCls} whitespace-nowrap`}>Status</th>
+            <th className={`${compactThCls} whitespace-nowrap`}>Last run</th>
           </tr>
         </thead>
         <tbody>
@@ -69,14 +69,14 @@ function JobsTable({ jobs, now }: { jobs: RegisterJob[]; now: number }): React.J
             <tr key={j.key} className={compactRowCls}>
               <td className={compactTdCls}>
                 <div className="text-foreground">{j.label}</div>
-                {(j.lastDetail || j.note) && <div className="mt-0.5 line-clamp-2 text-[11.5px] text-meta">{j.lastDetail || j.note}</div>}
+                {j.lastDetail && <div className="mt-0.5 line-clamp-2 text-[11.5px] text-meta">{j.lastDetail}</div>}
               </td>
-              <td className={compactTdCls}>
+              <td className={`${compactTdCls} whitespace-nowrap`}>
                 <StatusBadge tone={STATE[j.state].tone} size="sm">
                   {STATE[j.state].label}
                 </StatusBadge>
               </td>
-              <td className={`${compactTdCls} tabular-nums`}>
+              <td className={`${compactTdCls} whitespace-nowrap tabular-nums`}>
                 <div>{when(j.lastRunAt)}</div>
                 {j.lastRunAt && <div className="text-[11px] text-meta">{ago(j.lastRunAt, now)}</div>}
               </td>
@@ -204,6 +204,7 @@ export default async function AutomationPage(): Promise<React.JSX.Element> {
           )}
           {wb.landed7d.length > 0 && (
             <ul className="border-t border-rule">
+              <li className="px-3 pt-2 text-[10.5px] uppercase tracking-[0.06em] text-meta">Landed in the last 7 days</li>
               {wb.landed7d.map((o) => (
                 <li key={o.op} className="flex items-center justify-between border-b border-rule/60 px-3 py-1.5 text-[12.5px] last:border-0">
                   <span className="text-secondary-text">{o.label}</span>
