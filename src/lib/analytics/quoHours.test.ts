@@ -70,12 +70,35 @@ describe("quoHours", () => {
 
     expect({ ...resumed, generatedAt: "" }).toEqual({ ...oneGo, generatedAt: "" });
   });
+
+  it("measures reach on our outreach only (pickups, real talks, text backs)", () => {
+    const ev: QuoEvent[] = [
+      // Sat 2026-01-10, 11am EST: one real conversation, one short pickup (voicemail sized)
+      { kind: "call", dir: "out", at: "2026-01-10T16:00:00Z", answered: true, secs: 200, who: "a" },
+      { kind: "call", dir: "out", at: "2026-01-10T16:30:00Z", answered: true, secs: 40, who: "a" },
+      // Tue 2026-01-13, 10am EST: a two text burst counts once, they text back within 4h
+      { kind: "text", dir: "out", at: "2026-01-13T15:00:00Z", who: "b" },
+      { kind: "text", dir: "out", at: "2026-01-13T15:10:00Z", who: "b" },
+      { kind: "text", dir: "in", at: "2026-01-13T17:00:00Z", who: "b" },
+      { kind: "text", dir: "out", at: "2026-01-13T17:30:00Z", who: "b" }, // answering them: not outreach
+      // Tue 10am EST: no text back
+      { kind: "text", dir: "out", at: "2026-01-13T15:00:00Z", who: "c" },
+      // an unanswered Sat call at 2pm EST
+      { kind: "call", dir: "out", at: "2026-01-10T19:00:00Z", answered: false, secs: 0, who: "d" },
+    ];
+    const r = aggregate(ev, "2026-01-01T00:00:00Z", "2026-01-31T00:00:00Z", 4);
+    expect(r.reachGrid![6][11]).toEqual({ calls: 2, picked: 2, talked: 1, texts: 0, replied: 0 });
+    expect(r.reachGrid![6][14]).toEqual({ calls: 1, picked: 0, talked: 0, texts: 0, replied: 0 });
+    expect(r.reachGrid![2][10]).toEqual({ calls: 0, picked: 0, talked: 0, texts: 2, replied: 1 });
+    expect(r.reachByMonth!["2026-01"][6][1]).toEqual({ calls: 3, picked: 2, talked: 1, texts: 0, replied: 0 });
+    expect(r.reachByMonth!["2026-01"][2][1].texts).toBe(2);
+  });
 });
 
 describe("deriveState", () => {
   const now = Date.parse("2026-11-03T03:00:00Z");
   const ck = (over: Partial<Checkpoint> = {}): Checkpoint => ({
-    v: 1,
+    v: 2,
     days: 365,
     from: "2025-11-02T23:00:00Z",
     to: "2026-11-02T23:00:00Z",
