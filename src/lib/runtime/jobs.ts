@@ -13,7 +13,7 @@ import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client"
 import { planWaitingRuns } from "@/lib/ai/improvement/planner";
 import { INSTAWORK_STALE_MIN } from "@/lib/instawork/store";
 import { runInstaworkMonitor } from "@/lib/instawork/monitor";
-import { slackNotify } from "@/lib/notify/slack";
+import { slackNotify, slackBotConfigured } from "@/lib/notify/slack";
 import { discover } from "@/lib/seo/discovery";
 import { configured as ubersuggestConfigured } from "@/lib/seo/ubersuggest";
 import { connecteamConfigured, refreshConnecteamHealth, warmConnecteamCaches, takeConnecteamUsage, formatConnecteamUsage } from "@/lib/connecteam";
@@ -43,6 +43,7 @@ import { openphoneApiKey } from "@/lib/comms/openphone";
 import { runEsignCutoffSweep, esignCutoffEnabled } from "@/lib/salesos/esignCutoff";
 import { runWebsiteMonitor } from "@/lib/monitor/websiteHealth";
 import { runLeadSlackReplySweep } from "@/lib/intake/leadSlackReply";
+import { syncLeadLogFromSlack, LEAD_LOG_JOB_KEY } from "@/lib/marketing/leadLog";
 import { getRiskQueue } from "@/lib/risk/store";
 import { viktorHealthNow, drainPendingInstructions } from "@/lib/ai/viktor/worker";
 import { runOutboxHealthTick } from "@/lib/aiorg/outboxHealth";
@@ -379,6 +380,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     configured: () => true, // a silent no-op when no lead is waiting; reports when the bot token is missing
     note: "Backstop for Viktor's thread reply under each web lead's #new-leads post (\"Received. I created the Goodshuffle project ... here is the link\"). The reply normally fires right after Goodshuffle confirms the project; this sweep catches any that missed (Slack hiccup, late post, deploy restart). One channel read per tick; matches the post by the lead's email or phone; at most one reply per lead and per post (sales_intake.slack_reply_at / slack_reply_ts). Leads with no matching post are left alone, never posted top-level.",
     run: async () => runLeadSlackReplySweep(),
+  },
+  {
+    key: LEAD_LOG_JOB_KEY,
+    label: "Marketing lead log (#new-leads)",
+    bucket: "server",
+    configured: slackBotConfigured,
+    note: "Saves every lead post in Slack #new-leads (website form, wishlist, Yelp, Google) into the app so lead history outlives Slack's 90-day limit. The first run reads all of the channel Slack still shows; later runs read new posts only. Feeds the inbound lead scoreboard on /marketing. Read only on Slack; idempotent by post ts.",
+    run: async () => {
+      const r = await syncLeadLogFromSlack();
+      return { ok: r.ok, detail: r.detail };
+    },
   },
   {
     key: "exception-resolution",

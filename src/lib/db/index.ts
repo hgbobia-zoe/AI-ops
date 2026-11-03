@@ -1314,6 +1314,24 @@ CREATE TABLE IF NOT EXISTS marketing_prospects (
   updated_at    TEXT NOT NULL
 );
 
+-- Marketing lead log: every lead post from Slack #new-leads (website form, wishlist, Yelp, Google), saved
+-- so the history outlives Slack's 90-day limit. Keyed by the Slack post ts (idempotent sync). Read by the
+-- inbound lead scoreboard on /marketing. raw_text is kept so rows can be re-read if parsing improves.
+CREATE TABLE IF NOT EXISTS marketing_inbound_leads (
+  id           TEXT PRIMARY KEY,      -- slack:<ts>
+  slack_ts     TEXT NOT NULL UNIQUE,
+  received_at  TEXT NOT NULL,         -- ISO, when the post landed
+  channel      TEXT NOT NULL,         -- website | wishlist | yelp | google | <other>
+  name         TEXT,
+  email        TEXT,
+  phone        TEXT,
+  ref          TEXT,                  -- Goodshuffle project id for a wishlist, when present
+  is_test      INTEGER NOT NULL DEFAULT 0,
+  raw_text     TEXT,
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_marketing_inbound_received ON marketing_inbound_leads(received_at);
+
 -- ── Post-Event Customer Experience (service recovery + review workflow) ───────────────────────────
 -- Human-first post-event follow-up. This is NOT a review harvester: a review is the OUTCOME of a
 -- confirmed good experience, never the objective. Same platform law as the rest: RULES CALCULATE, AI

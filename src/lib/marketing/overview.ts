@@ -155,7 +155,7 @@ export function buildMarketingOverview(d: MarketingDashboard, opts: { hasLeadDat
       campaigns: "Campaigns tracked in this blade",
       outreach: "Prospects you're tracking before Goodshuffle · wins = last 30 days",
       leads:
-        "Leads from the website form, Yelp and Google Zaps, by office day. The same person again within a day counts once. Goodshuffle wishlists, calls and intakes entered by sales are not counted.",
+        "Every lead posted in #new-leads (website form, wishlist, Yelp, Google), saved here so history is kept for good. Office days; the same person again within a day counts once; test leads left out. Calls and intakes entered by sales are not counted.",
     },
     hasCampaignData,
     hasContentData,
