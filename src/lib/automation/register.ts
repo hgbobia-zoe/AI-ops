@@ -50,6 +50,7 @@ const JOB_AREA: Record<string, JobArea> = {
   "exception-resolution": "Monitoring",
   "website-uptime": "Monitoring",
   ubersuggest: "Marketing",
+  "marketing-lead-log": "Marketing",
 };
 
 /** Jobs whose last-run detail can carry dollar amounts; hidden from viewers who can't see money. */
