@@ -65,7 +65,7 @@ export async function tick(): Promise<void> {
     const ok = results.filter((r) => r.ok).length;
     const bad = results.length - ok;
     console.log(
-      `[runtime-clock] tick ran ${results.length} job(s) (${ok} ok${bad ? `, ${bad} failed` : ""}) in ${Date.now() - t}ms`,
+      `[runtime-clock] tick ran ${results.length} job(s) (${ok} ok${bad ? `, ${bad} failed: ${results.filter((r) => !r.ok).map((r) => r.key).join(", ")}` : ""}) in ${Date.now() - t}ms`,
     );
   } catch (e) {
     // A job failure must never stop the timer or crash the process.

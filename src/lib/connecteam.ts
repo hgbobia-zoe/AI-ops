@@ -69,6 +69,102 @@ function noteRateLimit(res: HeaderBag | null, is429: boolean, now: number = Date
   }
   if (is429 && until <= now) until = now + DEFAULT_RL_BACKOFF_MS; // 429 with no usable header → default backoff
   if (until > now && until > connecteamRateLimitedUntil()) _rl.__connecteamRateLimitedUntil = until;
+  if (res) {
+    const dayRem = headerNum(res, "x-ratelimit-day-remaining");
+    if (Number.isFinite(dayRem)) _usage.dayRemaining = dayRem;
+    const dayLimit = headerNum(res, "x-ratelimit-day-limit");
+    if (Number.isFinite(dayLimit)) _usage.dayLimit = dayLimit;
+  }
+}
+
+// ── Daily quota budget (keeps the 10k/day cap from running out mid-afternoon) ───────────────────────
+// The breaker above stops calls only AFTER the quota is gone, so the app went dark from ~4pm ET until the
+// UTC reset. Two things stop that: (1) a usage meter, so each runtime tick reports how many calls it made
+// and how much of the day is left, and (2) a conserve mode: once the day's remaining calls drop under
+// CONNECTEAM_CONSERVE_BELOW (default 2500), every read cache keeps its value CONSERVE_TTL_FACTOR times
+// longer, so pages and ticks serve slightly older data instead of spending the rest of the day.
+const CONSERVE_BELOW = Number(process.env.CONNECTEAM_CONSERVE_BELOW || 2500);
+const CONSERVE_TTL_FACTOR = 4;
+const _usage = globalThis as unknown as { dayRemaining?: number; dayLimit?: number; lastOkAt?: number };
+const _meter = globalThis as unknown as { __ctCalls?: Map<string, number>; __ctCallsSince?: number };
+
+/** Endpoint family for the meter: the path without its query, numeric ids collapsed ("/scheduler/v1/schedulers/:id/shifts"). */
+export function connecteamCallFamily(path: string): string {
+  return path.split("?")[0].replace(/\/\d+(?=\/|$)/g, "/:id");
+}
+function meterCall(path: string): void {
+  if (!_meter.__ctCalls) {
+    _meter.__ctCalls = new Map();
+    _meter.__ctCallsSince = Date.now();
+  }
+  const f = connecteamCallFamily(path);
+  _meter.__ctCalls.set(f, (_meter.__ctCalls.get(f) ?? 0) + 1);
+}
+
+/** True while the day's remaining Connecteam calls are low enough that caches should hold longer. */
+export function connecteamConserving(): boolean {
+  const rem = _usage.dayRemaining;
+  return rem != null && Number.isFinite(rem) && rem < CONSERVE_BELOW;
+}
+function ttlScale(): number {
+  return connecteamConserving() ? CONSERVE_TTL_FACTOR : 1;
+}
+
+export interface ConnecteamUsage {
+  /** Calls made since the last take (all endpoints). */
+  calls: number;
+  /** Calls per endpoint family, busiest first. */
+  byFamily: Array<{ family: string; calls: number }>;
+  sinceIso: string | null;
+  /** Remaining calls in the current UTC day per Connecteam's headers (null until a response reports it). */
+  dayRemaining: number | null;
+  dayLimit: number | null;
+  conserving: boolean;
+}
+
+/** Read AND reset the call meter (the runtime tick reports one window per tick). */
+export function takeConnecteamUsage(): ConnecteamUsage {
+  const m = _meter.__ctCalls ?? new Map<string, number>();
+  const since = _meter.__ctCallsSince ?? null;
+  _meter.__ctCalls = new Map();
+  _meter.__ctCallsSince = Date.now();
+  const byFamily = [...m.entries()].map(([family, calls]) => ({ family, calls })).sort((a, b) => b.calls - a.calls);
+  return {
+    calls: byFamily.reduce((s, x) => s + x.calls, 0),
+    byFamily,
+    sinceIso: since ? new Date(since).toISOString() : null,
+    dayRemaining: _usage.dayRemaining ?? null,
+    dayLimit: _usage.dayLimit ?? null,
+    conserving: connecteamConserving(),
+  };
+}
+
+/** One readable line for the job ledger, e.g. "212 calls since last tick (shifts 120, ...), 7,400 left today". */
+export function formatConnecteamUsage(u: ConnecteamUsage): string {
+  const top = u.byFamily
+    .slice(0, 3)
+    .map((x) => `${x.family.split("/").filter((p) => p && p !== ":id" && !/^v\d+$/.test(p)).pop() ?? x.family} ${x.calls}`)
+    .join(", ");
+  const left = u.dayRemaining != null ? `, ${u.dayRemaining.toLocaleString("en-US")} left today${u.conserving ? " (conserving)" : ""}` : "";
+  return `${u.calls} call${u.calls === 1 ? "" : "s"} since last tick${top ? ` (${top})` : ""}${left}`;
+}
+
+/** Plain reason for a failed read, so job details don't say "unreachable" when the daily quota is spent. */
+export function connecteamDownReason(now: number = Date.now()): string {
+  if (!connecteamRateLimited(now)) return "Connecteam unreachable";
+  const at = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }).format(
+    new Date(connecteamRateLimitedUntil()),
+  );
+  return `Connecteam daily API limit reached, resumes ${at} ET`;
+}
+
+/** Test helper: clear the meter and the remembered quota headers. */
+export function resetConnecteamUsage(): void {
+  _meter.__ctCalls = new Map();
+  _meter.__ctCallsSince = Date.now();
+  _usage.dayRemaining = undefined;
+  _usage.dayLimit = undefined;
+  _usage.lastOkAt = undefined;
 }
 
 /** One GET attempt. `transient` marks a failure worth retrying (network error, timeout, or a 5xx from
@@ -78,12 +174,14 @@ async function ctGetOnce(path: string, timeoutMs: number): Promise<{ json: unkno
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
+    meterCall(path);
     const res = await fetch(`${BASE}${path}`, {
       headers: { "X-API-KEY": process.env.CONNECTEAM_API_KEY!, accept: "application/json" },
       cache: "no-store",
       signal: ctrl.signal,
     });
     noteRateLimit(res, res.status === 429); // arm the breaker from the quota headers (even a 200 that drains the last unit)
+    if (res.ok) _usage.lastOkAt = Date.now();
     if (!res.ok) {
       if (res.status === 429) {
         console.warn("[connecteam] GET", path, "HTTP 429 — rate-limited; backing off until", new Date(connecteamRateLimitedUntil()).toISOString());
@@ -131,6 +229,7 @@ export interface ConnecteamHealth {
 }
 
 const CT_HEALTH_TTL_MS = 90_000; // at most one real probe per 90s, however often either surface renders
+const CT_HEALTH_PASSIVE_MS = 10 * 60_000; // a successful read in the last 10 min counts as "reachable"
 let _ctHealth: ConnecteamHealth | null = null;
 let _ctInflight: Promise<ConnecteamHealth> | null = null;
 
@@ -149,6 +248,16 @@ export async function refreshConnecteamHealth(now: number = Date.now()): Promise
     return _ctHealth;
   }
   if (_ctHealth && now - Date.parse(_ctHealth.checkedAt) < CT_HEALTH_TTL_MS) return _ctHealth;
+  // Any real read that succeeded recently already proves reachability: reuse it instead of spending a
+  // probe call (the status bar + /api/health polling used to cost ~1 call every 90s all day).
+  if (_usage.lastOkAt && now - _usage.lastOkAt < CT_HEALTH_PASSIVE_MS && !connecteamRateLimited(now)) {
+    _ctHealth = { ok: true, checkedAt: new Date(now).toISOString(), detail: "reachable" };
+    return _ctHealth;
+  }
+  if (connecteamRateLimited(now)) {
+    _ctHealth = { ok: false, checkedAt: new Date(now).toISOString(), detail: "rate-limited (quota) — self-heals at reset", rateLimited: true };
+    return _ctHealth;
+  }
   if (_ctInflight) return _ctInflight;
   _ctInflight = (async () => {
     // One cheap call (no pagination); ctGet already retries a transient miss once (but NOT a 429) and
@@ -186,9 +295,18 @@ export async function refreshConnecteamHealth(now: number = Date.now()): Promise
 // shared across requests. A failed/empty result is NOT cached (via `cacheable`), so the last good value
 // keeps serving through a transient outage and is never pinned as "nobody scheduled". Single-flight
 // collapses concurrent refreshes of the same key into one call.
+const _cacheClears: Array<() => void> = [];
+/** Test helper: empty every Connecteam read cache (so a case can drive a real call). */
+export function resetConnecteamReadCaches(): void {
+  for (const clear of _cacheClears) clear();
+}
 function ttlCache<T>(ttlMs: number, cacheable: (v: T) => boolean) {
   const store = new Map<string, { at: number; value: T }>();
   const inflight = new Map<string, Promise<T>>();
+  _cacheClears.push(() => {
+    store.clear();
+    inflight.clear();
+  });
   const refresh = (key: string, fetchFn: () => Promise<T>): Promise<T> => {
     const flying = inflight.get(key);
     if (flying) return flying;
@@ -209,23 +327,29 @@ function ttlCache<T>(ttlMs: number, cacheable: (v: T) => boolean) {
     const hit = store.get(key);
     if (hit) {
       // Stale → revalidate in the background (never let that rejection go unhandled); serve now regardless.
-      if (Date.now() - hit.at >= ttlMs) void refresh(key, fetchFn).catch(() => {});
+      if (Date.now() - hit.at >= ttlMs * ttlScale()) void refresh(key, fetchFn).catch(() => {});
       return Promise.resolve(hit.value);
     }
     return refresh(key, fetchFn); // cold: await the first fetch
   };
 }
 
-const _usersCache = ttlCache<Map<number, CrewMember>>(5 * 60_000, (m) => m.size > 0);
-const _schedCache = ttlCache<Scheduler[]>(5 * 60_000, (l) => l.length > 0);
+// TTLs are set against the 10k/day account quota: the team, schedulers, pay rates and time clocks barely
+// change, so they hold 30 min to 6 h. Shifts are read in shared weekly chunks (see shiftBlockFor) held 5 min;
+// the per-day crew view is derived from those chunks, so its 60s TTL costs no extra calls.
+const _usersCache = ttlCache<Map<number, CrewMember>>(30 * 60_000, (m) => m.size > 0);
+const _schedCache = ttlCache<Scheduler[]>(30 * 60_000, (l) => l.length > 0);
 const _crewCache = ttlCache<CrewDayResult>(60_000, (r) => r.ok);
-const _ratesCache = ttlCache<Map<number, PayRate[]>>(5 * 60_000, (m) => m.size > 0);
-const _plannedCache = ttlCache<PlannedHoursResult>(5 * 60_000, (r) => r.ok);
-const _actualCache = ttlCache<ActualHoursResult>(5 * 60_000, (r) => r.ok);
+const _shiftBlockCache = ttlCache<{ ok: boolean; items: Array<Record<string, unknown>> }>(5 * 60_000, (r) => r.ok);
+const _ratesCache = ttlCache<Map<number, PayRate[]>>(30 * 60_000, (m) => m.size > 0);
+const _plannedCache = ttlCache<PlannedHoursResult>(15 * 60_000, (r) => r.ok);
+const _actualCache = ttlCache<ActualHoursResult>(15 * 60_000, (r) => r.ok);
+const _clocksCache = ttlCache<TimeClock[]>(6 * 60 * 60_000, (l) => l.length > 0);
 // Per-user availability is read ONE CALL PER USER (getUnavailabilityForDate loops the candidate pool), so a
 // single scheduling render could fire dozens of Connecteam calls — a prime way to drain the daily quota.
-// Cache each (user, window) for 5m (only a successful `ok` result) so repeat renders / the tick don't re-pay.
-const _unavailCache = ttlCache<UnavailabilityResult>(5 * 60_000, (r) => r.ok);
+// Each user is read for a whole weekly chunk (shiftBlockFor) and held 30 min (only a successful `ok`
+// result), so a 14-day look-ahead costs ~3 calls per user per half hour instead of one per user per day.
+const _unavailCache = ttlCache<UnavailabilityResult>(30 * 60_000, (r) => r.ok);
 
 /** Fetch ALL pages of a Connecteam list endpoint (they cap at a page size, so a single call
  *  silently truncates). Dedup-terminated: stops on a short page OR when a page adds nothing new —
@@ -523,6 +647,24 @@ async function getShifts(sched: Scheduler, startUnix: number, endUnix: number): 
   );
 }
 
+const DAY_S = 86400;
+const BLOCK_DAYS = 7;
+
+/** The UTC-aligned 7-day chunk holding a calendar day (by its UTC midnight), padded a day each side for the
+ *  timezone spread. Every day in the chunk shares ONE Connecteam read, so a 14-day sweep (sync, auto-assign,
+ *  risk horizon) costs ~3 reads per scheduler instead of 14 overlapping ±1-day windows. Pure. */
+export function shiftBlockFor(dayStartUtc: number): { key: number; from: number; to: number } {
+  const key = Math.floor(dayStartUtc / (BLOCK_DAYS * DAY_S));
+  const start = key * BLOCK_DAYS * DAY_S;
+  return { key, from: start - DAY_S, to: start + (BLOCK_DAYS + 1) * DAY_S };
+}
+
+/** A scheduler's shifts for the weekly chunk holding `dayStartUtc` (cached; a failed read is not cached). */
+async function getShiftsBlock(sched: Scheduler, dayStartUtc: number): Promise<{ ok: boolean; items: Array<Record<string, unknown>> }> {
+  const b = shiftBlockFor(dayStartUtc);
+  return _shiftBlockCache(`shifts:${sched.schedulerId}:${b.key}`, () => getShifts(sched, b.from, b.to));
+}
+
 /** Best-effort last-modified (Unix SECONDS) from a raw Connecteam shift. Connecteam has no public API docs
  *  and the shift payload is loosely typed, so we probe the keys a REST resource most commonly uses for this
  *  and coerce tolerantly (a bare number, or an {unix}/{timestamp}/… object via unixOf). Returns null when
@@ -598,11 +740,13 @@ async function getCrewForDateSafeUncached(date: string): Promise<CrewDayResult> 
   let reachable = schedulers.length > 0 && users.size > 0;
   const out: CrewShift[] = [];
   for (const sched of schedulers) {
-    const res = await getShifts(sched, from, to);
+    // The weekly chunk covers [from,to] for every day in it, so the local-day filter below gives the same day.
+    const res = await getShiftsBlock(sched, dayStartUtc);
     if (!res.ok) reachable = false; // a failed shift read is "unverified", never "nobody is scheduled"
     for (const s of res.items) {
       const startUnix = Number(s.startTime);
       if (!startUnix) continue;
+      if (startUnix < from || startUnix > to) continue;
       if (localYmd(startUnix, sched.timezone) !== date) continue; // keep only this local day
       const ids = (s.assignedUserIds as number[]) ?? [];
       const loc = s.locationData as { gps?: { address?: string } } | undefined;
@@ -727,12 +871,16 @@ export async function getUnavailabilityForDate(
   const base = Date.UTC(y, m - 1, d) / 1000;
   const from = base - 86400;
   const to = base + 2 * 86400;
+  // Read each user's whole weekly chunk once (shared by every day in it), then keep the blocks that touch
+  // this day's padded window, which is exactly what the per-day read used to return.
+  const b = shiftBlockFor(base);
   let anyOk = false;
   for (const uid of userIds) {
-    const r = await getUserUnavailability(uid, from, to);
+    const r = await getUserUnavailability(uid, b.from, b.to);
     if (r.ok) {
       anyOk = true;
-      if (r.blocks.length) byUser.set(uid, r.blocks);
+      const hits = r.blocks.filter((x) => x.endUnix > from && x.startUnix < to);
+      if (hits.length) byUser.set(uid, hits);
     }
   }
   return { ok: anyOk, byUser };
@@ -832,6 +980,9 @@ export interface TimeClock {
 }
 export async function getTimeClocks(): Promise<TimeClock[]> {
   if (!connecteamConfigured()) return [];
+  return _clocksCache("clocks", getTimeClocksUncached);
+}
+async function getTimeClocksUncached(): Promise<TimeClock[]> {
   const j = await ctGet("/time-clock/v1/time-clocks");
   return findArray(j, ["timeClocks", "timeClock"])
     .filter((t) => t.isArchived !== true)
@@ -1281,6 +1432,7 @@ async function ctWriteOnce(
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
+    meterCall(`${method} ${path}`);
     const res = await fetch(`${BASE}${path}`, {
       method,
       headers: { "X-API-KEY": process.env.CONNECTEAM_API_KEY!, accept: "application/json", "content-type": "application/json" },

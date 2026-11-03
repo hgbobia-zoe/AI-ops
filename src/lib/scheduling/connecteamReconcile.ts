@@ -10,7 +10,7 @@
 //   - A both-sides conflict with no reliable Connecteam timestamp is FLAGGED, never silently clobbered.
 //   - An env kill-switch (CONNECTEAM_IMPORT_DISABLED) turns the whole importer off without a deploy.
 
-import { getCrewForDateSafe, connecteamConfigured } from "@/lib/connecteam";
+import { getCrewForDateSafe, connecteamConfigured, connecteamDownReason } from "@/lib/connecteam";
 import { insertAudit } from "@/lib/db/repo";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { createIngestedShift, getShiftsForDate, updateShift } from "./store";
@@ -173,7 +173,7 @@ export async function runConnecteamImportTick(): Promise<ImportTickResult> {
   }
   const ok = reachableDays > 0; // enabled + configured but nothing reachable = a real outage
   const detail = reachableDays === 0
-    ? `Connecteam unreachable (${unreachable}/${dates.length} days) — skipped, no app shifts changed`
+    ? `${connecteamDownReason()} (${unreachable}/${dates.length} days) — skipped, no app shifts changed`
     : `${reachableDays}/${dates.length} days synced: ${created} imported, ${updated} updated, ${flagged} need review${baselined ? `, ${baselined} baselined` : ""}${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
   return { ok, detail, days: reachableDays, created, updated, baselined, flagged, unreachableDays: unreachable };
 }

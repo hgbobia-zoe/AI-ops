@@ -4,6 +4,8 @@ import {
   refreshConnecteamHealth,
   connecteamRateLimited,
   resetConnecteamRateLimit,
+  resetConnecteamReadCaches,
+  resetConnecteamUsage,
 } from "./connecteam";
 
 // The outage this guards against: Connecteam's limits are PER ACCOUNT (Expert = 100/min AND 10,000/day).
@@ -12,8 +14,8 @@ import {
 // re-fired — a stampede that drained the quota and then hammered a 429 wall. The breaker must: arm from the
 // quota headers, NOT retry a 429, and suppress further live calls until the reported reset.
 //
-// We drive the breaker through getTimeClocks() specifically because it is NOT TTL-cached (so each test case
-// exercises a real ctGet without a prior success leaking in from the module-level read caches).
+// We drive the breaker through getTimeClocks(), clearing the read caches (and the remembered last success)
+// before each case so every case exercises a real ctGet without a prior success leaking in.
 
 const KEY = "test-key";
 
@@ -34,6 +36,8 @@ const inAnHour = () => String(Math.floor(Date.now() / 1000) + 3600);
 beforeEach(() => {
   process.env.CONNECTEAM_API_KEY = KEY;
   resetConnecteamRateLimit();
+  resetConnecteamReadCaches();
+  resetConnecteamUsage();
 });
 afterEach(() => {
   vi.restoreAllMocks();
