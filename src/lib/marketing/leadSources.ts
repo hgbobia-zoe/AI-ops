@@ -1,11 +1,11 @@
 // Inbound lead scoreboard: how many leads each channel (website form, Goodshuffle wishlist, Yelp, Google)
 // brought in, for the last 7 days, the week before, 30 days and all time. PURE: callers hand in records.
 //
-// Where the records come from (see leadLog.ts):
-//  - The marketing lead log: every lead post in Slack #new-leads, saved into the app so it is kept for good
-//    (Slack's free plan hides posts older than 90 days). This is the most complete source.
-//  - sales_intake: every lead a Zap sent to /api/intake/lead (since Oct 21, 2026). A safety net for a lead
-//    whose Slack post failed. The same lead seen in both counts once (see the repeat rule).
+// Where the records come from (see leadLog.ts): the marketing lead log, every lead post in Slack #new-leads
+// saved into the app so it is kept for good (Slack's free plan hides posts older than 90 days). Every lead
+// path posts there (website form and wishlist Zaps, the old Google Zap, the app's own Yelp and Google
+// posts). sales_intake is deliberately NOT counted: it only starts Oct 31, 2026 and also holds Zapier
+// "test step" replays of older leads, which made the live count one too high (2026-11-03).
 //
 // Counting rules (shown on the page):
 //  - Days follow the office timezone.
@@ -80,6 +80,8 @@ export function leadChannel(source: string | null): { key: string; label: string
   if (s.includes("yelp")) return CORE.yelp;
   if (s.includes("google")) return CORE.google;
   if (/\b(web|website|site|form|contact)\b/.test(s.replace(/[_-]/g, " "))) return CORE.website;
+  // The website Zap sometimes tags a lead with the site's domain ("zoeeventsdmv.com").
+  if (s.includes("zoeevents") || /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(s)) return CORE.website;
   const key = s.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "other";
   const label = s.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   return { key, label };

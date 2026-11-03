@@ -1,5 +1,5 @@
-// Marketing lead log: every lead post from Slack #new-leads, saved into the app for good, plus the read that
-// merges it with sales_intake for the scoreboard.
+// Marketing lead log: every lead post from Slack #new-leads, saved into the app for good, and the read the
+// scoreboard counts.
 //
 // Why save it: Slack's free plan hides posts older than 90 days, a rolling window, so a lead not saved here
 // is gone from Slack history for good. The first sync walks all of the channel Slack still shows; after that
@@ -12,7 +12,7 @@ import { getDb } from "@/lib/db/index";
 import { slackBotConfigured, slackConversationsHistoryPage, slackJoinChannel, type SlackMessage } from "@/lib/notify/slack";
 import { newLeadsChannel } from "@/lib/intake/leadSlackReply";
 import { parseLeadPost } from "./slackLeads";
-import { isTestLead, leadChannel, type LeadRecord } from "./leadSources";
+import type { LeadRecord } from "./leadSources";
 
 export const LEAD_LOG_JOB_KEY = "marketing-lead-log";
 const OVERLAP_SECONDS = 24 * 60 * 60;
@@ -98,35 +98,9 @@ export function listSavedSlackLeads(): LeadRecord[] {
   }));
 }
 
-/** Every lead a Zap sent to /api/intake/lead (sales-entered intakes are left out). Read only. */
-export function listIntakeLeads(): LeadRecord[] {
-  const rows = getDb()
-    .prepare("SELECT created_at, source, first_name, last_name, email, phone, sales_notes FROM sales_intake ORDER BY created_at ASC")
-    .all() as {
-      created_at: string; source: string | null; first_name: string | null; last_name: string | null;
-      email: string | null; phone: string | null; sales_notes: string | null;
-    }[];
-  const out: LeadRecord[] = [];
-  for (const r of rows) {
-    const ch = leadChannel(r.source);
-    if (!ch) continue;
-    const name = `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim();
-    const email = (r.email ?? "").trim().toLowerCase();
-    out.push({
-      receivedAt: r.created_at,
-      channel: ch.key,
-      name,
-      email,
-      phone: r.phone ?? "",
-      isTest: isTestLead({ name, email, message: r.sales_notes ?? "" }),
-    });
-  }
-  return out;
-}
-
-/** Both sources together; the scoreboard's repeat rule counts a lead seen in both once. */
+/** What the scoreboard counts: the saved #new-leads posts only (leadSources.ts explains why not sales_intake). */
 export function listAllInboundLeads(): LeadRecord[] {
-  return [...listSavedSlackLeads(), ...listIntakeLeads()];
+  return listSavedSlackLeads();
 }
 
 export function savedLeadCount(): number {
