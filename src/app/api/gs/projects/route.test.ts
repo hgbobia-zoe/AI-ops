@@ -153,3 +153,16 @@ describe("POST /api/gs/projects — active lane NEVER prunes", () => {
     expect(state.sources?.bookings?.count).toBe(10);
   });
 });
+
+describe("POST /api/gs/projects — sales lead", () => {
+  const lead = (): unknown => (getDb().prepare("SELECT sales_lead FROM bookings WHERE booking_id = 'SL-1'").get() as { sales_lead: unknown }).sales_lead;
+  const pull = (extra: Record<string, unknown>) => POST(req(JSON.stringify({ scope: "active", projects: [{ bookingId: "SL-1", eventName: "A", statusLabel: "Quote Sent", ...extra }] })));
+  it("stores the Goodshuffle sales lead and keeps it when an older pull does not send it", async () => {
+    await pull({ salesLead: "Jessie Medalla" });
+    expect(lead()).toBe("Jessie Medalla");
+    await pull({});
+    expect(lead()).toBe("Jessie Medalla");
+    await pull({ salesLead: "Pat Lee" });
+    expect(lead()).toBe("Pat Lee");
+  });
+});

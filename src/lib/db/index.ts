@@ -2355,6 +2355,7 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "client_phone", type: "TEXT" }, // customer phone (Sales OS SMS/call)
   { table: "bookings", column: "loss_reason", type: "TEXT" }, // team-tagged reason a quote was lost (Goodshuffle has none)
   { table: "bookings", column: "loss_reason_at", type: "TEXT" }, // when the loss reason was recorded
+  { table: "bookings", column: "sales_lead", type: "TEXT" }, // Goodshuffle salesLeadName — who owns the lead (morning outreach signs as them)
   { table: "bookings", column: "venue", type: "TEXT" }, // Goodshuffle venueLabel — for win-rate-by-venue
   { table: "bookings", column: "location", type: "TEXT" }, // Goodshuffle cityStateZipCounty — for win-rate-by-area (DC/MD/VA)
   { table: "bookings", column: "internal_notes", type: "TEXT" }, // GS internalNotes — the team's call/text/email log (comms history)

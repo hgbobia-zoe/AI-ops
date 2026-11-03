@@ -787,6 +787,7 @@ export interface BookingRecord {
   dateCreated?: string | null; // YYYY-MM-DD
   venue?: string | null;
   location?: string | null; // city/state/zip/county string
+  salesLead?: string | null; // Goodshuffle salesLeadName; undefined = the pull did not send it (keep the stored one)
   archived?: boolean; // Goodshuffle `archived` — project off the active board (Lost/Cancelled/closed)
 }
 
@@ -810,6 +811,7 @@ export interface BookingView {
   lossReason: string | null;
   venue: string | null;
   location: string | null;
+  salesLead?: string | null; // Goodshuffle salesLeadName (who owns the lead); null when not captured yet
   internalNotes: string | null;
   clientNotes: string | null;
   lastSentDate: string | null;
@@ -848,6 +850,7 @@ function toBookingView(r: Record<string, unknown>): BookingView {
     lossReason: (r.loss_reason as string) ?? null,
     venue: (r.venue as string) ?? null,
     location: (r.location as string) ?? null,
+    salesLead: (r.sales_lead as string) || null,
     internalNotes: (r.internal_notes as string) ?? null,
     clientNotes: (r.client_notes as string) ?? null,
     lastSentDate: (r.last_sent_date as string) ?? null,
@@ -998,14 +1001,14 @@ export function saveBookings(items: BookingRecord[]): void {
   const up = db.prepare(
     `INSERT INTO bookings (booking_id, event_name, event_date, status_label, signed, contract_total,
        grand_total, amount_paid, amount_due, client_name, client_email, client_phone, quote_sent_date,
-       date_created, venue, location, archived, updated_at)
+       date_created, venue, location, sales_lead, archived, updated_at)
      VALUES (@bookingId,@eventName,@eventDate,@statusLabel,@signed,@contractTotal,@grandTotal,
-       @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@venue,@location,@archived,@now)
+       @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@venue,@location,@salesLead,@archived,@now)
      ON CONFLICT(booking_id) DO UPDATE SET event_name=@eventName, event_date=@eventDate,
        status_label=@statusLabel, signed=@signed, contract_total=@contractTotal, grand_total=@grandTotal,
        amount_paid=@amountPaid, amount_due=@amountDue, client_name=@clientName, client_email=@clientEmail,
        client_phone=@clientPhone, quote_sent_date=@quoteSentDate, date_created=@dateCreated,
-       venue=@venue, location=@location, archived=@archived, updated_at=@now`,
+       venue=@venue, location=@location, sales_lead=COALESCE(@salesLead, sales_lead), archived=@archived, updated_at=@now`,
   );
   const tx = db.transaction(() => {
     for (const i of items)
@@ -1026,6 +1029,7 @@ export function saveBookings(items: BookingRecord[]): void {
         dateCreated: i.dateCreated ?? null,
         venue: i.venue ?? null,
         location: i.location ?? null,
+        salesLead: i.salesLead === undefined ? null : i.salesLead?.trim() || null,
         archived: i.archived ? 1 : 0,
         now,
       });

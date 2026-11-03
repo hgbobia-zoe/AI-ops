@@ -24,7 +24,7 @@ import { openQuoteCards, SUBSTATUS_LABEL, type OpenQuoteSubStatus } from "./bulk
 import { ensureLeadThreadSynced } from "@/lib/comms/openphoneSync";
 import { getOpenphonePhoneNumbers, listOpenphoneCalls, openphoneApiKey, type QuoNumber } from "@/lib/comms/openphone";
 import { botAnnounce, appUrl, type BotCard } from "@/lib/notify/aiBots";
-import { todayInOpsTz, shiftYmd, isBusinessDay, opsLocalInputToIso, DISPLAY_TZ } from "@/lib/dates";
+import { todayInOpsTz, shiftYmd, opsLocalInputToIso, DISPLAY_TZ } from "@/lib/dates";
 import { getJson, setJson } from "@/lib/kv";
 
 // ── Send time ────────────────────────────────────────────────────────────────────────────────────────
@@ -32,15 +32,20 @@ import { getJson, setJson } from "@/lib/kv";
 /** Send window in minutes after midnight Eastern: 9:12:00 through 9:17:59. */
 export const SEND_WINDOW = { fromMin: 9 * 60 + 12, toMin: 9 * 60 + 17 };
 
-/** The morning the next send would happen: today if it is a weekday and the window has not closed yet,
- *  else the next weekday. Weekdays only (Saturday outreach connected worst in the Quo analysis). */
+/** Send days: Monday through Saturday (owner call). Never Sunday. */
+export function isSendDay(ymd: string): boolean {
+  return new Date(`${ymd}T12:00:00Z`).getUTCDay() !== 0;
+}
+
+/** The morning the next send would happen: today if it is a send day and the window has not opened yet,
+ *  else the next send day. */
 export function nextSendDay(now: Date = new Date()): string {
   const today = todayInOpsTz(now);
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: DISPLAY_TZ, hour: "numeric", minute: "numeric", hourCycle: "h23" }).formatToParts(now);
   const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
   const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-  let day = isBusinessDay(today) && h * 60 + m < SEND_WINDOW.fromMin ? today : shiftYmd(today, 1);
-  while (!isBusinessDay(day)) day = shiftYmd(day, 1);
+  let day = isSendDay(today) && h * 60 + m < SEND_WINDOW.fromMin ? today : shiftYmd(today, 1);
+  while (!isSendDay(day)) day = shiftYmd(day, 1);
   return day;
 }
 
@@ -212,6 +217,13 @@ export function whereWeAre(input: {
   return lines;
 }
 
+/** Who the text is from: the project's Goodshuffle sales lead (first name), else MORNING_OUTREACH_REP_NAME,
+ *  else nobody (the drafter then opens with "it's Zoe Events"). */
+export function senderFirstName(salesLead: string | null | undefined, fallback: string | null | undefined): string | null {
+  const first = (salesLead ?? "").trim().split(/\s+/)[0];
+  return first || (fallback ?? "").trim() || null;
+}
+
 // ── The dry run ──────────────────────────────────────────────────────────────────────────────────────
 
 export interface MorningPlanRow {
@@ -229,6 +241,8 @@ export interface MorningPlanRow {
   caution: string | null;
   draftSource: "ai" | "template" | null;
   sendAt: string | null;
+  salesLead: string | null; // Goodshuffle sales lead on the project
+  signedAs: string | null; // first name the text introduces; null = "Zoe Events"
 }
 
 export interface MorningPlan {
@@ -273,8 +287,9 @@ async function readLiveCalls(phone: string, numbers: QuoNumber[]): Promise<LiveC
   return out;
 }
 
-async function planLead(card: LeadCard, numbers: QuoNumber[], sendDay: string, now: number, repFirstName: string | null): Promise<MorningPlanRow> {
+async function planLead(card: LeadCard, numbers: QuoNumber[], sendDay: string, now: number, fallbackRep: string | null): Promise<MorningPlanRow> {
   const lead = getLead(card.id);
+  const signedAs = senderFirstName(lead?.salesLead, fallbackRep);
   const phone = lead?.clientPhone ?? "";
   await ensureLeadThreadSynced(card.id, phone); // fresh Quo texts into the timeline before we read it
   const liveCalls = phone ? await readLiveCalls(phone, numbers) : [];
@@ -287,7 +302,7 @@ async function planLead(card: LeadCard, numbers: QuoNumber[], sendDay: string, n
   let caution: string | null = null;
   let draftSource: MorningPlanRow["draftSource"] = null;
   if (gate.send) {
-    const d = await draftLeadOutreach(card.id, repFirstName);
+    const d = await draftLeadOutreach(card.id, signedAs);
     const body = d?.draft.sms?.trim();
     if (body) {
       draft = humanize(body);
@@ -311,6 +326,8 @@ async function planLead(card: LeadCard, numbers: QuoNumber[], sendDay: string, n
     caution: send ? caution : null,
     draftSource: send ? draftSource : null,
     sendAt: send ? randomSendTime(sendDay) : null,
+    salesLead: lead?.salesLead ?? null,
+    signedAs,
   };
 }
 
@@ -336,7 +353,7 @@ export function headerCard(plan: MorningPlan): BotCard {
   return {
     emoji: "🧪",
     title: `Morning outreach dry run: ${plan.rows.length} projects`,
-    subtitle: `Nothing was sent. This is what Sales Bot would do on ${dayLabel(plan.sendDay)} between 9:12 and 9:17 AM.`,
+    subtitle: `Nothing was sent. This is what Sales Bot would do on ${dayLabel(plan.sendDay)} between 9:12 and 9:17 AM. Each text is signed by the project's sales lead from Goodshuffle.`,
     fields: [
       { label: "Would text", value: String(sends) },
       { label: "Would hold back", value: String(plan.rows.length - sends) },
@@ -350,14 +367,14 @@ export function projectCard(r: MorningPlanRow): BotCard {
   const c = r.context;
   const sections = [`*Based on context we are here:*\n${r.whereWeAre.map((l) => `• ${l}`).join("\n")}`];
   if (r.send && r.draft) {
-    sections.push(`*Sales Bot would have sent this* (text at ${clockLabel(r.sendAt!)}):\n>${r.draft.replace(/\n/g, "\n>")}`);
+    sections.push(`*Sales Bot would have sent this* (text at ${clockLabel(r.sendAt!)}, as ${r.signedAs ?? "Zoe Events"}):\n>${r.draft.replace(/\n/g, "\n>")}`);
     if (r.caution) sections.push(`_Heads up: ${r.caution}_`);
   } else {
     sections.push(`*Sales Bot would not text this one:* ${r.reason ?? "no reason recorded"}`);
   }
   return {
     title: `${r.eventName} - ${r.clientName}`.slice(0, 140),
-    subtitle: `${r.subStatusLabel} · ${r.stageLabel}${r.value != null ? ` · $${Math.round(r.value).toLocaleString("en-US")}` : ""}`,
+    subtitle: `${r.subStatusLabel} · ${r.stageLabel}${r.value != null ? ` · $${Math.round(r.value).toLocaleString("en-US")}` : ""} · Sales lead: ${r.salesLead ?? "not captured yet"}`,
     sections,
     link: { text: "Open in Sales OS", url: appUrl("/salesos") },
     context: `Read: ${c.quoTexts} Quo texts, ${c.quoCalls} stored calls + ${c.liveCalls} live from Quo, ${c.emails} emails, ${c.notes} notes${r.draftSource ? ` · draft: ${r.draftSource}` : ""}`,
@@ -378,14 +395,14 @@ export function getMorningRunState(): MorningRunState {
   return s.status === "running" && !running ? { ...s, status: "error", error: "The run stopped (the server likely restarted). POST again." } : s;
 }
 
-export function startMorningDryRun(opts: { limit?: number; post?: boolean } = {}): MorningRunState {
+export function startMorningDryRun(opts: { limit?: number; post?: boolean; rep?: string | null } = {}): MorningRunState {
   if (running) return getMorningRunState();
   running = true;
   const startedAt = new Date().toISOString();
   setJson(KEY, { status: "running", startedAt } satisfies MorningRunState);
   void (async () => {
     try {
-      const plan = await buildMorningPlan({ limit: opts.limit });
+      const plan = await buildMorningPlan({ limit: opts.limit, repFirstName: opts.rep });
       if (opts.post !== false) plan.posted = await postPlan(plan);
       setJson(KEY, { status: "done", startedAt, finishedAt: new Date().toISOString(), plan } satisfies MorningRunState);
     } catch (e) {

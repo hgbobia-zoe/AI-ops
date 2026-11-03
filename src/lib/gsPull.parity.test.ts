@@ -30,6 +30,13 @@ describe("extension drainer ↔ bookmarklet parity (defect #3)", () => {
     expect(bookmarkletSrc).toContain('o.op==="create_gs_task"');
   });
 
+  it("both pulls capture the client email thread and the sales lead (timeline + morning outreach context)", () => {
+    for (const src of [extSrc, bookmarkletSrc]) {
+      expect(src).toContain("/api/gs/emails");
+      expect(src).toContain("salesLeadName");
+    }
+  });
+
   it("the extension surfaces unhandled op types instead of silently ignoring them", () => {
     // create_project needs a popup from a real user gesture, which a timer-driven content script lacks,
     // so it stays bookmarklet/Playwright-only — but it must be COUNTED and reported, never dropped silently.
