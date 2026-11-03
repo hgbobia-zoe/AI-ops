@@ -35,13 +35,14 @@ export function AddEmployeeDialog({ policies }: { policies: { id: string; name: 
   const [msg, setMsg] = useState<{ text: string; tone: "ok" | "bad" } | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [role, setRole] = useState("member");
   const [department, setDepartment] = useState(defaultPolicy);
   const [startDate, setStartDate] = useState("");
   const [startNow, setStartNow] = useState(true);
 
   function reset(): void {
-    setName(""); setEmail(""); setRole("member"); setDepartment(defaultPolicy);
+    setName(""); setEmail(""); setPhone(""); setRole("member"); setDepartment(defaultPolicy);
     setStartDate(""); setStartNow(true); setMsg(null);
   }
 
@@ -57,7 +58,7 @@ export function AddEmployeeDialog({ policies }: { policies: { id: string; name: 
       const res = await fetch("/api/people/employee", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "create", displayName: name, workEmail: email, role, department, startDate: startDate || null, startNow }),
+        body: JSON.stringify({ action: "create", displayName: name, workEmail: email, phone, role, department, startDate: startDate || null, startNow }),
       });
       const data = (await res.json().catch(() => null)) as { ok?: boolean; id?: string; error?: string } | null;
       if (!res.ok || !data?.ok) {
@@ -106,6 +107,11 @@ export function AddEmployeeDialog({ policies }: { policies: { id: string; name: 
               <Input id="emp-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={derivedEmail ?? "name@zoeeventsdmv.com"} />
             </div>
 
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="emp-phone" className="text-[12px]">Mobile <span className="text-meta">(needed to set up Connecteam)</span></Label>
+              <Input id="emp-phone" type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="301 555 0123" />
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="emp-policy" className="text-[12px]">Access policy <span className="text-critical">*</span></Label>
@@ -132,7 +138,7 @@ export function AddEmployeeDialog({ policies }: { policies: { id: string; name: 
                 <span className="font-medium text-foreground">Start onboarding now</span>
                 <span className="mt-0.5 block text-meta">
                   {startNow
-                    ? `Moves them to Onboarding and creates the provisioning checklist from the ${policyName} policy. The Zoe login can then be approved and run; every other system is a tracked manual step. No access is granted by this action.`
+                    ? `Moves them to Onboarding and creates the provisioning checklist from the ${policyName} policy. Automated steps (the Zoe login, and Connecteam once verified) run after you approve them; every other system is a tracked manual step. No access is granted by this action.`
                     : "Creates the record in Starting soon. You can begin onboarding later from their profile."}
                 </span>
               </span>

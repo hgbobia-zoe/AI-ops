@@ -30,11 +30,16 @@ function personLink(emp: Employee) {
   return { text: "Open in People", url: appUrl(`/people/${encodeURIComponent(emp.id)}`) };
 }
 
+/** The "By" field for a human action (house rule: name who did it). System runs pass null. PURE. */
+export function byField(by: string | null | undefined): { label: string; value: string }[] {
+  return by ? [{ label: "By", value: by }] : [];
+}
+
 function post(card: Parameters<typeof botAnnounce>[1]): void {
   void botAnnounce("hiring", card).catch(() => {});
 }
 
-export function announceNewHire(emp: Employee, policyName: string | null): void {
+export function announceNewHire(emp: Employee, policyName: string | null, by: string | null = null): void {
   post({
     emoji: "🆕",
     title: "New hire added",
@@ -43,6 +48,7 @@ export function announceNewHire(emp: Employee, policyName: string | null): void 
       { label: "Role", value: policyName ?? "No access policy" },
       { label: "Work email", value: emp.workEmail ?? "None" },
       { label: "Start date", value: emp.startDate ?? "Not set" },
+      ...byField(by),
     ],
     body: emp.startDate
       ? "Onboarding starts on the start date and the access checklist is created then."
@@ -60,7 +66,7 @@ export function lockReminder(tasks: LifecycleTask[], kind: "provision" | "revoke
     : "*Do this first:* delete their Lockly access key in the Lockly phone app, then Mark Complete in People.";
 }
 
-export function announceOnboardingStarted(emp: Employee, tasks: LifecycleTask[], sopLink: string | null = null): void {
+export function announceOnboardingStarted(emp: Employee, tasks: LifecycleTask[], sopLink: string | null = null, by: string | null = null): void {
   const lock = lockReminder(tasks, "provision");
   const sop = sopLink ? `*Send the hire this link to read and sign their SOP:*\n${sopLink}` : null;
   post({
@@ -69,6 +75,7 @@ export function announceOnboardingStarted(emp: Employee, tasks: LifecycleTask[],
     fields: [
       { label: "Who", value: emp.displayName },
       { label: "Work email", value: emp.workEmail ?? "None" },
+      ...(by ? byField(by) : [{ label: "By", value: "Started on the start date" }]),
     ],
     sections: [`*Access to set up*\n${taskLines(tasks).join("\n") || "No systems in this policy."}`, ...(lock ? [lock] : []), ...(sop ? [sop] : [])],
     link: personLink(emp),
@@ -76,7 +83,7 @@ export function announceOnboardingStarted(emp: Employee, tasks: LifecycleTask[],
   });
 }
 
-export function announceOffboardingStarted(emp: Employee, revokes: LifecycleTask[], effective: string | null): void {
+export function announceOffboardingStarted(emp: Employee, revokes: LifecycleTask[], effective: string | null, by: string | null = null): void {
   const lock = lockReminder(revokes, "revoke");
   post({
     emoji: "🔒",
@@ -84,6 +91,7 @@ export function announceOffboardingStarted(emp: Employee, revokes: LifecycleTask
     fields: [
       { label: "Who", value: emp.displayName },
       { label: "Effective", value: effective ?? "Now" },
+      ...byField(by),
     ],
     sections: [...(lock ? [lock] : []), `*Remove access in this order*\n${taskLines(orderRevokes(revokes)).join("\n") || "Nothing to remove."}`],
     body: "The door goes first. Each step stays open here until someone confirms it is removed.",
@@ -92,11 +100,11 @@ export function announceOffboardingStarted(emp: Employee, revokes: LifecycleTask
   });
 }
 
-export function announceReady(emp: Employee): void {
+export function announceReady(emp: Employee, by: string | null = null): void {
   post({
     emoji: "✅",
     title: "Hire is ready",
-    fields: [{ label: "Who", value: emp.displayName }],
+    fields: [{ label: "Who", value: emp.displayName }, ...byField(by)],
     body: "Every required system is set up.",
     link: personLink(emp),
     context: "Hiring Bot",

@@ -21,7 +21,11 @@ import { StatusBanner } from "@/components/ui/states";
 import {
   compactTableFrameCls, compactTableCls, compactTheadRowCls, compactThCls, compactRowCls,
 } from "@/components/console-primitives";
-import { getEmployee, getPolicy, listEmployeeAudit, listTasks } from "@/lib/people/store";
+import { getEmployee, getPolicy, listEmployeeAudit, listPolicies, listTasks } from "@/lib/people/store";
+import { reconcileZoeLogin } from "@/lib/people/zoeLink";
+import { getUser } from "@/lib/auth/users";
+import { lastMatchReport } from "@/lib/people/matchRun";
+import { PhoneEdit, PolicyPicker, ConfirmLinkButton } from "@/components/people/PeopleControls";
 import { computeReadiness } from "@/lib/people/lifecycle";
 import type { Tone } from "@/lib/tone";
 import type { LifecycleState, LifecycleTask, TaskStatus, AdapterMode } from "@/lib/people/types";
@@ -45,7 +49,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 // The honest access-type label per adapter mode — automated is a real Zoe in-app capability; the rest are
 // tracked steps a human performs in the external system.
 const ACCESS_TYPE: Record<AdapterMode, { label: string; hint: string }> = {
-  automated: { label: "Automated · Zoe", hint: "Performed in-app behind the approval gate" },
+  automated: { label: "Automated", hint: "Done from here after you approve it" },
   partial: { label: "Partial", hint: "Some steps automatable; a human finishes it" },
   manual: { label: "Manual step", hint: "A human does it in the external system, then marks it complete" },
   future: { label: "Future", hint: "No admin API yet — tracked as a manual step for now" },
@@ -67,8 +71,14 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
   const role = await viewerRole();
   if (!canManageUsers(role)) redirect("/dashboard");
   const { id } = await params;
+  // Link the Zoe login first if the hire has accepted their invite since the last look.
+  if (getEmployee(id)) reconcileZoeLogin(id);
   const emp = getEmployee(id);
   if (!emp) notFound();
+  const zoeUser = emp.userId ? getUser(emp.userId) : null;
+  const exceptions = (lastMatchReport()?.exceptions ?? []).filter(
+    (x) => x.employeeId === emp.id || x.suggestions.some((sg) => sg.employeeId === emp.id),
+  );
 
   const policy = emp.department ? getPolicy(emp.department) : null;
   const provision = listTasks(emp.id, "provision");
@@ -92,15 +102,32 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
           </div>
           <dl className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-meta">
             <div className="inline-flex items-center gap-1.5"><ShieldCheck className="size-3.5" aria-hidden /> <span className="capitalize text-secondary-text">{emp.role}</span></div>
-            <div className="inline-flex items-center gap-1.5">Policy: <span className="text-secondary-text">{policy?.name ?? emp.department ?? "—"}</span></div>
+            <div className="inline-flex items-center gap-1.5">Policy: {policy
+              ? <span className="text-secondary-text">{policy.name}</span>
+              : <PolicyPicker id={emp.id} policies={listPolicies().map((p) => ({ id: p.id, name: p.name }))} />}</div>
             {emp.workEmail && <div className="inline-flex items-center gap-1.5"><Mail className="size-3.5" aria-hidden /> {emp.workEmail}</div>}
-            {emp.phone && <div className="inline-flex items-center gap-1.5"><Phone className="size-3.5" aria-hidden /> {emp.phone}</div>}
+            <div className="inline-flex items-center gap-1.5"><Phone className="size-3.5" aria-hidden /> <PhoneEdit id={emp.id} phone={emp.phone} /></div>
             {emp.startDate && <div className="inline-flex items-center gap-1.5"><Calendar className="size-3.5" aria-hidden /> Start {emp.startDate}</div>}
             {emp.endDate && <div className="inline-flex items-center gap-1.5 text-attention"><Calendar className="size-3.5" aria-hidden /> End {emp.endDate}</div>}
           </dl>
         </div>
         <LifecycleActions id={emp.id} state={emp.lifecycleState} name={emp.displayName} openRevokes={openRevokes} />
       </header>
+
+      {exceptions.length > 0 && (
+        <StatusBanner tone="attention" title="Account matching needs a decision" className="mb-5">
+          <ul className="mt-1 flex flex-col gap-1.5">
+            {exceptions.map((x) => (
+              <li key={x.key} className="flex flex-wrap items-center gap-2">
+                <span>{x.detail}</span>
+                {x.suggestions.filter((sg) => sg.employeeId === emp.id).map((sg) => (
+                  <ConfirmLinkButton key={`${sg.field}:${sg.value}`} employeeId={sg.employeeId} employeeName={sg.employeeName} field={sg.field} value={sg.value} />
+                ))}
+              </li>
+            ))}
+          </ul>
+        </StatusBanner>
+      )}
 
       {/* Readiness summary */}
       <Surface className="mb-5" aria-labelledby="readiness-h">
@@ -147,7 +174,7 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
         <h2 className="mb-2 flex items-center gap-1.5 text-[11.5px] font-medium uppercase tracking-[0.08em] text-tertiary-text"><Link2 className="size-3.5" aria-hidden /> Linked identities</h2>
         <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border text-[12.5px] sm:grid-cols-2 lg:grid-cols-3">
           {([
-            ["Zoe login", emp.userId],
+            ["Zoe login", zoeUser ? `${zoeUser.username}${zoeUser.active ? "" : " (deactivated)"}` : emp.userId],
             ["HR worker", emp.hrWorkerId],
             ["Connecteam", emp.connecteamUserId],
             ["Quo / OpenPhone", emp.openphoneUserId],
@@ -208,7 +235,9 @@ function ChecklistTable({ title, icon, tasks, note, emptyLabel }: {
             </thead>
             <tbody>
               {tasks.map((t) => {
-                const access = ACCESS_TYPE[t.mode];
+                const access = t.adapterId === "sop_ack"
+                  ? { label: "Hire signs", hint: "Completes only when the hire signs their SOP link" }
+                  : ACCESS_TYPE[t.mode];
                 return (
                   <tr key={t.id} className={compactRowCls}>
                     <td className="px-3 py-2.5 align-top">
@@ -230,7 +259,7 @@ function ChecklistTable({ title, icon, tasks, note, emptyLabel }: {
                       {!t.externalRef && t.status !== "completed" && <span>—</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right align-top">
-                      <TaskActions task={{ id: t.id, mode: t.mode, kind: t.kind, status: t.status, required: t.required }} />
+                      <TaskActions task={{ id: t.id, adapterId: t.adapterId, externalRef: t.externalRef, mode: t.mode, kind: t.kind, status: t.status, required: t.required }} />
                     </td>
                   </tr>
                 );

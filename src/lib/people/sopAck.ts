@@ -79,7 +79,7 @@ export function signSop(token: string, typedName: string): { ok: boolean; error?
   if (!sameName(typedName, view.employeeName)) return { ok: false, error: "Type your full name as it appears above." };
   const now = new Date().toISOString();
   const actor = `${typedName.trim()} (signed SOP v${view.sop.version})`;
-  const r = markTaskComplete(rec.taskId, actor, `Signed ${view.sop.title} v${view.sop.version}`);
+  const r = markTaskComplete(rec.taskId, actor, `Signed ${view.sop.title} v${view.sop.version}`, { sopSigned: true });
   if (!r.ok) return { ok: false, error: "Could not record the signature. Ask your manager." };
   recs[token] = { ...rec, signedAt: now, signedName: typedName.trim(), version: view.sop.version };
   setJson(KEY, recs);

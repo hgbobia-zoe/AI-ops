@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 
 export interface TaskView {
   id: string;
+  adapterId: string;
+  externalRef: string | null;
   mode: "automated" | "partial" | "manual" | "future";
   kind: "provision" | "revoke";
   status: string;
@@ -48,6 +50,35 @@ export function TaskActions({ task }: { task: TaskView }): React.JSX.Element {
 
   if (done) {
     return <span className="text-[11.5px] text-meta">{task.status === "skipped" ? "Skipped" : "Done"}</span>;
+  }
+
+  // Steps only the hire can finish: signing the SOP, and accepting the Zoe invite. No button closes them.
+  const waitingOnHire =
+    (task.adapterId === "sop_ack" && task.kind === "provision") ||
+    (task.adapterId === "zoe_platform" && task.kind === "provision" && task.status === "in_progress");
+  if (waitingOnHire) {
+    const ref = task.externalRef;
+    // Resolve a relative /join link against this site only on click (window is not there during SSR).
+    const copy = (): void => {
+      if (!ref) return;
+      const link = /^https?:/.test(ref) ? ref : `${window.location.origin}${ref}`;
+      void navigator.clipboard?.writeText(link);
+      setMsg({ text: "Link copied.", tone: "ok" });
+    };
+    return (
+      <div className="flex flex-wrap items-center justify-end gap-1.5">
+        <span className="text-[11.5px] text-meta">{task.adapterId === "sop_ack" ? "Waiting for the hire to sign" : "Waiting for the hire to accept"}</span>
+        {ref && (
+          <Button variant="outline" size="xs" onClick={copy}>
+            Copy link
+          </Button>
+        )}
+        {msg && <span className={`text-[11px] ${msg.tone === "ok" ? "text-positive" : "text-critical"}`}>{msg.text}</span>}
+      </div>
+    );
+  }
+  if (task.status === "in_progress") {
+    return <span className="text-[11.5px] text-meta">Running, waits for the system to confirm</span>;
   }
 
   return (

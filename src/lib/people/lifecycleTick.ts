@@ -13,6 +13,8 @@ import { getEmployee, listEmployees, listTasks, tasksByStatus } from "./store";
 import { announceCheckIn, announceOnboardingStarted, dueCheckIn, orderRevokes } from "./notify";
 import { ensureSopLink } from "./sopAck";
 import { getJson, setJson } from "@/lib/kv";
+import { reconcileAllZoeLogins } from "./zoeLink";
+import { runStaffMatching } from "./matchRun";
 
 /** Days a manual provision/revoke task may sit before it is escalated. */
 export const PEOPLE_ESCALATE_DAYS = 3;
@@ -100,6 +102,16 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
   }
   if (checkins > 0) setJson("people.checkins", sentMap);
 
-  const detail = `${checkins} check ins, ${onboarded} onboarded, ${revoked} auto-revoked, ${escalated} escalated`;
+  // 5) Link Zoe logins whose invite was accepted, then match existing staff across systems.
+  const zoeLinked = reconcileAllZoeLogins(listEmployees(), now);
+  let matchNote = "matching skipped";
+  try {
+    const m = await runStaffMatching(null);
+    matchNote = `${m.created.length} staff added, ${m.linked.length} links, ${m.exceptions.length} exceptions`;
+  } catch (e) {
+    matchNote = `matching failed: ${e instanceof Error ? e.message : "error"}`;
+  }
+
+  const detail = `${checkins} check ins, ${onboarded} onboarded, ${revoked} auto-revoked, ${escalated} escalated, ${zoeLinked} Zoe logins linked, ${matchNote}`;
   return { ok: true, detail };
 }

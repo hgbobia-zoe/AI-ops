@@ -14,7 +14,9 @@ import { createInvite } from "@/lib/auth/invites";
 import { getUser, setUserActive } from "@/lib/auth/users";
 import { archiveConnecteamUser, connecteamConfigured, createConnecteamUser } from "@/lib/connecteam";
 import { enqueueProvisioningOp } from "@/lib/db/repo";
-import { setEmployeeConnecteamUserId } from "../store";
+import { appUrl } from "@/lib/notify/aiBots";
+import { getEmployee, setEmployeeConnecteamUserId } from "../store";
+import { reconcileZoeLogin } from "../zoeLink";
 import { hasCapturedEndpoint, PROVISION_ENDPOINTS, type ReplaySystem } from "../provisioningEndpoints";
 import type { AdapterMode, Employee, ProvisioningResult } from "../types";
 
@@ -70,15 +72,19 @@ class ZoePlatformAdapter implements ProvisioningAdapter {
       name: emp.displayName,
       invitedByName: "People Lifecycle",
     });
-    const link = `/join?token=${invite.token}`;
+    const path = `/join?token=${invite.token}`;
+    const link = appUrl(path) ?? path;
+    // Not "completed" yet: the step closes when the hire actually creates the login (zoeLink.ts reads the
+    // accepted invite back and links the login onto the employee).
     return {
       ok: true,
-      status: "completed",
+      status: "in_progress",
       externalRef: link,
-      detail: `Invite link minted — share ${link}. The hire sets their own password (no password stored).`,
+      detail: `Invite link ready: send ${link} to the hire. This step completes when they create their login (no password stored).`,
     };
   }
   async revoke(emp: Employee): Promise<ProvisioningResult> {
+    if (!emp.userId && reconcileZoeLogin(emp.id) === "linked") emp = getEmployee(emp.id) ?? emp;
     if (!emp.userId) {
       return {
         ok: false,
