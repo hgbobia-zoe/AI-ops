@@ -40,6 +40,17 @@ export const DEFAULT_WORKING_BRANCH_PREFIX = "website-studio/";
  *  auto-merge with WEBSITE_AUTO_MERGE=1 (see websiteAutoMerge). */
 export const DEFAULT_WEBSITE_AUTO_MERGE = false;
 
+/** Default for the pre-merge checks gate: ON. After approval the runner opens the PR, waits for the website
+ *  repo's "Site checks" (PHP syntax, theme header, front-end build) and merges ONLY when they pass. Failing,
+ *  missing or timed-out checks leave the PR open for a human and fail the job. */
+export const DEFAULT_WEBSITE_REQUIRE_CHECKS = true;
+
+/** Whether the runner waits for green PR checks before merging. Default ON (shipped safety, flagOn style):
+ *  only an explicit 0/false/no/off turns it off. The runner mirrors this exact rule. Never throws. */
+export function websiteRequireChecks(): boolean {
+  return !/^(0|false|no|off)$/i.test((process.env.WEBSITE_REQUIRE_CHECKS ?? "").trim());
+}
+
 /** The configured target repo slug (owner/name). Never throws. */
 export function websiteRepoSlug(): string {
   return (process.env.WEBSITE_REPO_SLUG ?? "").trim() || DEFAULT_WEBSITE_REPO_SLUG;

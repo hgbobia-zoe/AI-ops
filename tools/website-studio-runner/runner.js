@@ -35,6 +35,10 @@
 //   • The runner NEVER commits to / pushes the deploy branch directly. The ONLY way a change reaches master is
 //     a human APPROVING the preview in the app, which lets the runner open the PR and merge it (immediately by
 //     default; WEBSITE_AUTO_MERGE=1 instead gates the merge on GitHub checks). Discarded/queued jobs never touch master.
+//   • PRE-MERGE CHECKS (default on): after approval the runner merges only when the website repo's "Site checks"
+//     (PHP syntax, theme header, front-end build) pass; failed/missing checks leave the PR open, nothing ships.
+//   • DEDICATED CLONE: a job only starts on a clean checkout. Never point WEBSITE_REPO_PATH at a person's
+//     working copy (git add -A / reset --hard would sweep up or delete their uncommitted edits).
 //   • One job at a time. One job failing never crashes the loop — it is marked `failed` and the loop continues.
 //   • Secrets (ANTHROPIC_API_KEY, WEBSITE_RUNNER_TOKEN) are read from the environment, never hardcoded.
 //
@@ -84,6 +88,14 @@ const MERGE_METHOD = (() => {
   const m = (process.env.WEBSITE_MERGE_METHOD || "squash").trim().toLowerCase();
   return ["squash", "merge", "rebase"].includes(m) ? m : "squash";
 })();
+// Pre-merge checks gate, DEFAULT ON (mirrors websiteRequireChecks() in src/lib/website/config.ts): after the PR
+// is opened, wait for the website repo's "Site checks" and merge ONLY when every check passes. Failing, missing
+// or timed-out checks leave the PR open and fail the job, so nothing is published. Only an explicit
+// WEBSITE_REQUIRE_CHECKS=0/false/no/off turns it off.
+const REQUIRE_CHECKS = !/^(0|false|no|off)$/i.test((process.env.WEBSITE_REQUIRE_CHECKS || "").trim());
+const CHECKS_TIMEOUT_MS = Number(process.env.WEBSITE_CHECKS_TIMEOUT_MS || 20 * 60 * 1000);
+/** How long to wait for checks to APPEAR on a new PR before concluding the repo has none. */
+const CHECKS_APPEAR_MS = Number(process.env.WEBSITE_CHECKS_APPEAR_MS || 3 * 60 * 1000);
 
 function requireEnv() {
   const missing = [];
@@ -174,6 +186,77 @@ async function postUpdate(body) {
 async function markFailed(jobId, reason) {
   log(`job ${jobId} FAILED: ${reason}`);
   try { await postUpdate({ id: jobId, status: "failed", error: String(reason).slice(0, 500) }); } catch { /* best effort */ }
+}
+
+// ── Checkout safety ──────────────────────────────────────────────────────────
+// The runner commits with `git add -A` and cleans up with `git reset --hard`, so it must own its checkout.
+// Pointing WEBSITE_REPO_PATH at a person's working copy would sweep their uncommitted edits into a job's
+// commit, or delete them on discard. So a job only starts on a CLEAN tree; dirt there is never ours to touch.
+class DirtyCheckoutError extends Error {}
+
+function assertCleanCheckout() {
+  const dirty = git(["status", "--porcelain"]);
+  if (dirty) {
+    const n = dirty.split("\n").filter(Boolean).length;
+    throw new DirtyCheckoutError(
+      `the website checkout at ${REPO} has ${n} uncommitted change(s), so the runner will not touch it. ` +
+      "Point WEBSITE_REPO_PATH at a dedicated clone the runner owns (see README).",
+    );
+  }
+}
+
+/** After a job failed mid-way on a tree that was clean when it started: drop the job's partial edits and
+ *  return to the deploy branch, so the next job starts clean. Only called when the job verified a clean start. */
+function resetOwnedCheckout() {
+  try { git(["reset", "--hard", "HEAD"]); } catch { /* best effort */ }
+  try { git(["clean", "-fd"]); } catch { /* best effort */ }
+  try { git(["checkout", resolveDeployBranch()]); } catch { /* best effort */ }
+}
+
+// ── Pre-merge checks (the website repo's "Site checks" workflow) ─────────────
+/** Read the PR's checks. `gh pr checks` exits non-zero while checks are pending/failing (stdout still holds
+ *  the JSON) and when none are reported yet. Returns [] for "none reported". */
+function readChecks(branch) {
+  let out = "";
+  try {
+    out = gh(["pr", "checks", branch, "--json", "name,bucket,state,link"]);
+  } catch (e) {
+    out = (e && e.stdout) ? String(e.stdout) : "";
+    if (!out.trim()) {
+      const err = String((e && e.stderr) || (e && e.message) || "");
+      if (/no checks reported/i.test(err)) return [];
+      throw e;
+    }
+  }
+  const parsed = JSON.parse(out || "[]");
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+/** Wait until every check on the PR has finished. pass = all passed/skipped; fail = any failed/cancelled;
+ *  none = no checks appeared within CHECKS_APPEAR_MS; timeout = still running at CHECKS_TIMEOUT_MS. */
+async function waitForChecks(branch) {
+  const started = Date.now();
+  for (;;) {
+    const elapsed = Date.now() - started;
+    let checks;
+    try {
+      checks = readChecks(branch);
+    } catch (e) {
+      if (elapsed > CHECKS_TIMEOUT_MS) return { state: "timeout", detail: `Could not read the site checks (${(e.message || "").split("\n")[0]}).` };
+      await sleep(POLL_MS);
+      continue;
+    }
+    if (checks.length === 0) {
+      if (elapsed > CHECKS_APPEAR_MS) return { state: "none", detail: "No site checks ran on the pull request (the Site checks workflow is not on master yet)." };
+    } else {
+      const failed = checks.filter((c) => c.bucket === "fail" || c.bucket === "cancel");
+      if (failed.length) return { state: "fail", detail: `Site checks failed: ${failed.map((c) => c.name).join(", ")}.` };
+      const pending = checks.filter((c) => c.bucket === "pending");
+      if (!pending.length) return { state: "pass", detail: `Site checks passed (${checks.map((c) => c.name).join(", ")}).` };
+      if (elapsed > CHECKS_TIMEOUT_MS) return { state: "timeout", detail: `Site checks still running after ${Math.round(CHECKS_TIMEOUT_MS / 60000)} min: ${pending.map((c) => c.name).join(", ")}.` };
+    }
+    await sleep(POLL_MS);
+  }
 }
 
 // ── Edit context (from the embedded browser) ─────────────────────────────────
@@ -404,7 +487,8 @@ async function processJob(job) {
   const environment = job.environment || "production";
   log(`job ${job.id}: "${job.prompt.slice(0, 80)}" — base=${base}, branch=${branch}, target=${pathHint || "(none)"} env=${environment}`);
 
-  // 2. fresh branch off the remote default
+  // 2. fresh branch off the remote default, only from a clean tree the runner owns (throws otherwise)
+  assertCleanCheckout();
   git(["fetch", "origin", base]);
   git(["checkout", "-B", branch, `origin/${base}`]);
 
@@ -449,6 +533,22 @@ async function processJob(job) {
       return;
     }
 
+    // Pre-merge gate: merge ONLY when the website repo's Site checks pass. Anything else leaves the PR open
+    // (a human can fix + merge it) and fails the job, so nothing is published.
+    let checksNote = "";
+    if (REQUIRE_CHECKS) {
+      log(`job ${job.id}: waiting for site checks on ${branch}`);
+      const checks = await waitForChecks(branch);
+      if (checks.state !== "pass") {
+        await markFailed(job.id, `${checks.detail} Nothing was published. The pull request is open for review: ${prUrl}`);
+        git(["checkout", base]);
+        try { deployToDevKinsta([]); } catch { /* best effort */ }
+        return;
+      }
+      checksNote = checks.detail;
+      log(`job ${job.id}: ${checks.detail}`);
+    }
+
     // Merge into the deploy branch. The human already approved the rendered preview in the app, so the
     // approval IS the go-live decision. DEFAULT: merge immediately (approval is the only gate). With
     // WEBSITE_AUTO_MERGE=1, instead prefer GitHub NATIVE auto-merge (merge when required checks pass) so the
@@ -456,7 +556,7 @@ async function processJob(job) {
     // repo has no auto-merge or required checks configured (gh errors in that case).
     const mergeNote = mergeToDeployBranch(branch, base);
 
-    await postUpdate({ id: job.id, status: "done", summary: `${summary}\n\n${mergeNote}`.trim(), prUrl });
+    await postUpdate({ id: job.id, status: "done", summary: `${summary}\n\n${checksNote ? `${checksNote} ` : ""}${mergeNote}`.trim(), prUrl });
     // leave the branch (GitHub removes it on merge per repo settings); return the local site to a clean
     // deploy branch so the next job starts fresh.
     git(["checkout", base]);
@@ -481,7 +581,8 @@ async function processJob(job) {
 async function main() {
   requireEnv();
   verifyOriginMatchesSlug();
-  log(`started. app=${APP_URL} repo=${REPO} targetRepo=${REPO_SLUG} deployBranch=${DEPLOY_BRANCH || "(auto)"} branchPrefix=${WORKING_BRANCH_PREFIX} autoMerge=${AUTO_MERGE} mergeMethod=${MERGE_METHOD} model=${MODEL} poll=${POLL_MS}ms`);
+  log(`started. app=${APP_URL} repo=${REPO} targetRepo=${REPO_SLUG} deployBranch=${DEPLOY_BRANCH || "(auto)"} branchPrefix=${WORKING_BRANCH_PREFIX} autoMerge=${AUTO_MERGE} mergeMethod=${MERGE_METHOD} requireChecks=${REQUIRE_CHECKS} model=${MODEL} poll=${POLL_MS}ms`);
+  try { assertCleanCheckout(); } catch (e) { log(`WARNING: ${e.message} Jobs will fail until this is fixed.`); }
   for (;;) {
     let job = null;
     try {
@@ -505,7 +606,9 @@ async function main() {
       } catch (e) {
         // One job failing must never crash the loop.
         await markFailed(job.id, e && e.message ? e.message : e);
-        try { git(["checkout", resolveDeployBranch()]); } catch { /* best effort */ }
+        // A dirty-checkout refusal means the tree is NOT ours: leave it exactly as it is. Otherwise the job
+        // started on a clean tree, so its partial edits are the only dirt and are safe to drop.
+        if (!(e instanceof DirtyCheckoutError)) resetOwnedCheckout();
       }
     } else {
       await sleep(POLL_MS);
