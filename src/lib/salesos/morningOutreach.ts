@@ -121,10 +121,11 @@ export function touches(timeline: TimelineEntry[], liveCalls: LiveCall[]): { at:
     .map((e) => ({ at: t(e.at), dir: e.direction as "in" | "out", channel: e.channel, detail: e.detail ?? null }));
   for (const c of liveCalls) {
     const at = t(c.at);
-    // the stored call feed and the live read can hold the same call; same direction within a minute = same
-    if (!out.some((x) => x.channel === "call" && x.dir === c.direction && Math.abs(x.at - at) < 60_000)) {
-      out.push({ at, dir: c.direction, channel: "call", detail: c.secs != null ? `${c.secs}s` : null });
-    }
+    // The stored call feed and the live read can hold the same call (within a minute). Quo's live read is
+    // the truth for direction: stored rows once logged a rep's call as inbound (summary event, no direction).
+    const same = out.filter((x) => x.channel === "call" && Math.abs(x.at - at) < 60_000);
+    if (same.length) for (const x of same) x.dir = c.direction;
+    else out.push({ at, dir: c.direction, channel: "call", detail: c.secs != null ? `${c.secs}s` : null });
   }
   return out.filter((x) => Number.isFinite(x.at)).sort((a, b) => b.at - a.at);
 }
