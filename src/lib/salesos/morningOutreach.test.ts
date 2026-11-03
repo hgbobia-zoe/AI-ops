@@ -9,7 +9,8 @@ import type { TimelineEntry } from "./timeline";
 
 const NOW = Date.parse("2026-11-03T20:00:00Z"); // Tue 3pm ET
 const e = (over: Partial<TimelineEntry>): TimelineEntry => ({ at: null, channel: "sms", direction: null, actor: null, title: "", source: "comms_events", ...over });
-const gate = (over: Partial<GateInput> = {}): GateInput => ({ hasPhone: true, daysToEvent: 30, subStatus: "follow_up", timeline: [], liveCalls: [], now: NOW, ...over });
+// 10 days out: the 3 day cadence, so a touch from Oct 31 or earlier is old enough.
+const gate = (over: Partial<GateInput> = {}): GateInput => ({ hasPhone: true, daysToEvent: 10, subStatus: "follow_up", timeline: [], liveCalls: [], now: NOW, ...over });
 
 describe("send time", () => {
   it("is the next Monday to Saturday morning once today's window has passed, never Sunday", () => {
@@ -47,10 +48,23 @@ describe("gateLead", () => {
     expect(gateLead(gate({ timeline: tl }))).toEqual({ send: true, reason: null });
   });
 
-  it("holds back without a phone, past events and events too close", () => {
+  it("holds back without a phone", () => {
     expect(gateLead(gate({ hasPhone: false })).send).toBe(false);
-    expect(gateLead(gate({ daysToEvent: -1 })).reason).toContain("passed");
-    expect(gateLead(gate({ daysToEvent: 2 })).reason).toContain("in 2 days");
+  });
+
+  it("marks lost and archives at 3 days out or less, unless the client is waiting on us", () => {
+    for (const d of [3, 2, 0, -1]) {
+      const r = gateLead(gate({ daysToEvent: d }));
+      expect(r.send).toBe(false);
+      expect(r.lose, String(d)).toBe(true);
+    }
+    expect(gateLead(gate({ daysToEvent: 3 })).reason).toContain("in 3 days and the quote is not signed");
+    expect(gateLead(gate({ daysToEvent: 3, hasPhone: false })).lose).toBe(true); // no phone does not keep it open
+    expect(gateLead(gate({ daysToEvent: 4 })).lose).toBeFalsy();
+    const asked = [e({ at: "2026-11-02T15:00:00Z", direction: "in", channel: "sms", detail: "Can we still add chairs?" })];
+    const r = gateLead(gate({ daysToEvent: 2, timeline: asked }));
+    expect(r.lose).toBeFalsy();
+    expect(r.reason).toContain("A person should answer before it is marked lost");
   });
 
   it("holds back when the client is waiting on us", () => {
@@ -127,9 +141,23 @@ describe("gateLead", () => {
     expect(gateLead(said("I can stop by Friday to look")).send).toBe(true);
   });
 
-  it("stops chasing after too many unanswered follow ups", () => {
-    const tl = [1, 2, 3, 4, 5].map((d) => e({ at: `2026-10-${String(10 + d).padStart(2, "0")}T15:00:00Z`, direction: "out", detail: "Hi" })).reverse();
-    expect(gateLead(gate({ timeline: tl })).reason).toContain("5 follow ups");
+  it("keeps following up however many went unanswered, less often the further out the event is", () => {
+    // 17 unanswered follow ups, the last one 6 days ago (Oct 28)
+    const tl = Array.from({ length: 17 }, (_, i) => e({ at: new Date(Date.parse("2026-10-28T15:00:00Z") - i * 7 * 86_400_000).toISOString(), direction: "out", detail: "Hi" }));
+    expect(gateLead(gate({ timeline: tl, daysToEvent: 10 })).send).toBe(true); //   every 3 days
+    expect(gateLead(gate({ timeline: tl, daysToEvent: 25 })).reason).toContain("Every 7 days"); // next Nov 4
+    expect(gateLead(gate({ timeline: tl, daysToEvent: 60 })).reason).toContain("Every 14 days");
+    expect(gateLead(gate({ timeline: tl, daysToEvent: 120 })).reason).toContain("Every 21 days");
+    const far = gateLead(gate({ timeline: tl, daysToEvent: 221 }));
+    expect(far.reason).toContain("Every 30 days with the event 221 days out, so next on Nov 27");
+    expect(gateLead(gate({ timeline: tl, daysToEvent: null })).reason).toContain("Every 14 days when there is no event date");
+  });
+
+  it("the cadence counts the team's touches too, any channel", () => {
+    const tl = [e({ at: "2026-10-25T15:00:00Z", direction: "out", channel: "sms", detail: "Hi" })]; // 9 days ago
+    expect(gateLead(gate({ timeline: tl, daysToEvent: 25 })).send).toBe(true); // every 7
+    const call = [{ direction: "out" as const, at: "2026-10-30T15:00:00Z", secs: 20 }]; // 4 days ago, live from Quo
+    expect(gateLead(gate({ timeline: tl, liveCalls: call, daysToEvent: 25 })).reason).toContain("(call). Every 7 days");
   });
 });
 

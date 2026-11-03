@@ -101,6 +101,7 @@ const OP_TITLE: Record<string, string> = {
   create_project: "Goodshuffle project created from a lead",
   remove_waypoint: "Stop removed from the Goodshuffle route",
   disable_esignature: "Online signing turned off in Goodshuffle",
+  mark_lost: "Project marked lost and archived in Goodshuffle",
 };
 // The same ops as a task, for the failure line ("Goodshuffle write-back failed: upload a delivery photo").
 const OP_TASK: Record<string, string> = {
@@ -115,6 +116,7 @@ const OP_TASK: Record<string, string> = {
   create_project: "create a project from a lead",
   remove_waypoint: "remove a stop from the route",
   disable_esignature: "turn off online signing",
+  mark_lost: "mark the project lost and archive it",
 };
 // Note copies mirror every synced text and call; they live in the Sales timeline and would bury the feed.
 export const FEED_SKIPPED_OPS = ["note_append"];

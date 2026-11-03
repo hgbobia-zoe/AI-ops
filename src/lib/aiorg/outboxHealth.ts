@@ -30,6 +30,7 @@ export const KNOWN_DRAINABLE_OPS: ReadonlySet<string> = new Set([
   "create_project",
   "remove_waypoint",
   "disable_esignature",
+  "mark_lost",
 ]);
 
 /** The kv row for the outbox alarm dedupe — its OWN namespaced key (never shares the responder's). */

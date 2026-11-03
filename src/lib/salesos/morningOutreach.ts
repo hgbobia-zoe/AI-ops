@@ -85,14 +85,29 @@ export interface GateInput {
 export interface GateResult {
   send: boolean;
   reason: string | null;
+  /** Mark the Goodshuffle project lost and archive it (3 days or less to an unsigned event). */
+  lose?: boolean;
 }
 
-/** Recently reached out: no automated text within this many hours of our last outbound touch. */
-export const RECENT_OUTBOUND_HOURS = 48;
-/** Unanswered follow ups in a row (since the client last said anything) before we stop chasing. */
-export const MAX_UNANSWERED = 5;
-/** Events this close (or closer) belong to a person, not an automated nudge. */
-export const MIN_DAYS_TO_EVENT = 3;
+/** Owner call (2026-11-03): follow up less often the further away the event is, keep going until 3 days
+ *  before the event, then mark the project lost and archive it. A follow up goes out only when nobody
+ *  (bot or team, any channel) has reached out within `everyDays`. */
+export const CADENCE: readonly { maxDaysOut: number; everyDays: number }[] = [
+  { maxDaysOut: 14, everyDays: 3 },
+  { maxDaysOut: 30, everyDays: 7 },
+  { maxDaysOut: 90, everyDays: 14 },
+  { maxDaysOut: 180, everyDays: 21 },
+  { maxDaysOut: Infinity, everyDays: 30 },
+];
+/** No event date on the project: a middle of the road cadence. */
+export const NO_DATE_EVERY_DAYS = 14;
+/** At this many days to the event (or fewer, or past) an unsigned quote is marked lost and archived. */
+export const LOSE_AT_DAYS = 3;
+
+export function followUpEveryDays(daysToEvent: number | null): number {
+  if (daysToEvent == null) return NO_DATE_EVERY_DAYS;
+  return (CADENCE.find((c) => daysToEvent <= c.maxDaysOut) ?? CADENCE[CADENCE.length - 1]).everyDays;
+}
 
 // A bare "STOP" reply, or an explicit opt out phrase ("stop by Friday" is not an opt out).
 const STOP_RE = /^\s*(stop|unsubscribe|end|quit)\W*$|\b(unsubscribe|stop texting|do not (text|contact) (me|us)|don'?t (text|contact) (me|us)|remove me)\b/i;
@@ -130,18 +145,9 @@ export function touches(timeline: TimelineEntry[], liveCalls: LiveCall[]): { at:
   return out.filter((x) => Number.isFinite(x.at)).sort((a, b) => b.at - a.at);
 }
 
-export function gateLead(g: GateInput): GateResult {
-  if (!g.hasPhone) return { send: false, reason: "No phone number on file." };
-  if (g.daysToEvent != null && g.daysToEvent < 0) return { send: false, reason: "The event date has passed." };
-  if (g.daysToEvent != null && g.daysToEvent < MIN_DAYS_TO_EVENT) {
-    return { send: false, reason: `The event is ${g.daysToEvent === 0 ? "today" : `in ${g.daysToEvent} day${g.daysToEvent === 1 ? "" : "s"}`}, a person should handle this one.` };
-  }
-  const inboundTexts = g.timeline.filter((e) => e.direction === "in" && (e.channel === "sms" || e.channel === "email") && e.detail);
-  const stop = inboundTexts.find((e) => STOP_RE.test(e.detail ?? ""));
-  if (stop) return { send: false, reason: `The client asked us to stop: "${clip(stop.detail, 90)}".` };
-  const done = inboundTexts.find((e) => DONE_RE.test(e.detail ?? ""));
-  if (done) return { send: false, reason: `The client said: "${clip(done.detail, 110)}".` };
+const inDays = (d: number): string => (d < 0 ? "has passed" : d === 0 ? "is today" : `is in ${d} day${d === 1 ? "" : "s"}`);
 
+export function gateLead(g: GateInput): GateResult {
   const list = touches(g.timeline, g.liveCalls);
   // Skip the client's closing thank yous; whatever came before them decides whether they are waiting.
   let skip = 0;
@@ -149,19 +155,33 @@ export function gateLead(g: GateInput): GateResult {
   const closedByThanks = skip > 0;
   const latest = list[skip];
   // A fresh reply puts the lead in action_needed; when that reply is only a thank you it is not a reason to hold.
-  if ((g.subStatus === "action_needed" && !closedByThanks) || latest?.dir === "in") {
-    const said = list.find((x) => x.dir === "in" && x.detail && x.channel !== "call" && !isBareThanks(x));
-    return { send: false, reason: `The client is waiting on us${said ? ` (their last message: "${clip(said.detail, 90)}")` : ""}. A person should answer.` };
+  const waiting = (g.subStatus === "action_needed" && !closedByThanks) || latest?.dir === "in";
+  const said = waiting ? list.find((x) => x.dir === "in" && x.detail && x.channel !== "call" && !isBareThanks(x)) : undefined;
+  const waitingWhy = `The client is waiting on us${said ? ` (their last message: "${clip(said.detail, 90)}")` : ""}`;
+
+  // 3 days out (or less, or past) with the quote still unsigned: the lead is lost. Never auto close a lead
+  // whose client is waiting on an answer; a person decides that one.
+  if (g.daysToEvent != null && g.daysToEvent <= LOSE_AT_DAYS) {
+    if (waiting) return { send: false, reason: `The event ${inDays(g.daysToEvent)} and ${waitingWhy.charAt(0).toLowerCase()}${waitingWhy.slice(1)}. A person should answer before it is marked lost.` };
+    return { send: false, lose: true, reason: `The event ${inDays(g.daysToEvent)} and the quote is not signed. Mark it lost and archive it.` };
   }
+
+  if (!g.hasPhone) return { send: false, reason: "No phone number on file." };
+  const inboundTexts = g.timeline.filter((e) => e.direction === "in" && (e.channel === "sms" || e.channel === "email") && e.detail);
+  const stop = inboundTexts.find((e) => STOP_RE.test(e.detail ?? ""));
+  if (stop) return { send: false, reason: `The client asked us to stop: "${clip(stop.detail, 90)}".` };
+  const done = inboundTexts.find((e) => DONE_RE.test(e.detail ?? ""));
+  if (done) return { send: false, reason: `The client said: "${clip(done.detail, 110)}".` };
+  if (waiting) return { send: false, reason: `${waitingWhy}. A person should answer.` };
+
+  // Cadence: the further out the event, the longer between follow ups (bot or team, any channel).
+  const every = followUpEveryDays(g.daysToEvent);
   const lastOut = list.find((x) => x.dir === "out");
-  if (lastOut && g.now - lastOut.at < RECENT_OUTBOUND_HOURS * 3_600_000) {
+  if (lastOut && g.now - lastOut.at < every * 86_400_000) {
     const h = Math.max(1, Math.round((g.now - lastOut.at) / 3_600_000));
-    return { send: false, reason: `We already reached out ${h < 24 ? `${h}h` : `${Math.round(h / 24)}d`} ago (${lastOut.channel === "sms" ? "text" : lastOut.channel}).` };
-  }
-  const lastIn = list.findIndex((x) => x.dir === "in");
-  const unanswered = (lastIn === -1 ? list : list.slice(0, lastIn)).filter((x) => x.dir === "out").length;
-  if (unanswered >= MAX_UNANSWERED) {
-    return { send: false, reason: `${unanswered} follow ups with no reply${lastIn === -1 ? "" : " since their last message"}. Pause instead of chasing.` };
+    const next = shortDate(lastOut.at + every * 86_400_000);
+    const why = g.daysToEvent == null ? "when there is no event date" : `with the event ${g.daysToEvent} days out`;
+    return { send: false, reason: `We already reached out ${h < 24 ? `${h}h` : `${Math.round(h / 24)}d`} ago (${lastOut.channel === "sms" ? "text" : lastOut.channel}). Every ${every} days ${why}, so next on ${next}.` };
   }
   return { send: true, reason: null };
 }
@@ -253,6 +273,8 @@ export interface MorningPlanRow {
   whereWeAre: string[];
   context: ContextCounts;
   send: boolean;
+  /** Would mark the Goodshuffle project lost and archive it instead of texting. */
+  lose: boolean;
   reason: string | null;
   draft: string | null;
   caution: string | null;
@@ -338,6 +360,7 @@ async function planLead(card: LeadCard, numbers: QuoNumber[], sendDay: string, n
     whereWeAre: whereWeAre({ value: card.value, quoteSentDate: card.quoteSentDate, eventDate: card.eventDate, daysToEvent, timeline, liveCalls, now }),
     context: contextCounts(timeline, liveCalls),
     send,
+    lose: !!gate.lose,
     reason: gate.send && !draft ? "The drafter found no sensible next step." : gate.reason,
     draft: send ? draft : null,
     caution: send ? caution : null,
@@ -357,7 +380,7 @@ export async function buildMorningPlan(opts: { limit?: number; now?: Date; repFi
   const repFirstName = opts.repFirstName ?? (process.env.MORNING_OUTREACH_REP_NAME?.trim() || null);
   const rows: MorningPlanRow[] = [];
   for (const c of cards) rows.push(await planLead(c, numbers, sendDay, now.getTime(), repFirstName));
-  rows.sort((a, b) => Number(b.send) - Number(a.send) || (a.sendAt ?? "").localeCompare(b.sendAt ?? ""));
+  rows.sort((a, b) => Number(b.send) - Number(a.send) || Number(b.lose) - Number(a.lose) || (a.sendAt ?? "").localeCompare(b.sendAt ?? ""));
   return { dryRun: true, generatedAt: new Date().toISOString(), sendDay, rows, posted: false };
 }
 
@@ -367,13 +390,15 @@ const dayLabel = (ymd: string): string => new Date(`${ymd}T12:00:00Z`).toLocaleD
 
 export function headerCard(plan: MorningPlan): BotCard {
   const sends = plan.rows.filter((r) => r.send).length;
+  const loses = plan.rows.filter((r) => r.lose).length;
   return {
     emoji: "🧪",
     title: `Morning outreach dry run: ${plan.rows.length} projects`,
     subtitle: `Nothing was sent. This is what Sales Bot would do on ${dayLabel(plan.sendDay)} between 9:12 and 9:17 AM. Each text is signed by the project's sales lead from Goodshuffle.`,
     fields: [
       { label: "Would text", value: String(sends) },
-      { label: "Would hold back", value: String(plan.rows.length - sends) },
+      { label: "Would mark lost", value: String(loses) },
+      { label: "Would hold back", value: String(plan.rows.length - sends - loses) },
     ],
     body: "Context checked for every project: Quo texts (refreshed live), Quo calls (read live), Goodshuffle emails, quote opens, notes and the sales log. Reply in thread with anything that looks off.",
     context: "Sales Bot · dry run",
@@ -386,6 +411,8 @@ export function projectCard(r: MorningPlanRow): BotCard {
   if (r.send && r.draft) {
     sections.push(`*Sales Bot would have sent this* (text at ${clockLabel(r.sendAt!)}, as ${r.signedAs ?? "Zoe Events"}):\n>${r.draft.replace(/\n/g, "\n>")}`);
     if (r.caution) sections.push(`_Heads up: ${r.caution}_`);
+  } else if (r.lose) {
+    sections.push(`*Sales Bot would mark this lost and archive it in Goodshuffle:* ${r.reason ?? ""}`);
   } else {
     sections.push(`*Sales Bot would not text this one:* ${r.reason ?? "no reason recorded"}`);
   }
