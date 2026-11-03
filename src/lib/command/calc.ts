@@ -160,3 +160,64 @@ export function computeRevenueOutlook(inp: {
     status,
   };
 }
+
+/** Exceptions that belong to TODAY's operations. The exceptions table keeps every unresolved row ever
+ *  logged, so counting all of them made one old, never-closed exception mark today as "at risk". An
+ *  exception tied to a stop counts only when that stop is on today's routes; one with no stop counts
+ *  only when it was logged today (ops time zone, via `ymdOf`). */
+export function todaysExceptions<T extends { stopId: string | null; ts: string }>(
+  exceptions: T[],
+  todayStopIds: Set<string>,
+  today: string,
+  ymdOf: (iso: string) => string,
+): T[] {
+  return exceptions.filter((x) => {
+    if (x.stopId) return todayStopIds.has(x.stopId);
+    try {
+      return ymdOf(x.ts) === today;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** A session marked "running" counts as live only with recent activity. Every timeline event touches
+ *  updated_at, so a running session silent for longer than this has most likely stalled. */
+export const AI_LIVE_FRESH_MIN = 30;
+
+export type AiActivityState = "live" | "idle" | "approval" | "other";
+
+/** How the dashboard should present one AI session: running + recent activity = live; running but
+ *  silent = idle (stalled, never counted as live); awaiting approval = waiting on a person (real work,
+ *  no staleness rule). Everything else (paused, done, failed, cancelled) keeps its own status. */
+export function aiActivityState(s: { status: string; updatedAt: string }, nowMs: number, freshMin = AI_LIVE_FRESH_MIN): AiActivityState {
+  if (s.status === "awaiting_approval") return "approval";
+  if (s.status !== "running") return "other";
+  const t = Date.parse(s.updatedAt);
+  if (!Number.isFinite(t)) return "idle";
+  return nowMs - t <= freshMin * 60_000 ? "live" : "idle";
+}
+
+/** Count of sessions that are live by the rule above. */
+export function liveAiCount(sessions: { status: string; updatedAt: string }[], nowMs: number, freshMin = AI_LIVE_FRESH_MIN): number {
+  return sessions.filter((s) => aiActivityState(s, nowMs, freshMin) === "live").length;
+}
+
+/** Goodshuffle data older than this is flagged on the dashboard (the office Auto-Pull runs daily). */
+export const GS_DATA_STALE_H = 24;
+
+export interface DataFreshness {
+  at: string | null; // ISO of the last successful bookings pull, null if never
+  ageLabel: string; // "12m ago", "5h ago", "3d ago", "never"
+  stale: boolean; // older than GS_DATA_STALE_H, or never pulled
+}
+
+/** How fresh the Goodshuffle numbers on the dashboard are. Every booking, quote and revenue figure
+ *  comes from the last Auto-Pull, so the page states its age instead of looking live. */
+export function dataFreshness(at: string | null | undefined, nowMs: number, staleH = GS_DATA_STALE_H): DataFreshness {
+  const t = at ? Date.parse(at) : NaN;
+  if (!at || !Number.isFinite(t)) return { at: null, ageLabel: "never", stale: true };
+  const m = Math.max(0, Math.round((nowMs - t) / 60_000));
+  const ageLabel = m < 1 ? "just now" : m < 60 ? `${m}m ago` : m < 48 * 60 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+  return { at, ageLabel, stale: nowMs - t > staleH * 3_600_000 };
+}

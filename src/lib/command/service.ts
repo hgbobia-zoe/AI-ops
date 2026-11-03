@@ -22,7 +22,9 @@ import { financeConfig } from "@/lib/finance/config";
 import { getPeriod } from "@/lib/finance/periods";
 import type { FinanceSummary } from "@/lib/finance/service";
 import type { AttentionItem } from "@/lib/ops/manager";
-import { sevenDayOutlook, dayStatus, computeRevenueOutlook, type OutlookDay, type OpStatus, type RevenueOutlook } from "./calc";
+import { getPullState } from "@/lib/pull/state";
+import { listRecentSessions, listLiveSessions, type AiSession } from "@/lib/ai/sessions";
+import { sevenDayOutlook, dayStatus, computeRevenueOutlook, todaysExceptions, dataFreshness, aiActivityState, liveAiCount, type OutlookDay, type OpStatus, type RevenueOutlook, type DataFreshness } from "./calc";
 
 /** This-MONTH path-to-target — the managerial "are we making our number?" number. Deterministic:
  *  signed vs a monthly target (derived from the weekly target) vs the open quotes that could close
@@ -57,7 +59,7 @@ export interface TodayOps {
   inProgress: number;
   remaining: number;
   driversAssigned: number;
-  exceptions: number;
+  exceptions: number; // open exceptions on TODAY's stops (or stopless ones logged today), not all-time
 }
 
 export interface CrewAssignment {
@@ -99,6 +101,7 @@ export interface CommandCenter {
   pipeline: PipelineBreakdown; // real signed / quote / lost split (upcoming)
   capacity: CapacityDay[]; // upcoming non-AVAILABLE days (attention-worthy)
   outlook: OutlookDay[]; // next 7 days
+  gsData: DataFreshness; // age of the last Goodshuffle bookings pull (every booking/quote/revenue number)
 }
 
 const IN_PROGRESS = new Set(["EnRoute", "Arrived", "HeadingBack"]);
@@ -130,7 +133,7 @@ export async function commandCenter(): Promise<CommandCenter> {
     inProgress: stops.filter((s) => IN_PROGRESS.has(s.state)).length,
     remaining: stops.filter((s) => s.state === "Waiting").length,
     driversAssigned: routes.filter((r) => r.driverId).length,
-    exceptions: getOpenExceptions().length,
+    exceptions: todaysExceptions(getOpenExceptions(), new Set(stops.map((s) => s.stopId)), today, (iso) => todayInOpsTz(new Date(iso))).length,
   };
 
   // People on the schedule today (Connecteam). Honest UNVERIFIED when the API can't be reached.
@@ -193,7 +196,16 @@ export async function commandCenter(): Promise<CommandCenter> {
     pipeline,
     capacity,
     outlook,
+    gsData: dataFreshness(safeBookingsPullAt(), Date.now()),
   };
+}
+
+function safeBookingsPullAt(): string | null {
+  try {
+    return getPullState().sources?.["bookings"]?.at ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function sumSigned(bookings: { grandTotal: number | null; signed: boolean }[]): number | null {
@@ -207,5 +219,29 @@ function clockLabel(unix: number, tz: string): string {
     return new Date(unix * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: tz });
   } catch {
     return "—";
+  }
+}
+
+export interface AiSessionsView {
+  sessions: (AiSession & { idle: boolean })[]; // most recent first; idle = marked running but silent
+  live: number; // running with recent activity (AI_LIVE_FRESH_MIN)
+}
+
+/** The Command Center's AI panel: recent sessions, each tagged idle when it is marked running but has
+ *  gone quiet, plus the live count by the same rule. Read-only over the AI control plane's tables. */
+export function aiSessionsView(limit = 6): AiSessionsView {
+  const now = Date.now();
+  const recent = safeRead(() => listRecentSessions(limit), [] as AiSession[]);
+  return {
+    sessions: recent.map((s) => ({ ...s, idle: aiActivityState(s, now) === "idle" })),
+    live: safeRead(() => liveAiCount(listLiveSessions(500), now), 0),
+  };
+}
+
+function safeRead<T>(fn: () => T, fallback: T): T {
+  try {
+    return fn();
+  } catch {
+    return fallback;
   }
 }
