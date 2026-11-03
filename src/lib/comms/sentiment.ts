@@ -19,6 +19,22 @@ function sentimentLlmEnabled(): boolean {
   return flagOn("CALL_SENTIMENT_LLM") && (process.env.CALL_SENTIMENT_LLM ?? "").trim().toLowerCase() !== "heuristic";
 }
 
+/** What a flagged call is mainly about. Negative calls are not all anger: a calm price objection or a
+ *  cancellation question needs a different follow-up than a furious caller, so the alert names it. */
+export type CallConcern =
+  | "frustration"
+  | "price_objection"
+  | "cancellation_risk"
+  | "complaint"
+  | "damage"
+  | "billing"
+  | "delivery_problem"
+  | "negative_tone";
+
+export const CALL_CONCERNS: readonly CallConcern[] = [
+  "frustration", "price_objection", "cancellation_risk", "complaint", "damage", "billing", "delivery_problem", "negative_tone",
+];
+
 export interface Sentiment {
   label: "positive" | "neutral" | "negative";
   score: number; // 0..1 — negativity / frustration confidence
@@ -26,6 +42,7 @@ export interface Sentiment {
   method: "llm" | "heuristic";
   reasons: string[]; // short, specific — what drove the verdict
   llmModel?: string;
+  concern?: CallConcern; // the LLM's read of what the call is mainly about (absent on the heuristic path)
 }
 
 /** Flag threshold — at/above this negativity score a call is treated as "frustrated / at-risk". */
@@ -68,7 +85,13 @@ const MILD: [RegExp, string][] = [
   [/\bmistake\b/i, "mistake"],
   [/\bno one\b|\bnobody\b/i, "no one responded"],
 ];
-const PROFANITY = /\b(damn|hell|crap|bullshit|wtf|f[\*u]ck|shit|ass(hole)?)\b/i;
+// Price pushback: the customer objecting to cost. Weighted like MODERATE (it puts a booking at risk), but
+// labelled so the alert can say "Price objection" instead of calling a calm caller frustrated.
+export const PRICE_CUE_LABEL = "price pushback";
+const PRICE: [RegExp, string][] = [
+  [/\btoo (expensive|pricey|high|much)\b|\bprice is (too )?(high|steep)\b|\bover (our|my|the) budget\b|\bout of (our|my) budget\b|\bcan'?t afford\b|\b(found|got) (it |a )?cheaper\b|\bbetter (price|deal|quote)\b|\bcheaper (option|quote|elsewhere)\b/i, PRICE_CUE_LABEL],
+];
+const PROFANITY =/\b(damn|hell|crap|bullshit|wtf|f[\*u]ck|shit|ass(hole)?)\b/i;
 const POSITIVE = /\b(thank you|thanks|great|perfect|appreciate|wonderful|awesome|excellent|love it|so happy|pleasure)\b/i;
 
 /** Cue labels that signal genuine emotional frustration / escalation (STRONG + MODERATE + profanity +
@@ -76,12 +99,14 @@ const POSITIVE = /\b(thank you|thanks|great|perfect|appreciate|wonderful|awesome
  *  call negative without the caller being angry. Used to title a call alert honestly: a frustrated /
  *  escalation caller vs. a negative-tone operational report. Derived from the lists above so it never
  *  drifts out of sync. */
-export const ESCALATION_CUE_LABELS: ReadonlySet<string> = new Set<string>([
-  ...STRONG.map(([, label]) => label),
-  ...MODERATE.map(([, label]) => label),
-  "profanity",
-  "shouting (caps)",
-]);
+// "cancel" and "wants refund" score as STRONG but are NOT emotion: a calm caller asking to cancel is a
+// cancellation risk, not a frustrated caller. "complaint" is titled as a complaint, not as anger.
+const NOT_EMOTION = new Set<string>(["cancel", "wants refund", "complaint"]);
+export const ESCALATION_CUE_LABELS: ReadonlySet<string> = new Set<string>(
+  [...STRONG.map(([, label]) => label), ...MODERATE.map(([, label]) => label), "profanity", "shouting (caps)"].filter(
+    (l) => !NOT_EMOTION.has(l),
+  ),
+);
 
 /** Deterministic negativity score for a piece of call text. Pure — no I/O, fully testable. */
 export function heuristicSentiment(text: string | null | undefined): Sentiment {
@@ -101,6 +126,7 @@ export function heuristicSentiment(text: string | null | undefined): Sentiment {
   hit(STRONG, 0.4);
   hit(MODERATE, 0.25);
   hit(MILD, 0.12);
+  hit(PRICE, 0.25);
   if (PROFANITY.test(t)) {
     score += 0.35;
     reasons.push("profanity");
@@ -131,11 +157,16 @@ export function heuristicSentiment(text: string | null | undefined): Sentiment {
 
 const SYSTEM =
   "You analyze the tone of a customer phone call for an event-rental company's operations team. " +
-  "Judge the CUSTOMER's emotional tone — are they frustrated, irritated, angry, or upset? Ignore normal " +
-  "logistics talk. Be conservative: only call it negative when the customer is genuinely unhappy, not " +
-  "merely asking questions. Output RAW JSON ONLY — no markdown, no fences, no prose — exactly: " +
-  '{"sentiment":"positive|neutral|negative","frustration":0.0,"reasons":["short phrase", "..."]}. ' +
-  "frustration is 0.0–1.0. Keep reasons to at most 3 short, specific phrases grounded in what was said.";
+  "Judge the CUSTOMER's tone. Ignore normal logistics talk. Be conservative: only call it negative when " +
+  "the customer is genuinely unhappy, or pushes back in a way that puts the booking at risk (the price is " +
+  "too high, they are thinking of cancelling or going elsewhere). Plain questions about price or dates are " +
+  "not negative. Then name the MAIN concern, one of: frustration (the customer is clearly angry, irritated " +
+  "or fed up), price_objection, cancellation_risk, complaint (unhappy with service, calm), damage, billing, " +
+  "delivery_problem, negative_tone (unhappy but none of the above). Use frustration ONLY for real anger; a " +
+  "calm objection is never frustration. Output RAW JSON ONLY, no markdown, no fences, no prose, exactly: " +
+  '{"sentiment":"positive|neutral|negative","frustration":0.0,"concern":"negative_tone","reasons":["short phrase"]}. ' +
+  "frustration is 0.0 to 1.0 and is your confidence the call needs attention. Keep reasons to at most 3 " +
+  "short, specific phrases grounded in what was said.";
 
 function extractJson(text: string): unknown {
   let s = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
@@ -161,7 +192,8 @@ export async function analyzeSentiment(text: string | null | undefined): Promise
   if (!r.ok || !r.text) return heuristic;
 
   try {
-    const p = extractJson(r.text) as { sentiment?: unknown; frustration?: unknown; reasons?: unknown };
+    const p = extractJson(r.text) as { sentiment?: unknown; frustration?: unknown; concern?: unknown; reasons?: unknown };
+    const concern = CALL_CONCERNS.find((c) => c === String(p.concern ?? "").trim().toLowerCase());
     const label: Sentiment["label"] =
       p.sentiment === "negative" || p.sentiment === "positive" ? p.sentiment : "neutral";
     const rawScore = typeof p.frustration === "number" ? p.frustration : label === "negative" ? 0.7 : 0;
@@ -174,6 +206,7 @@ export async function analyzeSentiment(text: string | null | undefined): Promise
       method: "llm",
       reasons: reasons.length ? reasons : heuristic.reasons,
       llmModel: r.model,
+      ...(concern ? { concern } : {}),
     };
   } catch {
     return heuristic; // model returned non-JSON — trust the deterministic read instead

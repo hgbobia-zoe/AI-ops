@@ -204,16 +204,16 @@ export async function ingestCallEvent(input: IngestCallInput): Promise<IngestRes
   // and a readable, searchable phone number, plus a link straight to the matched project when we have one.
   const who = fmtPhoneName(resolvedName, prettyPhone(custPhone));
   const confidence = Math.round(s.score * 100);
-  const conf = s.method === "llm" ? `${confidence}% (LLM${s.llmModel ? ` · ${s.llmModel}` : ""})` : `${confidence}% (keyword heuristic — no transcript LLM read)`;
+  const conf = s.method === "llm" ? `${confidence}% (LLM${s.llmModel ? ` · ${s.llmModel}` : ""})` : `${confidence}% (keyword match, no LLM read)`;
   const reasons = s.reasons.length ? `\n> ${s.reasons.join(" · ")}` : "";
   const src = transcript ? "transcript" : "AI summary";
   const project = booking ? `\n<https://pro.goodshuffle.com/app/project/detail?id=${booking.bookingId}|${(booking.eventName ?? "").trim() || "Open the project in Goodshuffle"}>` : "";
-  // Title is a PURE function of what we actually detected (frustration/escalation vs. a nameable
-  // operational signal vs. a plain flagged insight) — never a blanket "Frustrated caller" for every call.
+  // Title names what the call is mainly about (anger, price objection, cancellation, damage, ...), never a
+  // blanket "Frustrated caller" for every flagged call. No dashes in the text (house comms style).
   const title = callAlertTitle(s, classifyReason(text).reason);
   const msg =
-    `${title.emoji} *${title.heading}* — ${who}\n` +
-    `Negative tone on a ${dir === "outgoing" ? "call we made" : "call in"} (from the ${src}). Confidence ${conf}.${reasons}${project}\n` +
+    `${title.emoji} *${title.heading}*: ${who}\n` +
+    `${dir === "outgoing" ? "A call we made" : "An incoming call"}, read from the ${src}. Confidence ${conf}.${reasons}${project}\n` +
     `_Review the call in OpenPhone and consider a follow-up._`;
 
   const res = await slackNotifyAlert(msg);
