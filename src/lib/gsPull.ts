@@ -316,6 +316,7 @@ ${GS_TEMPLATE_JS}
         var taskOps=all.filter(function(o){ return o.op==="create_gs_task" && o.transactionId && o.payload && o.payload.title; });
         var provOps=all.filter(function(o){ return (o.op==="provision_user"||o.op==="revoke_user") && o.payload && o.payload.system; });
         var esignOps=all.filter(function(o){ return o.op==="disable_esignature" && o.transactionId; });
+        var lostOps=all.filter(function(o){ return o.op==="mark_lost" && o.transactionId; });
         var createOps=all.filter(function(o){ return o.op==="create_project" && o.payload && o.payload.intakeId; });
         if(SKIP_CREATE) createOps=[]; // a standalone Playwright runner drains creates by navigation instead of a popup
         // Goodshuffle only CREATES a project on a real navigation (a fetch just returns the SPA shell), so we
@@ -334,7 +335,7 @@ ${GS_TEMPLATE_JS}
         var claimFirst=(createOps.length && activeClick) ? fetch(API+"/api/gs/outbox",{method:"POST",headers:POSTH(),body:JSON.stringify({id:createOps[0].id,claim:true,holder:"bookmarklet"})}).then(function(r){ return r.ok?r.json():null; }).then(function(cj){ if(cj && cj.claimed===true){ try{ createPopup=window.open("/app/project/createNewProject","gscreate","width=520,height=640,left=40,top=40"); }catch(e){ createPopup=null; } } }).catch(function(){}) : Promise.resolve();
         function popNewId(w){ return new Promise(function(resolve){ if(!w){ resolve(null); return; } var n=0; var iv=setInterval(function(){ n++; var got=null; try{ var h=w.location.href; if(h && h.indexOf("about:blank")<0){ var m=h.match(/[?&]id=(\\d+)/); if(m) got=m[1]; } }catch(e){} if(got){ clearInterval(iv); resolve(got); } else if(n>80){ clearInterval(iv); resolve(null); } }, 250); }); }
         var emailSender=(j&&j.emailSender)||null, senderOk=!emailSender, emailsHeld=0;
-        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, provisioned=0, esigns=0;
+        var pushed=0, failed=0, notes=0, team=0, emails=0, created=0, fees=0, tasks=0, provisioned=0, esigns=0, losts=0;
         var chain=(emailSender && (emailOps.length||tplOps.length)) ? claimFirst.then(function(){ return gsSignedInAs(emailSender); }).then(function(ok){ senderOk=ok; }) : claimFirst;
         // disable_esignature: turn OFF online signing N business days before the event (queued by
         // src/lib/salesos/esignCutoff.ts) so a contract signs IN PERSON, not last-minute online. CAPTURE-NEEDED:
@@ -578,7 +579,18 @@ ${GS_TEMPLATE_JS}
             });
           });
         });
-        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, emailsHeld:emailsHeld, emailSender:emailSender, created:created, fees:fees, tasks:tasks, provisioned:provisioned, esigns:esigns}; });
+        // mark_lost: unsigned quote 3 days (or less) before the event. Parity with the extension: markAsLost then
+        // archiveProject (form transactionID), done only when both succeed.
+        lostOps.forEach(function(o){
+          chain=chain.then(function(){
+            function post(path){ return fetch(path,{method:"POST",headers:{"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"},credentials:"include",body:new URLSearchParams({transactionID:String(o.transactionId)}).toString()}).then(function(r){ return r.ok; }); }
+            return post("/app/vendorTransaction/markAsLost").then(function(lostOk){
+              if(o.payload && o.payload.archive===false) return lostOk ? "" : "lost_failed";
+              return post("/app/vendorTransaction/archiveProject").then(function(archOk){ return (lostOk&&archOk) ? "" : (!lostOk ? "lost_failed" : "archive_failed"); });
+            }).then(function(err){ if(!err) losts++; else failed++; return ackOp(o.id,!err,"mark_lost_"+err); }).catch(function(){ failed++; return ackOp(o.id,false,"mark_lost_error"); });
+          });
+        });
+        return chain.then(function(){ return {pushed:pushed, failed:failed, notes:notes, team:team, emails:emails, emailsHeld:emailsHeld, emailSender:emailSender, created:created, fees:fees, tasks:tasks, provisioned:provisioned, esigns:esigns, losts:losts}; });
       }).catch(function(){ return {pushed:0, failed:0, notes:0, emails:0, created:0, fees:0, tasks:0, provisioned:0, esigns:0}; });
     }
 

@@ -149,6 +149,7 @@ const OP_LABEL: Record<string, string> = {
   create_project: "Project created from a lead",
   remove_waypoint: "Stop removed from a route",
   disable_esignature: "Online signing turned off",
+  mark_lost: "Project marked lost and archived",
 };
 
 export function opLabel(op: string): string {

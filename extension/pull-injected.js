@@ -272,15 +272,16 @@ function gsTemplateText(html) {
       const taskOps = all.filter((o) => o.op === "create_gs_task" && o.transactionId && o.payload && o.payload.title);
       const provOps = all.filter((o) => (o.op === "provision_user" || o.op === "revoke_user") && o.payload && o.payload.system);
       const esignOps = all.filter((o) => o.op === "disable_esignature" && o.transactionId);
+      const lostOps = all.filter((o) => o.op === "mark_lost" && o.transactionId);
       // Ops this content-script drainer can't action (e.g. create_project, which needs a popup created
       // from a real user gesture — a timer-driven content script has none, so the office bookmarklet or a
       // Playwright runner drains those). Surfaced in the result so they're VISIBLE, never silently
       // ignored forever. Keep this set in sync with the handlers below + gsPull.ts.
-      const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, email_template: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1, disable_esignature: 1 };
+      const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, email_template: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1, disable_esignature: 1, mark_lost: 1 };
       const unhandledOps = all.filter((o) => !HANDLED[o.op]);
       const emailSender = (j && j.emailSender) || null;
       let senderOk = !emailSender, emailsHeld = 0;
-      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, emails = 0, tasks = 0, provisioned = 0, esigns = 0;
+      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, emails = 0, tasks = 0, provisioned = 0, esigns = 0, losts = 0;
       let chain = (emailSender && (emailOps.length || tplOps.length)) ? gsSignedInAs(emailSender).then((ok) => { senderOk = ok; }) : Promise.resolve();
       // provision_user / revoke_user: People Lifecycle access provisioning via REPLAY. Mirrors
       // src/lib/gsPull.ts — gated on the captured endpoint (src/lib/people/provisioningEndpoints.ts). This
@@ -407,7 +408,18 @@ function gsTemplateText(html) {
         else { headers["content-type"] = "application/x-www-form-urlencoded"; body = new URLSearchParams(data).toString(); }
         return fetch(ep.path, { method: ep.method || "POST", headers, credentials: "include", body }).then((r) => r.ok).then((ok) => { if (ok) esigns++; else failed++; return ackOp(o.id, ok, "disable_esignature_failed"); }).catch(() => { failed++; return ackOp(o.id, false, "disable_esignature_error"); });
       }); });
-      return chain.then(() => ({ pushed, failed, notes, team, fees, emails, emailsHeld, emailSender, tasks, provisioned, esigns, unhandled: unhandledOps.length }));
+      // mark_lost: an unsigned quote 3 days (or less) before its event (queued by the Sales Bot morning run,
+      // src/lib/salesos/markLost.ts). Captured live 2026-11-03 on TEST 3: POST markAsLost then archiveProject,
+      // each a form body of just transactionID. Done only when both succeed; a failure acks failed (visible
+      // in the outbox health) rather than retrying a half done write forever.
+      lostOps.forEach((o) => { chain = chain.then(() => {
+        const post = (path) => fetch(path, { method: "POST", headers: { "x-requested-with": "XMLHttpRequest", "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, credentials: "include", body: new URLSearchParams({ transactionID: String(o.transactionId) }).toString() }).then((r) => r.ok);
+        return post("/app/vendorTransaction/markAsLost").then((lostOk) => {
+          if (o.payload && o.payload.archive === false) return lostOk ? "" : "lost_failed";
+          return post("/app/vendorTransaction/archiveProject").then((archOk) => (lostOk && archOk ? "" : !lostOk ? "lost_failed" : "archive_failed"));
+        }).then((err) => { if (!err) losts++; else failed++; return ackOp(o.id, !err, "mark_lost_" + err); }).catch(() => { failed++; return ackOp(o.id, false, "mark_lost_error"); });
+      }); });
+      return chain.then(() => ({ pushed, failed, notes, team, fees, emails, emailsHeld, emailSender, tasks, provisioned, esigns, losts, unhandled: unhandledOps.length }));
     }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0, fees: 0, emails: 0, tasks: 0, provisioned: 0, esigns: 0, unhandled: 0 }));
   }
 
