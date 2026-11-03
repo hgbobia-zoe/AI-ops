@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { computeRateSyncProposals } from "./rateSync";
 import type { GustoSnapshotMember } from "./gustoSnapshot";
 import type { WorkerRecord } from "./types";
+import type { PayRate } from "@/lib/connecteam";
 
 function rec(p: Partial<WorkerRecord>): WorkerRecord {
   return {
@@ -19,9 +20,9 @@ function gm(id: string, payRate: number | null, payUnit: string | null): GustoSn
     payRate, payCurrency: "USD", payUnit,
   };
 }
-function ctRates(entries: { userId: number; rate: number }[]): Map<number, { hourlyRate: number; effectiveDate: string; userId: number }[]> {
-  const m = new Map<number, { hourlyRate: number; effectiveDate: string; userId: number }[]>();
-  for (const e of entries) m.set(e.userId, [{ userId: e.userId, hourlyRate: e.rate, effectiveDate: "2026-01-01" }]);
+function ctRates(entries: { userId: number; rate: number }[]): Map<number, PayRate[]> {
+  const m = new Map<number, PayRate[]>();
+  for (const e of entries) m.set(e.userId, [{ userId: e.userId, rate: e.rate, effectiveDate: "2026-01-01" }]);
   return m;
 }
 const EFF = "2026-10-31";

@@ -6,6 +6,7 @@
 
 import { unifiedWorkers } from "./workers";
 import { getPayrollConfig } from "./config";
+import { overtimeFlag } from "./overtime";
 import { listPeriodExclusions, listReviewAccepts, type PeriodExclusion, type ReviewAccept } from "./store";
 import type { ExcludeMode, IssueTag, PayPeriod, PayrollReviewResult, ReviewStatus, ReviewWorker, UnifiedWorker } from "./types";
 
@@ -36,7 +37,9 @@ export function classifyWorker(w: UnifiedWorker, opts: ReviewOptions): ReviewWor
   if (w.workerType === "INTERNATIONAL_CONTRACTOR" && !w.currency) issues.push({ kind: "MISSING_CONFIG", code: "CURRENCY_MISSING", label: "Currency missing" });
 
   // EXCEPTION — anomaly in otherwise valid data.
-  if ((hours ?? 0) > opts.overtimeThreshold) issues.push({ kind: "EXCEPTION", code: "OVERTIME", label: `Overtime (> ${opts.overtimeThreshold}h)` });
+  // Overtime only for hourly workers; salaried never; unknown pay type is flagged to fix (overtime.ts).
+  const ot = overtimeFlag(hours, w.payType, opts.overtimeThreshold);
+  if (ot) issues.push({ kind: "EXCEPTION", code: "OVERTIME", label: ot.label });
 
   const hasBlocking = issues.some((i) => i.kind === "BLOCKING");
   const hasOther = issues.some((i) => i.kind !== "BLOCKING");

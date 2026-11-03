@@ -6,8 +6,8 @@ const rates = new Map<number, PayRate[]>([
   [
     1,
     [
-      { userId: 1, hourlyRate: 25, effectiveDate: "2026-06-01" },
-      { userId: 1, hourlyRate: 22, effectiveDate: "2026-01-01" },
+      { userId: 1, rate: 25, effectiveDate: "2026-06-01" },
+      { userId: 1, rate: 22, effectiveDate: "2026-01-01" },
     ],
   ],
 ]);

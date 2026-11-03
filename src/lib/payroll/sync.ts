@@ -8,9 +8,12 @@
 // "READY / REQUIRES_REVIEW" and records gusto_ok = null (not configured / not pushed).
 
 import { createHash } from "node:crypto";
-import { getActualHours, getTimesheetDetail } from "@/lib/connecteam";
-import { getUsers } from "@/lib/connecteam";
+import { getActualHours, getTimesheetDetail, getUsers, getPayRates, payTypeForUserOn } from "@/lib/connecteam";
 import { gustoConfigured } from "./gusto";
+import { getPayrollConfig } from "./config";
+import { overtimeFlag } from "./overtime";
+import { resolvePayType } from "./workers";
+import { readGustoSnapshot } from "./gustoSnapshot";
 import {
   ensureWorkerFromConnecteam, upsertTimeEntry, upsertException, startSyncRun, finishSyncRun,
 } from "./store";
@@ -39,19 +42,20 @@ export interface SyncSummary {
   message: string;
 }
 
-const OVERTIME_WEEKLY_THRESHOLD = 40; // US weekly OT line; surfaced as a MEDIUM exception (not auto-split yet)
-
 export async function runPayrollSync(input: SyncInput): Promise<SyncSummary> {
   const runId = startSyncRun({ periodStart: input.periodStart, periodEnd: input.periodEnd, trigger: input.trigger, initiatedBy: input.actor });
 
   // 1) Pull the operational time source. If it's unavailable, FAIL cleanly — never push partial payroll.
   //    Also pull the timesheet APPROVAL detail: the sync must never mark unapproved (or approval-unverified)
   //    hours as ready to export — that is the prerequisite to safely enabling the Connecteam→Gusto sync.
-  const [roster, actual, tsDetail] = await Promise.all([
+  const [roster, actual, tsDetail, rates] = await Promise.all([
     getUsers(),
     getActualHours(input.periodStart, input.periodEnd),
     getTimesheetDetail(input.periodStart, input.periodEnd),
+    getPayRates(input.periodStart, input.periodEnd),
   ]);
+  const overtimeThreshold = getPayrollConfig().overtimeThreshold;
+  const gustoById = new Map((readGustoSnapshot()?.members ?? []).map((m) => [m.id, m] as const));
   if (!actual.ok) {
     finishSyncRun(runId, { status: "FAILED", connecteamOk: false, gustoOk: null, detail: "Connecteam time source unavailable — no hours pulled." });
     return summary(runId, "FAILED", { connecteamOk: false, message: "Connecteam unavailable — nothing was synced." });
@@ -102,10 +106,16 @@ export async function runPayrollSync(input: SyncInput): Promise<SyncSummary> {
       if (opened) newExceptions++;
       reviewCount++;
     }
-    if (hours > OVERTIME_WEEKLY_THRESHOLD) {
+    const payType = resolvePayType(
+      payTypeForUserOn(rates, userId, input.periodEnd),
+      worker.gustoId ? gustoById.get(worker.gustoId) ?? null : null,
+      worker,
+    );
+    const ot = overtimeFlag(hours, payType, overtimeThreshold);
+    if (ot) {
       const opened = upsertException({
         syncRunId: runId, workerId: worker.id, workerLabel: name, severity: "MEDIUM", type: "OVERTIME_DETECTED",
-        source: "connecteam", description: `${name} logged ${rounded}h (> ${OVERTIME_WEEKLY_THRESHOLD}h) — review overtime before payroll.`,
+        source: "connecteam", description: `${name} logged ${rounded}h. ${ot.label}. ${ot.action}`,
         detectKey: `${input.periodStart}:${input.periodEnd}:${worker.id}:OVERTIME`,
       });
       if (opened) newExceptions++;

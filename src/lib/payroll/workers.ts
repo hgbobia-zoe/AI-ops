@@ -4,11 +4,11 @@
 // "match + classify" step) persist as overrides. FACTS ONLY — unknown hours stay null, never 0, when the
 // time source is unavailable.
 
-import { getUsers, getPayRates, rateForUserOn, getActualHours } from "@/lib/connecteam";
+import { getUsers, getPayRates, rateForUserOn, payTypeForUserOn, getActualHours } from "@/lib/connecteam";
 import { listWorkerRecords } from "./store";
 import { readGustoSnapshot, type GustoSnapshotMember } from "./gustoSnapshot";
 import { getPayrollConfig } from "./config";
-import type { PayPeriod, RateSource, UnifiedWorker, WorkerRecord, WorkerType } from "./types";
+import type { PayPeriod, PayType, RateSource, UnifiedWorker, WorkerRecord, WorkerType } from "./types";
 
 export interface UnifiedWorkersResult {
   workers: UnifiedWorker[];
@@ -67,6 +67,19 @@ export function resolveRate(
   return { payRate, rateSource, gustoRate, gustoRateUnit, connecteamRate, currency };
 }
 
+/** Hourly or salaried, from the systems that actually know, never assumed: the Connecteam pay rate in effect
+ *  at period end (hourly vs monthly/yearly), else the Gusto pay unit, else what was saved on the record.
+ *  Null when none of them says. Overtime depends on it (overtime.ts). */
+export function resolvePayType(
+  connecteam: "hourly" | "salary" | null,
+  gm: GustoSnapshotMember | null,
+  rec: WorkerRecord | null,
+): PayType | null {
+  if (connecteam) return connecteam;
+  if (gm?.payUnit) return /hour/i.test(gm.payUnit) ? "hourly" : "salary";
+  return rec?.payType ?? null;
+}
+
 /** Build the merged worker directory for a pay period. Connecteam roster + stored overrides, with actual
  *  period hours and the applicable hourly rate attached. */
 export async function unifiedWorkers(period: PayPeriod): Promise<UnifiedWorkersResult> {
@@ -113,7 +126,7 @@ export async function unifiedWorkers(period: PayPeriod): Promise<UnifiedWorkersR
       inConnecteam: true,
       gustoId: rec?.gustoId ?? null,
       gustoMapped: Boolean(rec?.gustoId),
-      payType: rec?.payType ?? "hourly",
+      payType: resolvePayType(payTypeForUserOn(rates, m.userId, period.end), gm, rec),
       payRate: rr.payRate,
       currency: rr.currency,
       rateSource: rr.rateSource,
@@ -148,7 +161,7 @@ export async function unifiedWorkers(period: PayPeriod): Promise<UnifiedWorkersR
       inConnecteam: false,
       gustoId: rec.gustoId,
       gustoMapped: Boolean(rec.gustoId),
-      payType: rec.payType,
+      payType: resolvePayType(null, gm, rec),
       payRate: rr.payRate,
       currency: rr.currency,
       rateSource: rr.rateSource,

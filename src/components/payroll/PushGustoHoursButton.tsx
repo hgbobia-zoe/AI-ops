@@ -91,11 +91,15 @@ export function PushGustoHoursButton({
       }
 
       // 2) Confirm — be explicit that this is DRAFT-only and does NOT submit payroll.
+      // Name who gets overtime (hourly only, per their Connecteam pay type) and why anyone is skipped.
+      const otLines = data.entries.filter((e) => e.overtimeHours > 0).map((e) => `  ${e.name}: ${e.overtimeHours}h overtime (hourly)`);
+      const skipLines = data.skipped.map((s) => `  ${s.name}: ${s.reason}`);
       const ok = window.confirm(
-        `Write hours into the Gusto DRAFT for ${data.mappedCount} mapped worker${data.mappedCount === 1 ? "" : "s"} ` +
-          `(${data.totals.regular}h regular + ${data.totals.overtime}h overtime, period ${data.period.label}).\n\n` +
-          `It does NOT submit, run, or approve payroll — it only fills the draft. ` +
-          `${data.skipped.length ? `${data.skipped.length} worker(s) will be skipped (unmapped/blocked/no hours).` : ""}\n\nContinue?`,
+        `Write hours into the Gusto DRAFT for ${data.mappedCount} worker${data.mappedCount === 1 ? "" : "s"} ` +
+          `(${data.totals.regular}h regular + ${data.totals.overtime}h overtime, period ${data.period.label}).\n` +
+          (otLines.length ? `\nOvertime:\n${otLines.join("\n")}\n` : "") +
+          (skipLines.length ? `\nSkipped:\n${skipLines.join("\n")}\n` : "") +
+          `\nIt does NOT submit, run, or approve payroll. It only fills the draft.\n\nContinue?`,
       );
       if (!ok) {
         setBusy(false);

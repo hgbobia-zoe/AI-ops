@@ -760,24 +760,32 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Connecteam's pay rate types (GET /pay-rates/v1/pay-rates). monthly and yearly are salaried. */
+export type ConnecteamRateType = "hourly" | "monthly" | "yearly";
+
 export interface PayRate {
   userId: number;
-  hourlyRate: number;
+  rate: number | null; // defaultRate: $/h for hourly, the salary amount for monthly/yearly; null when not set
+  rateType?: ConnecteamRateType; // absent only in hand-built maps (tests), read as hourly
   effectiveDate: string; // YYYY-MM-DD
 }
 
-/** Hourly pay rates (with effective dates) for a date range. Empty when unconfigured/unavailable. */
+/** Every pay rate (all types, with history) for a date range, newest effective date first per user. Empty
+ *  when unconfigured/unavailable. Read hourly $/h with rateForUserOn and hourly vs salaried with
+ *  payTypeForUserOn. Not filtered by rateType on purpose: Connecteam's filter also drops the rate in effect at
+ *  the range start, so a salaried person would wrongly look like they have no rate (or an old hourly one). */
 export async function getPayRates(startDate: string, endDate: string): Promise<Map<number, PayRate[]>> {
   if (!connecteamConfigured()) return new Map();
   return _ratesCache(`rates:${startDate}:${endDate}`, () => getPayRatesUncached(startDate, endDate));
 }
+const RATE_TYPES: ReadonlySet<string> = new Set(["hourly", "monthly", "yearly"]);
 async function getPayRatesUncached(startDate: string, endDate: string): Promise<Map<number, PayRate[]>> {
   const map = new Map<number, PayRate[]>();
   if (!connecteamConfigured()) return map;
-  // Confirmed shape (live probe): data.payRatesByUsers = [{ userId, payRate }], where payRate is
-  // an object (or array w/ history) of { effectiveDate, rateType, defaultRate, resourcesRates, … }.
+  // Shape (docs + live probe): data.payRatesByUsers = [{ userId, payRate }], where payRate is an object (or
+  // an array with history) of { effectiveDate, rateType: hourly|monthly|yearly, defaultRate?, ... }.
   const items = await ctGetAllPages<Json>(
-    `/pay-rates/v1/pay-rates?startDate=${startDate}&endDate=${endDate}&rateType=hourly&isIncludeHistory=true`,
+    `/pay-rates/v1/pay-rates?startDate=${startDate}&endDate=${endDate}&isIncludeHistory=true`,
     (j) => findArray(j, ["payRatesByUsers"]),
     (it) => Number((it as Record<string, unknown>).userId),
   );
@@ -787,24 +795,35 @@ async function getPayRatesUncached(startDate: string, endDate: string): Promise<
     const pr = item.payRate;
     const entries: Json[] = Array.isArray(pr) ? (pr as Json[]) : pr && typeof pr === "object" ? [pr as Json] : [];
     for (const e of entries) {
-      const rateType = String(e.rateType ?? "").toLowerCase();
-      if (rateType && rateType !== "hourly") continue; // only hourly rates fund per-hour labor cost
-      const rate = num(e.defaultRate ?? e.rate ?? e.amount);
-      if (rate == null) continue;
+      const t = String(e.rateType ?? "").toLowerCase();
+      if (!RATE_TYPES.has(t)) continue; // unknown type: skip rather than guess
       const eff = String(e.effectiveDate ?? "1970-01-01").slice(0, 10);
-      map.set(userId, [...(map.get(userId) ?? []), { userId, hourlyRate: rate, effectiveDate: eff }]);
+      const rate = num(e.defaultRate ?? e.rate ?? e.amount);
+      map.set(userId, [...(map.get(userId) ?? []), { userId, rate, rateType: t as ConnecteamRateType, effectiveDate: eff }]);
     }
   }
   for (const list of map.values()) list.sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate));
   return map;
 }
 
-/** The hourly rate applicable to a user ON a date (latest effectiveDate ≤ date). Null if none. */
+/** The pay rate entry in effect for a user ON a date (latest effectiveDate ≤ date), or null. */
+function rateEntryOn(rates: Map<number, PayRate[]>, userId: number, date: string): PayRate | null {
+  return rates.get(userId)?.find((r) => r.effectiveDate <= date) ?? null;
+}
+
+/** The HOURLY rate in effect for a user on a date. Null when none is set yet, or when they are salaried on
+ *  that date (a salary is not an hourly rate). */
 export function rateForUserOn(rates: Map<number, PayRate[]>, userId: number, date: string): number | null {
-  const list = rates.get(userId);
-  if (!list || list.length === 0) return null;
-  const applicable = list.find((r) => r.effectiveDate <= date);
-  return applicable ? applicable.hourlyRate : null; // no rate yet effective on that date → unknown
+  const e = rateEntryOn(rates, userId, date);
+  if (!e || (e.rateType && e.rateType !== "hourly")) return null;
+  return e.rate;
+}
+
+/** Hourly or salaried on a date, from the Connecteam pay rate in effect. Null when no rate is set. */
+export function payTypeForUserOn(rates: Map<number, PayRate[]>, userId: number, date: string): "hourly" | "salary" | null {
+  const e = rateEntryOn(rates, userId, date);
+  if (!e) return null;
+  return !e.rateType || e.rateType === "hourly" ? "hourly" : "salary";
 }
 
 export interface TimeClock {

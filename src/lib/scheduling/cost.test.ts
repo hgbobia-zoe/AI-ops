@@ -28,7 +28,7 @@ describe("window hours", () => {
 
 describe("internalRateFor", () => {
   const rates = new Map<number, PayRate[]>([
-    [1, [{ userId: 1, hourlyRate: 25, effectiveDate: "2026-01-01" }]],
+    [1, [{ userId: 1, rate: 25, effectiveDate: "2026-01-01" }]],
   ]);
   it("returns the rate on the date, null when none", () => {
     expect(internalRateFor(rates, 1, "2026-10-04")).toBe(25);

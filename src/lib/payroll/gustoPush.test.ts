@@ -30,7 +30,7 @@ function uw(p: Partial<UnifiedWorker>): UnifiedWorker {
     key: p.key ?? "ct:1", recordId: null, name: p.name ?? "Worker", email: null,
     workerType: (p.workerType ?? "EMPLOYEE") as WorkerType, typeInferred: false, country: null,
     connecteamUserId: 1, instaworkWorker: null, inConnecteam: true, gustoId: p.gustoId ?? null,
-    gustoMapped: Boolean(p.gustoId), payType: "hourly", payRate: p.payRate ?? null, currency: "USD",
+    gustoMapped: Boolean(p.gustoId), payType: p.payType === undefined ? "hourly" : p.payType, payRate: p.payRate ?? null, currency: "USD",
     active: true, persisted: true, periodHours: p.periodHours ?? null,
     mappingStatus: p.gustoId ? "MATCHED" : "UNMATCHED",
   };
@@ -105,6 +105,29 @@ describe("buildPushEntries", () => {
     expect(r.skipped.map((s) => s.name).sort()).toEqual(["Cara", "Dan", "Eve"]);
     expect(r.skipped.find((s) => s.name === "Cara")!.reason).toMatch(/blocked/i);
     expect(r.skipped.find((s) => s.name === "Dan")!.reason).toMatch(/mapping/i);
+  });
+
+  it("overtime follows the Connecteam pay type: hourly split, salaried left to Gusto, unknown over 40h held back", () => {
+    const review = [
+      rw({ key: "ct:1", name: "Hourly Hal", status: "REQUIRES_REVIEW", hours: 43.85 }),
+      rw({ key: "ct:2", name: "Salaried Sue", status: "READY", hours: 45 }),
+      rw({ key: "ct:3", name: "Unknown Una", status: "REQUIRES_REVIEW", hours: 44 }),
+      rw({ key: "ct:4", name: "Unknown Uli", status: "READY", hours: 30 }),
+    ];
+    const unified = [
+      uw({ key: "ct:1", gustoId: "g1", payType: "hourly" }),
+      uw({ key: "ct:2", gustoId: "g2", payType: "salary" }),
+      uw({ key: "ct:3", gustoId: "g3", payType: null }),
+      uw({ key: "ct:4", gustoId: "g4", payType: null }),
+    ];
+    const r = buildPushEntries(review, unified, 40);
+    expect(r.entries).toEqual([
+      { gustoMemberId: "g1", name: "Hourly Hal", regularHours: 40, overtimeHours: 3.85, doubleOvertimeHours: 0 },
+      { gustoMemberId: "g4", name: "Unknown Uli", regularHours: 30, overtimeHours: 0, doubleOvertimeHours: 0 },
+    ]);
+    expect(r.totalOvertime).toBe(3.85);
+    expect(r.skipped.find((s) => s.name === "Salaried Sue")!.reason).toMatch(/salaried/);
+    expect(r.skipped.find((s) => s.name === "Unknown Una")!.reason).toMatch(/pay type not set in Connecteam/);
   });
 
   it("never pushes a blocked worker even when a gusto_id is present", () => {
