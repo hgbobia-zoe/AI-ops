@@ -161,3 +161,15 @@ Keep it running whenever marketing might submit requests. If it isn't running, j
   approval — and therefore auto-deploy — is now wired; see the branch/merge model above.)
 - **Security:** run the agent in a sandbox/container or as a lower-privilege user so even file writes can't
   escape the repo (the file tools run under `bypassPermissions`, so they can still write by absolute path).
+
+## Running it on the office PC
+
+Installed at `C:\Git\zoe-website-studio` (runner files + `node_modules` + Playwright Chromium), with the dedicated
+clone at `C:\Git\zoe-website-studioepo`. Settings live in `C:\Git\zoe-website-studio\.env` (private). Start:
+
+```
+powershell -ExecutionPolicy Bypass -File C:\Git\zoe-website-studio\start.ps1
+```
+
+`start.ps1` loads `.env` and runs `runner.js`. Start Docker Desktop + DevKinsta first so previews have screenshots.
+

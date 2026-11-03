@@ -401,7 +401,8 @@ async function captureAndUpload(jobId, changedPaths) {
   try {
     for (const path of changedPaths) {
       for (const { vp, width, height } of VIEWPORTS) {
-        const page = await browser.newPage({ viewport: { width, height } });
+        // The local DevKinsta site serves a self-signed certificate; this only ever loads the LOCAL preview URL.
+        const page = await browser.newPage({ viewport: { width, height }, ignoreHTTPSErrors: true });
         try {
           await page.goto(`${PREVIEW_URL}${path}`, { waitUntil: "networkidle", timeout: 30000 });
           const buf = await page.screenshot({ fullPage: true });
