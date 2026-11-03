@@ -47,6 +47,7 @@ import { getRiskQueue } from "@/lib/risk/store";
 import { viktorHealthNow, drainPendingInstructions } from "@/lib/ai/viktor/worker";
 import { runOutboxHealthTick } from "@/lib/aiorg/outboxHealth";
 import { runExceptionResolutionTick } from "@/lib/exceptions/engine";
+import { runPostEventDigestIfDue, digestEnabled } from "@/lib/postevent/digest";
 import { countPendingInstructions } from "@/lib/ai/sessions";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { logImport, getLatestImportBySource, recordInstaworkProbe, type ImportRow } from "@/lib/pull/state";
@@ -427,6 +428,14 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
       // ok=false when any url is down so /admin/health surfaces the red state; the tick still never throws.
       return { ok: r.down.length === 0, detail };
     },
+  },
+  {
+    key: "postevent-digest",
+    label: "Post-Event daily follow up nudge",
+    bucket: "server",
+    configured: digestEnabled, // on by default; POSTEVENT_DAILY_DIGEST=false is the kill switch
+    note: "Once each morning (default 9am ET, POSTEVENT_DIGEST_HOUR; Monday to Saturday) the Customer Experience Bot posts one card listing the customers who need us today, service first: open issues, overdue follow ups, due today, ready for a review invite, each with its owner. Built from the same board cards as the Kanban, so every count is real. Silent when nothing is due; once per ET day (kv postevent.digest.lastSentYmd); a 4h morning window so a late restart never posts at night. Never contacts a customer.",
+    run: async () => runPostEventDigestIfDue(),
   },
   {
     key: "route",

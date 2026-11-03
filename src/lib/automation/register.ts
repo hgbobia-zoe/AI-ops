@@ -26,6 +26,7 @@ const JOB_AREA: Record<string, JobArea> = {
   "lead-slack-reply": "Sales",
   "openphone-message-sync": "Sales",
   "sales-action-items": "Sales",
+  "postevent-digest": "Sales", // Post-Event sits under Sales in the nav
   instawork: "Crew & scheduling",
   connecteam: "Crew & scheduling",
   "connecteam-sync": "Crew & scheduling",
@@ -119,6 +120,7 @@ export const SWITCHES: SwitchDef[] = [
   { env: "AUTO_PACKET_ENABLED", label: "Automatic debriefs", controls: "Worker debriefs sent on their own 2 hours before a shift. Also needs crew shift texts and outgoing texts on." },
   { env: "SALES_AI_ENABLED", label: "Sales AI", controls: "The scheduled Sales AI pass for Jessie's team." },
   { env: "GS_NOTE_SYNC_ENABLED", label: "Notes to Goodshuffle", controls: "Copying sales texts and calls into the Goodshuffle project notes." },
+  { env: "POSTEVENT_DAILY_DIGEST", label: "Post-Event morning nudge", controls: "The daily Slack card listing the customers who need a follow up, an issue resolved or a review invite." },
   { env: "CALL_SENTIMENT_LLM", label: "AI call tone", controls: "AI reads call tone for customer alerts. Off falls back to the free rule based check." },
 ];
 
