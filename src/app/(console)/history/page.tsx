@@ -1,132 +1,202 @@
-// Operational History (MVP4) — the factual memory of the operation. An append-only feed of
-// what changed and when: risks detected/escalated/resolved, drivers assigned, stops pulled.
-// Read-only observer of the other systems — it never decides anything, it just remembers.
+// Operational History (MVP4): the factual memory of the operation. An append-only feed of what changed and
+// when: risks detected, escalated and resolved, drivers assigned, stops pulled, bookings moved or cancelled.
+// Read only. It never decides anything, it only remembers. Times are in the operating timezone (Eastern).
 
 import Link from "next/link";
-import { History, ShieldAlert, Truck, Package, CircleDot } from "lucide-react";
-import { getRecentChanges, type ChangeRow } from "@/lib/history/store";
+import { History, Search } from "lucide-react";
+import { queryChanges, type ChangeRow } from "@/lib/history/store";
+import { describeChange, AREA_KINDS, AREA_LABEL, type HistoryArea } from "@/lib/history/describe";
+import { opsDayLabel, opsTime } from "@/lib/history/format";
+import { todayInOpsTz } from "@/lib/dates";
+import { STATUS_DOT } from "@/lib/tone";
+import { viewerRole } from "@/lib/auth/getSession";
+import { canSeeFinancials } from "@/lib/auth/roles";
+import { cn } from "@/lib/utils";
+import { PageHeader, Toolbar } from "@/components/ui/page-header";
+import { BladeMain, OverviewLayout } from "@/components/ui/layouts";
+import { Surface } from "@/components/ui/surface";
+import { EmptyState } from "@/components/ui/states";
 
 export const dynamic = "force-dynamic";
 
-// One human-readable line + an icon per change kind. Deterministic — no interpretation.
-function describe(c: ChangeRow): { icon: React.ReactNode; text: React.ReactNode; tone: string } {
-  const risk = <ShieldAlert className="size-4" />;
-  const truck = <Truck className="size-4" />;
-  const pkg = <Package className="size-4" />;
-  const dot = <CircleDot className="size-4" />;
-  const target = c.field || c.entityId || "an item";
-  switch (c.kind) {
-    case "risk_detected":
-      return { icon: risk, tone: "text-amber-300", text: <>New risk detected — <b>{target}</b>{c.toValue ? ` (${c.toValue})` : ""}</> };
-    case "risk_escalated":
-      return { icon: risk, tone: "text-red-300", text: <>Risk escalated — <b>{target}</b> {c.fromValue} → <b>{c.toValue}</b></> };
-    case "risk_resolved":
-      return { icon: risk, tone: "text-emerald-300", text: <>Risk resolved — <b>{target}</b></> };
-    case "risk_regressed":
-      return { icon: risk, tone: "text-orange-300", text: <>Risk returned — <b>{target}</b></> };
-    case "driver_assigned":
-      return { icon: truck, tone: "text-sky-300", text: <>Driver assigned to <b>{c.entityId}</b> — {c.toValue}</> };
-    case "driver_reassigned":
-      return { icon: truck, tone: "text-sky-300", text: <>Driver changed on <b>{c.entityId}</b> — {c.fromValue} → <b>{c.toValue}</b></> };
-    case "driver_cleared":
-      return { icon: truck, tone: "text-muted-foreground", text: <>Driver cleared from <b>{c.entityId}</b>{c.fromValue ? ` (was ${c.fromValue})` : ""}</> };
-    case "stop_removed":
-      return { icon: pkg, tone: "text-muted-foreground", text: <>Stop pulled from route <b>{c.fromValue}</b></> };
-    case "event_rescheduled":
-      return { icon: dot, tone: "text-sky-300", text: <>Event rescheduled — <b>{target}</b> {c.fromValue} → <b>{c.toValue}</b></> };
-    case "booking_value_changed":
-      return { icon: dot, tone: "text-emerald-300", text: <>Booking value changed — <b>{target}</b> ${c.fromValue} → <b>${c.toValue}</b></> };
-    case "event_completed":
-      return { icon: pkg, tone: c.toValue === "complete" ? "text-emerald-300" : "text-amber-300", text: <>Event closed — <b>{target}</b> {c.field}</> };
-    case "booking_cancelled":
-      return { icon: risk, tone: "text-red-300", text: <>Booking cancelled — <b>{target}</b></> };
-    case "risk_status_changed":
-      return { icon: risk, tone: "text-sky-300", text: <>Risk {c.toValue} — <b>{target}</b></> };
-    default:
-      return { icon: dot, tone: "text-muted-foreground", text: <>{c.kind} — {target}</> };
-  }
+const AREAS = Object.keys(AREA_KINDS) as HistoryArea[];
+const PAGE_SIZE = 150;
+
+function href(p: { area?: string | null; q?: string | null; before?: string | null }): string {
+  const sp = new URLSearchParams();
+  if (p.area) sp.set("area", p.area);
+  if (p.q) sp.set("q", p.q);
+  if (p.before) sp.set("before", p.before);
+  const s = sp.toString();
+  return s ? `/history?${s}` : "/history";
 }
 
-function dayLabel(iso: string): string {
-  const d = new Date(iso);
-  const today = new Date();
-  const y = new Date(today);
-  y.setDate(today.getDate() - 1);
-  const key = (x: Date) => x.toISOString().slice(0, 10);
-  if (key(d) === key(today)) return "Today";
-  if (key(d) === key(y)) return "Yesterday";
-  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+function Row({ c, showMoney }: { c: ChangeRow; showMoney: boolean }): React.JSX.Element {
+  const d = describeChange(c, { showMoney });
+  const inner = (
+    <>
+      <span className={cn("mt-[7px] size-1.5 shrink-0 rounded-full", STATUS_DOT[d.tone])} aria-hidden />
+      <span className="min-w-0 flex-1 text-[13px]">
+        <span className="text-foreground">{d.title}</span>
+        {d.subject && <span className="font-medium text-foreground">: {d.subject}</span>}
+        {d.detail && <span className="text-secondary-text"> ({d.detail})</span>}
+      </span>
+      <time className="shrink-0 tabular-nums text-[11.5px] text-meta" dateTime={c.ts}>
+        {opsTime(c.ts)}
+      </time>
+    </>
+  );
+  const cls = "flex items-start gap-3 px-3 py-2";
+  return (
+    <li className="border-b border-rule/60 last:border-0">
+      {c.eventId ? (
+        <Link href={`/history/${encodeURIComponent(c.eventId)}`} className={cn(cls, "hover:bg-row-hover")}>
+          {inner}
+        </Link>
+      ) : (
+        <div className={cls}>{inner}</div>
+      )}
+    </li>
+  );
 }
 
-const time = (iso: string): string => new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+export default async function HistoryPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ area?: string; q?: string; before?: string }>;
+}): Promise<React.JSX.Element> {
+  const sp = await searchParams;
+  const area = AREAS.includes(sp.area as HistoryArea) ? (sp.area as HistoryArea) : null;
+  const q = (sp.q ?? "").trim().slice(0, 100) || null;
+  const before = sp.before || null;
+  const showMoney = canSeeFinancials(await viewerRole());
 
-export default async function HistoryPage(): Promise<React.JSX.Element> {
-  const changes = getRecentChanges(200);
+  const { rows, nextBefore } = queryChanges({ kinds: area ? AREA_KINDS[area] : undefined, q: q ?? undefined, before: before ?? undefined, limit: PAGE_SIZE });
 
-  // Group by calendar day (already sorted newest-first).
+  // Group by calendar day in the operating timezone (rows are already newest first).
+  const today = todayInOpsTz();
   const groups: { label: string; items: ChangeRow[] }[] = [];
-  for (const c of changes) {
-    const label = dayLabel(c.ts);
+  for (const c of rows) {
+    const label = opsDayLabel(c.ts, today);
     const last = groups[groups.length - 1];
     if (last && last.label === label) last.items.push(c);
     else groups.push({ label, items: [c] });
   }
 
-  return (
-    <main className="mx-auto max-w-3xl p-5 pb-16 md:p-8">
-      <header className="mb-6">
-        <h1 className="flex items-center gap-2 text-3xl font-bold tracking-tight">
-          <History className="size-7" /> Operational History
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Everything that changed across dispatch and risk — the operation&apos;s memory. Append-only; nothing here is editable.
-        </p>
-      </header>
+  const chip = (active: boolean): string =>
+    cn("border px-2.5 py-1 text-[12px]", active ? "border-foreground/40 bg-row-hover text-foreground" : "border-border text-secondary-text hover:bg-row-hover");
 
-      {changes.length === 0 ? (
-        <div className="border border-white/10 p-8 text-center text-sm text-muted-foreground">
-          No changes recorded yet. As risks are detected, drivers assigned, and stops pulled, they&apos;ll appear here.
-        </div>
+  const filtered = Boolean(area || q);
+
+  const main = (
+    <div className="space-y-4">
+      <Toolbar>
+        <nav className="flex flex-wrap gap-1.5" aria-label="Filter by area">
+          <Link href={href({ q })} className={chip(!area)}>
+            All
+          </Link>
+          {AREAS.map((a) => (
+            <Link key={a} href={href({ area: a, q })} className={chip(area === a)}>
+              {AREA_LABEL[a]}
+            </Link>
+          ))}
+        </nav>
+        <form action="/history" method="get" className="flex items-center gap-1.5">
+          {area && <input type="hidden" name="area" value={area} />}
+          <label className="relative">
+            <span className="sr-only">Search history</span>
+            <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-meta" aria-hidden />
+            <input
+              name="q"
+              defaultValue={q ?? ""}
+              placeholder="Event, client or route"
+              className="h-8 w-56 border border-border bg-transparent pr-2 pl-7 text-[12.5px] text-foreground outline-none placeholder:text-meta focus-visible:border-ring"
+            />
+          </label>
+          <button type="submit" className="h-8 border border-border px-2.5 text-[12px] text-foreground hover:bg-row-hover">
+            Search
+          </button>
+        </form>
+      </Toolbar>
+
+      {rows.length === 0 ? (
+        <EmptyState
+          icon={<History className="size-5" />}
+          title={filtered ? "Nothing matches" : "No changes recorded yet"}
+          body={
+            filtered
+              ? "Try another area or search."
+              : "As risks are detected, drivers assigned, stops pulled and bookings change, they appear here."
+          }
+          action={
+            filtered ? (
+              <Link href="/history" className="text-[12px] text-foreground underline">
+                Clear filters
+              </Link>
+            ) : undefined
+          }
+        />
       ) : (
-        <div className="space-y-6">
-          {groups.map((g) => (
-            <section key={g.label}>
-              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{g.label}</h2>
-              <ul className="space-y-px overflow-hidden border border-white/10">
-                {g.items.map((c) => {
-                  const d = describe(c);
-                  const inner = (
-                    <>
-                      <span className={`mt-0.5 shrink-0 ${d.tone}`}>{d.icon}</span>
-                      <span className="min-w-0 flex-1">{d.text}</span>
-                      <time className="shrink-0 tabular-nums text-xs text-muted-foreground" dateTime={c.ts}>
-                        {time(c.ts)}
-                      </time>
-                    </>
-                  );
-                  const cls = "flex items-start gap-3 bg-white/[0.02] px-3 py-2.5 text-sm";
-                  return (
-                    <li key={c.id}>
-                      {c.eventId ? (
-                        <Link href={`/history/${c.eventId}`} className={`${cls} hover:bg-white/[0.05]`}>
-                          {inner}
-                        </Link>
-                      ) : (
-                        <div className={cls}>{inner}</div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+        <div className="space-y-5">
+          {groups.map((g, i) => (
+            <section key={`${g.label}-${i}`}>
+              <h2 className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.07em] text-meta">{g.label}</h2>
+              <Surface pad="none">
+                <ul>
+                  {g.items.map((c) => (
+                    <Row key={c.id} c={c} showMoney={showMoney} />
+                  ))}
+                </ul>
+              </Surface>
             </section>
           ))}
         </div>
       )}
 
-      <p className="mt-6 text-[11px] text-muted-foreground">
-        History is captured automatically by the risk scan and by dispatch actions. Per-event timelines appear in the
-        readiness details on the Event Risk page.
+      {(nextBefore || before) && (
+        <div className="flex items-center gap-3 text-[12px]">
+          {before && (
+            <Link href={href({ area, q })} className="text-secondary-text hover:text-foreground">
+              Back to newest
+            </Link>
+          )}
+          {nextBefore && (
+            <Link href={href({ area, q, before: nextBefore })} className="border border-border px-2.5 py-1 text-foreground hover:bg-row-hover">
+              Show older
+            </Link>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const context = (
+    <Surface pad="md" className="space-y-2">
+      <div className="text-[11px] uppercase tracking-[0.07em] text-meta">What gets recorded</div>
+      <ul className="space-y-1.5 text-[12px] text-secondary-text">
+        <li>
+          <b className="text-foreground">Risks:</b> found, worse, resolved or back, from the risk scan, plus decisions made on Event Risk.
+        </li>
+        <li>
+          <b className="text-foreground">Drivers:</b> assigned, changed or removed on Dispatch.
+        </li>
+        <li>
+          <b className="text-foreground">Routes &amp; stops:</b> stops pulled, and how each event was delivered when its route closed.
+        </li>
+        <li>
+          <b className="text-foreground">Bookings:</b> moved dates, value changes and cancellations seen in the Goodshuffle pull.
+        </li>
+      </ul>
+      <p className="border-t border-rule pt-2 text-[11.5px] text-meta">
+        Nothing here can be edited. Click a change to see that event&apos;s full timeline. Times are Eastern.
       </p>
-    </main>
+    </Surface>
+  );
+
+  return (
+    <BladeMain>
+      <PageHeader title="Operational History" icon={<History className="size-6" />} subtitle="Everything that changed across dispatch, risk and bookings" />
+      <OverviewLayout main={main} context={context} />
+    </BladeMain>
   );
 }
