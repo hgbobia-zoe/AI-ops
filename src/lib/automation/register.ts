@@ -43,7 +43,7 @@ const JOB_AREA: Record<string, JobArea> = {
   "payroll-sync": "Payroll",
   "payroll-precheck": "Payroll",
   "payroll-wire-reminder": "Payroll",
-  "responder-health": "Monitoring",
+  "viktor-agent": "Monitoring",
   "outbox-health": "Monitoring",
   "self-audit": "Monitoring",
   "exception-resolution": "Monitoring",

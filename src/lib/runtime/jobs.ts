@@ -43,7 +43,7 @@ import { runEsignCutoffSweep, esignCutoffEnabled } from "@/lib/salesos/esignCuto
 import { runWebsiteMonitor } from "@/lib/monitor/websiteHealth";
 import { runLeadSlackReplySweep } from "@/lib/intake/leadSlackReply";
 import { getRiskQueue } from "@/lib/risk/store";
-import { responderHealthNow, recordJobAlert, formatAge } from "@/lib/ai/responderHealth";
+import { viktorHealthNow, drainPendingInstructions } from "@/lib/ai/viktor/worker";
 import { runOutboxHealthTick } from "@/lib/aiorg/outboxHealth";
 import { runExceptionResolutionTick } from "@/lib/exceptions/engine";
 import { countPendingInstructions } from "@/lib/ai/sessions";
@@ -321,31 +321,20 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     },
   },
   {
-    key: "responder-health",
-    label: "AI responder health (fail-loud)",
+    key: "viktor-agent",
+    label: "Viktor in-app AI agent (backstop + health)",
     bucket: "server",
-    configured: () => true, // app-owned; a silent no-op when the responder is healthy or has no pending work
-    note: "Backstop for the Slack-reactive alert: each tick, if the office-machine responder has gone stale (no recent heartbeat) AND there is pending Viktor/session work waiting, Slack the ops channel so someone starts it. Deduped with a 2h cool-off, with a one-shot recovered note when it comes back. Never alarms when the queue is empty (nothing is waiting) or the responder is alive.",
+    configured: () => true, // app-owned; answers in real time from the Slack/in-app triggers, this is the safety net
+    note: "Viktor answers Slack messages and AI Command Center instructions with the in-app AI agent (src/lib/ai/viktor), triggered the moment a message arrives. This tick is the backstop: it answers anything still pending (for example a message that arrived during a deploy restart, or a run the restart interrupted) and reports health. Failures alert the ops channel from the worker itself (30 min cool-off). Replaces the retired office-machine responder.",
     run: async () => {
-      const health = responderHealthNow();
-      const pending = countPendingInstructions();
-      // Only "down" when the responder is not alive AND work is actually waiting — a stale responder with an
-      // empty queue is harmless (nothing is being dropped), so we never nag about it.
-      const down = !health.alive && pending > 0;
-      const { alert } = recordJobAlert(down);
-      if (alert === "down") {
-        void slackNotify(
-          `⚠️ AI responder is DOWN with work waiting: ${pending} instruction${pending === 1 ? "" : "s"} queued and no heartbeat in ${formatAge(health.ageMs)}. Start the responder (a Claude Code session running scripts/responder/loop.md via /loop 60s).`,
-        );
-      } else if (alert === "recovered") {
-        void slackNotify("✅ AI responder is back (heartbeating again). The queued instructions will drain.");
+      const health = viktorHealthNow();
+      if (health.state === "disabled" || health.state === "not_configured") {
+        const pending = countPendingInstructions();
+        return { ok: pending === 0, detail: `${health.summary}${pending ? ` ${pending} pending.` : ""}` };
       }
-      const detail = health.alive
-        ? "responder alive"
-        : pending > 0
-          ? `responder ${health.state} (last ${formatAge(health.ageMs)}), ${pending} pending`
-          : `responder ${health.state} but queue empty`;
-      return { ok: health.alive || pending === 0, detail };
+      const r = await drainPendingInstructions(5);
+      const detail = r.pending ? `backstop answered ${r.answered}/${r.pending}${r.failed ? `, ${r.failed} failed` : ""}` : health.summary;
+      return { ok: r.failed === 0 && health.state !== "degraded", detail };
     },
   },
   {

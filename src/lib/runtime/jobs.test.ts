@@ -59,9 +59,12 @@ describe("computeJobStatus", () => {
   });
 });
 
-describe("responder-health job registration", () => {
+describe("viktor-agent job registration", () => {
+  it("replaces the retired responder-health job", () => {
+    expect(RUNTIME_JOBS.find((j) => j.key === "responder-health")).toBeUndefined();
+  });
   it("is registered as an always-configured server job with a runner", () => {
-    const job = RUNTIME_JOBS.find((j) => j.key === "responder-health");
+    const job = RUNTIME_JOBS.find((j) => j.key === "viktor-agent");
     expect(job).toBeDefined();
     expect(job!.bucket).toBe("server");
     expect(job!.configured()).toBe(true);
