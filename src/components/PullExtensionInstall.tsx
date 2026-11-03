@@ -38,7 +38,7 @@ export function PullExtensionInstall({ downloadHref, version }: { downloadHref: 
       </div>
 
       <ol className="list-decimal space-y-1.5 pl-5 text-sm text-muted-foreground">
-        <li>The download is <b>zoe-autopull-extension.zip</b> — <b>unzip</b> it to a folder you&apos;ll keep (e.g. Documents).</li>
+        <li>The download is <b>zoe-autopull-extension.zip</b> — <b>unzip</b> it to a folder you&apos;ll keep (e.g. Documents). It is for Load unpacked only; the Chrome Web Store rejects it (use the UPLOAD-TO-CHROME-WEB-STORE zip for the store).</li>
         <li>
           Open a new tab and go to{" "}
           <code className="rounded bg-white/10 px-1.5 py-0.5 text-foreground">chrome://extensions</code>
