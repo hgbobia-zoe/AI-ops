@@ -1,20 +1,17 @@
-// Viktor — the Slack Events API inbound webhook. A mention (@Viktor …) or a DM becomes an AI SESSION
-// instruction; the connected responder (via the bridge) reads docs/app data, answers IN the Slack thread
-// (using its Slack tool), and for an operational ask raises an approval a human OKs in the app. The app
-// itself calls NO model here — it just verifies, dedups, and routes. Public path (cross-origin): it
-// authenticates by Slack's HMAC signature, not a session (see src/proxy.ts PUBLIC).
+// Viktor — the Slack Events API inbound webhook. A mention (@Viktor ...) or a DM becomes an AI SESSION
+// instruction, which the in-app Viktor agent (src/lib/ai/viktor) answers IN the Slack thread, raising an
+// approval a human OKs in the app for any operational ask. Public path (cross-origin): it authenticates by
+// Slack's HMAC signature, not a session (see src/proxy.ts PUBLIC).
 //
-// Fast-ACK: all work here is local (verify + a couple of SQLite writes), so we finish and return 200 well
-// within Slack's 3s window — no network call happens until the responder picks the session up.
+// Fast-ACK: the request path is local (verify + a couple of SQLite writes), so we return 200 well within
+// Slack's 3s window; the agent runs after the ACK.
 
 import { NextResponse } from "next/server";
 import { verifySlackSignature, slackChallenge, extractSlackEvent } from "@/lib/slack/verify";
 import { markSlackEventSeen } from "@/lib/slack/store";
 import { createSession, addInstruction, getSessionByIdempotencyKey } from "@/lib/ai/sessions";
 import { insertAudit } from "@/lib/db/repo";
-import { responderHealthNow, recordReactiveAlert, formatAge } from "@/lib/ai/responderHealth";
-import { slackNotify } from "@/lib/notify/slack";
-import { handleViktorFastPath } from "@/lib/ai/viktorFastPath";
+import { handleSessionInstruction } from "@/lib/ai/viktor/worker";
 
 export const dynamic = "force-dynamic";
 
@@ -66,43 +63,23 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (!markSlackEventSeen(`msg:${ev.channel}:${ev.ts}`)) return NextResponse.json({ ok: true, deduped: true });
 
   try {
-    // The `slack` input carries the reply target the responder needs to answer in-thread. createSession is
+    // The `slack` input carries the reply target Viktor needs to answer in-thread. createSession is
     // idempotent on the key, so a follow-up continues the same session.
     const session = createSession({
       agentId: "viktor",
       owner: ev.user,
       startedBy: `slack:${ev.user}`,
       title: `Slack: ${ev.text.slice(0, 60)}`,
-      provider: "session-bridge",
+      provider: "viktor-agent",
       input: { source: "slack", slack: { channel: ev.channel, threadTs: ev.threadTs, user: ev.user } },
       idempotencyKey: threadKey,
     });
     addInstruction(session.id, ev.text, ev.user);
 
-    // Tier 1 (the snappy fast path) + the fail-loud alarm, kicked off AFTER we ACK so Slack still gets its
-    // 200 inside 3s. The app is a long-lived Node server on Fly, so this void promise runs to completion.
-    // Fast path triages the message: a basic question it answers itself here (no office machine needed); a
-    // real task it leaves on the bridge for the Claude Code responder (Tier 2) with a short ack.
-    const sessionId = session.id;
-    const fastText = ev.text;
-    const channel = ev.channel;
-    const threadTs = ev.threadTs;
-    const messageTs = ev.ts;
-    void (async () => {
-      const outcome = await handleViktorFastPath({ sessionId, text: fastText, channel, threadTs, messageTs });
-      // Only alarm when the message actually needs Tier 2 (routed, or fast path unavailable). A question
-      // Tier 1 already answered must NOT trigger a false "responder is DOWN" alert. Deduped with a short
-      // cool-off so a burst of Slack messages doesn't spam.
-      if (outcome !== "answered") {
-        const health = responderHealthNow();
-        if (!health.alive && recordReactiveAlert().alert) {
-          const since = health.state === "never" ? "ever" : `in ${formatAge(health.ageMs)}`;
-          void slackNotify(
-            `⚠️ Viktor has a task that needs the responder, but it is DOWN (no heartbeat ${since}). It's queued and will be handled once the responder is running. Start it: a Claude Code session running scripts/responder/loop.md via /loop 60s.`,
-          ).catch(() => {});
-        }
-      }
-    })().catch(() => {});
+    // Viktor answers in-app: the agent runs AFTER we ACK so Slack still gets its 200 inside 3s. The app is a
+    // long-lived Node server on Fly, so this void promise runs to completion. The worker claims the
+    // instruction first, so a Slack retry or the runtime backstop can never answer it twice.
+    void handleSessionInstruction(session.id).catch(() => {});
   } catch {
     // Still ACK 200 so Slack doesn't retry-storm; a failure here is logged by the DB layer, not user-facing.
   }

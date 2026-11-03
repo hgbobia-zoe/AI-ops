@@ -1,5 +1,12 @@
 # Responder (office-machine)
 
+> **RETIRED for answering instructions (2026-11-03).** Viktor and AI Command Center instructions are now
+> answered by the in-app AI agent (`src/lib/ai/viktor/`: Claude with read tools plus the two governed writes,
+> `propose_action` and `file_feature_request`). Nothing needs to run on the office machine, and there is no
+> heartbeat or CLI login to keep alive. The bridge endpoints below still exist for compatibility and for
+> the self-improvement report API, but no responder is required. Kill switch: `VIKTOR_AGENT=false`.
+
+
 The **responder** is the external agent that does what the app cannot: it reads the work queue, works in an
 isolated git worktree, writes code, runs tests, and opens PRs — while the app governs and records it. For
 Phase 1 the responder is a **Claude Code session on the office machine**.

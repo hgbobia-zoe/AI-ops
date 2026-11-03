@@ -13,7 +13,7 @@ import { canViewAi, canApproveAi, canSeeFinancials } from "@/lib/auth/roles";
 import { getSession as getAiSession, listSessionEvents, listSessionTools, listSessionApprovalIds, isSessionTerminal, type SessionEventKind } from "@/lib/ai/sessions";
 import { getApproval, type AiApproval } from "@/lib/aiorg/approvals";
 import { agentDisplayName } from "@/lib/ai/control";
-import { activeAiProviderId, aiProviderById, bridgeConnected } from "@/lib/ai/provider";
+import { viktorHealthNow } from "@/lib/ai/viktor/worker";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { AiSessionControls } from "@/components/aiorg/AiSessionControls";
 import { ApprovalCard, type ApprovalCardData } from "@/components/aiorg/ApprovalCard";
@@ -87,12 +87,9 @@ export default async function AiSessionWorkspacePage({ params }: { params: Promi
   }
   awaitingInstruction = awaitingInstruction && !isSessionTerminal(session.status);
 
-  // Honest view of what (if anything) can respond. Nothing auto-dispatches an instruction to a responder;
-  // the only inbound-response path is a connected Claude session posting back via the bridge. So we never
-  // imply work is in flight — we say plainly whether a response can arrive and how.
-  const providerId = activeAiProviderId();
-  const providerDef = aiProviderById(providerId);
-  const bridge = providerDef.mode === "deferred" && bridgeConnected();
+  // Honest view of what responds: the in-app Viktor agent answers every instruction within seconds when it
+  // is configured and healthy. When it isn't, say so plainly instead of implying work is in flight.
+  const viktor = viktorHealthNow();
 
   // Don't show a green "Working" pill when the session is really just holding an unprocessed instruction.
   const pill = awaitingInstruction && session.status === "running"
@@ -149,9 +146,9 @@ export default async function AiSessionWorkspacePage({ params }: { params: Promi
           <div className="min-w-0 text-[12.5px] leading-relaxed">
             <div className="font-medium text-foreground">Instruction received and recorded.</div>
             <p className="mt-0.5 text-secondary-text">
-              {bridge
-                ? "A Claude session is connected. When it posts a response it will appear in the activity stream below, and this page refreshes on its own. This session does not generate a reply by itself."
-                : `No automated responder is attached to this session, so it will not reply on its own. A response appears here only when a connected Claude session posts one back (active AI provider: ${providerDef.name}). Connect one in Admin → AI Configuration.`}
+              {viktor.state === "ready"
+                ? "Viktor (the in-app AI agent) is answering it. The reply appears in the activity stream below within a minute, and this page refreshes on its own."
+                : `${viktor.summary} The instruction is saved and will be answered once Viktor is working again.`}
             </p>
           </div>
         </div>

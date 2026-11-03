@@ -1,6 +1,6 @@
 // AI Control Plane — session persistence actions (operate level: any signed staff). Pause / resume /
-// rename / set-objective / archive / send a new instruction. None of these execute an operational side
-// effect; they only change the session's own record. Mutations an AI proposes still go through approvals.
+// rename / set-objective / archive / send a new instruction (which the in-app Viktor agent then answers).
+// None of these execute an operational side effect; they only change the session's own record. Mutations an AI proposes still go through approvals.
 
 import { NextResponse } from "next/server";
 import {
@@ -13,7 +13,8 @@ import {
   type AiSession,
 } from "@/lib/ai/sessions";
 import { currentActor, viewerRole } from "@/lib/auth/getSession";
-import { canOperateAi } from "@/lib/auth/roles";
+import { canOperateAi, canSeeFinancials } from "@/lib/auth/roles";
+import { handleSessionInstruction } from "@/lib/ai/viktor/worker";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,8 @@ type Op = "pause" | "resume" | "rename" | "objective" | "archive" | "instruct";
 const OPS: Op[] = ["pause", "resume", "rename", "objective", "archive", "instruct"];
 
 export async function POST(req: Request): Promise<NextResponse> {
-  if (!canOperateAi(await viewerRole())) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  const role = await viewerRole();
+  if (!canOperateAi(role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   let body: { sessionId?: string; op?: string; title?: string; objective?: string; archived?: boolean; text?: string };
   try {
     body = (await req.json()) as typeof body;
@@ -55,6 +57,8 @@ export async function POST(req: Request): Promise<NextResponse> {
     case "instruct":
       if (!(body.text ?? "").trim()) return NextResponse.json({ error: "text required" }, { status: 400 });
       result = addInstruction(sessionId, body.text!, actor);
+      // The in-app Viktor agent answers it (after we respond); the reply lands in the activity stream.
+      if (result) void handleSessionInstruction(sessionId, { showMoney: canSeeFinancials(role) }).catch(() => {});
       break;
   }
   if (!result) return NextResponse.json({ error: "not_found" }, { status: 404 });

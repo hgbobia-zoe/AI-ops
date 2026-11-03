@@ -1,5 +1,12 @@
 # AI Session Bridge Responder — operating contract
 
+> **RETIRED for answering instructions (2026-11-03).** Viktor and AI Command Center instructions are now
+> answered by the in-app AI agent (`src/lib/ai/viktor/`: Claude with read tools plus the two governed writes,
+> `propose_action` and `file_feature_request`). Nothing needs to run on the office machine, and there is no
+> heartbeat or CLI login to keep alive. The bridge endpoints below still exist for compatibility and for
+> the self-improvement report API, but no responder is required. Kill switch: `VIKTOR_AGENT=false`.
+
+
 This is the operating spec for the **responder**: the Claude agent that answers the instructions people
 send to AI sessions in the AI Command Center. It is runtime-agnostic — the same contract is followed
 whether the responder runs as a **Claude Code session on the office machine** (no new cost, needs the

@@ -1,3 +1,5 @@
+// NOTE (2026-11-03): the office-machine responder is retired; Viktor answers in-app (src/lib/ai/viktor).
+// The heartbeat helpers below are legacy. decideJobAlert / formatAge are still shared by other alarms.
 // AI Control Plane — responder health. The office-machine responder (the Claude Code session running the
 // /loop prompt) heartbeats the bridge every cycle (~60s), which `setBridgeConnected()` stamps under the kv
 // key `ai.bridge.connected` as `{ connected, at: <ISO> }`. So the LAST HEARTBEAT TIME already exists; this

@@ -5,7 +5,7 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Inbox, ArrowRight, Wrench } from "lucide-react";
+import { Inbox, ArrowRight, Wrench, Bot } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canViewAi, canOperateAi, canApproveAi, canSeeFinancials } from "@/lib/auth/roles";
 import { aiCommandOverview } from "@/lib/ai/control";
@@ -15,6 +15,7 @@ import { todayInOpsTz } from "@/lib/dates";
 import { AI_EMPLOYEES } from "@/lib/aiorg/registry";
 import { AiCommandConsole } from "@/components/aiorg/AiCommandConsole";
 import { DeployStatusCard } from "@/components/ops/DeployStatusCard";
+import { viktorHealthNow } from "@/lib/ai/viktor/worker";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,8 @@ export default async function AiCommandPage({ searchParams }: { searchParams: Pr
   const { blade } = await searchParams;
   const openRequests = countOpenRequests();
   const activeImprovements = listActiveRuns().length;
+  const viktor = viktorHealthNow();
+  const viktorTone = viktor.state === "ready" ? "text-positive" : "text-attention";
 
   return (
     <main className="mx-auto max-w-[1500px] p-4 pb-16 md:p-5">
@@ -58,6 +61,19 @@ export default async function AiCommandPage({ searchParams }: { searchParams: Pr
 
       <div className="mb-5">
         <DeployStatusCard />
+      </div>
+
+      {/* Viktor health: the in-app AI agent that answers Slack and instructions here. Shows the REAL state
+          (key set, switched on, last answers succeeded), never a heartbeat that can look green while deaf. */}
+      <div className="mb-5 flex items-start gap-2.5 border border-border bg-panel px-3 py-2.5 text-[12.5px]" data-testid="viktor-health">
+        <Bot className={`mt-0.5 size-4 shrink-0 ${viktorTone}`} aria-hidden />
+        <div className="min-w-0">
+          <span className={`font-semibold uppercase tracking-wide text-[11px] ${viktorTone}`}>
+            Viktor {viktor.state === "ready" ? "ready" : viktor.state === "degraded" ? "having trouble" : viktor.state === "disabled" ? "off" : "not set up"}
+          </span>
+          <span className="ml-2 text-secondary-text">{viktor.summary}</span>
+          {viktor.lastOkAt && <span className="ml-2 text-meta">Last answer {new Date(viktor.lastOkAt).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}.</span>}
+        </div>
       </div>
 
       <AiCommandConsole
