@@ -2,7 +2,7 @@
 // proved, and no manual/future system is ever inflated to "automated". PURE (seed config only).
 
 import { describe, it, expect } from "vitest";
-import { SEED_POLICIES, seedPolicy } from "./policy";
+import { SEED_POLICIES, seedPolicy, FIELD_POLICY_IDS, policyAllows } from "./policy";
 
 describe("seed policies", () => {
   it("Sales yields the six systems with the audited modes", () => {
@@ -26,9 +26,18 @@ describe("seed policies", () => {
     }
   });
 
-  it("Warehouse is Connecteam only; Driver is Connecteam + Zoe Dispatch", () => {
+  it("field roles get no Zoe login: Warehouse and Driver are Connecteam only", () => {
     expect(seedPolicy("warehouse")!.rules.map((r) => r.adapterId)).toEqual(["connecteam"]);
-    expect(seedPolicy("driver")!.rules.map((r) => r.adapterId).sort()).toEqual(["connecteam", "zoe_platform"].sort());
+    expect(seedPolicy("driver")!.rules.map((r) => r.adapterId)).toEqual(["connecteam"]);
+    for (const id of FIELD_POLICY_IDS) expect(seedPolicy(id)?.rules.some((r) => r.adapterId === "zoe_platform") ?? false).toBe(false);
+  });
+
+  it("policyAllows blocks the Zoe login only for field roles", () => {
+    expect(policyAllows("driver", "zoe_platform")).toBe(false);
+    expect(policyAllows("warehouse", "zoe_platform")).toBe(false);
+    expect(policyAllows("admin", "zoe_platform")).toBe(true);
+    expect(policyAllows("driver", "connecteam")).toBe(true);
+    expect(policyAllows(null, "zoe_platform")).toBe(true);
   });
 
   it("every seed policy has at least one required rule (so READY is meaningful)", () => {

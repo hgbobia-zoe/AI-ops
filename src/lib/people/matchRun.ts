@@ -28,7 +28,7 @@ export interface MatchReport {
   ranAt: string;
   by: string | null;
   rosterOk: boolean;
-  created: { employeeId: string; name: string; policyId: string | null }[];
+  created: { employeeId: string; name: string; policyId: string | null; source?: "connecteam" | "payroll" }[];
   linked: { employeeId: string; name: string; field: LinkField; via: string }[];
   exceptions: MatchException[];
 }
@@ -99,7 +99,23 @@ export async function runStaffMatching(by: string | null): Promise<MatchReport> 
       lifecycleState: "ACTIVE",
     });
     audit(actor, "EMPLOYEE_IMPORTED", emp.id, { source: "connecteam", connecteamUserId: c.person.userId, title: c.person.title ?? null, detail: `Added ${emp.displayName} as existing staff from Connecteam.` });
-    created.push({ employeeId: emp.id, name: emp.displayName, policyId: c.policyId });
+    created.push({ employeeId: emp.id, name: emp.displayName, policyId: c.policyId, source: "connecteam" });
+  }
+  // Paid staff with nothing on the Connecteam roster: import from the payroll record (People came later).
+  // Their payroll and Gusto links are made in pass 2; the access policy is left for a person to set.
+  for (const c of first.payrollCreates) {
+    const em = c.worker.email?.trim().toLowerCase() ?? null;
+    const emp = createEmployee({
+      displayName: c.worker.name,
+      workEmail: em && em.endsWith("@zoeeventsdmv.com") ? em : null,
+      phone: null,
+      role: "member",
+      department: null,
+      connecteamUserId: c.worker.connecteamUserId,
+      lifecycleState: "ACTIVE",
+    });
+    audit(actor, "EMPLOYEE_IMPORTED", emp.id, { source: "payroll", hrWorkerId: c.worker.id, detail: `Added ${emp.displayName} as existing staff from Payroll.` });
+    created.push({ employeeId: emp.id, name: emp.displayName, policyId: null, source: "payroll" });
   }
 
   // Pass 2: link identities (now including the imported records) and collect exceptions.
@@ -123,7 +139,8 @@ async function announce(report: MatchReport): Promise<void> {
   setJson(POSTED_KEY, report.exceptions.map((x) => x.key));
   if (report.created.length === 0 && report.linked.length === 0 && fresh.length === 0) return;
   const sections: string[] = [];
-  if (report.created.length > 0) sections.push(`*Added as existing staff from Connecteam (${report.created.length})*\n${report.created.slice(0, 12).map((c) => `• ${c.name}`).join("\n")}`);
+  if (report.created.length > 0) sections.push(`*Added as existing staff (${report.created.length})*\n${report.created.slice(0, 12).map((c) => `• ${c.name} (from ${c.source === "payroll" ? "Payroll" : "Connecteam"})`).join("\n")}`);
+  if (!report.rosterOk) sections.push("_Connecteam did not answer, so importing from the roster waits for the next run._");
   if (report.linked.length > 0) sections.push(`*Linked automatically:* ${report.linked.length} account link${report.linked.length === 1 ? "" : "s"}.`);
   if (fresh.length > 0) sections.push(`*Need a person to sort out (${fresh.length})*\n${fresh.slice(0, 8).map((x) => `• ${x.detail}`).join("\n")}`);
   await botAnnounce("hiring", {

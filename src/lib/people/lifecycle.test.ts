@@ -15,7 +15,7 @@ import {
   startOffboarding,
   startOnboarding,
 } from "./lifecycle";
-import { createEmployee, getEmployee, getTask, listTasks } from "./store";
+import { createEmployee, getEmployee, getPolicy, getTask, linkEmployee, listTasks } from "./store";
 import { acceptInvite } from "@/lib/auth/invites";
 import { inviteTokenFromRef, reconcileZoeLogin } from "./zoeLink";
 
@@ -226,5 +226,27 @@ describe("offboarding honesty", () => {
     // No linked user_id → honest manual_required (never a faked revoke), still audited as the attempt.
     expect(res.task!.status).toBe("manual_required");
     expect(auditCount("ACCESS_REVOKED", `${e.id}:zoe_platform`)).toBe(1);
+  });
+});
+
+describe("Zoe Dispatch is office only", () => {
+  it("a driver gets no Zoe login task at onboarding, but an existing login is still revoked at offboarding", () => {
+    const d = createEmployee({ displayName: "Field Driver", role: "member", department: "driver", lifecycleState: "HIRE" });
+    startOnboarding(d.id, "Hermann");
+    expect(listTasks(d.id, "provision").map((t) => t.adapterId)).toEqual(["connecteam"]);
+
+    linkEmployee(d.id, "user_id", "U-made-by-hand");
+    startOffboarding(d.id, "Hermann", null);
+    expect(listTasks(d.id, "revoke").map((t) => t.adapterId).sort()).toEqual(["connecteam", "zoe_platform"]);
+  });
+
+  it("removes a stored Zoe rule from a field policy and skips an open Zoe setup task for field staff", () => {
+    const db = getDb();
+    db.prepare("INSERT OR IGNORE INTO access_policy_rule (id, policy_id, adapter_id, system, required, mode) VALUES ('warehouse:zoe_platform','warehouse','zoe_platform','Zoe',1,'automated')").run();
+    const w = createEmployee({ displayName: "Ware House", role: "member", department: "warehouse", lifecycleState: "ONBOARD" });
+    db.prepare("INSERT INTO lifecycle_task (id, employee_id, adapter_id, system, kind, title, status, mode, required, source, change_key, created_at) VALUES ('LT-x', ?, 'zoe_platform', 'Zoe', 'provision', 'Provision Zoe', 'pending', 'automated', 1, 'automated', ?, '2026-11-03')").run(w.id, `${w.id}:provision:zoe_platform`);
+    getPolicy("warehouse"); // any policy read runs the enforcement
+    expect(db.prepare("SELECT COUNT(*) AS c FROM access_policy_rule WHERE policy_id='warehouse' AND adapter_id='zoe_platform'").get()).toEqual({ c: 0 });
+    expect(getTask("LT-x")?.status).toBe("skipped");
   });
 });
