@@ -46,6 +46,7 @@ export interface LeadView {
   internalNotes: string | null; // GS comms log (calls/texts/emails)
   clientNotes: string | null; // GS client-visible context
   lastSentDate: string | null;
+  salesLead?: string | null; // Goodshuffle sales lead (full name), when captured
   signals: LeadSignals;
   stage: SalesStage;
   action: NextAction;
@@ -84,6 +85,7 @@ export function toLeadView(b: BookingView, today: string): LeadView {
     internalNotes: b.internalNotes,
     clientNotes: b.clientNotes,
     lastSentDate: b.lastSentDate,
+    salesLead: b.salesLead ?? null,
     signals,
     stage,
     action: nextBestAction(stage, signals),
