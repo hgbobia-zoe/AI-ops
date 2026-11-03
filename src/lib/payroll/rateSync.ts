@@ -6,7 +6,7 @@
 // here writes on its own. Idempotent: a rate already in sync is never rewritten. Honest: a write is "ok" only
 // on a real 2xx; a missing pay_rates.write scope (403) is surfaced, never swallowed.
 
-import { getPayRates, rateForUserOn, setConnecteamPayRate } from "@/lib/connecteam";
+import { getPayRates, rateForUserOn, setConnecteamPayRate, type PayRate } from "@/lib/connecteam";
 import { readGustoSnapshot, type GustoSnapshotMember } from "./gustoSnapshot";
 import { listWorkerRecords } from "./store";
 import { getPayrollConfig } from "./config";
@@ -44,7 +44,7 @@ function isHourly(unit: string | null | undefined): boolean {
 export function computeRateSyncProposals(
   records: WorkerRecord[],
   gustoById: Map<string, GustoSnapshotMember>,
-  ctRates: Map<number, { hourlyRate: number; effectiveDate: string; userId: number }[]>,
+  ctRates: Map<number, PayRate[]>,
   effectiveDate: string,
 ): RateSyncPlan {
   const proposals: RateSyncProposal[] = [];

@@ -11,6 +11,9 @@
 // sets hours on the draft. The extension aborts if the open run is not a DRAFT.
 
 import type { ReviewWorker, UnifiedWorker } from "./types";
+import { overtimeRule, splitOvertime } from "./overtime";
+
+export { splitOvertime }; // kept for existing importers; the rule lives in overtime.ts
 
 // ── One worker's hours to push ────────────────────────────────────────────────────────────────────────
 export interface GustoPushEntry {
@@ -31,16 +34,6 @@ export interface BuildPushResult {
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
-/** Split a week's hours into regular + overtime at the overtime threshold (default 40). Mirrors the review
- *  engine's OVERTIME rule (review.ts flags > threshold as an exception). Double-overtime is always 0: we do
- *  not compute it (no deterministic rule), so we never fabricate it. Pure. */
-export function splitOvertime(hours: number, overtimeThreshold: number): { regular: number; overtime: number } {
-  const h = Math.max(0, hours);
-  const t = Math.max(0, overtimeThreshold);
-  if (h <= t) return { regular: round2(h), overtime: 0 };
-  return { regular: round2(t), overtime: round2(h - t) };
-}
-
 /** Does a worker's reconciled row qualify to push into the DRAFT? MAPPED (gusto_id present) AND NOT BLOCKED
  *  (no blocking issue — no mapping/no rate) AND has real hours. REQUIRES_REVIEW (e.g. overtime, unconfirmed
  *  type) still pushes — the hours are valid and overtime is exactly what we split. Pure + conservative. */
@@ -60,8 +53,8 @@ export function buildPushEntries(
   unified: UnifiedWorker[],
   overtimeThreshold: number,
 ): BuildPushResult {
-  const gustoByKey = new Map<string, string | null>();
-  for (const u of unified) gustoByKey.set(u.key, u.gustoId);
+  const byKey = new Map<string, UnifiedWorker>();
+  for (const u of unified) byKey.set(u.key, u);
 
   const entries: GustoPushEntry[] = [];
   const skipped: { key: string; name: string; reason: string }[] = [];
@@ -69,13 +62,27 @@ export function buildPushEntries(
   let totalOvertime = 0;
 
   for (const w of reviewWorkers) {
-    const gustoId = gustoByKey.get(w.key) ?? null;
+    const u = byKey.get(w.key);
+    const gustoId = u?.gustoId ?? null;
     const check = isPushable(w, gustoId);
     if (!check.ok) {
       skipped.push({ key: w.key, name: w.name, reason: check.reason ?? "excluded" });
       continue;
     }
-    const { regular, overtime } = splitOvertime(w.hours ?? 0, overtimeThreshold);
+    // Overtime follows the worker's pay type (overtime.ts): hourly is split at the threshold; salaried is
+    // left to Gusto (it pays the salary, there are no hours to enter); unknown pay type over the threshold is
+    // held back rather than guessed.
+    const rule = overtimeRule(u?.payType ?? w.payType);
+    const hours = w.hours ?? 0;
+    if (rule === "salaried") {
+      skipped.push({ key: w.key, name: w.name, reason: "salaried (Gusto pays the salary, no hours to enter)" });
+      continue;
+    }
+    if (rule === "unknown" && hours > overtimeThreshold) {
+      skipped.push({ key: w.key, name: w.name, reason: `over ${overtimeThreshold}h but pay type not set in Connecteam (hourly or salary)` });
+      continue;
+    }
+    const { regular, overtime } = splitOvertime(hours, overtimeThreshold);
     entries.push({
       gustoMemberId: gustoId!,
       name: w.name,

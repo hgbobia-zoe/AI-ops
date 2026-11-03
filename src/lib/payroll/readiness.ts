@@ -10,13 +10,14 @@
 
 import { unifiedWorkers } from "./workers";
 import { getPayrollConfig } from "./config";
+import { overtimeFlag } from "./overtime";
 import { getTimesheetDetail, getPlannedHours, type TimesheetUserDetail } from "@/lib/connecteam";
 import { gustoConfigured } from "./gusto";
 import { gustoSnapshotFresh } from "./gustoSnapshot";
 import { upsertException, listExceptions, resolveException, getWorkerByConnecteamId, listPeriodExclusions } from "./store";
 import type {
   PayPeriod, PayrollReadiness, ReadinessException, ReadinessStatus, ReadinessWorker,
-  ReadinessIssueKind, ExceptionSeverity, UnifiedWorker,
+  ReadinessIssueKind, ExceptionSeverity, UnifiedWorker, PayType,
 } from "./types";
 
 export interface ReadinessOptions {
@@ -33,6 +34,7 @@ export interface ReadinessFacts {
   gustoId: string | null;
   gustoMapped: boolean;
   payRate: number | null;
+  payType?: PayType | null; // hourly / salary from Connecteam (workers.ts); drives the overtime rule
   actualHours: number | null; // null ⇒ time source unavailable (UNVERIFIED, never 0)
   approvedHours: number | null;
   unapprovedHours: number | null;
@@ -127,10 +129,10 @@ export function classifyReadinessWorker(f: ReadinessFacts, ctx: ReadinessContext
       `${f.name} logged ${round2(hours)}h vs ${round2(f.plannedHours)}h scheduled (≥${ctx.opts.scheduleDiscrepancyPct}% difference).`,
       "Confirm the recorded hours against the schedule.", "connecteam"));
   }
-  if ((hours ?? 0) > ctx.opts.overtimeThreshold) {
+  const ot = overtimeFlag(hours, f.payType, ctx.opts.overtimeThreshold);
+  if (ot) {
     issues.push(mkException(ctx.period, who, "OVERTIME", "EXCEPTION",
-      `${f.name} logged ${round2(hours ?? 0)}h (> ${ctx.opts.overtimeThreshold}h).`,
-      "Review overtime before payroll.", "connecteam"));
+      `${f.name} logged ${round2(hours ?? 0)}h. ${ot.label}.`, ot.action, "connecteam"));
   }
 
   return {
@@ -282,6 +284,7 @@ export async function assessReadiness(period: PayPeriod, opts?: Partial<Readines
       gustoId: w.gustoId,
       gustoMapped: w.gustoMapped,
       payRate: w.payRate,
+      payType: w.payType,
       actualHours: w.periodHours,
       approvedHours: detail?.approvedHours ?? null,
       unapprovedHours: detail?.unapprovedHours ?? null,
