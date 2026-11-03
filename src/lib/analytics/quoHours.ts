@@ -15,8 +15,38 @@ export interface QuoEvent {
   dir: "in" | "out";
   at: string; // ISO
   missed?: boolean; // inbound call never answered
+  answered?: boolean; // outbound call: the other side picked up (a voicemail greeting can count too)
+  secs?: number; // call length in seconds
   who: string; // participant key (only used in memory for reply-time pairing)
 }
+
+// ── Reach: when WE reach out, do they pick up / text back? ──────────────────────────────────────────────
+// Only outreach counts: an outbound call or text with no inbound from that person in the 2h before it
+// (otherwise we are just answering them, which says nothing about when people are reachable).
+// A text burst (several texts within 30 min) counts once; it is "replied" when they call or text back
+// within 4h. A call is "picked" when answered, and "talked" when it lasted 90s or more (most voicemail
+// greetings plus a message run shorter, so talked is the safer read of a real conversation).
+
+export interface ReachCell {
+  calls: number;
+  picked: number;
+  talked: number;
+  texts: number;
+  replied: number;
+}
+const emptyReach = (): ReachCell => ({ calls: 0, picked: 0, talked: 0, texts: 0, replied: 0 });
+/** Hour bands for the monthly table: before 10, 10 to 5, 5 to 9 pm, after 9 pm. */
+export const BANDS = ["early", "core", "evening", "late"] as const;
+export function bandOf(hour: number): number {
+  if (hour < 10) return 0;
+  if (hour < 17) return 1;
+  if (hour < 21) return 2;
+  return 3;
+}
+const REPLY_WINDOW_MS = 2 * 3_600_000;
+const BURST_MS = 30 * 60_000;
+const TEXT_BACK_MS = 4 * 3_600_000;
+const TALK_SECS = 90;
 
 export const TZ = "America/New_York";
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -67,6 +97,10 @@ export interface HoursReport {
   byMonth: { month: string; callsIn: number; textsIn: number; callsMissed: number }[];
   /** Distinct days in the window per weekday (to turn totals into per-day averages). */
   daysPerDow: number[];
+  /** Outreach reach by weekday x hour (all seasons). */
+  reachGrid?: ReachCell[][];
+  /** Outreach reach by month ("YYYY-MM") x weekday x hour band (see BANDS). */
+  reachByMonth?: Record<string, ReachCell[][]>;
 }
 
 function median(xs: number[]): number | null {
@@ -84,6 +118,8 @@ export interface HoursAcc {
   months: Record<string, { callsIn: number; textsIn: number; callsMissed: number }>;
   afterIn: number;
   afterMissed: number;
+  reachHour: ReachCell[][];
+  reachMonth: Record<string, ReachCell[][]>;
 }
 
 const SEASONS = ["all", "peak", "off"] as const;
@@ -95,7 +131,44 @@ export function newAcc(): HoursAcc {
     months: {},
     afterIn: 0,
     afterMissed: 0,
+    reachHour: DOW.map(() => Array.from({ length: 24 }, emptyReach)),
+    reachMonth: {},
   };
+}
+
+/** Fold the outreach in one participant's sorted events into the reach tables. */
+function addReach(acc: HoursAcc, list: QuoEvent[]): void {
+  let lastIn = -Infinity;
+  let lastOutText = -Infinity;
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    const t = Date.parse(e.at);
+    if (e.dir === "in") {
+      lastIn = t;
+      continue;
+    }
+    const isReply = t - lastIn <= REPLY_WINDOW_MS;
+    const burst = e.kind === "text" && t - lastOutText <= BURST_MS;
+    if (e.kind === "text") lastOutText = t;
+    if (isReply || burst) continue;
+    const lp = localParts(e.at);
+    const mk = lp.ymd.slice(0, 7);
+    const month = (acc.reachMonth[mk] ??= DOW.map(() => BANDS.map(emptyReach)));
+    const targets = [acc.reachHour[lp.dow][lp.hour], month[lp.dow][bandOf(lp.hour)]];
+    if (e.kind === "call") {
+      targets.forEach((c) => {
+        c.calls++;
+        if (e.answered) c.picked++;
+        if (e.answered && (e.secs ?? 0) >= TALK_SECS) c.talked++;
+      });
+    } else {
+      const back = list.slice(i + 1).some((x) => x.dir === "in" && Date.parse(x.at) - t <= TEXT_BACK_MS);
+      targets.forEach((c) => {
+        c.texts++;
+        if (back) c.replied++;
+      });
+    }
+  }
 }
 
 /** Fold ONE participant's events (every event for one of our numbers x one person) into the totals.
@@ -104,6 +177,7 @@ export function newAcc(): HoursAcc {
 export function addParticipant(acc: HoursAcc, events: QuoEvent[], from: string, to: string): void {
   const list = events.filter((e) => e.at >= from && e.at <= to).sort((a, b) => a.at.localeCompare(b.at));
   const { cells, totals } = acc;
+  addReach(acc, list);
   for (let i = 0; i < list.length; i++) {
     const e = list[i];
     const lp = localParts(e.at);
@@ -194,6 +268,8 @@ export function finalize(acc: HoursAcc, from: string, to: string, conversations 
     afterHours: { inbound: afterIn, share: inboundAll ? Math.round((afterIn / inboundAll) * 1000) / 10 : 0, missedCalls: afterMissed },
     byMonth: Object.entries(acc.months).sort(([a], [b]) => a.localeCompare(b)).map(([month, v]) => ({ month, ...v })),
     daysPerDow,
+    reachGrid: acc.reachHour,
+    reachByMonth: Object.fromEntries(Object.entries(acc.reachMonth).sort(([a], [b]) => a.localeCompare(b))),
   };
 }
 
@@ -235,7 +311,7 @@ export interface RunState {
 
 /** Partial work saved mid run. Aggregates and hashes only: no numbers, names or text. */
 export interface Checkpoint {
-  v: 1;
+  v: 2;
   days: number;
   from: string;
   to: string;
@@ -257,7 +333,7 @@ function readRaw(): RunState {
 }
 function readCheckpoint(): Checkpoint | null {
   const c = getJson<Checkpoint | null>(CKPT_KEY, null);
-  return c && c.v === 1 && Array.isArray(c.processed) && c.acc ? c : null;
+  return c && c.v === 2 && Array.isArray(c.processed) && c.acc ? c : null;
 }
 
 /** Is this checkpoint good to continue for a run over `days`? */
@@ -344,8 +420,10 @@ async function fetchParticipant(num: string, who: string, from: string, apiKey: 
     const dir = c.direction === "outgoing" ? "out" : "in";
     const status = String(c.status ?? "");
     // Prefer answeredAt (null = nobody picked up); fall back to the status word if the field is absent.
-    const missed = dir === "in" && ("answeredAt" in c ? !c.answeredAt : /missed|no-answer|voicemail|abandoned/i.test(status));
-    events.push({ kind: "call", dir, at, missed, who: "p" });
+    const picked = "answeredAt" in c ? !!c.answeredAt : !/missed|no-answer|voicemail|abandoned|busy|failed|canceled/i.test(status);
+    const missed = dir === "in" && !picked;
+    const answered = dir === "out" && picked;
+    events.push({ kind: "call", dir, at, missed, answered, secs: Number(c.duration) || 0, who: "p" });
   }
   for (const m of await pages(`/messages?${q}`, apiKey, ctr, 20)) {
     const at = m.createdAt as string;
@@ -374,7 +452,7 @@ export function startRun(days = 365, opts: { fresh?: boolean } = {}): RunState {
     resume && saved
       ? { ...saved, resumes: saved.resumes + 1 }
       : {
-          v: 1,
+          v: 2,
           days,
           from: new Date(now - days * 86400000).toISOString(),
           to: new Date(now).toISOString(),
