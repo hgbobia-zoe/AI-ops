@@ -32,6 +32,7 @@
 
 import {
   connecteamConfigured,
+  connecteamDownReason,
   getCrewForDateSafe,
   getDefaultScheduler,
   getUsers,
@@ -1001,7 +1002,7 @@ export async function runRouteAutoSyncTick(): Promise<RouteAutoSyncTickResult> {
   const driverlessNote = driverlessRequiredRoutes ? `, ${driverlessRequiredRoutes} route${driverlessRequiredRoutes === 1 ? "" : "s"} still need a driver` : "";
   const adoptedNote = ctAdopted ? `, ${ctAdopted} matched to an existing Connecteam shift` : "";
   const detail = reachableDays === 0
-    ? `Connecteam unreachable (${unreachable}/${dates.length} days) — skipped, nothing written`
+    ? `${connecteamDownReason()} (${unreachable}/${dates.length} days) — skipped, nothing written`
     : `${reachableDays}/${dates.length} days: ${autoAssigned} auto-assigned${seniorityNote}${expandedNote}${driverRowNote}, ${ctCreated} Connecteam shift${ctCreated === 1 ? "" : "s"} created (silent)${adoptedNote}, ${flagged} flagged${driverlessNote}${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
   return { ok, detail, days: reachableDays, autoAssigned, seniorityAssigned, windowsExpanded, ctCreated, ctAdopted, flagged, unreachableDays: unreachable, driverRowsSet, driverlessRequiredRoutes };
 }

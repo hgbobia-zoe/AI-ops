@@ -6,7 +6,7 @@
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity, saveDerivedLabor, getGpsVisitSpans } from "@/lib/db/repo";
 import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/history/store";
-import { getCrewForDateSafe, getUnavailabilityForDate, connecteamConfigured, getPayRates, rateForUserOn, type CrewShift, type CrewRole } from "@/lib/connecteam";
+import { getCrewForDateSafe, getUnavailabilityForDate, connecteamConfigured, connecteamDownReason, getPayRates, rateForUserOn, type CrewShift, type CrewRole } from "@/lib/connecteam";
 import { getSettings } from "@/lib/settings";
 import { DISPLAY_TZ } from "@/lib/dates";
 import {
@@ -567,7 +567,7 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
     logImport("connecteam", verifiedDays > 0, {
       rowsIn: dates.length,
       rowsWritten: verifiedDays,
-      detail: verifiedDays > 0 ? undefined : "Connecteam unreachable during scan",
+      detail: verifiedDays > 0 ? undefined : `${connecteamDownReason()} during scan`,
     });
     if (verifiedDays > 0) recordPull("connecteam", verifiedDays);
   }

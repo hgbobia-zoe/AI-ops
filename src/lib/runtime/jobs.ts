@@ -15,7 +15,7 @@ import { runInstaworkMonitor } from "@/lib/instawork/monitor";
 import { slackNotify } from "@/lib/notify/slack";
 import { discover } from "@/lib/seo/discovery";
 import { configured as ubersuggestConfigured } from "@/lib/seo/ubersuggest";
-import { connecteamConfigured, refreshConnecteamHealth, warmConnecteamCaches } from "@/lib/connecteam";
+import { connecteamConfigured, refreshConnecteamHealth, warmConnecteamCaches, takeConnecteamUsage, formatConnecteamUsage } from "@/lib/connecteam";
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { runScheduledPayrollSyncIfDue, runScheduledPrecheckIfDue } from "@/lib/payroll/scheduler";
 import { runWireReminderTick } from "@/lib/payroll/wireReminder";
@@ -112,7 +112,8 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     run: async () => {
       // Warm the read caches (batched) alongside the health probe, so the next render/publish is instant.
       const [h] = await Promise.all([refreshConnecteamHealth(), warmConnecteamCaches()]);
-      return { ok: h.ok, detail: h.detail };
+      // Report the daily-quota spend since the last tick so a drain is visible long before the 429s start.
+      return { ok: h.ok, detail: `${h.detail} · ${formatConnecteamUsage(takeConnecteamUsage())}` };
     },
   },
   {
