@@ -239,3 +239,14 @@ export function saveChannelLinks(input: ChannelLinks): ChannelLinks {
   return clean;
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
+
+// ── Inbound leads (read only) ──────────────────────────────────────────────────────────────────────
+// Every lead a Zap sends to /api/intake/lead is recorded in sales_intake with its source. Marketing only
+// reads it to count leads per channel (see leadSources.ts); it never edits intake rows.
+
+export function listInboundLeadRows(sinceIso: string): { createdAt: string; source: string | null; email: string | null; phone: string | null }[] {
+  const rows = getDb()
+    .prepare("SELECT created_at, source, email, phone FROM sales_intake WHERE created_at >= ? ORDER BY created_at ASC")
+    .all(sinceIso) as { created_at: string; source: string | null; email: string | null; phone: string | null }[];
+  return rows.map((r) => ({ createdAt: r.created_at, source: r.source, email: r.email, phone: r.phone }));
+}

@@ -14,6 +14,9 @@ import {
 import { marketingDashboard } from "@/lib/marketing/dashboard";
 import { buildMarketingOverview, type AttentionItem } from "@/lib/marketing/overview";
 import { ChannelHub } from "@/components/marketing/ChannelHub";
+import { LeadSourceBoard } from "@/components/marketing/LeadSourceBoard";
+import { listInboundLeadRows } from "@/lib/marketing/store";
+import { buildLeadScoreboard, leadScoreboardSince } from "@/lib/marketing/leadSources";
 import { BladeMain, OverviewLayout } from "@/components/ui/layouts";
 import { PageHeader } from "@/components/ui/page-header";
 import { Surface } from "@/components/ui/surface";
@@ -22,7 +25,7 @@ import { EmptyState, StatusBanner } from "@/components/ui/states";
 import { StatusBadge } from "@/components/ui/status";
 import { buttonVariants } from "@/components/ui/button";
 import { REVIEW_SOURCE_LABEL, CHANNEL_LABEL, AUDIENCE_LABEL, PROSPECT_STATUS_LABEL, PROSPECT_OPEN_STAGES } from "@/lib/marketing/types";
-import { formatYmdLong } from "@/lib/dates";
+import { formatYmdLong, DISPLAY_TZ } from "@/lib/dates";
 import { BladeAgents } from "@/components/aiorg/BladeAgents";
 import { cn } from "@/lib/utils";
 
@@ -33,16 +36,18 @@ function money(n: number): string {
 }
 
 /** A section header with a "jump to the working view" link. Secondary access to every sub-blade. */
-function SectionHead({ title, href, linkLabel, scope }: { title: string; href: string; linkLabel: string; scope?: string }): React.JSX.Element {
+function SectionHead({ title, href, linkLabel, scope }: { title: string; href?: string; linkLabel?: string; scope?: string }): React.JSX.Element {
   return (
     <div className="mb-2 flex items-end justify-between gap-3">
       <div className="min-w-0">
         <h2 className="text-[13px] font-medium text-foreground">{title}</h2>
         {scope && <p className="mt-0.5 text-[11px] text-meta">{scope}</p>}
       </div>
-      <Link href={href} className="inline-flex shrink-0 items-center gap-1 text-[12px] text-meta transition-colors hover:text-foreground">
-        {linkLabel} <ArrowUpRight className="size-3.5" />
-      </Link>
+      {href && (
+        <Link href={href} className="inline-flex shrink-0 items-center gap-1 text-[12px] text-meta transition-colors hover:text-foreground">
+          {linkLabel} <ArrowUpRight className="size-3.5" />
+        </Link>
+      )}
     </div>
   );
 }
@@ -66,7 +71,8 @@ function AttentionRow({ a }: { a: AttentionItem }): React.JSX.Element {
 
 export default function MarketingHome(): React.JSX.Element {
   const d = marketingDashboard();
-  const vm = buildMarketingOverview(d);
+  const leads = buildLeadScoreboard(listInboundLeadRows(leadScoreboardSince()), d.today, DISPLAY_TZ);
+  const vm = buildMarketingOverview(d, { hasLeadData: leads.hasData });
   const stars = d.reviews.avgRating != null ? `${d.reviews.avgRating}★` : "—";
 
   const primaryBtn = (
@@ -130,6 +136,12 @@ export default function MarketingHome(): React.JSX.Element {
               )}
             </section>
 
+            {/* Inbound leads by channel — counted automatically from the lead Zaps, no typing. */}
+            <section>
+              <SectionHead title="Inbound leads by channel" scope={vm.scope.leads} />
+              <LeadSourceBoard sb={leads} />
+            </section>
+
             {/* Going out next — upcoming content (honest 3-week period + source). */}
             <section>
               <SectionHead title="Going out next" href="/marketing/content" linkLabel="Content calendar" scope={vm.scope.content} />
@@ -189,10 +201,13 @@ export default function MarketingHome(): React.JSX.Element {
             {/* Snapshot — only the areas that actually carry data, each with an honest scope sub. No
                 wall of zero tiles implying complete company reporting; hidden entirely until something
                 is logged (links alone don't create a snapshot). */}
-            {(vm.hasOutreachData || vm.hasContentData || vm.hasCampaignData || vm.hasReviewData) && (
+            {(vm.hasLeadData || vm.hasOutreachData || vm.hasContentData || vm.hasCampaignData || vm.hasReviewData) && (
             <section>
               <h2 className="mb-2 text-[13px] font-medium text-foreground">Snapshot</h2>
               <div className="grid grid-cols-2 gap-3">
+                {vm.hasLeadData && (
+                  <Metric label="Inbound leads" value={String(leads.total.last7)} sub={`7 days · ${leads.total.last30} in 30d`} />
+                )}
                 {vm.hasOutreachData && (
                   <Metric label="In outreach" value={String(d.outreach.open)} sub={`${d.outreach.winsRecent} won · 30d`} tone={d.outreach.open > 0 ? "info" : undefined} />
                 )}
