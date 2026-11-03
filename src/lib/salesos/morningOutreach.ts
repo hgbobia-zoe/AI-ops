@@ -99,6 +99,17 @@ const STOP_RE = /^\s*(stop|unsubscribe|end|quit)\W*$|\b(unsubscribe|stop texting
 const DONE_RE =
   /\b(went with (another|someone|a different)|booked (with )?(another|someone else|a different)|found (another|someone)|no longer (need|interested)|not interested|we('| a)re (all set|good)|cancel(l)?ing|cancelled the event|decided not to)\b/i;
 
+// A bare acknowledgement that closes the exchange ("Thank you", "Okay thank you", "Thanks!"). Owner call
+// (2026-11-03): it does not leave the client waiting on us. The whole message must be the thanks, so
+// "Thank you, can we add chairs?" still counts as waiting.
+const THANKS_RE =
+  /^\s*(?:(?:ok(?:ay)?|k|great|perfect|awesome|sounds good|got it|will do|noted)[\s,.!]*)?(?:thank(?:s| you)(?:\s+(?:so|very)\s+much)?|thx|ty)[\s,.!]*[\p{Extended_Pictographic}\u{FE0F}\u{200D}\s]*$/iu;
+
+/** True for an inbound client text or email that is only a thank you. */
+export function isBareThanks(x: { dir: "in" | "out"; channel: string; detail: string | null }): boolean {
+  return x.dir === "in" && (x.channel === "sms" || x.channel === "email") && !!x.detail && THANKS_RE.test(x.detail);
+}
+
 const TOUCH: ReadonlySet<TimelineEntry["channel"]> = new Set(["sms", "call", "email", "quote"]);
 const t = (iso: string | null | undefined): number => (iso ? Date.parse(iso.length > 10 ? iso : `${iso}T00:00:00Z`) : NaN);
 
@@ -131,9 +142,14 @@ export function gateLead(g: GateInput): GateResult {
   if (done) return { send: false, reason: `The client said: "${clip(done.detail, 110)}".` };
 
   const list = touches(g.timeline, g.liveCalls);
-  const latest = list[0];
-  if (g.subStatus === "action_needed" || latest?.dir === "in") {
-    const said = list.find((x) => x.dir === "in" && x.detail && x.channel !== "call");
+  // Skip the client's closing thank yous; whatever came before them decides whether they are waiting.
+  let skip = 0;
+  while (skip < list.length && isBareThanks(list[skip])) skip++;
+  const closedByThanks = skip > 0;
+  const latest = list[skip];
+  // A fresh reply puts the lead in action_needed; when that reply is only a thank you it is not a reason to hold.
+  if ((g.subStatus === "action_needed" && !closedByThanks) || latest?.dir === "in") {
+    const said = list.find((x) => x.dir === "in" && x.detail && x.channel !== "call" && !isBareThanks(x));
     return { send: false, reason: `The client is waiting on us${said ? ` (their last message: "${clip(said.detail, 90)}")` : ""}. A person should answer.` };
   }
   const lastOut = list.find((x) => x.dir === "out");

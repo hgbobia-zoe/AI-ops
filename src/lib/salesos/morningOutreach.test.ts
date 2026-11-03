@@ -63,6 +63,38 @@ describe("gateLead", () => {
     expect(r.reason).toContain("2 more tables");
   });
 
+  it("treats a bare thank you as closure, not as the client waiting", () => {
+    for (const thanks of ["Thank you", "Okay thank you", "ok, thanks!", "Thank you so much 🙏", "Sounds good, thank you."]) {
+      const tl = [
+        e({ at: "2026-10-30T15:00:00Z", direction: "in", channel: "sms", detail: thanks }),
+        e({ at: "2026-10-29T15:00:00Z", direction: "out", channel: "sms", detail: "Here is your updated quote" }),
+      ];
+      expect(gateLead(gate({ timeline: tl })), thanks).toEqual({ send: true, reason: null });
+      expect(gateLead(gate({ timeline: tl, subStatus: "action_needed" })).send, thanks).toBe(true);
+    }
+  });
+
+  it("still holds when the thanks comes with a question, or follows an unanswered question", () => {
+    const withQ = [e({ at: "2026-10-30T15:00:00Z", direction: "in", channel: "sms", detail: "Thank you, can we add chairs?" })];
+    expect(gateLead(gate({ timeline: withQ })).reason).toContain("waiting on us");
+    const afterQ = [
+      e({ at: "2026-10-30T16:00:00Z", direction: "in", channel: "sms", detail: "Thank you" }),
+      e({ at: "2026-10-30T15:00:00Z", direction: "in", channel: "sms", detail: "Can we add 2 more tables?" }),
+      e({ at: "2026-10-29T15:00:00Z", direction: "out", channel: "sms", detail: "Hi" }),
+    ];
+    const r = gateLead(gate({ timeline: afterQ }));
+    expect(r.send).toBe(false);
+    expect(r.reason).toContain("2 more tables");
+  });
+
+  it("a thank you right after our text still waits out the recent outreach window", () => {
+    const tl = [
+      e({ at: "2026-11-03T15:00:00Z", direction: "in", channel: "sms", detail: "Thank you" }),
+      e({ at: "2026-11-03T14:00:00Z", direction: "out", channel: "sms", detail: "Hi" }),
+    ];
+    expect(gateLead(gate({ timeline: tl })).reason).toContain("already reached out");
+  });
+
   it("does not treat a quote open as the client talking", () => {
     const tl = [
       e({ at: "2026-11-01T15:00:00Z", direction: "in", channel: "quote", title: "Client opened the quote" }),
