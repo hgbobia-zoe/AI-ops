@@ -81,8 +81,28 @@ function zoePull(apiBase, tier) {
         (quoteMsgs.length ? quoteMsgs : msgs).forEach(consider);
         return { sent: qs, opened: qo };
       }
+      // Client EMAIL thread for the lead timeline. PARITY with the bookmarklet (gsPull.ts emailsFrom): without
+      // it the extension pull never fed /api/gs/emails, so the timeline (and the morning outreach context)
+      // had no Goodshuffle emails at all. FACTS ONLY: id + subject + date + latest open; a snippet only when the
+      // message carries a body; direction "outbound" only when it has client recipients, else unknown (null).
+      function emailsFrom(mv, id, out) {
+        const msgs = (mv && mv.client && mv.client.messages) || [];
+        msgs.forEach((m) => {
+          if (!m || m.medium !== "EMAIL") return;
+          const mid = m.id != null ? String(m.id) : m.messageID != null ? String(m.messageID) : "";
+          if (!mid) return;
+          const recips = m.clientRecipients || [];
+          let opened = null;
+          recips.forEach((rp) => { if (rp.messageOpenedDate && (!opened || rp.messageOpenedDate > opened)) opened = rp.messageOpenedDate; });
+          const rawBody = m.content || m.body || m.message || m.plainTextBody || m.htmlContent || m.htmlBody || m.preview || "";
+          const snip = typeof rawBody === "string" && rawBody ? rawBody.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 200) : null;
+          const participant = recips.length ? recips[0].name || recips[0].email || null : null;
+          out.push({ bookingId: String(id), providerMsgId: mid, direction: recips.length ? "outbound" : null, participant, subject: m.subject || null, snippet: snip, occurredAt: m.date || null, openedAt: opened });
+        });
+      }
       function pullNotes() {
         const notes = [];
+        const emails = [];
         function one(i) {
           if (i >= capIds.length) return Promise.resolve();
           const id = capIds[i];
@@ -90,6 +110,7 @@ function zoePull(apiBase, tier) {
           const pMsg = fetch("/app/conversation/getMessagesForTransaction?transactionID=" + id, H).then((r) => (r.ok ? r.json() : null)).catch(() => null);
           return Promise.all([pCV, pMsg]).then((res) => {
             const j = res[0], qt = quoteTimes(res[1]);
+            try { emailsFrom(res[1], id, emails); } catch (e) { /* email capture never blocks notes */ }
             if (!j) return; // no contract view → skip (don't blank stored notes with a partial record)
             const g = (j.lineItemGroupsToLoad) || [];
             return Promise.all(g.map((x) => fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID=" + x.id + "&transactionID=" + id, H).then((r2) => r2.json()).catch(() => null))).then((lists) => {
@@ -97,7 +118,12 @@ function zoePull(apiBase, tier) {
             });
           }).catch(() => {}).then(() => one(i + 1));
         }
-        return one(0).then(() => { if (!notes.length) return { updated: 0 }; return fetch(API + "/api/gs/notes", { method: "POST", headers: POSTH, body: JSON.stringify({ notes }) }).then((r) => r.json()).catch(() => ({ updated: 0 })); });
+        return one(0).then(() => {
+          const pN = notes.length ? fetch(API + "/api/gs/notes", { method: "POST", headers: POSTH, body: JSON.stringify({ notes }) }).then((r) => r.json()).catch(() => ({ updated: 0 })) : Promise.resolve({ updated: 0 });
+          // idempotent server-side on the Goodshuffle message id, so re-posting the thread every pull is safe
+          const pE = emails.length ? fetch(API + "/api/gs/emails", { method: "POST", headers: POSTH, body: JSON.stringify({ emails }) }).then((r) => r.json()).catch(() => ({ written: 0 })) : Promise.resolve({ written: 0 });
+          return Promise.all([pN, pE]).then((rs) => ({ updated: (rs[0] && rs[0].updated) || 0, emails: (rs[1] && rs[1].written) || 0 }));
+        });
       }
       // FULL lane: archive-inclusive POST (scope:"full" — the ONLY scope that prunes) carrying `partial`,
       // no notes (those ride the fast ACTIVE lane). ACTIVE lane: scope:"active" (never prunes) + notes.
