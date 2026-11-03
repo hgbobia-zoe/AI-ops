@@ -26,9 +26,11 @@ const GAP_COMPETITOR_FLOOR = 2;
  * absent while rivals rank = the strongest signal (highest). Zoe already top-3 = little upside (low). A mid
  * page-1 Zoe = a real improve opportunity. No SERP read = UNKNOWN (neutral placeholder, flagged).
  */
-function competitiveGapComponent(serp: SerpData | null | undefined): SeoScoreComponent {
+function competitiveGapComponent(serp: SerpData | null | undefined, metrics?: SeoMetrics | null): SeoScoreComponent {
   const base = { key: "competitive_gap", label: "Competitive gap", weight: 0.15 } as const;
   if (!serp) {
+    const tracked = trackedRankGap(metrics);
+    if (tracked) return { ...base, ...tracked, unknown: false };
     return { ...base, score: NEUTRAL, evidence: "No SERP read yet — competitive position unknown (neutral placeholder, not zero).", unknown: true };
   }
   const competitors = serp.topDomains.filter((d) => d.rank <= 10).length;
@@ -48,6 +50,20 @@ function competitiveGapComponent(serp: SerpData | null | undefined): SeoScoreCom
 }
 
 const NEUTRAL = 50;
+
+/** The gap from Ubersuggest rank tracking (Zoe's tracked position), used when no SERP was read. A final
+ *  reading only; an unknown rank returns null so the caller keeps the neutral placeholder. */
+function trackedRankGap(m: SeoMetrics | null | undefined): { score: number; evidence: string } | null {
+  if (!m?.rankStatus) return null;
+  const where = m.locale ? ` (${m.locale} rank tracking)` : " (rank tracking)";
+  if (m.rankStatus === "not_top_100" || m.trackedRank == null) {
+    return { score: 72, evidence: `Zoe is not in the top 100${where} — a gap to fill.` };
+  }
+  const r = m.trackedRank;
+  if (r <= 3) return { score: 25, evidence: `Zoe ranks #${r}${where} — limited upside, defend the position.` };
+  if (r <= 10) return { score: Math.max(55, Math.min(80, 50 + r * 3)), evidence: `Zoe ranks #${r} on page 1${where} — improving the page is the opportunity.` };
+  return { score: 82, evidence: `Zoe ranks #${r}${where}, past page 1 — close enough to push onto page 1.` };
+}
 
 /** Monthly volume → 0–100 on a log curve (≈1k ⇒ ~60, ≈10k ⇒ ~85). */
 function volumeScore(v: number): number {
@@ -121,7 +137,7 @@ export function scorePriority(input: PriorityInput): SeoPriorityBreakdown {
   components.push({ key: "competitor", label: "Competitor evidence", score: comp.length ? Math.min(80, 40 + comp.length * 10) : NEUTRAL, weight: 0.08, evidence: comp.length ? `${comp.length} competitor domain(s) rank for this: ${comp.slice(0, 3).join(", ")}.` : "No competitor ranking data (neutral placeholder).", unknown: comp.length === 0 });
 
   // 5b. Competitive gap — observed SERP position (Zoe absent vs. already ranking). The SERP engine's core signal.
-  components.push(competitiveGapComponent(input.serp));
+  components.push(competitiveGapComponent(input.serp, m));
 
   // 6. Existing coverage leverage.
   components.push({ key: "coverage", label: "Existing coverage", score: coverageScore(input.match.action), weight: 0.1, evidence: `Recommended action is ${input.match.action}.`, unknown: false });

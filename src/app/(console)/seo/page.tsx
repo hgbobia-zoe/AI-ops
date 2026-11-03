@@ -67,38 +67,38 @@ function OverviewBanner({ state, lastSuccessLabel }: { state: SeoOverviewState; 
             </Link>
           }
         >
-          Set Zoe&apos;s domain and the competitor domains in Settings, then run the Google SERP office runner from
-          the office machine. Opportunities appear here once it reads. No live keyword data is shown until then —
+          SEO data arrives with the weekly Ubersuggest feed, a scheduled Claude task on the office PC that pushes
+          Zoe&apos;s tracked keywords, rankings and search volume. Opportunities appear here once it runs. No live keyword data is shown until then —
           nothing is fabricated.
         </StatusBanner>
       );
     case "error":
       return (
-        <StatusBanner tone="critical" title="The SERP source needs attention">
-          The last Google SERP read failed or was blocked. The runner retries on its next drip; existing
+        <StatusBanner tone="critical" title="The SEO data source needs attention">
+          The last data push failed. The next scheduled run retries; existing
           opportunities below are unaffected. See the source health for the specific reason.
         </StatusBanner>
       );
     case "retrieving":
       return (
-        <StatusBanner tone="info" title="Reading live SERPs — first results on the way">
-          The source is connected and reading Google. No opportunities have been queued yet; they appear here as
-          the runner matches read keywords against Zoe&apos;s site.
+        <StatusBanner tone="info" title="Data arriving — first results on the way">
+          The source is connected. No opportunities have been queued yet; they appear here as pushed keywords
+          are matched against Zoe&apos;s site.
         </StatusBanner>
       );
     case "no_records":
       return (
         <StatusBanner tone="attention" title="No opportunities queued">
           The source has read before{lastSuccessLabel ? ` (last success ${lastSuccessLabel})` : ""} but nothing is
-          queued right now. This is zero <em>queued records</em>, not zero SEO opportunity — re-run the office
-          runner to read more keywords.
+          queued right now. This is zero <em>queued records</em>, not zero SEO opportunity — add keywords to the
+          Ubersuggest project to track more.
         </StatusBanner>
       );
     case "stale":
       return (
         <StatusBanner tone="attention" title="Source data may be out of date">
-          The pipeline below is real, but the SERP source hasn&apos;t refreshed inside the staleness window
-          {lastSuccessLabel ? ` (last success ${lastSuccessLabel})` : ""}. Re-run the office runner for current rankings.
+          The pipeline below is real, but the data source hasn&apos;t refreshed inside the staleness window
+          {lastSuccessLabel ? ` (last success ${lastSuccessLabel})` : ""}. Check the weekly Ubersuggest task on the office PC.
         </StatusBanner>
       );
     case "populated":
@@ -193,7 +193,7 @@ export default function SeoOverviewPage(): React.JSX.Element {
                     <h3 className="mb-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-meta">Recent retrievals</h3>
                     <Surface pad="none">
                       {d.diagnostics.length === 0 ? (
-                        <p className="p-3 text-[12.5px] text-meta">No reads recorded yet. Run the SERP office runner to start.</p>
+                        <p className="p-3 text-[12.5px] text-meta">No data pushes recorded yet.</p>
                       ) : (
                         <ul className="divide-y divide-[color:var(--row-rule)]">
                           {d.diagnostics.map((x) => (

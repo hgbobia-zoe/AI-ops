@@ -6,7 +6,10 @@
 //
 //   POST  body { keywords: [{ keyword, category, location, intent, rawResult }], meta?: { source, zoeDomain,
 //               blocked, limitHit, quota, error, toolName, retrievedAt } }  → parse + upsert + analyze
-//   GET   ?pending=<n>  → the next <n> seed keywords NOT yet read (what the runner should read next)
+//   GET   ?pending=<n>  → the next <n> seed keywords NOT yet read (what the runner should read next), plus the
+//                         `sources` this deploy parses
+//   meta.source "ubersuggest_project" = entries of Ubersuggest's weekly rank-tracking report, pushed by a
+//   scheduled Claude task via tools/seo-runner/push-ubersuggest.mjs (see ubersuggestProject.ts).
 
 import { NextResponse } from "next/server";
 import { ingestKeywordResults, pendingSeedKeywords, type SeoIngestBatch } from "@/lib/seo/discovery";
@@ -14,6 +17,9 @@ import { alertLimitHit } from "@/lib/seo/watcher";
 import { insertAudit } from "@/lib/db/repo";
 
 export const dynamic = "force-dynamic";
+
+/** Payload sources this deploy parses (meta.source). Absent = legacy keyword metrics. */
+const INGEST_SOURCES = ["serp", "ubersuggest_project"] as const;
 
 function cors(req: Request): Record<string, string> {
   const origin = req.headers.get("origin") ?? "*";
@@ -46,7 +52,8 @@ export async function GET(req: Request): Promise<NextResponse> {
   const nParam = Number(new URL(req.url).searchParams.get("pending") ?? "25");
   const limit = Number.isFinite(nParam) && nParam > 0 ? Math.min(nParam, 200) : 25;
   const pending = pendingSeedKeywords({ limit });
-  return NextResponse.json({ ok: true, pending, count: pending.length }, { headers });
+  // `sources` lets a pusher confirm this deploy understands its payload before sending it.
+  return NextResponse.json({ ok: true, pending, count: pending.length, sources: INGEST_SOURCES }, { headers });
 }
 
 export async function POST(req: Request): Promise<NextResponse> {

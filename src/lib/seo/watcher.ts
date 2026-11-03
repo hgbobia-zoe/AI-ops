@@ -60,7 +60,7 @@ export function serpHealth(): SeoHealth {
       status: "never",
       configured: false,
       headline: "Not run yet",
-      detail: "The SERP office runner has not pushed any data yet. Run it from the office machine (tools/seo-runner) to start reading Google SERPs.",
+      detail: "No SEO data has arrived yet. The weekly Ubersuggest feed (a scheduled Claude task on the office PC) pushes Zoe's tracked keywords, rankings and search volume.",
       lastSuccessAt: null,
       lastAttemptAt: null,
       lastError: null,
@@ -72,7 +72,7 @@ export function serpHealth(): SeoHealth {
       status: "error",
       configured: true,
       headline: attempt.rateLimited ? "Data limit" : "Blocked / error",
-      detail: attempt.detail || "The last SERP read failed. The runner reports blocked reads honestly and retries on the next drip.",
+      detail: attempt.detail || "The last data push failed. Failures are reported honestly and the next scheduled run retries.",
       lastSuccessAt,
       lastAttemptAt,
       lastError: attempt.detail ?? "read failed",
@@ -84,8 +84,8 @@ export function serpHealth(): SeoHealth {
     configured: true,
     headline: stale ? "Stale" : "Reading",
     detail: stale
-      ? `The last successful SERP read was over ${SEO_STALE_HOURS} hours ago. Data may be out of date — check the office runner.`
-      : "The SERP office runner is pushing live Google results.",
+      ? `The last successful data push was over ${SEO_STALE_HOURS} hours ago. Data may be out of date. Check the weekly Ubersuggest task on the office PC.`
+      : "SEO data is arriving (Ubersuggest weekly rank tracking).",
     lastSuccessAt,
     lastAttemptAt,
     lastError: null,

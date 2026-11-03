@@ -32,9 +32,10 @@ export default function SeoCompetitorsPage(): React.JSX.Element {
       />
 
       {domains.length === 0 ? (
-        <StatusBanner tone="neutral" title="No SERP reads yet">
-          Set the Zoe + competitor domains in <Link href="/admin" className="underline underline-offset-2">Settings</Link>, then run the
-          Google SERP office runner. Competitor rankings appear here once it reads — nothing is estimated.
+        <StatusBanner tone="neutral" title="No competitor rankings yet">
+          Competitor rankings come from Google SERP reads, which are not running. The weekly Ubersuggest feed
+          tracks Zoe&apos;s own positions (see <Link href="/seo/opportunities" className="underline underline-offset-2">Opportunities</Link>).
+          Nothing is estimated.
         </StatusBanner>
       ) : (
         <section className="space-y-2">

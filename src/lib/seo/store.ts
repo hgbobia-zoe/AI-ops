@@ -169,6 +169,10 @@ export function upsertOpportunity(input: UpsertOpportunityInput): string {
   const competitors = JSON.stringify(input.competitorRefs ?? []);
   const metrics = input.metrics ? JSON.stringify(input.metrics) : null;
   const metricsSource: SeoMetricsSource = input.metricsSource ?? (input.metrics ? "ubersuggest" : "none");
+  // On a refresh, a source that does not provide a fact (undefined related/competitors, null metrics) leaves the
+  // value another source already stored, so a SERP read never wipes Ubersuggest volume and vice versa.
+  const relatedOrKeep = input.relatedKeywords === undefined ? null : related;
+  const competitorsOrKeep = input.competitorRefs === undefined ? null : competitors;
   const serp = input.serp ? JSON.stringify(input.serp) : null;
   const source: SeoSource = input.source ?? "ubersuggest";
 
@@ -177,10 +181,11 @@ export function upsertOpportunity(input: UpsertOpportunityInput): string {
     // any prior read in place (COALESCE), so an unrelated refresh never wipes a SERP we already have.
     db.prepare(
       `UPDATE seo_opportunities SET
-         keyword = ?, related_keywords = ?, competitor_refs = ?, metrics = ?, metrics_source = ?,
+         keyword = ?, related_keywords = COALESCE(?, related_keywords), competitor_refs = COALESCE(?, competitor_refs),
+         metrics = COALESCE(?, metrics), metrics_source = CASE WHEN ? IS NULL THEN metrics_source ELSE ? END,
          serp = COALESCE(?, serp), source = ?, research_at = COALESCE(?, research_at), updated_at = ?
        WHERE id = ?`,
-    ).run(input.keyword.trim(), related, competitors, metrics, metricsSource, serp, source, input.researchAt ?? null, now, existing.id);
+    ).run(input.keyword.trim(), relatedOrKeep, competitorsOrKeep, metrics, metrics, metricsSource, serp, source, input.researchAt ?? null, now, existing.id);
     return existing.id;
   }
 

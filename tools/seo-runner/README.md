@@ -1,4 +1,24 @@
-# SEO SERP-pull runner (office machine)
+# SEO data feeds (office machine)
+
+## Primary: weekly Ubersuggest feed (`push-ubersuggest.mjs`)
+
+Ubersuggest's connector **is** signed in inside Claude (an official client), so a **scheduled Claude task** on the
+office PC reads the Zoe project's weekly rank-tracking report (`project_position_info`) and pushes it here with
+`push-ubersuggest.mjs`. Each tracked keyword lands as an opportunity with **real search volume, SEO difficulty and
+Zoe's tracked position** (or a final "not in the top 100"). Reading rank tracking does not use the free plan's 3
+daily searches.
+
+- Install: copy `push-ubersuggest.mjs` next to the runner's `.env` (`C:\Git\zoe-seo-runner`), which already
+  holds `APP_URL` + `SEO_INGEST_TOKEN`.
+- Run: `node push-ubersuggest.mjs <report.json>` (`--dry-run` prints the payload; `--error "<msg>"` records an
+  honest failure, e.g. the connector signed out). It refuses to push until the deployed app lists
+  `ubersuggest_project` in `GET /api/seo/ingest` `sources`, and refuses a non-final (`done:false`) report.
+- Schedule: the Claude desktop scheduled task "SEO weekly Ubersuggest feed" (Saturdays). It runs while the
+  Claude app is open; a missed run fires on the next launch.
+- Tracked keywords, competitors and location are managed in Ubersuggest itself (project "Zoe Event Rentals").
+  The free plan allows 25 keywords and 1 location.
+
+## Optional: Google SERP-pull runner (`runner.mjs`)
 
 Feeds the **SEO Growth** competitive-gap engine with real data. We read **live Google SERPs** for Zoe's
 tracked keywords and look at who ranks: which competitor domains own page 1, and whether Zoe appears and where.
