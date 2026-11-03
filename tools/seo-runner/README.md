@@ -13,7 +13,8 @@ daily searches.
 - Run: `node push-ubersuggest.mjs <report.json>` (`--dry-run` prints the payload; `--error "<msg>"` records an
   honest failure, e.g. the connector signed out). It refuses to push until the deployed app lists
   `ubersuggest_project` in `GET /api/seo/ingest` `sources`, and refuses a non-final (`done:false`) report.
-- Schedule: the Claude desktop scheduled task "SEO weekly Ubersuggest feed" (Saturdays). It runs while the
+- Schedule: the Claude desktop scheduled task "SEO weekly Ubersuggest feed" (Sundays 10:00; prompt in
+  `weekly-task-prompt.md`). It runs while the
   Claude app is open; a missed run fires on the next launch.
 - Tracked keywords, competitors and location are managed in Ubersuggest itself (project "Zoe Event Rentals").
   The free plan allows 25 keywords and 1 location.
