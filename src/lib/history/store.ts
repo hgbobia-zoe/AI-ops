@@ -136,6 +136,46 @@ export function getRecentChanges(limit = 100): ChangeRow[] {
   return (getDb().prepare("SELECT * FROM history_changes ORDER BY ts DESC LIMIT ?").all(limit) as Record<string, unknown>[]).map(toChange);
 }
 
+export interface ChangeQuery {
+  /** Only these change kinds (an area filter). Empty or missing = all kinds. */
+  kinds?: string[];
+  /** Free text matched against the event name, ids and the recorded values. */
+  q?: string;
+  /** Page cursor from a previous page's `nextBefore` ("ts|id"): only changes after it in the order. */
+  before?: string;
+  limit?: number;
+}
+
+/** A page of the change log, newest first. `nextBefore` is the cursor for the next (older) page, or null. */
+export function queryChanges(opts: ChangeQuery = {}): { rows: ChangeRow[]; nextBefore: string | null } {
+  const limit = Math.min(500, Math.max(1, opts.limit ?? 100));
+  const where: string[] = [];
+  const args: unknown[] = [];
+  if (opts.kinds && opts.kinds.length > 0) {
+    where.push(`kind IN (${opts.kinds.map(() => "?").join(",")})`);
+    args.push(...opts.kinds);
+  }
+  const q = opts.q?.trim();
+  if (q) {
+    const like = `%${q.replace(/[\\%_]/g, (m) => "\\" + m)}%`;
+    where.push(
+      "(field LIKE ? ESCAPE '\\' OR entity_id LIKE ? ESCAPE '\\' OR event_id LIKE ? ESCAPE '\\' OR from_value LIKE ? ESCAPE '\\' OR to_value LIKE ? ESCAPE '\\')",
+    );
+    args.push(like, like, like, like, like);
+  }
+  if (opts.before) {
+    // Cursor is "ts|id": a scan logs many changes in the same millisecond, so ts alone would skip rows.
+    const [ts, id = ""] = opts.before.split("|");
+    where.push("(ts < ? OR (ts = ? AND id < ?))");
+    args.push(ts, ts, id);
+  }
+  const sql = `SELECT * FROM history_changes ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY ts DESC, id DESC LIMIT ?`;
+  const raw = (getDb().prepare(sql).all(...args, limit + 1) as Record<string, unknown>[]).map(toChange);
+  const rows = raw.slice(0, limit);
+  const last = rows[rows.length - 1];
+  return { rows, nextBefore: raw.length > limit && last ? `${last.ts}|${last.id}` : null };
+}
+
 /**
  * Lifecycle history for a set of risks, keyed by their stable `signature` (the risk's entity_id in the
  * change log). Returns a Map signature → changes (newest first) so the /risk detail panel can show a
