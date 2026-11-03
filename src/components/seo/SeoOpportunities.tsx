@@ -134,8 +134,8 @@ export function SeoOpportunities({
             </Link>
           }
         >
-          There is nothing to discover until the source reads. Set the Zoe + competitor domains in Settings, then
-          run the Google SERP office runner. The pipeline is live and populates once it reads.
+          There is nothing to discover until the source reads. Data arrives with the weekly Ubersuggest feed (a
+          scheduled task on the office PC). The pipeline is live and populates once it pushes.
         </StatusBanner>
       )}
 

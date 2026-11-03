@@ -46,7 +46,7 @@ export function SeoHealthCard({ health, watcher }: { health: SeoHealth; watcher?
 
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-[var(--row-rule)] pt-3 text-[12px]">
         <dt className="text-meta">Source</dt>
-        <dd className="text-right text-foreground">Google SERP (office runner)</dd>
+        <dd className="text-right text-foreground">Ubersuggest rank tracking (weekly)</dd>
         <dt className="text-meta">Last successful read</dt>
         <dd className={`text-right tabular-nums ${health.lastSuccessAt ? "text-foreground" : "text-meta"}`}>{ago(health.lastSuccessAt)}</dd>
         <dt className="text-meta">Last attempt</dt>
@@ -61,7 +61,7 @@ export function SeoHealthCard({ health, watcher }: { health: SeoHealth; watcher?
           <>
             <dt className="text-meta">Keywords read</dt>
             <dd className="text-right tabular-nums text-foreground">{watcher.discovered} / {watcher.totalSeeds} <span className="text-meta">({watcher.pending} pending)</span></dd>
-            <dt className="text-meta">Last SERP read</dt>
+            <dt className="text-meta">Last data push</dt>
             <dd className={`text-right tabular-nums ${watcher.lastIngestAt ? "text-foreground" : "text-meta"}`}>{ago(watcher.lastIngestAt)}</dd>
             {watcher.lastLimitHitAt && (
               <>
@@ -75,7 +75,7 @@ export function SeoHealthCard({ health, watcher }: { health: SeoHealth; watcher?
 
       {!health.configured && (
         <Link href="/admin" className="mt-3 inline-block text-[12px] text-meta transition-colors hover:text-foreground">
-          Set the Zoe + competitor domains in Settings, then run the office runner →
+          Set the Zoe + competitor domains in Settings; data arrives with the weekly Ubersuggest feed →
         </Link>
       )}
     </div>

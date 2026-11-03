@@ -12,6 +12,7 @@ import { upsertOpportunity, findOpportunityByDedupe, getOpportunity, setAnalysis
 import { analyzeOpportunity } from "./analyze";
 import { parseSerpResult, DEFAULT_ZOE_DOMAIN } from "./serp";
 import { ZOE_PAGES } from "./zoe-pages";
+import { parseUbersuggestPosition, inferCategory } from "./ubersuggestProject";
 import type { SeoIntent, SeoMetrics, SeoSource, SerpData, ZoePage } from "./types";
 
 // ── seed catalog ────────────────────────────────────────────────────────────────────────────────────
@@ -155,6 +156,8 @@ export interface ParsedKeyword {
   serp?: SerpData | null;
   /** How this fact was obtained — drives the opportunity's `source`. Defaults to "ubersuggest" for back-compat. */
   source?: SeoSource;
+  /** false = this source never reports related keywords / competitors, so a refresh keeps the stored ones. */
+  providesRefs?: boolean;
 }
 
 const INTENTS: SeoIntent[] = ["informational", "commercial", "transactional", "navigational"];
@@ -235,8 +238,8 @@ export function applyKeywordFacts(seed: SeedKeyword, parsed: ParsedKeyword, retr
     intent,
     location: seed.location,
     category: seed.category,
-    relatedKeywords: parsed.relatedKeywords,
-    competitorRefs: parsed.competitorRefs,
+    relatedKeywords: parsed.providesRefs === false ? undefined : parsed.relatedKeywords,
+    competitorRefs: parsed.providesRefs === false ? undefined : parsed.competitorRefs,
     // A SERP read never carries volume/difficulty — those stay UNKNOWN (metricsSource "none"), which is honest.
     metrics: parsed.hasMetrics ? parsed.metrics : null,
     metricsSource: parsed.hasMetrics ? (source === "serp" ? "serp" : "ubersuggest") : "none",
@@ -333,8 +336,9 @@ export interface SeoIngestKeywordInput {
 
 /** Batch-level signal from the runner: data source, quota/limit/blocked state + the first-run schema capture. */
 export interface SeoIngestMeta {
-  /** "serp" = the keyword rawResults are live Google SERP reads; absent/"ubersuggest" = legacy keyword metrics. */
-  source?: SeoSource;
+  /** "serp" = the keyword rawResults are live Google SERP reads; "ubersuggest_project" = entries of Ubersuggest's
+   *  weekly rank-tracking report (project_position_info); absent/"ubersuggest" = legacy keyword metrics. */
+  source?: SeoSource | "ubersuggest_project";
   /** Zoe's own domain, so the SERP parser can detect Zoe's listing + rank. Defaults to DEFAULT_ZOE_DOMAIN. */
   zoeDomain?: string;
   limitHit?: boolean;
@@ -374,6 +378,7 @@ export function ingestKeywordResults(batch: SeoIngestBatch, opts: { pages?: ZoeP
   const meta = batch.meta ?? {};
   const toolName = meta.toolName ?? null;
   const isSerp = meta.source === "serp";
+  const isProject = meta.source === "ubersuggest_project";
   const zoeDomain = meta.zoeDomain || DEFAULT_ZOE_DOMAIN;
   const result: SeoIngestResult = { received: 0, created: 0, updated: 0, analyzed: 0, skipped: 0, errors: 0, limitHit: !!meta.limitHit, blocked: !!meta.blocked, note: "", ranAt };
   const kws = Array.isArray(batch.keywords) ? batch.keywords : [];
@@ -386,13 +391,24 @@ export function ingestKeywordResults(batch: SeoIngestBatch, opts: { pages?: ZoeP
     result.received++;
     const seed: SeedKeyword = {
       keyword: kw.keyword.trim(),
-      category: (kw.category ?? "").toString().trim() || "uncategorized",
+      category: (kw.category ?? "").toString().trim() || (isProject ? inferCategory(kw.keyword) : "uncategorized"),
       location: kw.location ?? null,
       intent: (typeof kw.intent === "string" ? kw.intent : "commercial") as SeoIntent,
     };
     let parsed: ParsedKeyword;
     try {
-      if (isSerp) {
+      if (isProject) {
+        // Ubersuggest rank tracking: real volume + difficulty, and Zoe's position on a final reading. The geo is
+        // the tracked location (e.g. "US"), so these never collide with the DMV SERP seeds.
+        const pu = parseUbersuggestPosition(kw.rawResult);
+        if (!pu.hasData) {
+          result.skipped++;
+          recordRetrieval({ operation: "ingest", ok: false, tool: toolName, detail: `no metrics or final rank in tracker entry: ${seed.keyword}` });
+          continue;
+        }
+        if (!kw.location) seed.location = pu.metrics.locale ?? "US";
+        parsed = pu;
+      } else if (isSerp) {
         // SERP source: parse observed rankings. No volume/difficulty (stays UNKNOWN). A read with zero organic
         // results is treated as no data for this keyword (skipped), never fabricated.
         const ps = parseSerpResult(kw.rawResult, zoeDomain, { locale: seed.location ?? undefined });

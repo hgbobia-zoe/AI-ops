@@ -57,6 +57,17 @@ export interface SeoMetrics {
   cpc?: number;
   /** Country/locale the metrics were pulled for. */
   locale?: string;
+  /** Zoe's tracked organic position from Ubersuggest rank tracking (1-100), or null when not in the top 100.
+   *  Only set when the tracker returned a FINAL reading; an unstable/pending reading leaves rankStatus unset. */
+  trackedRank?: number | null;
+  /** "ranking" (trackedRank set) or "not_top_100" (a final "not ranking" answer). Absent = rank unknown. */
+  rankStatus?: "ranking" | "not_top_100";
+  /** The Zoe URL that ranks, when known. */
+  rankUrl?: string | null;
+  /** Date (YYYY-MM-DD) of the tracked reading. */
+  rankDate?: string | null;
+  /** Previous tracked position (null = was not in the top 100), when the tracker had an earlier reading. */
+  previousRank?: number | null;
 }
 
 /** One organic result on a read SERP: the ranking domain, its 1-based position, the URL and the title. FACTS
@@ -191,8 +202,9 @@ export interface SeoHealth {
   stale: boolean;
 }
 
-/** Hours after which the last successful retrieval is considered stale. */
-export const SEO_STALE_HOURS = 24 * 7;
+/** Hours after which the last successful retrieval is considered stale. Eight days: the Ubersuggest feed is
+ *  weekly, so a one-day slip past the weekly run still reads as fresh. */
+export const SEO_STALE_HOURS = 24 * 8;
 
 // ── Phase 2: Kanban lifecycle (stage) ─────────────────────────────────────────────────────────────
 //
