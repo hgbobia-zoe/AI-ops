@@ -377,6 +377,8 @@ export interface PageDraft {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  /** The Website Studio job that publishes this approved draft (null = not sent yet). */
+  websiteJobId: string | null;
 }
 
 // ── deterministic quality checks ────────────────────────────────────────────────────────────────────

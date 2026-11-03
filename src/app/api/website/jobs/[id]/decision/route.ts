@@ -9,6 +9,7 @@ import { NextResponse } from "next/server";
 import { viewerRole, currentActor } from "@/lib/auth/getSession";
 import { canUseWebsiteStudio } from "@/lib/auth/roles";
 import { decideJob } from "@/lib/website/jobs";
+import { syncPublishState } from "@/lib/seo/publish";
 
 export const dynamic = "force-dynamic";
 
@@ -30,5 +31,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const actor = (await currentActor()).label;
   const job = decideJob(id, decision, actor);
   if (!job) return NextResponse.json({ error: "not_in_preview_or_missing" }, { status: 409 });
+  if (job.status === "discarded") await syncPublishState(job); // records who discarded it on a linked SEO draft
   return NextResponse.json({ ok: true, job });
 }

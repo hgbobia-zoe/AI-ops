@@ -78,6 +78,7 @@ function scaffoldToTransient(oppId: string, s: ScaffoldedDraft): PageDraft {
     reviewNote: null,
     reviewedBy: null,
     reviewedAt: null,
+    websiteJobId: null,
     createdBy: null,
     createdAt: now,
     updatedAt: now,

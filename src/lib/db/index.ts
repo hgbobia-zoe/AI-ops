@@ -2481,6 +2481,8 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Operational History: the signed-in person behind a change (driver assign, stop removal, risk decision).
   // Null for platform changes and older rows, which History shows as "someone" or "the platform".
   { table: "history_changes", column: "actor", type: "TEXT" },
+  // SEO publish via Website Studio: the job that publishes an approved page draft. Null = not sent yet.
+  { table: "seo_page_drafts", column: "website_job_id", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {

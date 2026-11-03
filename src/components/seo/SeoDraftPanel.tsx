@@ -3,19 +3,74 @@
 // SEO page-draft detail — the preview + quality report + review gate, shown inside the shared SidePanelOverlay.
 // Fetches the full draft (/api/seo/draft/[id]), renders the structured preview (sourced facts vs [NEEDS REVIEW]
 // markers kept visually distinct), the deterministic quality findings, and the human review actions (submit /
-// approve / reject / reopen). NOTHING here publishes a page — the furthest an approval goes is "cleared to
-// publish", a separate authorized step outside this engine.
+// approve / reject / reopen). An APPROVED draft can be sent to Website Studio, whose own preview approval and
+// site checks still gate the merge to the live site. Nothing here writes to the website directly.
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { X, Check, Ban, Send, RotateCcw, Loader2, AlertTriangle, AlertCircle, Info, FileText } from "lucide-react";
+import Link from "next/link";
+import { X, Check, Ban, Send, RotateCcw, Loader2, AlertTriangle, AlertCircle, Info, FileText, Globe, ArrowUpRight } from "lucide-react";
 import type { PageDraft, SeoQualityReport, SeoQualityFinding } from "@/lib/seo/types";
+
+interface LinkedJob {
+  id: string;
+  status: string;
+  prUrl: string | null;
+  error: string | null;
+}
 
 interface Detail {
   draft: PageDraft;
   quality: SeoQualityReport;
   opportunity: { keyword: string; stage: string } | null;
+  websiteJob?: LinkedJob | null;
   error?: string;
+}
+
+/** Where a sent draft stands in Website Studio, in plain words. */
+const JOB_LABEL: Record<string, string> = {
+  pending: "Queued in Website Studio",
+  running: "Website Studio is making the change",
+  preview: "Preview ready: approve it in Website Studio",
+  approved: "Approved: waiting for the site checks and merge",
+  done: "Finished in Website Studio",
+  failed: "Website Studio job failed",
+  discarded: "Discarded in Website Studio",
+};
+
+function PublishBlock({ job, stage, busy, onSend }: { job: LinkedJob | null | undefined; stage: string | undefined; busy: boolean; onSend: () => void }): React.JSX.Element {
+  const canSend = !job || job.status === "failed" || job.status === "discarded";
+  const published = stage === "PUBLISHED" || stage === "MONITORING";
+  return (
+    <div className="w-full space-y-2">
+      <div className="rounded border border-[color:var(--positive,#16a34a)]/40 bg-[color:var(--positive,#16a34a)]/5 px-3 py-2 text-[12px] text-[color:var(--positive,#16a34a)]">
+        {published ? "Approved and published on the live site." : "Approved. Send it to Website Studio to put it on the site."}
+      </div>
+      {job && (
+        <div className="rounded border border-border px-3 py-2 text-[12px]">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={job.status === "failed" ? "text-critical" : "text-foreground"}>{JOB_LABEL[job.status] ?? job.status}</span>
+            <Link href="/website-studio" className="inline-flex items-center gap-0.5 text-meta hover:text-foreground">Open Website Studio <ArrowUpRight className="size-3" /></Link>
+            {job.prUrl && (
+              <a href={job.prUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-meta hover:text-foreground">Pull request <ArrowUpRight className="size-3" /></a>
+            )}
+          </div>
+          {job.error && <p className="mt-1 text-[11.5px] text-critical">{job.error}</p>}
+          {job.status === "done" && !published && (
+            <p className="mt-1 text-[11.5px] text-meta">Marked Published only once the change is merged and, for a new page, the page is live. See the decision history for what is left.</p>
+          )}
+        </div>
+      )}
+      {canSend && (
+        <>
+          <button disabled={busy} onClick={onSend} className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-foreground transition-colors hover:bg-[var(--row-hover)] disabled:opacity-50">
+            <Globe className="size-3.5" /> {job ? "Send to Website Studio again" : "Send to Website Studio"}
+          </button>
+          <p className="text-[11px] text-meta">Website Studio makes the change on a working branch and shows a preview. It goes live only after someone approves that preview and the site checks pass.</p>
+        </>
+      )}
+    </div>
+  );
 }
 
 const STATE_TONE: Record<string, string> = {
@@ -224,9 +279,7 @@ export function SeoDraftPanel({ draftId, onClose }: { draftId: string; onClose: 
                   <button disabled={busy} onClick={() => void act("reopen")} className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-foreground transition-colors hover:bg-[var(--row-hover)] disabled:opacity-50"><RotateCcw className="size-3.5" /> Reopen to revise</button>
                 )}
                 {draft.reviewState === "APPROVED" && (
-                  <div className="rounded border border-[color:var(--positive,#16a34a)]/40 bg-[color:var(--positive,#16a34a)]/5 px-3 py-2 text-[12px] text-[color:var(--positive,#16a34a)]">
-                    Approved and cleared to publish. Publishing is a separate authorized step and is not performed here.
-                  </div>
+                  <PublishBlock job={d?.websiteJob} stage={d?.opportunity?.stage} busy={busy} onSend={() => void act("publish")} />
                 )}
               </div>
             </section>
