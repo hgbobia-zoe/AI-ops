@@ -165,7 +165,7 @@ Keep it running whenever marketing might submit requests. If it isn't running, j
 ## Running it on the office PC
 
 Installed at `C:\Git\zoe-website-studio` (runner files + `node_modules` + Playwright Chromium), with the dedicated
-clone at `C:\Git\zoe-website-studioepo`. Settings live in `C:\Git\zoe-website-studio\.env` (private). Start:
+clone at `C:\Git\zoe-website-studio\repo`. Settings live in `C:\Git\zoe-website-studio\.env` (private). Start:
 
 ```
 powershell -ExecutionPolicy Bypass -File C:\Git\zoe-website-studio\start.ps1
