@@ -54,6 +54,7 @@ interface InProject {
   dateCreated?: string | null;
   venue?: string | null;
   location?: string | null;
+  salesLead?: string | null; // Goodshuffle salesLeadName
   archived?: boolean;
 }
 
@@ -151,6 +152,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       dateCreated: ymd(p.dateCreated),
       venue: p.venue?.trim() || null,
       location: p.location?.trim() || null,
+      salesLead: p.salesLead === undefined ? undefined : p.salesLead?.trim() || null,
       archived: Boolean(p.archived),
     });
   }

@@ -4,7 +4,7 @@ vi.mock("@/lib/comms/openphoneSync", () => ({ ensureLeadThreadSynced: vi.fn() })
 vi.mock("@/lib/comms/openphone", () => ({ getOpenphonePhoneNumbers: vi.fn(), listOpenphoneCalls: vi.fn(), openphoneApiKey: () => null }));
 vi.mock("@/lib/notify/aiBots", () => ({ botAnnounce: vi.fn(), appUrl: () => null }));
 
-import { nextSendDay, randomSendTime, clockLabel, gateLead, whereWeAre, projectCard, type GateInput, type MorningPlanRow } from "./morningOutreach";
+import { nextSendDay, senderFirstName, randomSendTime, clockLabel, gateLead, whereWeAre, projectCard, type GateInput, type MorningPlanRow } from "./morningOutreach";
 import type { TimelineEntry } from "./timeline";
 
 const NOW = Date.parse("2026-11-03T20:00:00Z"); // Tue 3pm ET
@@ -12,11 +12,19 @@ const e = (over: Partial<TimelineEntry>): TimelineEntry => ({ at: null, channel:
 const gate = (over: Partial<GateInput> = {}): GateInput => ({ hasPhone: true, daysToEvent: 30, subStatus: "follow_up", timeline: [], liveCalls: [], now: NOW, ...over });
 
 describe("send time", () => {
-  it("is the next weekday morning once today's window has passed", () => {
+  it("is the next Monday to Saturday morning once today's window has passed, never Sunday", () => {
     expect(nextSendDay(new Date("2026-11-03T20:00:00Z"))).toBe("2026-11-04"); // Tue 3pm -> Wed
     expect(nextSendDay(new Date("2026-11-03T13:00:00Z"))).toBe("2026-11-03"); // Tue 8am -> today
-    expect(nextSendDay(new Date("2026-11-06T20:00:00Z"))).toBe("2026-11-09"); // Fri 3pm -> Mon
-    expect(nextSendDay(new Date("2026-11-07T13:00:00Z"))).toBe("2026-11-09"); // Sat -> Mon
+    expect(nextSendDay(new Date("2026-11-06T20:00:00Z"))).toBe("2026-11-07"); // Fri 3pm -> Sat
+    expect(nextSendDay(new Date("2026-11-07T13:00:00Z"))).toBe("2026-11-07"); // Sat 8am -> today
+    expect(nextSendDay(new Date("2026-11-07T20:00:00Z"))).toBe("2026-11-09"); // Sat 3pm -> Mon
+    expect(nextSendDay(new Date("2026-11-08T13:00:00Z"))).toBe("2026-11-09"); // Sun -> Mon
+  });
+
+  it("signs as the project's sales lead, else the fallback, else Zoe Events", () => {
+    expect(senderFirstName("Jessie Medalla", "Pat")).toBe("Jessie");
+    expect(senderFirstName(null, "Pat")).toBe("Pat");
+    expect(senderFirstName("  ", null)).toBeNull();
   });
 
   it("always lands between 9:12:00 and 9:17:59 Eastern, across DST", () => {
@@ -103,11 +111,13 @@ describe("recap", () => {
       leadId: "1", eventName: "Smith Wedding", clientName: "Jane Smith", stageLabel: "Follow up", subStatusLabel: "Needs follow-up", value: 4200,
       whereWeAre: ["Quote sent."], context: { quoTexts: 3, quoCalls: 1, liveCalls: 1, emails: 2, notes: 1 },
       send: true, reason: null, draft: "Hi Jane, it's Zoe Events", caution: null, draftSource: "ai", sendAt: "2026-11-04T14:14:37Z",
+      salesLead: "Jessie Medalla", signedAs: "Jessie",
     };
     const c = projectCard(row);
     expect(c.title).toBe("Smith Wedding - Jane Smith");
     expect(c.sections?.[0]).toContain("Based on context we are here");
-    expect(c.sections?.[1]).toContain("Sales Bot would have sent this* (text at 9:14:37 AM)");
+    expect(c.sections?.[1]).toContain("Sales Bot would have sent this* (text at 9:14:37 AM, as Jessie)");
+    expect(c.subtitle).toContain("Sales lead: Jessie Medalla");
     expect(projectCard({ ...row, send: false, draft: null, reason: "No phone number on file." }).sections?.[1]).toContain("would not text this one");
   });
 });
