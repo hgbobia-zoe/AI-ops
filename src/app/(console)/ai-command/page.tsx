@@ -84,7 +84,11 @@ export default async function AiCommandPage({ searchParams }: { searchParams: Pr
         canApprove={canApproveAi(role)}
         initialBlade={blade}
         today={todayInOpsTz()}
-        playbooks={[{ id: "salesos-lost-quotes", label: "Lost Quote Recovery", endpoint: "/api/ai/blades/salesos/run", blade: "salesos" }]}
+        playbooks={[
+          { id: "salesos-lost-quotes", label: "Lost Quote Recovery", endpoint: "/api/ai/blades/salesos/run", blade: "salesos" },
+          { id: "event-risk-review", label: "Event Risk Review", endpoint: "/api/ai/blades/event-risk/run", blade: "event-risk" },
+          { id: "dispatch-route-health", label: "Route Health Check", endpoint: "/api/ai/blades/dispatch/run", blade: "dispatch" },
+        ]}
       />
     </main>
   );
