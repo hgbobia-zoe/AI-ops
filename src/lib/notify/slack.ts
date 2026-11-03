@@ -191,6 +191,28 @@ export async function slackConversationsHistory(channel: string, limit = 20): Pr
   return { ok: true, messages: toSlackMessages(r.data).reverse() };
 }
 
+/** One page of a channel's history, newest first, for walking a whole channel (oldest/latest are Slack ts
+ *  bounds, inclusive=false). `nextCursor` is set while more pages remain. Same honest degrade as above. */
+export async function slackConversationsHistoryPage(
+  channel: string,
+  opts: { oldest?: string; latest?: string; cursor?: string; limit?: number } = {},
+): Promise<SlackReadResult & { nextCursor: string | null }> {
+  if (!slackBotConfigured()) return { ok: false, skipped: true, messages: [], nextCursor: null };
+  const ch = channel.trim();
+  if (!ch) return { ok: false, error: "missing_channel", messages: [], nextCursor: null };
+  const id = (await resolveChannelId(ch)) ?? ch;
+  const r = await slackApi("conversations.history", {
+    channel: id,
+    limit: Math.min(200, Math.max(1, opts.limit ?? 200)),
+    ...(opts.oldest ? { oldest: opts.oldest } : {}),
+    ...(opts.latest ? { latest: opts.latest } : {}),
+    ...(opts.cursor ? { cursor: opts.cursor } : {}),
+  });
+  if (!r.ok) return { ok: false, error: r.error, messages: [], nextCursor: null };
+  const next = (r.data?.response_metadata as { next_cursor?: string } | undefined)?.next_cursor || null;
+  return { ok: true, messages: toSlackMessages(r.data), nextCursor: next };
+}
+
 /** Have the bot join a public channel (needs channels:join). Used before a history read in a channel the bot
  *  was never invited to. Skipped without a bot token. Never throws. */
 export async function slackJoinChannel(channel: string): Promise<SlackResult> {

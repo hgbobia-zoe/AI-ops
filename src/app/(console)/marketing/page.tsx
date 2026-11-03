@@ -15,8 +15,9 @@ import { marketingDashboard } from "@/lib/marketing/dashboard";
 import { buildMarketingOverview, type AttentionItem } from "@/lib/marketing/overview";
 import { ChannelHub } from "@/components/marketing/ChannelHub";
 import { LeadSourceBoard } from "@/components/marketing/LeadSourceBoard";
-import { listInboundLeadRows } from "@/lib/marketing/store";
-import { buildLeadScoreboard, leadScoreboardSince } from "@/lib/marketing/leadSources";
+import { listAllInboundLeads, savedLeadCount, LEAD_LOG_JOB_KEY } from "@/lib/marketing/leadLog";
+import { buildLeadScoreboard } from "@/lib/marketing/leadSources";
+import { getLatestImportBySource } from "@/lib/pull/state";
 import { BladeMain, OverviewLayout } from "@/components/ui/layouts";
 import { PageHeader } from "@/components/ui/page-header";
 import { Surface } from "@/components/ui/surface";
@@ -71,7 +72,9 @@ function AttentionRow({ a }: { a: AttentionItem }): React.JSX.Element {
 
 export default function MarketingHome(): React.JSX.Element {
   const d = marketingDashboard();
-  const leads = buildLeadScoreboard(listInboundLeadRows(leadScoreboardSince()), d.today, DISPLAY_TZ);
+  const leads = buildLeadScoreboard(listAllInboundLeads(), d.today, DISPLAY_TZ);
+  const syncRow = getLatestImportBySource()[LEAD_LOG_JOB_KEY] ?? null;
+  const leadStatus = { lastRunAt: syncRow?.ts ?? null, ok: syncRow ? syncRow.ok : null, detail: syncRow?.detail ?? null, saved: savedLeadCount() };
   const vm = buildMarketingOverview(d, { hasLeadData: leads.hasData });
   const stars = d.reviews.avgRating != null ? `${d.reviews.avgRating}★` : "—";
 
@@ -139,7 +142,7 @@ export default function MarketingHome(): React.JSX.Element {
             {/* Inbound leads by channel — counted automatically from the lead Zaps, no typing. */}
             <section>
               <SectionHead title="Inbound leads by channel" scope={vm.scope.leads} />
-              <LeadSourceBoard sb={leads} />
+              <LeadSourceBoard sb={leads} status={leadStatus} />
             </section>
 
             {/* Going out next — upcoming content (honest 3-week period + source). */}
@@ -206,7 +209,7 @@ export default function MarketingHome(): React.JSX.Element {
               <h2 className="mb-2 text-[13px] font-medium text-foreground">Snapshot</h2>
               <div className="grid grid-cols-2 gap-3">
                 {vm.hasLeadData && (
-                  <Metric label="Inbound leads" value={String(leads.total.last7)} sub={`7 days · ${leads.total.last30} in 30d`} />
+                  <Metric label="Inbound leads" value={String(leads.total.last7)} sub={`7 days · ${leads.total.allTime} all time`} />
                 )}
                 {vm.hasOutreachData && (
                   <Metric label="In outreach" value={String(d.outreach.open)} sub={`${d.outreach.winsRecent} won · 30d`} tone={d.outreach.open > 0 ? "info" : undefined} />
