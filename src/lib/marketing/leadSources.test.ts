@@ -19,6 +19,8 @@ describe("leadChannel", () => {
     expect(leadChannel("web")?.key).toBe("website");
     expect(leadChannel("contact_form")?.key).toBe("website");
     expect(leadChannel("wishlist")?.key).toBe("wishlist");
+    expect(leadChannel("zoeeventsdmv.com")?.key).toBe("website");
+    expect(leadChannel("www.zoeeventsdmv.com")?.key).toBe("website");
   });
 
   it("leaves out intakes typed in by sales", () => {
