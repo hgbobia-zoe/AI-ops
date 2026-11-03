@@ -44,7 +44,10 @@ describe("describeChange", () => {
 
   it("names who made a risk decision", () => {
     const d = describeChange({ ...base, kind: "risk_status_changed", toValue: "acknowledged (by Jessie)" }, { showMoney: true });
-    expect(d).toMatchObject({ title: "Risk acknowledged", detail: "by Jessie", area: "risk" });
+    expect(d).toMatchObject({ title: "Risk marked acknowledged", detail: "by Jessie", area: "risk" });
+    // Real statuses are uppercase with underscores.
+    expect(describeChange({ ...base, kind: "risk_status_changed", toValue: "IN_PROGRESS" }, { showMoney: true }).title).toBe("Risk marked in progress");
+    expect(describeChange({ ...base, kind: "risk_status_changed", toValue: "OPEN" }, { showMoney: true }).title).toBe("Risk reopened");
   });
 
   it("describes escalation, reschedule and delivery outcome", () => {

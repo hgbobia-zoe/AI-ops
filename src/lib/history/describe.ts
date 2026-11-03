@@ -58,7 +58,8 @@ export function describeChange(c: Pick<ChangeRow, "kind" | "field" | "entityId" 
       // toValue is "acknowledged" or "acknowledged (by Jessie)".
       const m = /^(\w+)(?:\s*\(by (.+)\))?$/.exec(c.toValue ?? "");
       const status = m?.[1] ?? c.toValue ?? "updated";
-      return { area, tone: status === "resolved" ? "positive" : "info", title: `Risk ${status.toLowerCase()}`, subject, detail: m?.[2] ? `by ${m[2]}` : null };
+      const s = status.toLowerCase().replace(/_/g, " ");
+      return { area, tone: s === "resolved" ? "positive" : "info", title: s === "open" ? "Risk reopened" : `Risk marked ${s}`, subject, detail: m?.[2] ? `by ${m[2]}` : null };
     }
     case "driver_assigned":
       return { area, tone: "info", title: "Driver assigned", subject: c.entityId ? `route ${c.entityId}` : null, detail: c.toValue };

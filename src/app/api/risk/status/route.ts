@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { setRiskStatus, getRiskById } from "@/lib/risk/store";
 import { logChange } from "@/lib/history/store";
+import { historyActor } from "@/lib/history/actor";
 import type { RiskStatus } from "@/lib/risk/types";
 
 export const dynamic = "force-dynamic";
@@ -40,6 +41,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       fromValue: before.status,
       toValue: body.owner ? `${body.status} (by ${body.owner})` : body.status,
       changeKey: `riskstatus|${before.signature}|${body.status}|${dayKey}`,
+      actor: await historyActor(),
     });
   }
   return NextResponse.json({ ok: true });

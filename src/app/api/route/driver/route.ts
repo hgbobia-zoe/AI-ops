@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { setRouteDriver } from "@/lib/db/repo";
 import { logChange } from "@/lib/history/store";
+import { historyActor } from "@/lib/history/actor";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       toValue: newName,
       // Once per (route, target driver) per day — re-submitting the same assignment is a no-op.
       changeKey: `driver|${body.routeId}|${newName ?? "none"}|${dayKey}`,
+      actor: await historyActor(),
     });
   }
   return NextResponse.json({ ok: true });
