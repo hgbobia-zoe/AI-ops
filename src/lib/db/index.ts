@@ -2478,6 +2478,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Payroll worker exclusion (permanent). Default 0 → existing rows are NOT excluded, behavior unchanged.
   { table: "hr_workers", column: "excluded", type: "INTEGER NOT NULL DEFAULT 0" },
   { table: "hr_workers", column: "exclude_reason", type: "TEXT" },
+  // Operational History: the signed-in person behind a change (driver assign, stop removal, risk decision).
+  // Null for platform changes and older rows, which History shows as "someone" or "the platform".
+  { table: "history_changes", column: "actor", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {
