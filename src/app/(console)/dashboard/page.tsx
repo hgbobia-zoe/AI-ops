@@ -7,22 +7,21 @@
 
 import Link from "next/link";
 import {
-  AlertTriangle, ArrowRight, DollarSign, FileText, CalendarCheck, ShieldAlert, Truck,
-  Gauge, Radar, Lightbulb, ListChecks, Bot, CalendarDays, CircleDot, Phone, Mail, Users, Megaphone, MapPin,
-  Search, Bell, ChevronDown, Plus, Tag,
+  ArrowRight, DollarSign, FileText, CalendarCheck, ShieldAlert, Truck,
+  Gauge, Radar, Lightbulb, ListChecks, Bot, CalendarDays, CircleDot, Phone, Mail, Users, Megaphone,
+  Bell, Plus, Tag,
 } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { StatusBadge } from "@/components/ui/status";
-import { commandCenter } from "@/lib/command/service";
-import { capacityLevel, type CapacityLevel } from "@/lib/command/calc";
+import { commandCenter, aiSessionsView } from "@/lib/command/service";
+import { capacityLevel, AI_LIVE_FRESH_MIN, type CapacityLevel } from "@/lib/command/calc";
 import { salesYearOverview } from "@/lib/sales/service";
 import { salesCommandCenter } from "@/lib/salesos/commandCenter";
 import { getPipelineBookingsInRange, getQuoteStageSnapshot, type BookingView } from "@/lib/db/repo";
 import { aiControlOverview } from "@/lib/ai/control";
-import { listRecentSessions } from "@/lib/ai/sessions";
 import { STATUS_META } from "@/lib/ai/sessionDisplay";
 import { formatYmdLong, shiftYmd } from "@/lib/dates";
-import { viewerRole, currentActor } from "@/lib/auth/getSession";
+import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 import type { Priority } from "@/lib/ops/manager";
 import { RevenueTrendChart, type MonthPoint } from "@/components/dashboard/RevenueTrendChart";
@@ -44,6 +43,8 @@ const P_DOT: Record<Priority, string> = { critical: "bg-critical", high: "bg-att
 const CAP_HEX: Record<CapacityLevel, string> = { NORMAL: "#3ad492", TIGHT: "#f0c13a", CONSTRAINED: "#f06a5e", UNVERIFIED: "#3f424d" };
 // KPI accent palette — green revenue/fleet, blue quotes, purple booked, amber/red risk.
 const KPI_C = { green: "#3ad492", blue: "#5e9cf7", purple: "#8f74f2", purpleHi: "#b8a4ff", red: "#f06a5e", amber: "#f0c13a", track: "#262834" };
+// Display for a "running" session that has gone quiet (see aiActivityState): never shown as Working.
+const AI_IDLE_META = { label: "Idle", dot: "bg-[var(--bar)]", text: "text-meta" };
 const NBA_LABEL: Record<string, string> = {
   CALL_NOW: "Call", SEND_SMS: "Text", FOLLOW_UP: "Follow up", ASK_DISCOVERY: "Discover", HANDLE_OBJECTION: "Respond",
   VERIFY_AVAILABILITY: "Verify", REVIEW_QUOTE: "Review", WAIT: "View",
@@ -81,9 +82,6 @@ function ago(iso: string | null): string {
 export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ range?: string }> }): Promise<React.JSX.Element> {
   const role = await viewerRole();
   const showMoney = canSeeFinancials(role);
-  const actor = await currentActor();
-  const firstName = actor.label.split(/[\s(]/)[0] || "Zoe";
-  const initials = actor.label.split(/\s+/).map((p) => p[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "ZO";
   const c = await commandCenter();
   const rev = c.revenue;
   const year = c.year;
@@ -104,7 +102,10 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     .slice(0, 6);
   const upcomingTitle = `Upcoming events — ${titleCase(win.label)}`;
   const aiOverview = safe(() => aiControlOverview(), null);
-  const aiSessions = safe(() => listRecentSessions(6), []);
+  // "Live" = running WITH recent activity. A session left marked running after it went quiet is shown as
+  // Idle and never counted, so the chip can't claim work that isn't happening.
+  const { sessions: aiSessions, live: aiLive } = aiSessionsView(6);
+  const pendingApprovals = aiOverview?.pendingApprovals ?? 0;
 
   // Monthly trend points (current + prior year).
   const curM = c.sales.months;
@@ -140,10 +141,16 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const low = attention.filter((i) => i.priority === "info").length;
   // Severity breakdown sub (e.g. "1 critical · 2 high · 1 medium"), matching the mockup's "1 medium · 1 low".
   const riskSub = [crit && `${crit} critical`, high && `${high} high`, med && `${med} medium`, low && `${low} low`].filter(Boolean).join(" · ") || "all clear";
-  const nextActions = attention.filter((i) => i.priority !== "info").slice(0, 6).map((i) => ({
-    key: i.key, href: i.href, priority: i.priority,
-    text: i.detail?.split("→")[1]?.trim() && i.detail.split("→")[1].trim().length > 3 ? i.detail.split("→")[1].trim() : i.title,
-  }));
+  // NEXT ACTIONS — only what Needs attention does NOT already show: AI approvals waiting on a person, then
+  // the attention items past the five listed there. (It used to re-render the same five items.)
+  const ATTENTION_SHOWN = 5;
+  const nextActions: { key: string; href: string; priority: Priority; text: string }[] = [
+    ...(pendingApprovals > 0 ? [{ key: "ai-approvals", href: "/ai-command", priority: "high" as Priority, text: `Review ${plural(pendingApprovals, "AI approval")}` }] : []),
+    ...attention.slice(ATTENTION_SHOWN).filter((i) => i.priority !== "info").map((i) => {
+      const act = i.detail?.split("→")[1]?.trim();
+      return { key: i.key, href: i.href, priority: i.priority, text: act && act.length > 3 ? act : i.title };
+    }),
+  ].slice(0, 6);
 
   const util = c.today_ops.fleetSize > 0 ? Math.round((c.today_ops.trucksUsed / c.today_ops.fleetSize) * 100) : null;
 
@@ -180,35 +187,28 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
     <main className="p-3 pb-8 leading-[1.3] md:px-4 md:pb-4">
       <AutoRefresh seconds={120} />
 
-      {/* v3 top bar — search, quick actions, notifications, viewer (dashboard chrome) */}
-      <div className="mb-2 flex h-[46px] items-center gap-2.5">
-        <div className="flex h-8 min-w-0 flex-[0_1_460px] items-center gap-2 rounded-md border border-border bg-[#151722] px-3 text-[12.5px] text-meta">
-          <Search className="size-[15px] shrink-0" />
-          <span className="truncate">Search anything… (quotes, events, customers, routes, risks)</span>
-          <span className="ml-auto shrink-0 rounded border border-[var(--bar)] px-1.5 text-[11px] text-[var(--bar-2)]">⌘K</span>
-        </div>
-        <div className="ml-auto flex items-center gap-2.5">
-          <Link href="/intake" className="flex h-8 items-center gap-2 rounded-md border border-border bg-[#151722] px-3 text-[12.5px] text-secondary-text transition-colors hover:border-[var(--bar)]"><Plus className="size-3.5" /> Quick Actions</Link>
-          <Link href="/ai-command" aria-label="Notifications" className="relative grid size-8 place-items-center rounded-md border border-border bg-[#151722] text-secondary-text transition-colors hover:border-[var(--bar)]">
-            <Bell className="size-4" />
-            {aiOverview && aiOverview.pendingApprovals > 0 && <span className="absolute right-[7px] top-[6px] size-1.5 rounded-full bg-critical" />}
-          </Link>
-          <div className="flex items-center gap-2 pl-1">
-            <span className="grid size-7 place-items-center rounded-full bg-[#3d3a78] text-[11px] font-semibold text-foreground">{initials}</span>
-            <span className="text-[12.5px] text-foreground">{firstName}</span>
-            <ChevronDown className="size-3 text-meta" />
-          </div>
-        </div>
-      </div>
-
-      {/* Header + range tabs */}
+      {/* Header + range tabs. The shell header already carries breadcrumbs, clock and theme, so the page
+          adds only controls that work: the range selector, New project and the AI approvals bell. */}
       <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-[24px] font-semibold tracking-tight">Command Center</h1>
-          <p className="text-[12.5px] text-meta">{formatYmdLong(today)} · real-time view of your business, operations and AI activity.</p>
+          <p className="text-[12.5px] text-meta">
+            {formatYmdLong(today)} ·{" "}
+            {/* Every booking, quote and revenue number comes from the last Goodshuffle pull, so say how old it is. */}
+            <span className={c.gsData.stale ? "font-medium text-attention" : undefined} title={c.gsData.at ?? undefined}>
+              Goodshuffle data {c.gsData.at ? `as of ${c.gsData.ageLabel}` : "has never been pulled"}
+              {c.gsData.stale && c.gsData.at ? ", run the Auto-Pull" : ""}
+            </span>
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="inline-flex overflow-hidden rounded border border-border">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href="/intake" className="flex h-[26px] items-center gap-1.5 rounded border border-border px-2.5 text-[12px] text-secondary-text transition-colors hover:border-[var(--bar)] hover:text-foreground"><Plus className="size-3.5" /> New project</Link>
+          <Link href="/ai-command" aria-label={pendingApprovals > 0 ? `${pendingApprovals} AI approvals waiting` : "AI Command Center"} title={pendingApprovals > 0 ? `${pendingApprovals} AI approvals waiting` : "AI Command Center"}
+            className="relative grid size-[26px] place-items-center rounded border border-border text-secondary-text transition-colors hover:border-[var(--bar)] hover:text-foreground">
+            <Bell className="size-3.5" />
+            {pendingApprovals > 0 && <span className="absolute right-[5px] top-[4px] size-1.5 rounded-full bg-critical" />}
+          </Link>
+          <div className="inline-flex max-w-full overflow-x-auto rounded border border-border">
             {RANGES.map((r) => (
               <Link key={r.key} href={r.key === "today" ? "/dashboard" : `/dashboard?range=${r.key}`} aria-current={range === r.key ? "page" : undefined}
                 className={`px-2.5 py-1 text-[12px] font-medium transition-colors ${range === r.key ? "bg-[var(--gold)]/15 text-[var(--gold)]" : "text-muted-foreground hover:bg-[var(--row-hover)] hover:text-foreground"}`}>
@@ -216,7 +216,6 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               </Link>
             ))}
           </div>
-          <span className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1 text-[12px] text-tertiary-text"><MapPin className="size-3.5 text-meta" /> All locations</span>
         </div>
       </header>
 
@@ -289,7 +288,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                 })}
               </div>
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 px-0.5 text-[11px] text-meta">
-                <span>Crews booked / available</span>
+                <span>Drivers scheduled / needed · a single number = events booked</span>
                 <span className="flex items-center gap-1.5"><span className="h-[3px] w-2" style={{ background: CAP_HEX.NORMAL }} /> open</span>
                 <span className="flex items-center gap-1.5"><span className="h-[3px] w-2" style={{ background: CAP_HEX.TIGHT }} /> tight</span>
                 <span className="flex items-center gap-1.5"><span className="h-[3px] w-2" style={{ background: CAP_HEX.CONSTRAINED }} /> at limit</span>
@@ -313,13 +312,14 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         <div className="space-y-3 min-w-0">
           {/* AI Sessions (LIVE) — a compact summary that links to the full AI Command Center */}
           <Panel icon={<Bot className="size-4" />} title="AI sessions" scope={WIDGET_SCOPE.aiSessions.scope} href="/ai-command" hrefLabel="View all"
-            chip={aiOverview && aiOverview.liveCount > 0 ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-positive"><span className="size-1.5 rounded-full bg-positive" /> {aiOverview.liveCount} live</span> : undefined}>
+            chip={aiLive > 0 ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-positive" title={`Running with activity in the last ${AI_LIVE_FRESH_MIN} minutes`}><span className="size-1.5 rounded-full bg-positive" /> {aiLive} live</span> : undefined}>
             {aiSessions.length === 0 ? (
               <p className="text-[12px] text-meta">No AI sessions yet. <Link href="/ai-command" className="text-tertiary-text hover:text-foreground">Open the AI Command Center →</Link></p>
             ) : (
               <div className="space-y-0.5">
                 {aiSessions.slice(0, 5).map((s) => {
-                  const m = STATUS_META[s.status];
+                  // A running session with no recent activity reads Idle, not Working.
+                  const m = s.idle ? AI_IDLE_META : STATUS_META[s.status];
                   return (
                     <Link key={s.id} href={`/ai-command/${s.id}`} className="flex items-center gap-2 rounded px-1.5 py-2 transition-colors hover:bg-[var(--row-hover)]">
                       <span className={`size-2 shrink-0 rounded-full ${m.dot}`} aria-hidden />
@@ -412,7 +412,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         </Panel>
         <Panel icon={<ListChecks className="size-4" />} title="Next actions" scope={WIDGET_SCOPE.nextActions.scope} href="/ops" hrefLabel="View all">
           {nextActions.length === 0 ? (
-            <p className="text-[12px] text-positive">Nothing needs you right now.</p>
+            <p className="text-[12px] text-positive">{attention.length > 0 ? "Nothing beyond the Needs attention list." : "Nothing needs you right now."}</p>
           ) : (
             <div className="space-y-0.5">
               {nextActions.map((a) => (
