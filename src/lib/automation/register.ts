@@ -26,6 +26,7 @@ const JOB_AREA: Record<string, JobArea> = {
   "lead-slack-reply": "Sales",
   "openphone-message-sync": "Sales",
   "sales-action-items": "Sales",
+  "morning-outreach": "Sales",
   "postevent-digest": "Sales", // Post-Event sits under Sales in the nav
   instawork: "Crew & scheduling",
   connecteam: "Crew & scheduling",

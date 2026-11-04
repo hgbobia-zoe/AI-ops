@@ -11,8 +11,8 @@
 // close, client waiting on a person, reached out recently, asked to stop, too many unanswered follow ups).
 // Only leads that pass get an LLM draft, from the same context aware drafter the Sales panel uses.
 //
-// This file is the DRY RUN: it plans and posts a recap to the Sales Bot channel. It sends nothing and
-// writes nothing to Goodshuffle or Quo. The live daily send is a follow up once the dry run is validated.
+// This file plans (gate, cadence, drafter) and runs the DRY RUN, which only posts a recap to the Sales Bot
+// channel. The live daily send reuses buildMorningPlan: see morningLive.ts.
 
 import type { LeadCard } from "./boardTypes";
 import { getLead } from "./service";
