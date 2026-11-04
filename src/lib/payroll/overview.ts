@@ -7,7 +7,7 @@ import { countOpenExceptions, latestSyncRun, getApproval, listPeriodExclusions, 
 import { gustoConfigured } from "./gusto";
 import { instaworkTempPay } from "./instawork";
 import { classifyReview } from "./review";
-import { getPayrollConfig, scheduleLabel } from "./config";
+import { getPayrollConfig, overtimeCutoff, scheduleLabel } from "./config";
 import type { PayPeriod, PayrollOverview, PayrollStatus, UnifiedWorker } from "./types";
 
 export async function payrollOverview(period: PayPeriod): Promise<PayrollOverview> {
@@ -21,7 +21,7 @@ export async function payrollOverview(period: PayPeriod): Promise<PayrollOvervie
   const cfg = getPayrollConfig();
   const periodExclusions = listPeriodExclusions(period.start, period.end);
   const reviewAccepts = listReviewAccepts(period.start, period.end);
-  const rv = classifyReview(period, workers, connecteamOk, { overtimeThreshold: cfg.overtimeThreshold }, periodExclusions, reviewAccepts);
+  const rv = classifyReview(period, workers, connecteamOk, { overtimeThreshold: overtimeCutoff(cfg) }, periodExclusions, reviewAccepts);
   const approval = getApproval(period.start, period.end);
 
   // Total hours — only when the time source answered; otherwise UNVERIFIED (null), never a fabricated 0.

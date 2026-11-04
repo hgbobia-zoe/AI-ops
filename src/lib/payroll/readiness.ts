@@ -9,7 +9,7 @@
 // gathers the live facts and persists each exception idempotently through the existing hr_exceptions queue.
 
 import { unifiedWorkers } from "./workers";
-import { getPayrollConfig } from "./config";
+import { getPayrollConfig, overtimeCutoff } from "./config";
 import { overtimeFlag } from "./overtime";
 import { getTimesheetDetail, getPlannedHours, type TimesheetUserDetail } from "@/lib/connecteam";
 import { gustoConfigured } from "./gusto";
@@ -257,7 +257,7 @@ export function isExcludedFromRun(excluded: boolean | undefined, key: string, pe
 export async function assessReadiness(period: PayPeriod, opts?: Partial<ReadinessOptions>): Promise<PayrollReadiness> {
   const cfg = getPayrollConfig();
   const resolved: ReadinessOptions = {
-    overtimeThreshold: opts?.overtimeThreshold ?? cfg.overtimeThreshold,
+    overtimeThreshold: opts?.overtimeThreshold ?? overtimeCutoff(cfg),
     scheduleDiscrepancyPct: opts?.scheduleDiscrepancyPct ?? cfg.scheduleDiscrepancyPct,
   };
 

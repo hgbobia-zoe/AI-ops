@@ -46,8 +46,15 @@ export function PayrollSettingsForm({ initial }: { initial: PayrollConfig }): Re
           </select>
         </label>
         <label className="flex flex-col gap-1">
+          <span className={labelCls}>Overtime pay</span>
+          <select className={fieldCls} value={cfg.overtimePaid ? "on" : "off"} onChange={(e) => set("overtimePaid", e.target.value === "on")}>
+            <option value="off">Not paid (every hour is regular)</option>
+            <option value="on">Paid to hourly workers past the threshold</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
           <span className={labelCls}>Overtime threshold (hrs/week)</span>
-          <input type="number" min={1} max={168} className={fieldCls} value={cfg.overtimeThreshold} onChange={(e) => set("overtimeThreshold", Number(e.target.value))} />
+          <input type="number" min={1} max={168} className={fieldCls} disabled={!cfg.overtimePaid} value={cfg.overtimeThreshold} onChange={(e) => set("overtimeThreshold", Number(e.target.value))} />
         </label>
         <label className="flex flex-col gap-1">
           <span className={labelCls}>Automatic sync</span>

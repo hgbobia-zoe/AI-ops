@@ -8,6 +8,7 @@ import {
   hoursAlreadyMatch,
   type EmployeeIdMapEntry,
 } from "./gustoPush";
+import { DEFAULT_PAYROLL_CONFIG, overtimeCutoff } from "./config";
 import type { ReviewWorker, UnifiedWorker, WorkerType } from "./types";
 
 // ── test fixtures ───────────────────────────────────────────────────────────────────────────────────
@@ -128,6 +129,31 @@ describe("buildPushEntries", () => {
     expect(r.totalOvertime).toBe(3.85);
     expect(r.skipped.find((s) => s.name === "Salaried Sue")!.reason).toMatch(/salaried/);
     expect(r.skipped.find((s) => s.name === "Unknown Una")!.reason).toMatch(/pay type not set in Connecteam/);
+  });
+
+  it("with overtime not paid (the default), every hour is regular for everyone not salaried", () => {
+    const review = [
+      rw({ key: "ct:1", name: "Hourly Hal", status: "READY", hours: 43.85 }),
+      rw({ key: "ct:2", name: "Unknown Una", status: "READY", hours: 44 }),
+      rw({ key: "ct:3", name: "Salaried Sue", status: "READY", hours: 45 }),
+    ];
+    const unified = [
+      uw({ key: "ct:1", gustoId: "g1", payType: "hourly" }),
+      uw({ key: "ct:2", gustoId: "g2", payType: null }),
+      uw({ key: "ct:3", gustoId: "g3", payType: "salary" }),
+    ];
+    const r = buildPushEntries(review, unified, overtimeCutoff({ ...DEFAULT_PAYROLL_CONFIG }));
+    expect(r.entries).toEqual([
+      { gustoMemberId: "g1", name: "Hourly Hal", regularHours: 43.85, overtimeHours: 0, doubleOvertimeHours: 0 },
+      { gustoMemberId: "g2", name: "Unknown Una", regularHours: 44, overtimeHours: 0, doubleOvertimeHours: 0 },
+    ]);
+    expect(r.totalOvertime).toBe(0);
+    expect(r.skipped.map((s) => s.name)).toEqual(["Salaried Sue"]);
+  });
+
+  it("overtimeCutoff is the threshold only when overtime is paid", () => {
+    expect(overtimeCutoff({ ...DEFAULT_PAYROLL_CONFIG })).toBe(Number.POSITIVE_INFINITY);
+    expect(overtimeCutoff({ ...DEFAULT_PAYROLL_CONFIG, overtimePaid: true, overtimeThreshold: 40 })).toBe(40);
   });
 
   it("never pushes a blocked worker even when a gusto_id is present", () => {

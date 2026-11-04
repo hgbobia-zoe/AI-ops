@@ -1,6 +1,8 @@
 // Overtime: ONE rule for the whole payroll flow (sync exceptions, Review, Readiness, the Gusto draft push).
 //
-// Overtime is owed to HOURLY workers for hours past the weekly threshold (40h in MD, VA and DC, set in Payroll
+// Zoe pays NO overtime by default (owner, 2026-11-04): Payroll settings "Overtime pay" is off, overtimeCutoff() is
+// Infinity, and every hour is regular. When it is turned on, overtime is owed to HOURLY workers for hours past
+// the weekly threshold (set in Payroll
 // settings). Salaried workers (Connecteam pay rate type monthly or yearly) get none. The pay type is read
 // from Connecteam (see workers.ts), never assumed: when it is unknown we do not split anything, we flag the
 // worker so a person sets the pay type in Connecteam.
