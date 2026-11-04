@@ -13,7 +13,8 @@ import {
 } from "lucide-react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { StatusBadge } from "@/components/ui/status";
-import { commandCenter, aiSessionsView } from "@/lib/command/service";
+import { commandCenter, aiSessionsView, collectBladeSignals } from "@/lib/command/service";
+import { mergeAttention, type HubItem } from "@/lib/command/bladeSignals";
 import { capacityLevel, AI_LIVE_FRESH_MIN, type CapacityLevel } from "@/lib/command/calc";
 import { salesYearOverview } from "@/lib/sales/service";
 import { salesCommandCenter } from "@/lib/salesos/commandCenter";
@@ -23,7 +24,7 @@ import { STATUS_META } from "@/lib/ai/sessionDisplay";
 import { formatYmdLong, shiftYmd } from "@/lib/dates";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
-import type { Priority } from "@/lib/ops/manager";
+import type { Priority, Source } from "@/lib/ops/manager";
 import { RevenueTrendChart, type MonthPoint } from "@/components/dashboard/RevenueTrendChart";
 import { QuotePipeline, type PipelineBucket } from "@/components/dashboard/QuotePipeline";
 import { WIDGET_SCOPE } from "@/lib/command/widgetScope";
@@ -44,6 +45,8 @@ const CAP_HEX: Record<CapacityLevel, string> = { NORMAL: "#3ad492", TIGHT: "#f0c
 // KPI accent palette — green revenue/fleet, blue quotes, purple booked, amber/red risk.
 const KPI_C = { green: "#3ad492", blue: "#5e9cf7", purple: "#8f74f2", purpleHi: "#b8a4ff", red: "#f06a5e", amber: "#f0c13a", track: "#262834" };
 // Display for a "running" session that has gone quiet (see aiActivityState): never shown as Working.
+// Owning-blade label for ops-feed rows (blade signals carry their own).
+const OPS_SOURCE_LABEL: Record<Source, string> = { risk: "Event Risk", sales: "Sales", finance: "Finance", customer: "Customers" };
 const AI_IDLE_META = { label: "Idle", dot: "bg-[var(--bar)]", text: "text-meta" };
 const NBA_LABEL: Record<string, string> = {
   CALL_NOW: "Call", SEND_SMS: "Text", FOLLOW_UP: "Follow up", ASK_DISCOVERY: "Discover", HANDLE_OBJECTION: "Respond",
@@ -134,11 +137,19 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
 
   const bookedThisMonth = curM[curMonthIdx]?.count ?? 0; // events booked this month (matches "This month")
 
-  const attention = showMoney ? c.attention : c.attention.filter((i) => i.source !== "finance");
-  const crit = attention.filter((i) => i.priority === "critical").length;
-  const high = attention.filter((i) => i.priority === "high").length;
-  const med = attention.filter((i) => i.priority === "medium").length;
-  const low = attention.filter((i) => i.priority === "info").length;
+  // The "Open operational risks" KPI counts the ops feed only (what its label says). Needs attention and
+  // Next actions also carry the other blades' signals (Payroll, Scheduling, Goodshuffle write-backs,
+  // Instawork, Post-Event, Radar), merged by priority; money signals stay hidden from roles without it.
+  const opsAttention = showMoney ? c.attention : c.attention.filter((i) => i.source !== "finance");
+  const bladeItems = safe(() => collectBladeSignals(today), [] as HubItem[]).filter((b) => showMoney || !b.financial);
+  const attention: HubItem[] = mergeAttention(
+    opsAttention.map((i) => ({ key: i.key, priority: i.priority, score: i.score, title: i.title, detail: i.detail, href: i.href, source: OPS_SOURCE_LABEL[i.source], financial: i.source === "finance" })),
+    bladeItems,
+  );
+  const crit = opsAttention.filter((i) => i.priority === "critical").length;
+  const high = opsAttention.filter((i) => i.priority === "high").length;
+  const med = opsAttention.filter((i) => i.priority === "medium").length;
+  const low = opsAttention.filter((i) => i.priority === "info").length;
   // Severity breakdown sub (e.g. "1 critical · 2 high · 1 medium"), matching the mockup's "1 medium · 1 low".
   const riskSub = [crit && `${crit} critical`, high && `${high} high`, med && `${med} medium`, low && `${low} low`].filter(Boolean).join(" · ") || "all clear";
   // NEXT ACTIONS — only what Needs attention does NOT already show: AI approvals waiting on a person, then
@@ -371,15 +382,19 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             <p className="text-[12.5px] text-positive">All operations are on track.</p>
           ) : (
             <div className="space-y-1">
-              {attention.slice(0, 5).map((i) => {
+              {attention.slice(0, ATTENTION_SHOWN).map((i) => {
                 const reason = i.detail?.split("→")[0].trim();
                 const action = i.detail?.split("→")[1]?.trim();
                 return (
                   <Link key={i.key} href={i.href} className="flex items-start gap-2.5 rounded px-1.5 py-2 transition-colors hover:bg-[var(--row-hover)]">
                     <span className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide ${SEV_TAG[i.priority]}`}>{SEV_LABEL[i.priority]}</span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[12.5px] font-medium text-foreground">{i.title}</span>
-                      {reason && <span className="block truncate text-[11px] text-muted-foreground">{reason}</span>}
+                      <span className="block truncate text-[12.5px] font-medium text-foreground" title={i.title}>{i.title}</span>
+                      {/* Owning blade first, then the reason, so the title keeps the full row width. */}
+                      <span className="block truncate text-[11px] text-muted-foreground" title={reason || undefined}>
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-meta">{i.source}</span>
+                        {reason ? ` · ${reason}` : ""}
+                      </span>
                       {action && <span className="mt-0.5 inline-flex items-center gap-0.5 text-[11px] font-medium text-[#9fb6e6]">{action} <ArrowRight className="size-3" /></span>}
                     </span>
                   </Link>
