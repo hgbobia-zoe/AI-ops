@@ -12,7 +12,7 @@ import { commandCenter } from "@/lib/command/service";
 import { namedPeriod } from "@/lib/payroll/period";
 import { payrollReview } from "@/lib/payroll/review";
 import { unifiedWorkers } from "@/lib/payroll/workers";
-import { getPayrollConfig } from "@/lib/payroll/config";
+import { overtimeCutoff } from "@/lib/payroll/config";
 import { buildPushEntries } from "@/lib/payroll/gustoPush";
 import { gustoPushDisabled } from "@/lib/payroll/gustoPushState";
 import { gustoRunnerConfigured } from "@/lib/payroll/gustoRunnerAuth";
@@ -48,7 +48,7 @@ export async function POST(req: Request): Promise<Response> {
   const today = await safeToday();
   const period = namedPeriod(today, which);
 
-  const overtimeThreshold = getPayrollConfig().overtimeThreshold;
+  const overtimeThreshold = overtimeCutoff();
   const [review, { workers: unified }] = await Promise.all([payrollReview(period), unifiedWorkers(period)]);
   const built = buildPushEntries(review.workers, unified, overtimeThreshold);
 

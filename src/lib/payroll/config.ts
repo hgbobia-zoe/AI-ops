@@ -10,7 +10,8 @@ export interface PayrollConfig {
   syncDay: number; // 0=Sun … 6=Sat (default Monday)
   syncHour: number; // 0–23, local ET (default 8am)
   approvalPolicy: "always_require" | "auto_if_clean"; // never auto-approve unless explicitly set
-  overtimeThreshold: number; // weekly hours above which overtime is flagged (EXCEPTION)
+  overtimePaid: boolean; // DEFAULT OFF: Zoe pays no overtime, every hour is regular. On = hourly hours past the threshold split as overtime
+  overtimeThreshold: number; // weekly hours above which overtime applies (only when overtimePaid)
   rateWriteback: boolean; // when a Gusto pull syncs rates, also write them back into Connecteam (PUT)
   gustoRateSyncAuto: boolean; // DEFAULT OFF — when on, the Gusto→Connecteam rate engine writes WITHOUT per-proposal approval
   gustoSalaryToHourly: boolean; // DEFAULT OFF — when on, a Gusto ANNUAL salary is converted to an hourly rate (÷2080) for estimates
@@ -32,6 +33,7 @@ export const DEFAULT_PAYROLL_CONFIG: PayrollConfig = {
   syncDay: 1,
   syncHour: 8,
   approvalPolicy: "always_require",
+  overtimePaid: false,
   overtimeThreshold: 40,
   rateWriteback: true,
   gustoRateSyncAuto: false,
@@ -45,6 +47,12 @@ export const DEFAULT_PAYROLL_CONFIG: PayrollConfig = {
   slackChannel: null,
   wireMatchPattern: null,
 };
+
+/** Weekly hours past which overtime applies. Infinity when overtime is not paid (the default), so nothing is
+ *  ever split or flagged as overtime and every hour goes to Gusto as regular. */
+export function overtimeCutoff(cfg: PayrollConfig = getPayrollConfig()): number {
+  return cfg.overtimePaid ? cfg.overtimeThreshold : Number.POSITIVE_INFINITY;
+}
 
 export const DOW_LABEL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -65,6 +73,7 @@ export function savePayrollConfig(patch: Partial<PayrollConfig>): PayrollConfig 
     syncDay: clampInt(patch.syncDay, 0, 6, cur.syncDay),
     syncHour: clampInt(patch.syncHour, 0, 23, cur.syncHour),
     approvalPolicy: patch.approvalPolicy === "auto_if_clean" || patch.approvalPolicy === "always_require" ? patch.approvalPolicy : cur.approvalPolicy,
+    overtimePaid: typeof patch.overtimePaid === "boolean" ? patch.overtimePaid : cur.overtimePaid,
     overtimeThreshold: clampInt(patch.overtimeThreshold, 1, 168, cur.overtimeThreshold),
     rateWriteback: typeof patch.rateWriteback === "boolean" ? patch.rateWriteback : cur.rateWriteback,
     gustoRateSyncAuto: typeof patch.gustoRateSyncAuto === "boolean" ? patch.gustoRateSyncAuto : cur.gustoRateSyncAuto,

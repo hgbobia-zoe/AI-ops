@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import { getActualHours, getTimesheetDetail, getUsers, getPayRates, payTypeForUserOn } from "@/lib/connecteam";
 import { gustoConfigured } from "./gusto";
-import { getPayrollConfig } from "./config";
+import { overtimeCutoff } from "./config";
 import { overtimeFlag } from "./overtime";
 import { resolvePayType } from "./workers";
 import { readGustoSnapshot } from "./gustoSnapshot";
@@ -54,7 +54,7 @@ export async function runPayrollSync(input: SyncInput): Promise<SyncSummary> {
     getTimesheetDetail(input.periodStart, input.periodEnd),
     getPayRates(input.periodStart, input.periodEnd),
   ]);
-  const overtimeThreshold = getPayrollConfig().overtimeThreshold;
+  const overtimeThreshold = overtimeCutoff();
   const gustoById = new Map((readGustoSnapshot()?.members ?? []).map((m) => [m.id, m] as const));
   if (!actual.ok) {
     finishSyncRun(runId, { status: "FAILED", connecteamOk: false, gustoOk: null, detail: "Connecteam time source unavailable — no hours pulled." });

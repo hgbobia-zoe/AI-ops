@@ -96,7 +96,9 @@ export function PushGustoHoursButton({
       const skipLines = data.skipped.map((s) => `  ${s.name}: ${s.reason}`);
       const ok = window.confirm(
         `Write hours into the Gusto DRAFT for ${data.mappedCount} worker${data.mappedCount === 1 ? "" : "s"} ` +
-          `(${data.totals.regular}h regular + ${data.totals.overtime}h overtime, period ${data.period.label}).\n` +
+          (data.totals.overtime > 0
+            ? `(${data.totals.regular}h regular + ${data.totals.overtime}h overtime, period ${data.period.label}).\n`
+            : `(${data.totals.regular}h, all regular, period ${data.period.label}).\n`) +
           (otLines.length ? `\nOvertime:\n${otLines.join("\n")}\n` : "") +
           (skipLines.length ? `\nSkipped:\n${skipLines.join("\n")}\n` : "") +
           `\nIt does NOT submit, run, or approve payroll. It only fills the draft.\n\nContinue?`,

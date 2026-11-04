@@ -13,7 +13,7 @@ import { commandCenter } from "@/lib/command/service";
 import { namedPeriod } from "@/lib/payroll/period";
 import { payrollReview } from "@/lib/payroll/review";
 import { unifiedWorkers } from "@/lib/payroll/workers";
-import { getPayrollConfig } from "@/lib/payroll/config";
+import { overtimeCutoff } from "@/lib/payroll/config";
 import { buildPushEntries } from "@/lib/payroll/gustoPush";
 import { gustoPushDisabled } from "@/lib/payroll/gustoPushState";
 
@@ -31,14 +31,15 @@ export async function POST(req: Request): Promise<Response> {
   const today = await safeToday();
   const period = namedPeriod(today, body.which === "previous" ? "previous" : "current");
 
-  const overtimeThreshold = getPayrollConfig().overtimeThreshold;
+  const overtimeThreshold = overtimeCutoff();
   const [review, { workers: unified }] = await Promise.all([payrollReview(period), unifiedWorkers(period)]);
   const built = buildPushEntries(review.workers, unified, overtimeThreshold);
 
   return NextResponse.json({
     period,
     which: body.which === "previous" ? "previous" : "current",
-    overtimeThreshold,
+    overtimePaid: Number.isFinite(overtimeThreshold),
+    overtimeThreshold: Number.isFinite(overtimeThreshold) ? overtimeThreshold : null,
     entries: built.entries,
     mappedCount: built.mappedCount,
     skipped: built.skipped,
