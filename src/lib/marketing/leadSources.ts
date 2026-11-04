@@ -1,4 +1,4 @@
-// Inbound lead scoreboard: how many leads each channel (website form, Goodshuffle wishlist, Yelp, Google)
+// Inbound lead scoreboard: how many leads each channel (Website = the contact form, Goodshuffle Pro = wishlists, Yelp, Google)
 // brought in, for the last 7 days, the week before, 30 days and all time. PURE: callers hand in records.
 //
 // Where the records come from (see leadLog.ts): the marketing lead log, every lead post in Slack #new-leads
@@ -65,8 +65,10 @@ export const TEST_EMAIL_DOMAINS = ["zoeeventsdmv.com", "example.com", "example.o
 const SALES_ENTERED = new Set(["", "manual", "quo"]);
 
 export const CORE_CHANNELS: { key: string; label: string }[] = [
-  { key: "website", label: "Website form" },
-  { key: "wishlist", label: "Website wishlist" },
+  // The website = its contact form. Goodshuffle Pro = wishlists from the Goodshuffle storefront (the internal
+  // key stays "wishlist" so saved rows never need migrating).
+  { key: "website", label: "Website" },
+  { key: "wishlist", label: "Goodshuffle Pro" },
   { key: "yelp", label: "Yelp" },
   { key: "google", label: "Google" },
 ];
@@ -76,12 +78,11 @@ const CORE = Object.fromEntries(CORE_CHANNELS.map((c) => [c.key, c]));
 export function leadChannel(source: string | null): { key: string; label: string } | null {
   const s = (source ?? "").trim().toLowerCase();
   if (SALES_ENTERED.has(s)) return null;
-  if (s.includes("wishlist")) return CORE.wishlist;
+  // Goodshuffle Pro: wishlists, and leads tagged with the storefront's domain ("zoeeventsdmv.com").
+  if (s.includes("wishlist") || s.includes("goodshuffle") || s.includes("zoeevents")) return CORE.wishlist;
   if (s.includes("yelp")) return CORE.yelp;
   if (s.includes("google")) return CORE.google;
   if (/\b(web|website|site|form|contact)\b/.test(s.replace(/[_-]/g, " "))) return CORE.website;
-  // The website Zap sometimes tags a lead with the site's domain ("zoeeventsdmv.com").
-  if (s.includes("zoeevents") || /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/.test(s)) return CORE.website;
   const key = s.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "other";
   const label = s.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   return { key, label };

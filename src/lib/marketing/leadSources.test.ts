@@ -19,8 +19,10 @@ describe("leadChannel", () => {
     expect(leadChannel("web")?.key).toBe("website");
     expect(leadChannel("contact_form")?.key).toBe("website");
     expect(leadChannel("wishlist")?.key).toBe("wishlist");
-    expect(leadChannel("zoeeventsdmv.com")?.key).toBe("website");
-    expect(leadChannel("www.zoeeventsdmv.com")?.key).toBe("website");
+    expect(leadChannel("zoeeventsdmv.com")).toEqual({ key: "wishlist", label: "Goodshuffle Pro" });
+    expect(leadChannel("www.zoeeventsdmv.com")?.key).toBe("wishlist");
+    expect(leadChannel("goodshuffle")?.key).toBe("wishlist");
+    expect(leadChannel("web")?.label).toBe("Website");
   });
 
   it("leaves out intakes typed in by sales", () => {
