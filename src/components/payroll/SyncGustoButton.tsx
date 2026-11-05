@@ -38,9 +38,12 @@ function relTime(iso: string | null): string | null {
 export function SyncGustoButton({
   lastSyncedAt = null,
   lastOk = false,
+  label = "Sync Gusto now",
 }: {
   lastSyncedAt?: string | null;
   lastOk?: boolean;
+  /** Button text (People uses "Pull from Gusto"; it is the same on-demand sync). */
+  label?: string;
 }): React.JSX.Element {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -104,7 +107,7 @@ export function SyncGustoButton({
         className="inline-flex h-8 items-center justify-center gap-2 rounded-md border border-border px-3 text-[12.5px] font-medium text-secondary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-60"
       >
         {busy ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-        {busy ? "Syncing…" : "Sync Gusto now"}
+        {busy ? "Syncing…" : label}
       </button>
       <span className="text-[11px] text-meta">
         {last ? (

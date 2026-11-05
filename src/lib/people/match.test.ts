@@ -7,7 +7,7 @@ import type { Employee } from "./types";
 
 function emp(over: Partial<Employee> & { id: string; displayName: string }): Employee {
   return {
-    workEmail: null, phone: null, lifecycleState: "ACTIVE", role: "member", department: "sales_associate", startDate: null, endDate: null,
+    workEmail: null, phone: null, birthDate: null, personalEmail: null, lifecycleState: "ACTIVE", role: "member", department: "sales_associate", startDate: null, endDate: null,
     userId: null, hrWorkerId: null, connecteamUserId: null, instaworkWorker: null, openphoneUserId: null, gustoId: null, aiOrgHumanName: null,
     createdAt: "", updatedAt: "", ...over,
   };

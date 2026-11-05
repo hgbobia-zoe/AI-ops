@@ -114,3 +114,20 @@ export function VerifyConnecteamButton({ verified }: { verified: boolean }): Rea
     </span>
   );
 }
+
+export function AddFromGustoControls({ id, name, policies, suggested }: {
+  id: string; name: string; policies: { id: string; name: string }[]; suggested: string;
+}): React.JSX.Element {
+  const { busy, msg, post } = usePost();
+  const [policy, setPolicy] = useState(suggested);
+  return (
+    <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
+      <select aria-label={`Access policy for ${name}`} className="h-7 rounded-md border border-input bg-[var(--panel)] px-2 text-[12px] text-foreground" value={policy} onChange={(e) => setPolicy(e.target.value)}>
+        {policies.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+      </select>
+      <Button size="xs" disabled={busy} onClick={() => void post("/api/people/gusto", { action: "add", id, policyId: policy })}>{busy ? "Adding…" : "Add to People"}</Button>
+      <Button variant="ghost" size="xs" disabled={busy} onClick={() => void post("/api/people/gusto", { action: "hide", id })}>Not tracked here</Button>
+      <Note msg={msg} />
+    </span>
+  );
+}

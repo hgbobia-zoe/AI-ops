@@ -12,7 +12,7 @@
 import { getSecret } from "@/lib/secrets";
 import { createInvite } from "@/lib/auth/invites";
 import { getUser, setUserActive } from "@/lib/auth/users";
-import { archiveConnecteamUser, connecteamConfigured, createConnecteamUser } from "@/lib/connecteam";
+import { archiveConnecteamUser, connecteamConfigured, createConnecteamUser, getConnecteamCustomFields, pickPersonFields } from "@/lib/connecteam";
 import { enqueueProvisioningOp } from "@/lib/db/repo";
 import { appUrl } from "@/lib/notify/aiBots";
 import { getEmployee, setEmployeeConnecteamUserId } from "../store";
@@ -136,10 +136,19 @@ class ConnecteamAdapter implements ProvisioningAdapter {
       return { ok: false, status: "blocked", detail: "Phone required — add the hire's mobile (E.164) to the employee record to provision Connecteam." };
     }
     const { firstName, lastName } = splitName(emp.displayName);
-    const res = await createConnecteamUser(
-      [{ firstName, lastName, phoneNumber: emp.phone, userType: "user", email: emp.workEmail ?? undefined }],
-      { sendActivation: false },
-    );
+    // Fill the account's birthday and start date fields when it has them (birth date comes from Gusto).
+    const ids = pickPersonFields(await getConnecteamCustomFields());
+    const customFields: { customFieldId: number; value: string }[] = [];
+    if (ids.birthday != null && emp.birthDate) customFields.push({ customFieldId: ids.birthday, value: emp.birthDate });
+    if (ids.startDate != null && emp.startDate) customFields.push({ customFieldId: ids.startDate, value: emp.startDate });
+    const base = { firstName, lastName, phoneNumber: emp.phone, userType: "user" as const, email: emp.workEmail ?? emp.personalEmail ?? undefined };
+    let res = await createConnecteamUser([customFields.length ? { ...base, customFields } : base], { sendActivation: false });
+    let fieldsNote = customFields.length ? " Birthday and start date filled in where Connecteam has those fields." : "";
+    // A rejected custom field value must not block the user: create without them and say so.
+    if (!res.ok && !res.scopeMissing && res.status === 400 && customFields.length) {
+      res = await createConnecteamUser([base], { sendActivation: false });
+      fieldsNote = " Connecteam refused the birthday or start date value, so fill those in by hand.";
+    }
     if (res.scopeMissing) {
       return { ok: false, status: "manual_required", detail: "Connecteam key lacks the users.write scope — enable it (or create the user by hand), then Mark Complete." };
     }
@@ -147,7 +156,7 @@ class ConnecteamAdapter implements ProvisioningAdapter {
       return { ok: false, status: "failed", detail: `Connecteam create failed: ${res.error ?? `HTTP ${res.status}`}.` };
     }
     setEmployeeConnecteamUserId(emp.id, res.userId);
-    return { ok: true, status: "completed", externalRef: `connecteam:${res.userId}`, detail: `Created Connecteam user #${res.userId} (no activation SMS sent).` };
+    return { ok: true, status: "completed", externalRef: `connecteam:${res.userId}`, detail: `Created Connecteam user #${res.userId} (no activation SMS sent).${fieldsNote}` };
   }
   async revoke(emp: Employee): Promise<ProvisioningResult> {
     if (!emp.connecteamUserId) {

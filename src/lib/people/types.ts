@@ -34,6 +34,8 @@ export interface Employee {
   displayName: string;
   workEmail: string | null;
   phone: string | null; // E.164 mobile — needed to provision a Connecteam user
+  birthDate: string | null; // YYYY-MM-DD, from Gusto; sent to Connecteam's birthday field when it has one
+  personalEmail: string | null; // the hire's own email (from Gusto), for links before the work mailbox exists
   lifecycleState: LifecycleState;
   role: Role;
   department: string | null; // access_policy.id

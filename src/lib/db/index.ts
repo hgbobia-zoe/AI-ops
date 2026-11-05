@@ -2459,6 +2459,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // People Lifecycle: the new hire's E.164 mobile — required to provision a real Connecteam user. Additive
   // for employee rows created before the provisioning adapters landed (DBs from PR #29).
   { table: "employee", column: "phone", type: "TEXT" },
+  // New hires pulled from Gusto (People "New in Gusto"): what Connecteam setup needs. Owner/admin only.
+  { table: "employee", column: "birth_date", type: "TEXT" },        // YYYY-MM-DD
+  { table: "employee", column: "personal_email", type: "TEXT" },    // the hire's own email (before the work mailbox exists)
   // Connecteam TWO-WAY sync (Lisa's workflow): bookkeeping so the importer can reconcile an app shift
   // against its linked Connecteam shift idempotently, detect which side changed (content hash), and flag a
   // divergence for a human instead of clobbering. All additive + nullable. See docs/connecteam-two-way-sync.md.
