@@ -35,8 +35,12 @@
   // Any operation that could advance/submit payroll — we must NEVER POST one of these. Belt-and-braces guard.
   const FORBIDDEN_OP = /(submit|run|process|approve|finaliz|cancel|delete|skip)/i;
   // Fallback mutation doc (the app's own captured query is preferred — see captureTemplate).
+  // Verified live 2026-11-06 against the app's own request: the doc must USE $employeeUuid (GraphQL rejects an
+  // unused variable), and input.uniqueIdentifier is the DRAFT PAYROLL ID (regular.<schedule>.<group>.<periodEnd>),
+  // not a random string. payrollActivitySessionId is a uuid; a freshly generated one is accepted.
   const SAVE_DOC =
-    "mutation AutoSaveWorkedHours($employeeUuid: ID!, $input: UpdateDraftPayrollInput!) { updateDraftPayroll(input: $input) { draftPayroll { id } } }";
+    "mutation AutoSaveWorkedHours($employeeUuid: ID!, $input: UpdateDraftPayrollInput!) { updateDraftPayroll(input: $input) { draftPayroll { id draftEmployeePayroll(employeeUuid: $employeeUuid) { id allWorkedHours { id regularHours overtimeHours } } } } }";
+  const MARK_DOC = "mutation MarkCompanyTouchedHours { markCompanyTouchedHours { success } }";
 
   const origFetch = window.fetch;
   if (!origFetch) return;
@@ -77,6 +81,22 @@
     } catch (e) { /* never break the app's fetch */ }
     return res;
   };
+
+  // Live step for the Run payroll dialog (no payroll data, just a step code + an "i of n" detail). Posted only
+  // when the step changes; best-effort, never blocks the job.
+  let lastStage = null;
+  function progress(stage, detail) {
+    const k = stage + "|" + (detail || "");
+    if (k === lastStage) return;
+    lastStage = k;
+    try {
+      origFetch(API + "/api/payroll/gusto/progress", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "push", stage, detail: detail || null }),
+      }).catch(() => {});
+    } catch (e) { /* best-effort */ }
+  }
 
   function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 
@@ -119,7 +139,7 @@
           current: currentHours(dp.allWorkedHours, employeeJobUuid),
         };
       }
-      memberMap = map;
+      memberMap = Object.assign(memberMap || {}, map); // the app loads employees in batches: merge, don't replace
     } catch (e) { /* defensive — a shape change just leaves memberMap null → abort cleanly */ }
   }
 
@@ -197,6 +217,7 @@
       const key = pick.getAttribute("href");
       if (runLinkClicked === key) return false; // once per page; wait for the route to load
       runLinkClicked = key;
+      progress("opening_run");
       pick.click();
       return true;
     } catch (e) { return false; }
@@ -225,10 +246,10 @@
         // After the wire card, Gusto opens a "Wire transfer requirements" dialog with its own Continue
         // (verified live 2026-11-06). It only acknowledges the wire terms. Click it first when it's open, so we
         // never re-click the wire card behind it.
-        if (/wire transfer requirements/i.test(t)) { btn.click(); return true; }
+        if (/wire transfer requirements/i.test(t)) { progress("wire_terms"); btn.click(); return true; }
         if (/pay by wire transfer/i.test(t) && !/pay by check|4-day pay/i.test(t)) wireCardBtn = wireCardBtn || btn;
       }
-      if (wireCardBtn) { wireCardBtn.click(); return true; }
+      if (wireCardBtn) { progress("choosing_wire"); wireCardBtn.click(); return true; }
     } catch (e) { /* ignore */ }
     return false;
   }
@@ -264,7 +285,7 @@
                 regularHours: num(entry.regularHours),
                 overtimeHours: num(entry.overtimeHours),
                 doubleOvertimeHours: num(entry.doubleOvertimeHours),
-                missedBreakHours: "0.0",
+                missedBreakHours: null,
               },
             ],
           },
@@ -281,23 +302,48 @@
       && Math.abs(num(target.doubleOvertimeHours) - current.doubleOvertimeHours) < e;
   }
 
+  // Each Gusto GraphQL call carries its own name in the URL (?operationName=X); reusing another call's URL is
+  // rejected. Build the URL for the op we are sending.
+  function gqlUrl(op) {
+    try { const u = new URL(headerTemplate.url); return u.origin + u.pathname.replace(/\/$/, "") + "?operationName=" + encodeURIComponent(op); }
+    catch (e) { return "https://" + GQL_HOST + "?operationName=" + encodeURIComponent(op); }
+  }
+  function freshHeaders() {
+    const h = Object.assign({}, headerTemplate.headers);
+    try { const m = document.querySelector('meta[name="csrf-token"]'); if (m && m.content) h["x-csrf-token"] = m.content; } catch (e) { /* keep captured */ }
+    return h;
+  }
+  async function gqlError(res) {
+    const txt = await res.text().catch(() => "");
+    let msg = "http_" + res.status;
+    try { const j = JSON.parse(txt); if (j && j.errors && j.errors[0] && j.errors[0].message) msg += ": " + j.errors[0].message; } catch (e) { if (txt) msg += ": " + txt.slice(0, 160); }
+    return msg;
+  }
+
+  // The app marks hours as touched before its first save; do the same once (harmless, no payroll data).
+  async function markTouched() {
+    try {
+      await origFetch(gqlUrl(MARK_OP), { method: "POST", headers: freshHeaders(), credentials: "include", body: JSON.stringify({ operationName: MARK_OP, query: MARK_DOC, variables: {} }) });
+    } catch (e) { /* best-effort */ }
+  }
+
   async function postSave(ids, entry, sharedSessionId) {
     const query = saveTemplate && saveTemplate.query ? saveTemplate.query : SAVE_DOC;
     const session = {
       payrollActivitySessionId: sharedSessionId, // shared across the batch (captured real id, or one generated uuid)
-      uniqueIdentifier: uniqueIdentifier(), // fresh per request
+      uniqueIdentifier: draftPayrollId, // the draft payroll id, exactly as the app sends it
     };
     const variables = buildVariables(ids, entry, session);
     // FINAL SAFETY CHECK before the only write we ever make.
     if (FORBIDDEN_OP.test(SAVE_OP)) throw new Error("refused: op name failed safety check");
-    const res = await origFetch(headerTemplate.url, {
+    const res = await origFetch(gqlUrl(SAVE_OP), {
       method: "POST",
-      headers: headerTemplate.headers,
+      headers: freshHeaders(),
       body: JSON.stringify({ operationName: SAVE_OP, query, variables }),
       credentials: "include",
     });
+    if (!res.ok) throw new Error(await gqlError(res));
     const json = await res.json().catch(() => null);
-    if (!res.ok) throw new Error("http_" + res.status);
     if (json && json.errors && json.errors.length) throw new Error((json.errors[0] && json.errors[0].message) || "graphql_error");
     return json;
   }
@@ -315,6 +361,7 @@
       workers: [],
     };
     if (!entries.length) { result.aborted = "no_entries"; return result; }
+    progress("opened");
 
     // 1) Reach the inputs step + capture the member map (and thereby confirm DRAFT). Never submits.
     // Gusto's run key ends with the PAY PERIOD END date (verified live 2026-11-06: regular.<schedule>.<group>.2026-11-01
@@ -331,15 +378,20 @@
     if (!isDraft) { result.aborted = "not_a_draft"; return result; } // HARD SAFETY: only ever a DRAFT run
     if (!headerTemplate) { result.aborted = "no_graphql_headers"; return result; }
     result.draftPayrollId = draftPayrollId;
+    progress("hours_page");
 
     // 2) Session-id strategy (HYPOTHESIS): prefer a captured real session if the app fired a save; else generate.
     const sessionMode = saveTemplate && saveTemplate.payrollActivitySessionId ? "captured" : "generated";
     const sharedSessionId = sessionMode === "captured" ? saveTemplate.payrollActivitySessionId : uuid();
     result.sessionMode = sessionMode;
+    if (!draftPayrollId) { result.aborted = "no_draft_payroll_id"; return result; }
+    await markTouched();
 
     // 3) Write each matched worker's hours. Skip unmatched + idempotent-no-change. One failure never aborts
     //    the batch (DRAFT writes are independent per worker).
+    let n = 0;
     for (const entry of entries) {
+      progress("writing", ++n + " of " + entries.length);
       const ids = memberMap[entry.gustoMemberId];
       const row = { gustoMemberId: entry.gustoMemberId, name: entry.name || null, regularHours: num(entry.regularHours), overtimeHours: num(entry.overtimeHours) };
       if (!ids) { result.workers.push({ ...row, outcome: "skipped", reason: "not in draft (no matching employee)" }); continue; }

@@ -223,17 +223,21 @@ export interface SubmitContext {
 /** Build the confirm context purely from the readiness model + config + ledger state. estGross is an
  *  app-side estimate (honest), not the Gusto debit — the confirm UI labels it so. Pure + tested. */
 export function buildSubmitContext(args: {
-  model: Pick<PayrollReadinessModel, "period" | "counts" | "totals" | "approval">;
+  model: Pick<PayrollReadinessModel, "period" | "counts" | "totals" | "approval"> & Partial<Pick<PayrollReadinessModel, "workers">>;
   payrollDay: number;
   alreadySubmitted: boolean;
   disabled: boolean;
 }): SubmitContext {
   const { model } = args;
+  // The Gusto run pays EMPLOYEES only (contractors go through Contractor payments) and never blocked workers,
+  // so count and total just those when the worker rows are available.
+  const inRun = model.workers?.filter((w) => w.status !== "BLOCKED" && w.workerType === "EMPLOYEE");
+  const estVals = inRun?.map((w) => w.estPay).filter((v): v is number => v != null);
   return {
     period: model.period,
     checkDate: expectedCheckDate(model.period.end, args.payrollDay),
-    expectedTotal: model.totals.estGross ?? null,
-    headcount: model.counts.included,
+    expectedTotal: inRun ? (estVals && estVals.length ? Math.round(estVals.reduce((s, v) => s + v, 0) * 100) / 100 : null) : model.totals.estGross ?? null,
+    headcount: inRun ? inRun.length : model.counts.included,
     approved: model.approval?.status === "APPROVED",
     alreadySubmitted: args.alreadySubmitted,
     disabled: args.disabled,

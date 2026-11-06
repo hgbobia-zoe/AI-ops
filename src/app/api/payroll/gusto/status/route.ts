@@ -9,6 +9,7 @@ import { commandCenter } from "@/lib/command/service";
 import { namedPeriod } from "@/lib/payroll/period";
 import { readGustoPushResult } from "@/lib/payroll/gustoPushState";
 import { readGustoSubmitResult, periodKey } from "@/lib/payroll/gustoSubmitState";
+import { readGustoProgress } from "@/lib/payroll/gustoProgress";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,7 @@ export async function GET(req: Request): Promise<NextResponse> {
 
   return NextResponse.json({
     period,
+    progress: { push: readGustoProgress("push"), submit: readGustoProgress("submit") },
     push: push
       ? { at: push.at, ok: push.ok, aborted: push.aborted, periodStart: push.periodStart, periodEnd: push.periodEnd, pushed: push.pushed, skipped: push.skipped, failed: push.failed, workers: push.workers }
       : null,
