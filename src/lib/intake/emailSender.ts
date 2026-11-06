@@ -1,11 +1,12 @@
 // Who Goodshuffle client emails go out as. Goodshuffle has no sender field: an email is sent as whoever is
 // signed in to the session that drains the outbox. So the outbox hands email ops (welcome template, email
 // replies) only to a drainer that checks it is signed in as this person; any other session leaves them
-// pending. Owner call 2026-11-03: Jessie Medalla, until a dedicated automation seat exists ($49/mo each).
+// pending. Owner call 2026-11-03: the Cindy Gbobia profile (hello@zoeeventsdmv.com), the office machine that is
+// on most of the time, until a dedicated automation seat exists ($49/mo each). Goodshuffle has no "send as".
 //
 // GS_EMAIL_SENDER overrides: a full name ("First Last") or an email; "any" (or "off") turns the hold off.
 
-export const DEFAULT_EMAIL_SENDER = "Jessie Medalla";
+export const DEFAULT_EMAIL_SENDER = "hello@zoeeventsdmv.com";
 export const EMAIL_OPS: ReadonlySet<string> = new Set(["email_send", "email_template"]);
 
 /** The required sender, or null when any signed-in session may send. */
