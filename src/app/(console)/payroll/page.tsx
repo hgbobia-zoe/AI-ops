@@ -39,10 +39,9 @@ import { getLatestImportBySource } from "@/lib/pull/state";
 import { WorkerEditor, type GustoPick } from "@/components/payroll/WorkerEditor";
 import { SyncButton } from "@/components/payroll/SyncButton";
 import { SyncGustoButton } from "@/components/payroll/SyncGustoButton";
-import { PushGustoHoursButton } from "@/components/payroll/PushGustoHoursButton";
 import { ContractorPayPanel } from "@/components/payroll/ContractorPayPanel";
 import { gustoPushDisabled, readGustoPushResult } from "@/lib/payroll/gustoPushState";
-import { RunPayrollButton } from "@/components/payroll/RunPayrollButton";
+import { RunPayrollFlow } from "@/components/payroll/RunPayrollFlow";
 import { ConfirmWireButton } from "@/components/payroll/ConfirmWireButton";
 import { confirmWireGate, expectedCheckDate } from "@/lib/payroll/gustoSubmit";
 import { gustoSubmitDisabled, readGustoSubmitResult, readGustoConfirmWireResult, periodKey } from "@/lib/payroll/gustoSubmitState";
@@ -678,27 +677,25 @@ async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
           </div>
         </div>
         <div className="flex flex-col items-stretch gap-2 sm:items-end">
-          <ApproveButton
-            period={period}
-            readyCount={appr.readyKeys.length}
-            acknowledgeableCount={appr.acknowledgeableKeys.length}
-            ackReason={appr.ackReason}
-            approved={m.approval?.status === "APPROVED"}
-            approvedCount={m.workers.filter((w) => w.approvalState === "APPROVED_IN_ZOE").length}
-          />
-          {canPushPeriod ? (
-            <PushGustoHoursButton
-              which="previous"
-              disabled={pushDisabled}
-              lastPush={lastPush ? { at: lastPush.at, ok: lastPush.ok, aborted: lastPush.aborted, pushed: lastPush.pushed, skipped: lastPush.skipped, failed: lastPush.failed } : null}
-            />
-          ) : (
-            <span className="max-w-[16rem] text-right text-[11px] text-meta">Push to Gusto runs on the last completed week (the period payroll runs for). Switch to that week to push hours.</span>
-          )}
-          {/* Run payroll + Confirm wire — IRREVERSIBLE, Admin-only, last-completed-week only. Human-triggered:
-              nothing here auto-submits. The ledger drives which (if any) control is shown. */}
-          {canPushPeriod && canRun && (
-            confirmGate.canConfirm ? (
+          {/* One Run payroll flow for the week payroll runs for: approve → fill the Gusto draft → review →
+              confirm + submit (admins). After the submit, the wire confirm takes its place. Older weeks can
+              only be approved (the Gusto draft is always the last completed week). */}
+          {!canPushPeriod ? (
+            <>
+              <ApproveButton
+                period={period}
+                readyCount={appr.readyKeys.length}
+                acknowledgeableCount={appr.acknowledgeableKeys.length}
+                ackReason={appr.ackReason}
+                approved={payrollApproved}
+                approvedCount={m.workers.filter((w) => w.approvalState === "APPROVED_IN_ZOE").length}
+              />
+              <span className="max-w-[16rem] text-right text-[11px] text-meta">Run payroll works on the last completed week, the one in the Gusto draft.</span>
+            </>
+          ) : lastConfirm?.ok && lastConfirm.confirmed ? (
+            <span className="max-w-[16rem] text-right text-[11px] text-positive">Payroll submitted and the wire is confirmed in Gusto for this period.</span>
+          ) : confirmGate.canConfirm ? (
+            canRun ? (
               <ConfirmWireButton
                 period={period}
                 checkDate={wireCheckDate}
@@ -706,17 +703,33 @@ async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
                 wireDate={wireDate}
                 lastConfirm={lastConfirm ? { at: lastConfirm.at, ok: lastConfirm.ok, confirmed: lastConfirm.confirmed, aborted: lastConfirm.aborted } : null}
               />
-            ) : lastConfirm?.ok && lastConfirm.confirmed ? (
-              <span className="max-w-[16rem] text-right text-[11px] text-positive">Payroll submitted and the wire is confirmed in Gusto for this period.</span>
-            ) : !payrollApproved ? (
-              <span className="max-w-[16rem] text-right text-[11px] text-meta">Run payroll unlocks after the Zoe approval is recorded.</span>
             ) : (
-              <RunPayrollButton
-                which="previous"
-                disabled={submitDisabled}
+              <span className="max-w-[16rem] text-right text-[11px] text-positive">Payroll submitted. An administrator confirms the wire.</span>
+            )
+          ) : (
+            <>
+              <RunPayrollFlow
+                period={period}
+                readyCount={appr.readyKeys.length}
+                acknowledgeableCount={appr.acknowledgeableKeys.length}
+                ackReason={appr.ackReason}
+                approved={payrollApproved}
+                canRun={canRun}
+                pushDisabled={pushDisabled}
+                submitDisabled={submitDisabled}
+                lastPush={lastPush ? { at: lastPush.at, ok: lastPush.ok, aborted: lastPush.aborted, pushed: lastPush.pushed } : null}
                 lastSubmit={lastSubmit ? { at: lastSubmit.at, ok: lastSubmit.ok, submitted: lastSubmit.submitted, aborted: lastSubmit.aborted } : null}
               />
-            )
+              {payrollApproved && (
+                <ApproveButton
+                  unapproveOnly
+                  period={period}
+                  readyCount={0}
+                  approved
+                  approvedCount={m.workers.filter((w) => w.approvalState === "APPROVED_IN_ZOE").length}
+                />
+              )}
+            </>
           )}
         </div>
       </section>
@@ -1215,13 +1228,10 @@ function HistoryTab(): React.JSX.Element {
 
 // ══ SETTINGS ════════════════════════════════════════════════════════════════════════════════════════════
 function SettingsTab(): React.JSX.Element {
-  const which = "previous" as const;
   const ctOk = connecteamConfigured();
   const guOk = gustoConfigured();
   const cfg = getPayrollConfig();
   const gustoImport = getLatestImportBySource()["gusto"] ?? null;
-  const pushDisabled = gustoPushDisabled();
-  const lastPush = readGustoPushResult();
   return (
     <div className="max-w-2xl space-y-3">
       <section className="surface border p-4">
@@ -1235,16 +1245,6 @@ function SettingsTab(): React.JSX.Element {
             Gusto no longer syncs on the 10-minute loop. Sync it on demand: the office-browser extension opens one Gusto tab, pulls the roster + pay rates, and closes it.
           </p>
           <SyncGustoButton lastSyncedAt={gustoImport?.ts ?? null} lastOk={gustoImport?.ok ?? false} />
-        </div>
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-rule pt-3">
-          <p className="max-w-sm text-[11.5px] text-meta">
-            Push reconciled hours into the current Gusto <span className="font-medium text-secondary-text">DRAFT</span> payroll run. Runs in <span className="font-medium text-secondary-text">this Chrome</span> via the Auto-Pull extension, using your own signed-in Gusto session (write is audited to you). It never submits, runs, or approves payroll.
-          </p>
-          <PushGustoHoursButton
-            which={which}
-            disabled={pushDisabled}
-            lastPush={lastPush ? { at: lastPush.at, ok: lastPush.ok, aborted: lastPush.aborted, pushed: lastPush.pushed, skipped: lastPush.skipped, failed: lastPush.failed } : null}
-          />
         </div>
       </section>
       <PayrollSettingsForm initial={cfg} />

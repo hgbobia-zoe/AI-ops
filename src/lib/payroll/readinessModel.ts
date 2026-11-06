@@ -343,19 +343,28 @@ export function composeReadinessModel(inp: ComposeInputs): PayrollReadinessModel
   const gates = [hoursGate, approvalGate, mappingGate, reviewGate, submissionGate];
 
   // ── Overall status (worst gate, reconciled) ───────────────────────────────────────────────────────
+  // Blocked workers are held out of the run (they can't be paid until mapped or excluded), but they don't hold
+  // everyone else back: the period is BLOCKED only when nobody is payable. Otherwise the status follows the
+  // payable workers, and is toned "attention" (not red) while anyone is held out. The mapping gate itself
+  // still shows BLOCKED, so the held-out workers stay visible until they are fixed.
+  const payable = workers.filter((w) => w.status !== "BLOCKED");
+  const payableUnapproved = payable.filter((w) => w.approvalState === "UNAPPROVED").length;
+  const payableUnverifiedApproval = payable.filter((w) => w.approvalState === "UNVERIFIED").length;
   let status: UnifiedPayrollStatus;
   if (!connecteamOk) status = "UNAVAILABLE";
   else if (included === 0) status = "NO_DATA";
-  else if (blocked > 0) status = "BLOCKED";
-  else if (actionRequired > 0 || unapprovedCount > 0) status = "ACTION_REQUIRED";
+  else if (blocked > 0 && payable.length === 0) status = "BLOCKED";
+  else if (actionRequired > 0 || payableUnapproved > 0) status = "ACTION_REQUIRED";
   // "approval never exposed" only holds the period when workers remain UNVERIFIED — a Zoe approval resolves
-  // them (approvalGate.state is then PASS), so a fully Zoe-approved period is not forced to ACTION_REQUIRED.
-  else if (unverified > 0 || approvalGate.state === "UNVERIFIED" || periodStale) status = "ACTION_REQUIRED";
+  // them, so a fully Zoe-approved period is not forced to ACTION_REQUIRED.
+  else if (unverified > 0 || payableUnverifiedApproval > 0 || periodStale) status = "ACTION_REQUIRED";
   else if (pushedOk) status = "SUBMITTED";
   else if (approved) status = "APPROVED";
   else status = "READY";
 
-  const tone = TONE_FOR_STATUS[status];
+  const heldOut = blocked > 0 && (status === "READY" || status === "APPROVED" || status === "SUBMITTED");
+  const tone: PayrollTone = heldOut ? "attention" : TONE_FOR_STATUS[status];
+  const heldOutSuffix = heldOut ? ` · ${blocked} held out` : "";
 
   // ── Headline + explain ──────────────────────────────────────────────────────────────────────────
   const headline =
@@ -363,17 +372,18 @@ export function composeReadinessModel(inp: ComposeInputs): PayrollReadinessModel
       : status === "NO_DATA" ? "No hours to pay this period"
         : status === "BLOCKED" ? `${blocked} worker${blocked === 1 ? "" : "s"} blocked`
           : status === "ACTION_REQUIRED" ? `${actionRequired + unverified || "Items"} need attention`
-            : status === "READY" ? `All ${ready} worker${ready === 1 ? "" : "s"} ready to approve`
-              : status === "APPROVED" ? "Payroll approved"
-                : "Hours sent to Gusto draft";
+            : status === "READY" ? `${heldOut ? "" : "All "}${ready} worker${ready === 1 ? "" : "s"} ready to approve${heldOutSuffix}`
+              : status === "APPROVED" ? `Payroll approved${heldOutSuffix}`
+                : `Hours sent to Gusto draft${heldOutSuffix}`;
+  const heldOutNote = heldOut ? ` ${blocked} blocked worker${blocked === 1 ? " is" : "s are"} held out of this run until mapped or excluded.` : "";
   const explain =
     status === "UNAVAILABLE" ? "Connecteam is unreachable, so hours could not be verified. Not safe to approve on stale data."
       : status === "NO_DATA" ? "No worker logged hours in this completed week."
-        : status === "BLOCKED" ? "Unaffected, mapped workers can still be approved once review and timesheet gates pass — blocked workers are held out of the run until mapped or excluded."
+        : status === "BLOCKED" ? "Every worker in the run is blocked. Map them to Gusto or exclude them."
           : status === "ACTION_REQUIRED" ? "Resolve the items below. Workers that are already clean are not held back once the shared timesheet-approval gate is met."
-            : status === "READY" ? "Every gate is clean. Review and record the Zoe approval, then push to the Gusto draft."
-              : status === "APPROVED" ? "Zoe sign-off recorded. Push the hours into the Gusto draft (draft only — this never submits payroll)."
-                : "Hours are written to the Gusto draft. Submit payroll inside Gusto to finish — that step is not done here.";
+            : status === "READY" ? `Ready. Click Run payroll to approve, fill the Gusto draft and submit.${heldOutNote}`
+              : status === "APPROVED" ? `Approved. Click Run payroll to fill the Gusto draft and submit.${heldOutNote}`
+                : `Hours are in the Gusto draft. Click Run payroll to review and submit.${heldOutNote}`;
 
   // ── Next valid action (hard blockers first, else earliest pipeline gate) ────────────────────────────
   const nextAction = computeNextAction({ connecteamOk, mappingGate, approvalGate, reviewGate, status, approved });
@@ -467,14 +477,14 @@ function computeNextAction(a: {
   status: UnifiedPayrollStatus; approved: boolean;
 }): PayrollNextAction {
   if (!a.connecteamOk) return { label: "Sync hours", href: SETTINGS_TAB, explain: "Connecteam is unreachable — retry the hours sync before anything else.", gate: "hours" };
-  // Hard blockers first.
-  if (a.mappingGate.state === "BLOCKED") return { label: "Map workers to Gusto", href: REVIEW_TAB, explain: a.mappingGate.detail, gate: "gustoMapping" };
-  // Then the earliest pipeline gate that isn't passing.
-  if (a.approvalGate.state === "ACTION" || a.approvalGate.state === "UNVERIFIED") return { label: "Review and approve timesheets", href: REVIEW_TAB, explain: a.approvalGate.detail, gate: "timesheetApproval" };
+  // Hard blockers first (only when nobody can be paid; held-out workers don't stop the rest of the run).
+  if (a.status === "BLOCKED") return { label: "Map workers to Gusto", href: REVIEW_TAB, explain: a.mappingGate.detail, gate: "gustoMapping" };
+  // Then the earliest pipeline gate that isn't passing for the payable workers.
+  if (a.status === "ACTION_REQUIRED" && (a.approvalGate.state === "ACTION" || a.approvalGate.state === "UNVERIFIED")) return { label: "Review and approve timesheets", href: REVIEW_TAB, explain: a.approvalGate.detail, gate: "timesheetApproval" };
   if (a.reviewGate.state === "ACTION") return { label: "Review payroll", href: REVIEW_TAB, explain: a.reviewGate.detail, gate: "zoeReview" };
-  if (a.status === "READY") return { label: "Approve payroll", href: REVIEW_TAB, explain: "Every gate is clean — record the Zoe approval.", gate: "zoeReview" };
-  if (a.status === "APPROVED") return { label: "Push hours to Gusto (draft)", href: REVIEW_TAB, explain: "Approved — write the hours into the Gusto draft from the Review tab.", gate: "gustoSubmission" };
-  if (a.status === "SUBMITTED") return { label: "Submit in Gusto", href: null, explain: "Hours are in the Gusto draft — submit payroll inside Gusto to finish.", gate: "gustoSubmission" };
+  if (a.status === "READY") return { label: "Run payroll", href: REVIEW_TAB, explain: "Ready. Run payroll approves, fills the Gusto draft, then asks you to confirm.", gate: "zoeReview" };
+  if (a.status === "APPROVED") return { label: "Run payroll", href: REVIEW_TAB, explain: "Approved. Run payroll fills the Gusto draft, then asks you to confirm.", gate: "gustoSubmission" };
+  if (a.status === "SUBMITTED") return { label: "Run payroll", href: REVIEW_TAB, explain: "Hours are in the Gusto draft. Run payroll to review and submit.", gate: "gustoSubmission" };
   return { label: "Nothing to pay", href: null, explain: "No workers to pay in this period.", gate: null };
 }
 
