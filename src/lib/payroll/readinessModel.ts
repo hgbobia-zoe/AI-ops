@@ -216,7 +216,7 @@ export interface ComposeInputs {
   period: PayPeriod;
   review: PayrollReviewResult;
   readiness: PayrollReadiness;
-  rate: { proposals: number; salaried: number; noGustoRate: number; asOf: string | null };
+  rate: { proposals: number; salaried: number; noGustoRate: number; asOf: string | null; proposalKeys?: string[]; salariedKeys?: string[]; noGustoRateKeys?: string[] };
   approval: { status: PayrollApprovalStatus; approvedBy: string | null; approvedAt: string | null } | null;
   pushedOk: boolean;
   pushed: number;
@@ -249,7 +249,10 @@ export async function derivePayrollReadiness(period: PayPeriod): Promise<Payroll
 
   return composeReadinessModel({
     period, review, readiness,
-    rate: { proposals: ratePlan.proposals.length, salaried: ratePlan.salaried, noGustoRate: ratePlan.noGustoRate, asOf: ratePlan.asOf },
+    rate: {
+      proposals: ratePlan.proposals.length, salaried: ratePlan.salaried, noGustoRate: ratePlan.noGustoRate, asOf: ratePlan.asOf,
+      proposalKeys: ratePlan.proposals.map((p) => p.workerKey), salariedKeys: ratePlan.salariedKeys, noGustoRateKeys: ratePlan.noGustoRateKeys,
+    },
     approval: approval ? { status: approval.status, approvedBy: approval.approvedBy, approvedAt: approval.approvedAt } : null,
     pushedOk, pushed: pushResult?.pushed ?? 0,
     snapshotAt: last?.finishedAt ?? last?.startedAt ?? snap?.fetchedAt ?? null,
@@ -411,14 +414,21 @@ export function composeReadinessModel(inp: ComposeInputs): PayrollReadinessModel
   const sources = buildSources(connecteamOk, snapshotAt, inp.sources);
 
   // ── Rate comparison (3 distinct populations) ─────────────────────────────────────────────────────────
-  const mappedInRun = workers.filter((w) => w.gustoMapped).length;
-  const comparable = Math.max(0, mappedInRun - inp.rate.noGustoRate - inp.rate.salaried);
+  // Every number here counts the SAME population: mapped workers in this run. (The rate plan covers every
+  // mapped worker in Zoe; mixing the two once produced "0 of 8 comparable, 11 no Gusto rate".)
+  const mappedKeys = new Set(workers.filter((w) => w.gustoMapped).map((w) => w.key));
+  const mappedInRun = mappedKeys.size;
+  const inRun = (keys: string[] | undefined, fallback: number): number => (keys ? keys.filter((k) => mappedKeys.has(k)).length : fallback);
+  const noRateInRun = inRun(inp.rate.noGustoRateKeys, inp.rate.noGustoRate);
+  const salariedInRun = inRun(inp.rate.salariedKeys, inp.rate.salaried);
+  const differingInRun = inRun(inp.rate.proposalKeys, inp.rate.proposals);
+  const comparable = Math.max(0, mappedInRun - noRateInRun - salariedInRun);
   const rateComparison: RateComparison = {
     mapped: mappedInRun,
-    verifiedMatch: Math.max(0, comparable - inp.rate.proposals),
-    differing: inp.rate.proposals,
-    missingSourceRate: inp.rate.noGustoRate,
-    incomparableSalaried: inp.rate.salaried,
+    verifiedMatch: Math.max(0, comparable - differingInRun),
+    differing: differingInRun,
+    missingSourceRate: noRateInRun,
+    incomparableSalaried: salariedInRun,
     asOf: inp.rate.asOf,
   };
 

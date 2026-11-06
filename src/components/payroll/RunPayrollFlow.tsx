@@ -408,7 +408,6 @@ function DraftView({ plan, result }: { plan: PushPayload; result: NonNullable<St
   });
   const inGusto = rows.filter((r) => r.ok);
   const total = inGusto.reduce((s, r) => s + r.e.regularHours + r.e.overtimeHours, 0);
-  const anyOt = plan.entries.some((e) => e.overtimeHours > 0);
 
   return (
     <div className="space-y-3 text-[12.5px]">
@@ -425,7 +424,7 @@ function DraftView({ plan, result }: { plan: PushPayload; result: NonNullable<St
                   {!ok && note && <span className="ml-2 text-[11px] text-critical">{note}</span>}
                 </td>
                 <td className="px-3 py-1.5 text-right tabular-nums">
-                  {h(e.regularHours)}{anyOt && e.overtimeHours > 0 ? ` + ${h(e.overtimeHours)} OT` : ""}
+                  {h(e.regularHours + e.overtimeHours)}
                 </td>
               </tr>
             ))}
