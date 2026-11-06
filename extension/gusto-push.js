@@ -211,6 +211,7 @@
     try {
       const continues = Array.from(document.querySelectorAll("a,button,[role=button]"))
         .filter((n) => /^\s*continue\s*$/i.test(n.textContent || "") && n.offsetParent !== null);
+      let wireCardBtn = null;
       for (const btn of continues) {
         let card = null;
         let el = btn;
@@ -221,8 +222,13 @@
           card = el;
         }
         const t = (card && card.textContent) || "";
-        if (/pay by wire transfer/i.test(t) && !/pay by check|4-day pay/i.test(t)) { btn.click(); return true; }
+        // After the wire card, Gusto opens a "Wire transfer requirements" dialog with its own Continue
+        // (verified live 2026-11-06). It only acknowledges the wire terms. Click it first when it's open, so we
+        // never re-click the wire card behind it.
+        if (/wire transfer requirements/i.test(t)) { btn.click(); return true; }
+        if (/pay by wire transfer/i.test(t) && !/pay by check|4-day pay/i.test(t)) wireCardBtn = wireCardBtn || btn;
       }
+      if (wireCardBtn) { wireCardBtn.click(); return true; }
     } catch (e) { /* ignore */ }
     return false;
   }
@@ -313,7 +319,7 @@
     // 1) Reach the inputs step + capture the member map (and thereby confirm DRAFT). Never submits.
     // Gusto's run key ends with the PAY PERIOD END date (verified live 2026-11-06: regular.<schedule>.<group>.2026-11-01
     // for the Oct 26 to Nov 1 run, href /<company>/pay/payrolls/scheduled/<key>/inputs), not the check date.
-    const reached = await waitForInputs(45000, period.end || null);
+    const reached = await waitForInputs(90000, period.end || null);
     if (reached === "auth") {
       // Expired Gusto session — reveal this tab so the operator can sign in, then re-run the push.
       revealTab();
