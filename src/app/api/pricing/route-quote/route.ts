@@ -13,7 +13,7 @@
 
 import { NextResponse } from "next/server";
 import { geocode, driveTime, type LatLng } from "@/lib/eta/geo";
-import { WAREHOUSE_COORDS, WAREHOUSE_ADDRESS } from "@/lib/pricing/warehouse";
+import { WAREHOUSE_COORDS, WAREHOUSE_ADDRESS, pricingDeparture } from "@/lib/pricing/warehouse";
 import { pricingConfig } from "@/lib/pricing/config";
 import { deliveryQuote, metersToMiles, type LegMode } from "@/lib/pricing/delivery";
 import { buildDistanceFn, haversineMiles } from "@/lib/pricing/routeDistance";
@@ -67,7 +67,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (address) {
     venue = await geocode(address);
     if (venue) {
-      const drive = await driveTime(WAREHOUSE_COORDS, venue);
+      const drive = await driveTime(WAREHOUSE_COORDS, venue, { departAt: pricingDeparture() });
       if (drive?.meters != null) {
         warehouseMiles = Math.round(metersToMiles(drive.meters) * 10) / 10;
         distanceSource = "geocoded";

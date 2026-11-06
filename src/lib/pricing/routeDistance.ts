@@ -6,6 +6,7 @@
 
 import { driveTime, type LatLng } from "@/lib/eta/geo";
 import { metersToMiles } from "./delivery";
+import { pricingDeparture } from "./warehouse";
 import type { DistanceFn, DistanceResult } from "./routeOptimize";
 
 const g = globalThis as unknown as { __zoeDriveCache?: Map<string, DistanceResult | null> };
@@ -24,7 +25,7 @@ export async function cachedDrive(a: LatLng, b: LatLng): Promise<DistanceResult 
   if (same(a, b)) return { miles: 0, minutes: 0 };
   const k = pairKey(a, b);
   if (cache.has(k)) return cache.get(k)!;
-  const dt = await driveTime(a, b);
+  const dt = await driveTime(a, b, { departAt: pricingDeparture() });
   const res: DistanceResult | null =
     dt && dt.meters != null && Number.isFinite(dt.meters) ? { miles: metersToMiles(dt.meters), minutes: dt.seconds / 60 } : null;
   cache.set(k, res);

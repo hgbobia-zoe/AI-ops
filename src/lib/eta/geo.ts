@@ -101,25 +101,50 @@ export interface DriveTime {
   meters?: number;
 }
 
-export async function driveTime(from: LatLng, to: LatLng): Promise<DriveTime | null> {
+export interface DriveOpts {
+  /** Price-style lookups pass a fixed typical departure so the answer doesn't depend on when someone
+   *  clicks. Omitted = leave now (live ETAs). */
+  departAt?: Date;
+}
+
+export async function driveTime(from: LatLng, to: LatLng, opts: DriveOpts = {}): Promise<DriveTime | null> {
   return process.env.GOOGLE_MAPS_API_KEY
-    ? driveTimeGoogle(from, to)
+    ? driveTimeGoogle(from, to, opts)
     : driveTimeOsrm(from, to);
 }
 
-async function driveTimeGoogle(from: LatLng, to: LatLng): Promise<DriveTime | null> {
+type GoogleLeg = { duration_in_traffic?: { value?: number }; duration?: { value?: number }; distance?: { value?: number } };
+const legSeconds = (leg: GoogleLeg | undefined): number | undefined => leg?.duration_in_traffic?.value ?? leg?.duration?.value;
+
+/** The fastest of the routes Google offers (by time in traffic), like Google Maps' top pick. Not the
+ *  shortest: a 9.9 mi crawl down a light-heavy road loses to 11.8 mi on a faster one. */
+export function fastestGoogleLeg(routes: { legs?: GoogleLeg[] }[] | undefined): GoogleLeg | undefined {
+  let best: GoogleLeg | undefined;
+  for (const r of routes ?? []) {
+    const leg = r?.legs?.[0];
+    const s = legSeconds(leg);
+    if (typeof s !== "number") continue;
+    if (!best || s < legSeconds(best)!) best = leg;
+  }
+  return best;
+}
+
+async function driveTimeGoogle(from: LatLng, to: LatLng, opts: DriveOpts): Promise<DriveTime | null> {
   const url = new URL("https://maps.googleapis.com/maps/api/directions/json");
   url.searchParams.set("origin", `${from.lat},${from.lng}`);
   url.searchParams.set("destination", `${to.lat},${to.lng}`);
-  url.searchParams.set("departure_time", "now"); // unlocks duration_in_traffic
+  // a departure time unlocks duration_in_traffic; a past time is rejected, so fall back to now
+  const depart = opts.departAt && opts.departAt.getTime() > Date.now() ? String(Math.floor(opts.departAt.getTime() / 1000)) : "now";
+  url.searchParams.set("departure_time", depart);
+  url.searchParams.set("alternatives", "true"); // compare the options and keep the fastest
   url.searchParams.set("key", process.env.GOOGLE_MAPS_API_KEY!);
   try {
     const d = await (await fetch(url, { cache: "no-store" })).json();
     if (d?.status && d.status !== "OK" && d.status !== "ZERO_RESULTS") {
       void alertOps("Google Maps (directions)", `${d.status}${d.error_message ? `: ${d.error_message}` : ""}`);
     }
-    const leg = d?.routes?.[0]?.legs?.[0];
-    const secs = leg?.duration_in_traffic?.value ?? leg?.duration?.value;
+    const leg = fastestGoogleLeg(d?.routes);
+    const secs = legSeconds(leg);
     return typeof secs === "number"
       ? { seconds: secs, meters: leg?.distance?.value }
       : null;

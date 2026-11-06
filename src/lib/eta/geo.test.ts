@@ -111,4 +111,17 @@ describe("driveTime provider selection", () => {
     expect(r).toEqual({ seconds: 540, meters: 8000 }); // prefers duration_in_traffic
     expect(urls[0]).toContain("maps.googleapis.com");
   });
+
+  it("keeps Google's FASTEST alternative, not the shortest, at the departure it is given", async () => {
+    process.env.GOOGLE_MAPS_API_KEY = "test-key";
+    const urls: string[] = [];
+    const leg = (secs: number, meters: number) => ({ legs: [{ duration_in_traffic: { value: secs }, duration: { value: secs - 60 }, distance: { value: meters } }] });
+    mockByHost(urls, { google: { status: "OK", routes: [leg(2280, 15933), leg(1800, 18990), leg(2040, 22048)] } }); // Rockville Pike 9.9mi/38m, Montrose 11.8mi/30m, I-270
+    const depart = new Date(Date.now() + 3 * 86_400_000);
+    const r = await driveTime({ lat: 39.06, lng: -77.11 }, { lat: 38.96, lng: -77.13 }, { departAt: depart });
+    expect(r).toEqual({ seconds: 1800, meters: 18990 });
+    expect(urls[0]).toContain("alternatives=true");
+    expect(urls[0]).toContain(`departure_time=${Math.floor(depart.getTime() / 1000)}`);
+  });
 });
+
