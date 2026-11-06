@@ -37,6 +37,7 @@ import type {
   UnifiedIssueSeverity, ReadinessException, PayrollReviewResult, PayrollReadiness, PayrollApprovalStatus,
 } from "./types";
 import { GATE_LABEL } from "./types";
+import { draftAttemptLine } from "./attemptText";
 
 const REVIEW_TAB = "/payroll?tab=review";
 const WORKERS_TAB = "/payroll?tab=workers";
@@ -168,7 +169,7 @@ const ACTIVITY: Record<string, { layer: PayrollActivityEvent["layer"]; label: st
   "payroll.worker.exclude": { layer: "exclusion", label: "Excluded a worker", tone: "neutral" },
   "payroll.worker.include": { layer: "exclusion", label: "Re-included a worker", tone: "neutral" },
   "payroll.rate_sync.write": { layer: "rate", label: "Wrote a Gusto rate into Connecteam", tone: "neutral" },
-  "payroll.gusto.push_hours": { layer: "submission", label: "Pushed hours to the Gusto draft", tone: "positive" },
+  "payroll.gusto.push_hours": { layer: "submission", label: "Gusto draft update", tone: "neutral" },
 };
 
 /** Build the real payroll activity feed from the audit log + the sync ledger (actor / action / time / outcome).
@@ -186,6 +187,12 @@ function buildActivity(): PayrollActivityEvent[] {
           : a.action === "payroll.gusto.push_hours" ? `${d.pushed ?? "?"} pushed${d.failed ? `, ${d.failed} failed` : ""}`
             : a.action === "payroll.rate_sync.write" ? `${d.name ?? "worker"} → $${d.gustoRate ?? "?"}/hr`
               : (d.name as string | undefined) ?? (d.period as string | undefined) ?? null;
+      // A Gusto DRAFT update reads from its real outcome (failed / partial / stopped), never as a green success.
+      if (a.action === "payroll.gusto.push_hours") {
+        const line = draftAttemptLine({ ok: d.ok as boolean | null, aborted: (d.aborted as string | null) ?? null, pushed: Number(d.pushed ?? 0), failed: Number(d.failed ?? 0), skipped: Number(d.skipped ?? 0) });
+        events.push({ id: a.auditId, actor: a.actor || null, layer: meta.layer, label: line.title, at: a.ts, outcome: line.detail, tone: line.tone });
+        continue;
+      }
       events.push({ id: a.auditId, actor: a.actor || null, layer: meta.layer, label: meta.label, at: a.ts, outcome, tone: meta.tone });
     }
   } catch { /* audit unavailable — honest empty feed below */ }
