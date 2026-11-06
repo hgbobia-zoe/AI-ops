@@ -176,14 +176,40 @@
   // Resolves with WHY we stopped waiting: "inputs" (captured the draft), "auth" (signed out → reveal + abort),
   // or "timeout". Give the auth check a beat to settle (the hidden tab may still be redirecting to login on
   // the first ticks), so we only trust it after a short grace period.
-  function waitForInputs(timeoutMs) {
+  // The hidden tab lands on Gusto's home page, whose way into a draft run is the "Run payroll" LINK. Its href
+  // carries the run key regular.<schedule>.<group>.<checkDate>. Following that link only opens the run's
+  // hours step (it is a link, not a submit control), so it is safe here even though we never click anything
+  // LABELED "run payroll". We pick the link for this week's check date; with no date match we only follow a
+  // link when exactly one run is offered (never guess between weeks).
+  const RUN_LINK_RE = /regular\.[0-9a-f][0-9a-f-]{7,}\.[0-9a-f][0-9a-f-]{7,}\.(\d{4}-\d{2}-\d{2})/i;
+  let runLinkClicked = null;
+  function clickRunLink(checkDate) {
+    try {
+      const links = Array.from(document.querySelectorAll("a[href]")).filter((a) => RUN_LINK_RE.test(a.getAttribute("href") || ""));
+      if (!links.length) return false;
+      const dateOf = (a) => ((a.getAttribute("href") || "").match(RUN_LINK_RE) || [])[1] || null;
+      let pick = checkDate ? links.find((a) => dateOf(a) === checkDate) : null;
+      if (!pick) {
+        const uniq = Array.from(new Set(links.map((a) => (a.getAttribute("href") || "").match(RUN_LINK_RE)[0])));
+        if (uniq.length === 1) pick = links[0];
+      }
+      if (!pick) return false;
+      const key = pick.getAttribute("href");
+      if (runLinkClicked === key) return false; // once per page; wait for the route to load
+      runLinkClicked = key;
+      pick.click();
+      return true;
+    } catch (e) { return false; }
+  }
+
+  function waitForInputs(timeoutMs, checkDate) {
     return new Promise((resolve) => {
       const start = Date.now();
       const tick = () => {
         if (memberMap) return resolve("inputs");
         if (Date.now() - start > 4000 && onAuthPage()) return resolve("auth");
         if (Date.now() - start > timeoutMs) return resolve("timeout");
-        clickCandidates(); // nudge the flow forward one safe step, then re-poll
+        if (!clickRunLink(checkDate)) clickCandidates(); // nudge the flow forward one safe step, then re-poll
         setTimeout(tick, 1500);
       };
       tick();
@@ -259,14 +285,15 @@
     if (!entries.length) { result.aborted = "no_entries"; return result; }
 
     // 1) Reach the inputs step + capture the member map (and thereby confirm DRAFT). Never submits.
-    const reached = await waitForInputs(45000);
+    const reached = await waitForInputs(45000, (job && job.checkDate) || null);
     if (reached === "auth") {
       // Expired Gusto session — reveal this tab so the operator can sign in, then re-run the push.
       revealTab();
       result.aborted = "not_logged_in";
       return result;
     }
-    if (reached !== "inputs" || !memberMap) { result.aborted = "could_not_reach_inputs"; return result; }
+    // Say which Gusto page we were stuck on (path only), so a failure can be diagnosed from the app.
+    if (reached !== "inputs" || !memberMap) { result.aborted = "could_not_reach_inputs@" + location.pathname; return result; }
     if (!isDraft) { result.aborted = "not_a_draft"; return result; } // HARD SAFETY: only ever a DRAFT run
     if (!headerTemplate) { result.aborted = "no_graphql_headers"; return result; }
     result.draftPayrollId = draftPayrollId;
@@ -340,5 +367,13 @@
   });
 
   // Ask the bridge whether there's a push job for this tab (mirrors the read path's handshake direction).
-  try { window.postMessage({ __zoeGustoPush: true, type: "ready" }, location.origin); } catch (e) { /* no-op */ }
+  // Repeat for a few seconds: this MAIN-world script and the isolated bridge load in no guaranteed order, so a
+  // single "ready" can fire before the bridge is listening and the job would never be handed over.
+  let readyTries = 0;
+  const sayReady = () => {
+    if (started || readyTries++ >= 15) return;
+    try { window.postMessage({ __zoeGustoPush: true, type: "ready" }, location.origin); } catch (e) { /* no-op */ }
+    setTimeout(sayReady, 1000);
+  };
+  sayReady();
 })();

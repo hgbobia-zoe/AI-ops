@@ -391,5 +391,14 @@
     })();
   });
 
-  try { window.postMessage({ __zoeGustoSubmit: true, type: "ready" }, location.origin); } catch (e) { /* no-op */ }
+  // Repeat "ready" for a few seconds: this MAIN-world script and the isolated bridge load in no guaranteed
+  // order, so one early "ready" can be missed. The background hands a submit job out only once, so repeats
+  // can never start a second submit.
+  let readyTries = 0;
+  const sayReady = () => {
+    if (started || readyTries++ >= 15) return;
+    try { window.postMessage({ __zoeGustoSubmit: true, type: "ready" }, location.origin); } catch (e) { /* no-op */ }
+    setTimeout(sayReady, 1000);
+  };
+  sayReady();
 })();

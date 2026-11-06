@@ -312,7 +312,12 @@ async function startGustoPush(payload) {
     tabId: tab.id,
     startedAt: Date.now(),
     claimed: false,
-    job: { entries, period: (payload && payload.period) || null, initiatedBy: (payload && payload.initiatedBy) || null },
+    job: {
+      entries,
+      period: (payload && payload.period) || null,
+      checkDate: (payload && payload.checkDate) || null,
+      initiatedBy: (payload && payload.initiatedBy) || null,
+    },
   });
   chrome.alarms.create(GUSTO_PUSH_WATCHDOG, { delayInMinutes: GUSTO_PUSH_TIMEOUT_MS / 60000 });
   return { ok: true, tabId: tab.id };
@@ -452,6 +457,17 @@ async function startGustoSubmit(kind, payload) {
 // Two cases leave the app waiting with nothing: (1) Gusto is signed out, so the hidden tab is redirected to
 // login.gusto.com, where none of our Gusto scripts run; (2) the script never claimed the job before the
 // watchdog fired. We POST the same result shape the page scripts send, so the app shows the reason at once.
+// "@/path" of a job tab (no query string, no ids beyond what is in Gusto's path), for diagnosis.
+async function tabPath(tabId) {
+  try {
+    const t = await chrome.tabs.get(tabId);
+    const u = new URL(t.url || t.pendingUrl || "");
+    return "@" + u.hostname.replace(/\.gusto\.com$/, "") + u.pathname;
+  } catch (e) {
+    return "";
+  }
+}
+
 async function reportGustoJob(kind, job, aborted) {
   try {
     const { apiBase } = await cfg();
@@ -989,7 +1005,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       if (p && Date.now() - p.startedAt > GUSTO_PUSH_TIMEOUT_MS - 1000) {
         // Never claimed = our script never ran in that tab, so nothing was reported. Say so instead of
         // closing the tab silently (the app is waiting on a result).
-        if (!p.claimed) await reportGustoJob("push", p.job, "no_response");
+        // Our scripts never reported. Say where the tab got stuck instead of closing it silently.
+        await reportGustoJob("push", p.job, (p.claimed ? "claimed_no_result" : "no_response") + (await tabPath(p.tabId)));
         reapGustoPush(p);
       }
     });
@@ -1000,7 +1017,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   } else if (alarm.name === GUSTO_SUBMIT_WATCHDOG) {
     getGustoSubmit().then(async (p) => {
       if (p && Date.now() - p.startedAt > GUSTO_SUBMIT_TIMEOUT_MS - 1000) {
-        if (!p.claimed) await reportGustoJob("submit", p.job, "no_response");
+        if (!p.claimed) await reportGustoJob("submit", p.job, "no_response" + (await tabPath(p.tabId)));
         reapGustoSubmit(p);
       }
     });
@@ -1056,12 +1073,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // gusto-bridge.js (isolated world) claims the DRAFT-push job for ITS tab → return the entries ONLY for the
   // exact tab we opened, and only once (atomic claim), so a user's own Gusto tab is never driven.
+  // The SAME tab may claim again after a full page load (Gusto reloads while reaching the draft run); the
+  // hours write is idempotent (unchanged hours are skipped), so handing the job back to that tab is safe.
   if (msg.type === "zoe-gusto-push-claim") {
     (async () => {
       const p = await getGustoPush();
-      if (p && sender.tab && sender.tab.id === p.tabId && !p.claimed) {
-        p.claimed = true;
-        await setGustoPush(p);
+      if (p && sender.tab && sender.tab.id === p.tabId) {
+        if (!p.claimed) {
+          p.claimed = true;
+          await setGustoPush(p);
+        }
         sendResponse({ job: p.job });
       } else {
         sendResponse({ job: null });

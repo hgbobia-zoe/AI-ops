@@ -13,7 +13,8 @@ import { commandCenter } from "@/lib/command/service";
 import { namedPeriod } from "@/lib/payroll/period";
 import { payrollReview } from "@/lib/payroll/review";
 import { unifiedWorkers } from "@/lib/payroll/workers";
-import { overtimeCutoff } from "@/lib/payroll/config";
+import { getPayrollConfig, overtimeCutoff } from "@/lib/payroll/config";
+import { expectedCheckDate } from "@/lib/payroll/gustoSubmit";
 import { buildPushEntries } from "@/lib/payroll/gustoPush";
 import { gustoPushDisabled } from "@/lib/payroll/gustoPushState";
 
@@ -37,6 +38,8 @@ export async function POST(req: Request): Promise<Response> {
 
   return NextResponse.json({
     period,
+    // The Gusto run link carries its check date; the extension uses it to open THIS week's draft run.
+    checkDate: expectedCheckDate(period.end, getPayrollConfig().payrollDay),
     which: body.which === "previous" ? "previous" : "current",
     overtimePaid: Number.isFinite(overtimeThreshold),
     overtimeThreshold: Number.isFinite(overtimeThreshold) ? overtimeThreshold : null,
