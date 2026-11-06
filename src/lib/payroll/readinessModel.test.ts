@@ -287,6 +287,15 @@ describe("composeReadinessModel — rate comparison (three distinct populations)
     const m = compose({ workers, readiness, rate: { proposals: 1, salaried: 1, noGustoRate: 1, asOf: "x" } });
     expect(m.rateComparison).toMatchObject({ mapped: 4, differing: 1, missingSourceRate: 1, incomparableSalaried: 1, verifiedMatch: 1 });
   });
+
+  it("counts only workers in THIS run when the plan gives keys (no more \"0 of 8 comparable, 11 no Gusto rate\")", () => {
+    const workers = ["A", "B"].map((n, i) => rv({ key: `ct:${i}`, name: n }));
+    const readiness = ["A", "B"].map((n, i) => rdw({ key: `ct:${i}`, name: n }));
+    // Zoe-wide: 11 have no Gusto rate, but only ct:1 is in this run.
+    const noKeys = ["ct:1", ...Array.from({ length: 10 }, (_, i) => `ct:9${i}`)];
+    const m = compose({ workers, readiness, rate: { proposals: 0, salaried: 0, noGustoRate: 11, asOf: "x", proposalKeys: [], salariedKeys: [], noGustoRateKeys: noKeys } });
+    expect(m.rateComparison).toMatchObject({ mapped: 2, missingSourceRate: 1, verifiedMatch: 1, differing: 0 });
+  });
 });
 
 describe("payrollApprovability — gating cannot be bypassed", () => {

@@ -12,13 +12,13 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   Wallet, Users, UserCheck, History, Settings as SettingsIcon,
-  ArrowRight, ChevronLeft, ChevronRight, CheckCircle2, CircleAlert, Ban, HelpCircle, Clock,
-  ClipboardCheck, Plug, CalendarClock, BrainCircuit, Search,
+  ArrowRight, ChevronLeft, ChevronRight, CheckCircle2, CircleAlert, HelpCircle, Clock,
+  ClipboardCheck, Plug, CalendarClock, BrainCircuit,
 } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManagePayroll, canRunPayroll } from "@/lib/auth/roles";
 import { commandCenter } from "@/lib/command/service";
-import { connecteamConfigured, getTimesheetReview, type TimesheetUserReview } from "@/lib/connecteam";
+import { connecteamConfigured, getTimesheetReview } from "@/lib/connecteam";
 import { completedWeeksBack } from "@/lib/payroll/period";
 import { clampWeeksAgo, periodNavHref } from "@/lib/payroll/nav";
 import { derivePayrollReadiness, payrollApprovability } from "@/lib/payroll/readinessModel";
@@ -28,9 +28,9 @@ import { listExceptions, listSyncRuns, countTimeEntries } from "@/lib/payroll/st
 import { gustoConfigured } from "@/lib/payroll/gusto";
 import { instaworkTempPay } from "@/lib/payroll/instawork";
 import {
-  WORKER_TYPE_LABEL, MAPPING_STATUS_LABEL, APPROVAL_STATUS_LABEL, UNIFIED_STATUS_LABEL, RATE_SOURCE_LABEL,
+  WORKER_TYPE_LABEL, APPROVAL_STATUS_LABEL,
   type UnifiedWorker, type ExceptionSeverity, type PayrollReadinessModel, type PayrollTone, type GateState,
-  type UnifiedWorkerRow, type UnifiedWorkerStatus, type AttentionGroup, type PayrollSourceHealth,
+  type UnifiedWorkerRow, type AttentionGroup, type PayrollSourceHealth,
   type PayrollActivityEvent,
 } from "@/lib/payroll/types";
 import { getPayrollConfig } from "@/lib/payroll/config";
@@ -49,10 +49,8 @@ import { listWireEvents } from "@/lib/payroll/wireEvent";
 import { ApproveButton } from "@/components/payroll/ApproveButton";
 import { PayrollSettingsForm } from "@/components/payroll/PayrollSettingsForm";
 import { ExceptionActions } from "@/components/payroll/ExceptionActions";
-import { ExcludeControl } from "@/components/payroll/ExcludeControl";
-import { ApproveControl } from "@/components/payroll/ApproveControl";
-import { WorkerApproveControl } from "@/components/payroll/WorkerApproveControl";
 import { RateSyncPanel } from "@/components/payroll/RateSyncPanel";
+import { PayrollReviewBoard, type ReviewRow, type ReviewTimesheet } from "@/components/payroll/PayrollReviewBoard";
 import { buildRateSyncPlan } from "@/lib/payroll/rateSync";
 import { StatusBadge } from "@/components/ui/status";
 import type { Tone } from "@/lib/tone";
@@ -74,12 +72,6 @@ const money = (n: number | null, cur = "USD"): string => {
   return sym + Math.round(n).toLocaleString("en-US");
 };
 const hrs = (n: number | null): string => (n == null ? "—" : `${n.toLocaleString("en-US")} h`);
-// A yyyy-MM-dd day as "Mon, Oct 20" (UTC-parsed so the calendar date never shifts by timezone).
-const fmtDay = (ymd: string): string => {
-  const [y, m, d] = ymd.split("-").map(Number);
-  if (!y || !m || !d) return ymd;
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
-};
 function relTime(iso: string | null): string {
   if (!iso) return "never";
   const d = Date.parse(iso);
@@ -125,7 +117,7 @@ export default async function PayrollPage({
     <main className="mx-auto w-full min-w-0 max-w-[1440px] p-4 pb-12 leading-[1.35] md:p-6 lg:px-8">
       <PayrollHeader tab={tab} period={period} weeksAgo={weeksAgo} />
       {tab === "overview" && <OverviewTab period={period} weeksAgo={weeksAgo} />}
-      {tab === "review" && <ReviewTab period={period} statusFilter={sp.status ?? "all"} q={(sp.q ?? "").trim()} weeksAgo={weeksAgo} />}
+      {tab === "review" && <ReviewTab period={period} weeksAgo={weeksAgo} />}
       {tab === "sync" && <SyncTab period={period} weeksAgo={weeksAgo} />}
       {tab === "workers" && <WorkersTab period={period} mode="all" />}
       {tab === "contractors" && (
@@ -581,20 +573,11 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub?:
 }
 
 // ══ PAYROLL REVIEW ══════════════════════════════════════════════════════════════════════════════════════
-type ReviewFilter = "all" | "ready" | "review" | "unverified" | "blocked" | "excluded";
-const FILTER_LABEL: Record<ReviewFilter, string> = {
-  all: "All in run", ready: "Ready", review: "To review", unverified: "Unverified", blocked: "Blocked", excluded: "Excluded",
-};
-const WSTATUS_UI: Record<UnifiedWorkerStatus, { label: string; cls: string }> = {
-  READY: { label: "Ready", cls: "text-positive" },
-  ACTION_REQUIRED: { label: "To review", cls: "text-attention" },
-  UNVERIFIED: { label: "Unverified", cls: "text-attention" },
-  BLOCKED: { label: "Blocked", cls: "text-critical" },
-  EXCLUDED: { label: "Excluded", cls: "text-meta" },
-};
-
-async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
-  period: { start: string; end: string; label: string }; statusFilter: string; q: string; weeksAgo: number;
+// The review screen answers three questions fast: who is paid, what hours and estimated gross go through, and
+// what must be resolved first. Compact run summary + actions, then the worker table (PayrollReviewBoard: one
+// row per worker, full-run totals, Connecteam day detail in a side panel), then the rate check, folded away.
+async function ReviewTab({ period, weeksAgo }: {
+  period: { start: string; end: string; label: string }; weeksAgo: number;
 }): Promise<React.JSX.Element> {
   const [m, ratePlan, tsReview] = await Promise.all([
     derivePayrollReadiness(period), buildRateSyncPlan(period.end), getTimesheetReview(period.start, period.end),
@@ -603,93 +586,73 @@ async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
     return <EmptyState icon={<ClipboardCheck className="size-5" />} title="Nothing to review yet" body="No worker hours for this period (or Connecteam is unavailable). Sync hours, then review." />;
   }
   const appr = payrollApprovability(m, false);
+  const approvable = new Set([...appr.readyKeys, ...appr.acknowledgeableKeys]);
   const gustoMembers: GustoPick[] = (readGustoSnapshot()?.members ?? []).map((gm) => ({
     id: gm.id, name: gm.preferredName || `${gm.firstName} ${gm.lastName}`.trim() || gm.id, personType: gm.personType, country: gm.country,
   }));
-
-  const filter = (["all", "ready", "review", "unverified", "blocked", "excluded"].includes(statusFilter) ? statusFilter : "all") as ReviewFilter;
-  const counts: Record<ReviewFilter, number> = {
-    all: m.workers.length,
-    ready: m.workers.filter((w) => w.status === "READY").length,
-    review: m.workers.filter((w) => w.status === "ACTION_REQUIRED").length,
-    unverified: m.workers.filter((w) => w.status === "UNVERIFIED").length,
-    blocked: m.workers.filter((w) => w.status === "BLOCKED").length,
-    excluded: m.excludedWorkers.length,
+  const timesheetOf = (w: UnifiedWorkerRow): ReviewTimesheet | null => {
+    const t = w.connecteamUserId != null ? tsReview.byUser.get(w.connecteamUserId) : undefined;
+    return t ? { totalHours: t.totalHours, approvalState: t.approvalState, openPunch: t.openPunch, days: t.days } : null;
   };
-  const ql = q.toLowerCase();
-  let rows = filter === "all" ? m.workers
-    : filter === "ready" ? m.workers.filter((w) => w.status === "READY")
-      : filter === "review" ? m.workers.filter((w) => w.status === "ACTION_REQUIRED")
-        : filter === "unverified" ? m.workers.filter((w) => w.status === "UNVERIFIED")
-          : filter === "blocked" ? m.workers.filter((w) => w.status === "BLOCKED")
-            : m.excludedWorkers;
-  if (ql) rows = rows.filter((w) => w.name.toLowerCase().includes(ql));
-  const wQS = weeksAgo > 1 ? `&weeksAgo=${weeksAgo}` : "";
-  const filterHref = (f: ReviewFilter): string => `/payroll?tab=review&status=${f}${wQS}`;
+  const rows: ReviewRow[] = [
+    ...m.workers.map((w) => ({ ...w, excluded: false, approvable: approvable.has(w.key), timesheet: timesheetOf(w) })),
+    ...m.excludedWorkers.map((w) => ({ ...w, excluded: true, approvable: false, timesheet: timesheetOf(w) })),
+  ];
 
-  // Push hours to Gusto lives HERE next to approval so run → approve → push stays on one screen (it used to be
-  // buried on the Settings tab). The Gusto DRAFT covers the last completed week — the period payroll runs for —
-  // which is exactly weeksAgo === 1 (== the push's "previous" named period). Older weeks can't target the draft.
+  // Run summary (always the full run).
+  const blocked = m.workers.filter((w) => w.status === "BLOCKED").length;
+  const warnings = m.workers.filter((w) => w.status === "ACTION_REQUIRED" || w.status === "UNVERIFIED").length;
+  const contractors = m.workers.filter((w) => w.workerType === "US_CONTRACTOR" || w.workerType === "INTERNATIONAL_CONTRACTOR").length;
+  const totalHours = m.workers.reduce((s, w) => s + (w.hours ?? 0), 0);
+  const payrollApproved = m.approval?.status === "APPROVED";
+  const readiness: { tone: Tone; text: string } =
+    blocked > 0 ? { tone: "critical", text: `${blocked} worker${blocked === 1 ? " is" : "s are"} blocked and won't be sent to Gusto until fixed or excluded.` }
+      : warnings > 0 ? { tone: "attention", text: `${warnings} worker${warnings === 1 ? " needs" : "s need"} review before approval.` }
+        : payrollApproved ? { tone: "positive", text: "Approved. Ready to run payroll." }
+          : { tone: "positive", text: "Every worker is ready. Run payroll approves and fills the Gusto draft." };
+
+  // Run payroll + wire confirm (last completed week only; the submit itself is admin-only).
   const pushDisabled = gustoPushDisabled();
   const lastPush = readGustoPushResult();
   const canPushPeriod = weeksAgo === 1;
-
-  // ── Run payroll + Confirm wire (IRREVERSIBLE — Admin-only, last-completed-week only) ──────────────────
-  // The whole blade is canManagePayroll-gated; this trigger additionally requires canRunPayroll (the
-  // dedicated administrator-level gate for the real, irreversible run). Everything is read from the
-  // period-keyed submit/confirm ledger so the UI can never arm a second submit or a double-confirm.
   const role = await viewerRole();
   const canRun = canRunPayroll(role);
   const submitDisabled = gustoSubmitDisabled();
   const subKey = periodKey(period.start, period.end);
   const lastSubmit = readGustoSubmitResult(subKey);
   const lastConfirm = readGustoConfirmWireResult(subKey);
-  const payrollApproved = m.approval?.status === "APPROVED";
   const confirmGate = confirmWireGate(
     lastSubmit ? { ok: lastSubmit.ok, submitted: lastSubmit.submitted } : null,
     lastConfirm ? { ok: lastConfirm.ok, confirmed: lastConfirm.confirmed } : null,
   );
   const wireCheckDate = expectedCheckDate(period.end, getPayrollConfig().payrollDay);
-  // Amount/date for the wire confirm: the Mercury "wire sent" event matched to THIS period if we have one,
-  // else the submit-time estimate / the review estimate (honest fallback). The extension still verifies the
-  // authoritative amount against Gusto and refuses on a mismatch.
   const wireEvent = listWireEvents(50).find(
     (w) => w.matchedPeriod?.periodStart === period.start && w.matchedPeriod?.periodEnd === period.end,
   ) ?? null;
   const wireAmount = wireEvent?.amountAbs ?? lastSubmit?.expectedTotal ?? m.totals.estGross ?? null;
   const wireDate = (wireEvent?.createdAt ? wireEvent.createdAt.slice(0, 10) : null) ?? new Date().toISOString().slice(0, 10);
+  const approvedCount = m.workers.filter((w) => w.approvalState === "APPROVED_IN_ZOE").length;
+  const rc = m.rateComparison;
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Action summary — status + counts + the approval control (persistent, explains what approve does) */}
-      <section className="surface flex flex-wrap items-center justify-between gap-4 border p-4">
+    <div className="flex flex-col gap-4">
+      <section className="surface flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border px-4 py-3">
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge tone={m.tone} size="md" className="font-semibold">{UNIFIED_STATUS_LABEL[m.status]}</StatusBadge>
-            <span className="text-[12px] text-meta">{m.counts.included} in run · {hrs(m.totals.hours)}</span>
+          <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1">
+            <SummaryFigure label="In run" value={String(m.counts.included)} />
+            <SummaryFigure label="Payable hours" value={totalHours.toFixed(2)} />
+            <SummaryFigure label="Est. gross" value={m.totals.estGross == null ? "—" : `$${m.totals.estGross.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
           </div>
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-0.5 text-[12px]">
-            <Count n={counts.ready} label="ready" tone="positive" />
-            <Count n={counts.review} label="to review" tone="attention" />
-            <Count n={counts.unverified} label="unverified" tone="attention" />
-            <Count n={counts.blocked} label="blocked" tone="critical" />
-            {counts.excluded > 0 && <Count n={counts.excluded} label="excluded" tone="neutral" />}
+          <div className="mt-1.5 flex items-center gap-2 text-[12px]">
+            <StatusBadge tone={readiness.tone} size="sm">{readiness.tone === "positive" ? "Ready" : readiness.tone === "critical" ? "Blocked" : "Review"}</StatusBadge>
+            <span className="text-secondary-text">{readiness.text}</span>
           </div>
+          {contractors > 0 && <p className="mt-1 text-[11px] text-meta">{contractors} contractor{contractors === 1 ? " is" : "s are"} paid separately through Gusto contractor payments.</p>}
         </div>
-        <div className="flex flex-col items-stretch gap-2 sm:items-end">
-          {/* One Run payroll flow for the week payroll runs for: approve → fill the Gusto draft → review →
-              confirm + submit (admins). After the submit, the wire confirm takes its place. Older weeks can
-              only be approved (the Gusto draft is always the last completed week). */}
+        <div className="flex flex-col items-stretch gap-1.5 sm:items-end">
           {!canPushPeriod ? (
             <>
-              <ApproveButton
-                period={period}
-                readyCount={appr.readyKeys.length}
-                acknowledgeableCount={appr.acknowledgeableKeys.length}
-                ackReason={appr.ackReason}
-                approved={payrollApproved}
-                approvedCount={m.workers.filter((w) => w.approvalState === "APPROVED_IN_ZOE").length}
-              />
+              <ApproveButton period={period} readyCount={appr.readyKeys.length} acknowledgeableCount={appr.acknowledgeableKeys.length} ackReason={appr.ackReason} approved={payrollApproved} approvedCount={approvedCount} />
               <span className="max-w-[16rem] text-right text-[11px] text-meta">Run payroll works on the last completed week, the one in the Gusto draft.</span>
             </>
           ) : lastConfirm?.ok && lastConfirm.confirmed ? (
@@ -720,253 +683,37 @@ async function ReviewTab({ period, statusFilter, q, weeksAgo }: {
                 lastPush={lastPush ? { at: lastPush.at, ok: lastPush.ok, aborted: lastPush.aborted, pushed: lastPush.pushed } : null}
                 lastSubmit={lastSubmit ? { at: lastSubmit.at, ok: lastSubmit.ok, submitted: lastSubmit.submitted, aborted: lastSubmit.aborted } : null}
               />
-              {payrollApproved && (
-                <ApproveButton
-                  unapproveOnly
-                  period={period}
-                  readyCount={0}
-                  approved
-                  approvedCount={m.workers.filter((w) => w.approvalState === "APPROVED_IN_ZOE").length}
-                />
-              )}
+              {payrollApproved && <ApproveButton unapproveOnly period={period} readyCount={0} approved approvedCount={approvedCount} />}
             </>
           )}
         </div>
       </section>
 
-      <RateSyncPanel proposals={ratePlan.proposals} asOf={ratePlan.asOf} comparison={m.rateComparison} />
+      <PayrollReviewBoard rows={rows} timesheetsOk={tsReview.ok} period={period} gustoMembers={gustoMembers} />
 
-      {/* Filters + search */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex flex-wrap gap-1">
-          {(["all", "ready", "review", "unverified", "blocked", "excluded"] as ReviewFilter[]).map((f) => (
-            <Link key={f} href={filterHref(f)} aria-current={filter === f ? "true" : undefined}
-              className={`rounded-md border px-2.5 py-1 text-[11.5px] transition-colors ${filter === f ? "border-foreground/30 bg-foreground/[0.08] text-foreground" : "border-border text-meta hover:text-foreground"}`}>
-              {FILTER_LABEL[f]} <span className="tabular-nums text-meta">({counts[f]})</span>
-            </Link>
-          ))}
+      {/* Rate check: folded away unless a rate actually differs. Every count is workers in THIS run. */}
+      <details className="surface group border" open={ratePlan.proposals.some((p) => rows.some((r) => !r.excluded && r.key === p.workerKey))}>
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[12px] text-secondary-text">
+          <ChevronRight className="size-3.5 shrink-0 text-meta transition-transform group-open:rotate-90" aria-hidden />
+          <span className="font-medium text-foreground">Rate check</span>
+          <span className="text-meta">
+            Gusto vs Connecteam for the {rc.mapped} linked worker{rc.mapped === 1 ? "" : "s"} in this run:
+            {" "}{rc.verifiedMatch} match{rc.differing ? `, ${rc.differing} differ` : ""}{rc.missingSourceRate ? `, ${rc.missingSourceRate} have no Gusto rate` : ""}{rc.incomparableSalaried ? `, ${rc.incomparableSalaried} salaried` : ""}
+          </span>
+        </summary>
+        <div className="border-t border-rule px-4 py-3">
+          <RateSyncPanel proposals={ratePlan.proposals} asOf={ratePlan.asOf} comparison={m.rateComparison} />
         </div>
-        <form className="ml-auto flex items-center gap-1.5 rounded-md border border-border px-2 py-1" action="/payroll">
-          <input type="hidden" name="tab" value="review" />
-          {filter !== "all" && <input type="hidden" name="status" value={filter} />}
-          {weeksAgo > 1 && <input type="hidden" name="weeksAgo" value={String(weeksAgo)} />}
-          <Search className="size-3.5 text-meta" aria-hidden />
-          <input name="q" defaultValue={q} placeholder="Search workers" aria-label="Search workers" className="w-36 bg-transparent text-[12px] text-foreground outline-none placeholder:text-meta" />
-        </form>
-      </div>
-
-      <ReviewTable rows={rows} filter={filter} period={period} gustoMembers={gustoMembers} timesheets={tsReview.byUser} timesheetsOk={tsReview.ok} approvableKeys={new Set([...appr.readyKeys, ...appr.acknowledgeableKeys])} />
-      <p className="text-[11px] text-meta">
-        Expand a worker to review their day-by-day Connecteam timesheet in the app, then approve. Eligibility (the status column) is computed from the gates; it is not the same as the recorded Zoe approval. Approving records a sign-off for the eligible workers and does NOT submit or run payroll in Gusto. Excluded workers are kept here for reference and are never part of payable totals.
-      </p>
+      </details>
     </div>
   );
 }
 
-function rateCell(w: UnifiedWorkerRow): React.JSX.Element {
-  if (w.payRate == null) return <span className="text-attention">missing</span>;
-  const src = w.rateSource ? RATE_SOURCE_LABEL[w.rateSource] : null;
-  return <span>{money(w.payRate, w.currency)}/hr{src && <span className="ml-1 text-[10px] text-meta">· {src}</span>}</span>;
-}
-const APPROVAL_UI: Record<UnifiedWorkerRow["approvalState"], { label: string; cls: string }> = {
-  APPROVED: { label: "Approved", cls: "text-positive" },
-  APPROVED_IN_ZOE: { label: "Approved in Zoe", cls: "text-positive" },
-  UNAPPROVED: { label: "Unapproved", cls: "text-attention" },
-  UNVERIFIED: { label: "Unverified", cls: "text-attention" },
-  NA: { label: "—", cls: "text-meta" },
-};
-// Honest sub-label for the Connecteam day-lock outcome of a Zoe approval (only shown when Approved in Zoe).
-const CT_LOCK_UI: Record<NonNullable<UnifiedWorkerRow["ctLockStatus"]>, { label: string; cls: string }> = {
-  LOCKED: { label: "locked in Connecteam", cls: "text-meta" },
-  FAILED: { label: "Connecteam finalize failed — retry", cls: "text-attention" },
-  NA: { label: "nothing to lock in Connecteam", cls: "text-meta" },
-  UNLOCKED: { label: "unlocked in Connecteam", cls: "text-meta" },
-};
-
-// Per-day approval signal → status tone (the in-app review surface renders every status via StatusBadge).
-const DAY_APPROVAL_TONE: Record<"approved" | "unapproved" | "unverified", Tone> = {
-  approved: "positive", unapproved: "attention", unverified: "neutral",
-};
-const REVIEW_APPROVAL_TONE: Record<TimesheetUserReview["approvalState"], Tone> = {
-  APPROVED: "positive", UNAPPROVED: "attention", UNVERIFIED: "neutral",
-};
-const REVIEW_APPROVAL_LABEL: Record<TimesheetUserReview["approvalState"], string> = {
-  APPROVED: "Approved in Connecteam", UNAPPROVED: "Unapproved in Connecteam", UNVERIFIED: "Approval not exposed",
-};
-
-// The day-by-day Connecteam timesheet for ONE worker, so the owner reviews it in the app instead of opening
-// Connecteam. Collapsed by default; expanding shows each day's hours, clock in/out (when the payload exposes
-// them), open-punch flag, and per-day approval. Honest: no Connecteam user, or an unreachable source, is
-// stated plainly and never rendered as zeroed hours.
-function DayBreakdown({ worker, review, ok, period, approvable }: {
-  worker: UnifiedWorkerRow; review: TimesheetUserReview | undefined; ok: boolean; period: { start: string; end: string }; approvable: boolean;
-}): React.JSX.Element {
-  const alreadyApproved = worker.approvalState === "APPROVED_IN_ZOE";
-  const approveControl = approvable && !alreadyApproved
-    ? <WorkerApproveControl workerKey={worker.key} name={worker.name} periodStart={period.start} periodEnd={period.end} />
-    : null;
-
-  let body: React.JSX.Element;
-  if (worker.connecteamUserId == null) {
-    body = <p className="px-3 py-2.5 text-[11.5px] text-meta">No Connecteam timesheet for this worker (not a Connecteam user). Hours and approval are tracked outside Connecteam.</p>;
-  } else if (!ok) {
-    body = <p className="px-3 py-2.5 text-[11.5px] text-attention">Connecteam is unreachable, so the day-by-day timesheet could not be loaded. Sync hours, then review. Hours are not assumed.</p>;
-  } else if (!review || review.days.length === 0) {
-    body = <p className="px-3 py-2.5 text-[11.5px] text-meta">No daily records in Connecteam for this period.</p>;
-  } else {
-    body = (
-      <table className="w-full text-[11.5px]">
-        <thead>
-          <tr className="border-b border-rule/60 text-left text-[10px] uppercase tracking-[0.05em] text-meta">
-            <th className="px-3 py-1.5 font-medium">Day</th>
-            <th className="px-3 py-1.5 text-right font-medium">Hours</th>
-            <th className="px-3 py-1.5 font-medium">Clock in</th>
-            <th className="px-3 py-1.5 font-medium">Clock out</th>
-            <th className="px-3 py-1.5 font-medium">Approval</th>
-          </tr>
-        </thead>
-        <tbody>
-          {review.days.map((d) => {
-            const dayTone = d.approvalState == null ? "unverified" : d.approvalState;
-            return (
-              <tr key={d.date} className="border-b border-rule/40 last:border-0">
-                <td className="px-3 py-1.5 tabular-nums text-secondary-text">{fmtDay(d.date)}</td>
-                <td className="px-3 py-1.5 text-right tabular-nums text-secondary-text">{d.hours.toLocaleString("en-US")}</td>
-                <td className="px-3 py-1.5 tabular-nums text-tertiary-text">{d.clockIn ?? "—"}</td>
-                <td className="px-3 py-1.5 tabular-nums text-tertiary-text">
-                  {d.openPunch ? <span className="text-attention">open punch</span> : d.clockOut ?? "—"}
-                </td>
-                <td className="px-3 py-1.5">
-                  <StatusBadge tone={DAY_APPROVAL_TONE[dayTone]} size="sm">
-                    {d.approvalState == null ? "Not exposed" : d.approvalState === "approved" ? "Approved" : "Unapproved"}
-                  </StatusBadge>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    );
-  }
-
+function SummaryFigure({ label, value }: { label: string; value: string }): React.JSX.Element {
   return (
-    <details className="group">
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-[11.5px] text-meta transition-colors hover:text-secondary-text">
-        <ChevronRight className="size-3.5 shrink-0 transition-transform group-open:rotate-90" aria-hidden />
-        <span>Review daily timesheet{review && review.days.length > 0 ? ` (${review.days.length} day${review.days.length === 1 ? "" : "s"}, ${hrs(review.totalHours)})` : ""}</span>
-        {review && (
-          <StatusBadge tone={REVIEW_APPROVAL_TONE[review.approvalState]} size="sm" className="ml-1">
-            {REVIEW_APPROVAL_LABEL[review.approvalState]}
-          </StatusBadge>
-        )}
-        {review?.openPunch && <span className="text-[10.5px] text-attention">· open punch</span>}
-      </summary>
-      <div className="border-t border-rule/60 bg-[var(--row)]/40 pb-2">
-        {body}
-        {approveControl && (
-          <div className="flex flex-wrap items-center gap-2 px-3 pt-2">
-            {approveControl}
-            <span className="text-[10.5px] text-meta">Records the Zoe approval for this worker and finalizes their days in Connecteam. Does not run payroll.</span>
-          </div>
-        )}
-      </div>
-    </details>
-  );
-}
-
-function ReviewTable({ rows, filter, period, gustoMembers, timesheets, timesheetsOk, approvableKeys }: {
-  rows: UnifiedWorkerRow[]; filter: ReviewFilter; period: { start: string; end: string; label: string }; gustoMembers: GustoPick[];
-  timesheets: Map<number, TimesheetUserReview>; timesheetsOk: boolean; approvableKeys: Set<string>;
-}): React.JSX.Element {
-  if (rows.length === 0) {
-    return <div className="surface border px-4 py-10 text-center text-[12.5px] text-meta">No workers in this view.</div>;
-  }
-  const excluded = filter === "excluded";
-  return (
-    <div className="surface border">
-      <div className="max-h-[70vh] overflow-auto">
-        <table className="w-full min-w-[1120px] text-[12.5px]">
-          <thead className="sticky top-0 z-10 bg-[var(--panel)]">
-            <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
-              <th className="whitespace-nowrap px-3 py-2.5 font-medium">Worker</th>
-              <th className="whitespace-nowrap px-3 py-2.5 font-medium">Type</th>
-              <th className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Hours</th>
-              <th className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Rate / source</th>
-              <th className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Est. gross</th>
-              <th className="whitespace-nowrap px-3 py-2.5 font-medium">Approval</th>
-              <th className="whitespace-nowrap px-3 py-2.5 font-medium">Gusto</th>
-              <th className="whitespace-nowrap px-3 py-2.5 font-medium">Status / issues</th>
-              <th className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((w) => {
-              const st = WSTATUS_UI[w.status];
-              const ap = APPROVAL_UI[w.approvalState];
-              return (
-                <Fragment key={w.key}>
-                <tr className="border-b border-rule/60 hover:bg-[var(--row-hover)]">
-                  <td className="whitespace-nowrap px-3 py-2.5 align-middle font-medium text-foreground">{w.name}{w.accepted && <span className="ml-1.5 rounded bg-[var(--row)] px-1 py-0.5 text-[9.5px] font-normal text-tertiary-text">accepted</span>}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 align-middle text-tertiary-text">{WORKER_TYPE_LABEL[w.workerType]}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right align-middle tabular-nums text-secondary-text">{w.hours == null ? "—" : w.hours.toLocaleString("en-US")}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right align-middle tabular-nums text-secondary-text">{rateCell(w)}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right align-middle tabular-nums text-secondary-text">{money(w.estPay, w.currency)}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 align-middle">
-                    <span className={`text-[11.5px] ${ap.cls}`}>{excluded ? "—" : ap.label}</span>
-                    {!excluded && w.approvalState === "APPROVED_IN_ZOE" && w.ctLockStatus && (
-                      <span className={`block text-[10px] ${CT_LOCK_UI[w.ctLockStatus].cls}`} title={w.ctLockDetail ?? undefined}>· {CT_LOCK_UI[w.ctLockStatus].label}</span>
-                    )}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 align-middle"><span className={w.gustoMapped ? "text-secondary-text" : "text-attention"}>{MAPPING_STATUS_LABEL[w.mappingStatus]}</span></td>
-                  <td className="whitespace-nowrap px-3 py-2.5 align-middle">
-                    {excluded ? (
-                      <span className="text-[11.5px] text-meta">
-                        <span className="rounded bg-[var(--row)] px-1.5 py-0.5 text-[10px] text-tertiary-text">{w.excludeMode === "period" ? "This period" : "Permanent"}</span>
-                        {w.excludeReason ? <span className="ml-1.5">{w.excludeReason}</span> : null}
-                      </span>
-                    ) : (
-                      <div className="flex items-center gap-1.5 whitespace-nowrap">
-                        <span className={`text-[11.5px] font-medium ${st.cls}`}>{st.label}</span>
-                        {w.issues.length > 0 && (
-                          <span className="flex flex-nowrap items-center gap-1">
-                            {w.issues.slice(0, 2).map((i) => (
-                              <span key={i.code} className={`whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium ${i.severity === "blocker" ? "bg-critical/15 text-critical" : i.severity === "setup" ? "bg-[var(--row)] text-meta" : "bg-attention/15 text-attention"}`}>{i.label}</span>
-                            ))}
-                            {w.issues.length > 2 && <span className="whitespace-nowrap text-[10px] text-meta">+{w.issues.length - 2}</span>}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right align-middle">
-                    {excluded ? (
-                      <ExcludeControl workerKey={w.key} recordId={w.recordId} connecteamUserId={w.connecteamUserId} name={w.name} periodStart={period.start} periodEnd={period.end} excluded excludeMode={w.excludeMode} />
-                    ) : (
-                      <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
-                        {w.status === "ACTION_REQUIRED" && <ApproveControl workerKey={w.key} name={w.name} periodStart={period.start} periodEnd={period.end} />}
-                        {w.accepted && <ApproveControl workerKey={w.key} name={w.name} periodStart={period.start} periodEnd={period.end} accepted acceptedBy={w.acceptedBy} />}
-                        <WorkerEditor
-                          worker={{ recordId: w.recordId, connecteamUserId: w.connecteamUserId, name: w.name, workerType: w.workerType, payType: w.payType, payRate: w.payRate, currency: w.currency, country: w.country, gustoId: w.gustoId }}
-                          gustoMembers={gustoMembers}
-                        />
-                        <ExcludeControl workerKey={w.key} recordId={w.recordId} connecteamUserId={w.connecteamUserId} name={w.name} periodStart={period.start} periodEnd={period.end} />
-                      </div>
-                    )}
-                  </td>
-                </tr>
-                {!excluded && (
-                  <tr className="border-b border-rule/60">
-                    <td colSpan={9} className="p-0">
-                      <DayBreakdown worker={w} review={w.connecteamUserId != null ? timesheets.get(w.connecteamUserId) : undefined} ok={timesheetsOk} period={period} approvable={approvableKeys.has(w.key)} />
-                    </td>
-                  </tr>
-                )}
-                </Fragment>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+    <div className="flex items-baseline gap-1.5">
+      <span className="text-[18px] font-semibold tabular-nums text-foreground">{value}</span>
+      <span className="text-[11px] uppercase tracking-[0.06em] text-meta">{label}</span>
     </div>
   );
 }

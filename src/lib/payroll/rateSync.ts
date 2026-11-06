@@ -33,6 +33,9 @@ export interface RateSyncPlan {
   // Diagnostics for the UI: mapped workers whose Gusto comp can't drive an hourly write.
   salaried: number; // mapped workers whose Gusto comp is a salary (non-hourly) — not synced
   noGustoRate: number; // mapped workers with a Gusto id but no rate captured in the snapshot
+  // The same two populations as worker keys (ct:<id>), so a view can count only the workers in ITS run.
+  salariedKeys?: string[];
+  noGustoRateKeys?: string[];
 }
 
 function isHourly(unit: string | null | undefined): boolean {
@@ -50,12 +53,14 @@ export function computeRateSyncProposals(
   const proposals: RateSyncProposal[] = [];
   let salaried = 0;
   let noGustoRate = 0;
+  const salariedKeys: string[] = [];
+  const noGustoRateKeys: string[] = [];
   for (const rec of records) {
     if (rec.connecteamUserId == null || !rec.gustoId || !rec.active || rec.excluded) continue;
     const gm = gustoById.get(rec.gustoId);
     if (!gm) continue;
-    if (gm.payRate == null) { noGustoRate++; continue; }
-    if (!isHourly(gm.payUnit)) { salaried++; continue; } // salary → never fabricated into an hourly write
+    if (gm.payRate == null) { noGustoRate++; noGustoRateKeys.push(`ct:${rec.connecteamUserId}`); continue; }
+    if (!isHourly(gm.payUnit)) { salaried++; salariedKeys.push(`ct:${rec.connecteamUserId}`); continue; } // salary → never fabricated into an hourly write
     const gustoRate = gm.payRate;
     const ctRate = rateForUserOn(ctRates, rec.connecteamUserId, effectiveDate);
     if (ctRate != null && Math.abs(ctRate - gustoRate) < RATE_EPSILON) continue; // already in sync
@@ -71,7 +76,7 @@ export function computeRateSyncProposals(
       kind: ctRate == null ? "new" : "update",
     });
   }
-  return { asOf: null, effectiveDate, proposals, salaried, noGustoRate };
+  return { asOf: null, effectiveDate, proposals, salaried, noGustoRate, salariedKeys, noGustoRateKeys };
 }
 
 /** Build the current proposal plan (read-only). Fetches the Gusto snapshot + the live Connecteam rates. */
