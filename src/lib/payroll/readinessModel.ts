@@ -322,7 +322,7 @@ export function composeReadinessModel(inp: ComposeInputs): PayrollReadinessModel
   const approvalGate = gate("timesheetApproval",
     !connecteamOk ? "UNAVAILABLE" : unapprovedCount > 0 ? "ACTION" : unverifiedApprovalCount > 0 ? "UNVERIFIED" : "PASS",
     !connecteamOk ? "Connecteam time source is unreachable — hours could not be pulled."
-      : unapprovedCount > 0 ? `${unapprovedCount} worker${unapprovedCount === 1 ? "" : "s"} have unapproved time in Connecteam.${zoeApprovedSuffix ? ` ${zoeApprovedSuffix}` : ""}`
+      : unapprovedCount > 0 ? `${unapprovedCount} worker${unapprovedCount === 1 ? " has" : "s have"} unapproved time in Connecteam.${zoeApprovedSuffix ? ` ${zoeApprovedSuffix}` : ""}`
         : unverifiedApprovalCount > 0 ? `${unverifiedApprovalCount} worker${unverifiedApprovalCount === 1 ? "" : "s"} could not be confirmed as approved in Connecteam.${zoeApprovedSuffix ? ` ${zoeApprovedSuffix}` : ""}`
           : zoeApprovedSuffix ? zoeApprovedSuffix
             : "All timesheets approved in Connecteam.",

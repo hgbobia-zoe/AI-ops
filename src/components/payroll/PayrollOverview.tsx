@@ -55,7 +55,15 @@ export function PayrollOverview({ view, period, gates, sources, schedule, activi
   const mainIssues = issues.filter((i) => i.severity !== "setup");
   const setupIssues = issues.filter((i) => i.severity === "setup");
   // The attempt card already shows the latest Gusto attempt; the list below it shows the other recent events.
-  const otherActivity = activity.filter((e) => !(attempt && e.layer === "submission" && e.label === attempt.title));
+  // The attempt card already shows the latest Gusto attempt; the list shows the other recent events, with
+  // back-to-back repeats (e.g. several identical stopped tries) folded into one line with a count.
+  const otherActivity: (PayrollActivityEvent & { times: number })[] = [];
+  for (const e of activity) {
+    if (attempt && e.layer === "submission" && e.label === attempt.title && otherActivity.length === 0) continue;
+    const prev = otherActivity[otherActivity.length - 1];
+    if (prev && prev.label === e.label && prev.outcome === e.outcome) { prev.times++; continue; }
+    otherActivity.push({ ...e, times: 1 });
+  }
   const partial = summary.estCoverage.total > 0 && summary.estCoverage.known < summary.estCoverage.total;
 
   return (
@@ -111,7 +119,7 @@ export function PayrollOverview({ view, period, gates, sources, schedule, activi
       {/* 2 · Period summary and the latest attempt, side by side. */}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <section className="surface border p-4" aria-labelledby="ov-summary">
-          <h2 id="ov-summary" className="text-[10.5px] uppercase tracking-[0.1em] text-meta">This period</h2>
+          <h2 id="ov-summary" className="text-[10.5px] uppercase tracking-[0.1em] text-meta">This period <span className="ml-1 normal-case tracking-normal text-[12px] font-medium text-secondary-text">{period.label}</span></h2>
           <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
             <Figure label="Workers in run" value={String(summary.included)} sub="included, not excluded" />
             <Figure label="Recorded hours" value={hrs(summary.recordedHours)} sub="in the run · Connecteam" />
@@ -151,7 +159,7 @@ export function PayrollOverview({ view, period, gates, sources, schedule, activi
               {otherActivity.slice(0, 4).map((e) => (
                 <li key={e.id} className="flex items-center gap-2 text-[11.5px]">
                   <span className={`shrink-0 ${TONE_TEXT[e.tone]}`}>{e.tone === "critical" || e.tone === "attention" ? <CircleAlert className="size-3.5" aria-label="problem" /> : <span className="inline-block size-1.5 rounded-full bg-current align-middle" aria-hidden />}</span>
-                  <span className="min-w-0 flex-1 truncate text-secondary-text">{e.label}{e.outcome ? <span className="text-meta"> · {e.outcome}</span> : null}</span>
+                  <span className="min-w-0 flex-1 truncate text-secondary-text">{e.label}{e.outcome ? <span className="text-meta"> · {e.outcome}</span> : null}{e.times > 1 ? <span className="text-meta"> · ×{e.times}</span> : null}</span>
                   <span className="shrink-0 text-meta">{rel(e.at)}</span>
                 </li>
               ))}
@@ -176,57 +184,100 @@ export function PayrollOverview({ view, period, gates, sources, schedule, activi
           </FactRow>
           <FactRow label="Hours sync" note={sync.explain ?? undefined}>
             <span className={sync.status === "FAILED" ? "text-critical" : ""}>{sync.text}</span>
-            <span className="text-meta"> · last {rel(sync.at)}{sync.at && !sync.forThisPeriod ? " (a different period)" : ""}</span>
+            {sync.at && <span className="text-meta"> · last {rel(sync.at)}{!sync.forThisPeriod ? " (a different period)" : ""}</span>}
           </FactRow>
         </dl>
       </section>
 
-      {/* 4 · Secondary: schedule + automation, data sources, workflow checklist. Collapsed unless they explain
-          a current problem. */}
-      <div className="grid gap-3 md:grid-cols-3">
+      {/* 4 · Secondary: schedule + automation, data sources, workflow checklist, each a full-width table.
+          Collapsed unless they explain a current problem. */}
+      <div className="flex flex-col gap-3">
         <Collapsible title="Schedule & automation" summary={schedule.deadlineLabel} open={false}>
-          <dl className="space-y-1.5 text-[12px]">
-            <Rail label="Payroll runs" value={schedule.deadlineLabel} />
-            <Rail label="Pay date" value="Set by Gusto per run" muted />
-            <Rail label="Readiness pre-check" value={schedule.precheckLabel ?? "Off"} muted={!schedule.precheckLabel} />
-            <Rail label="Auto hours sync" value={schedule.autoSyncLabel ?? "Off"} muted={!schedule.autoSyncLabel} />
-          </dl>
-          <div className="mt-2 flex flex-wrap gap-3 text-[11.5px]">
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
+                <th className="w-56 py-1.5 pr-3 font-medium">Setting</th>
+                <th className="py-1.5 font-medium">Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              <TRow cells={["Payroll runs", schedule.deadlineLabel]} />
+              <TRow cells={["Pay date", "Set by Gusto per run"]} muted={[1]} />
+              <TRow cells={["Readiness pre-check", schedule.precheckLabel ?? "Off"]} muted={schedule.precheckLabel ? [] : [1]} />
+              <TRow cells={["Auto hours sync", schedule.autoSyncLabel ?? "Off"]} muted={schedule.autoSyncLabel ? [] : [1]} />
+            </tbody>
+          </table>
+          <div className="mt-2.5 flex flex-wrap gap-4 text-[11.5px]">
             <Link href="/payroll?tab=settings" className="text-tertiary-text hover:text-foreground">Settings →</Link>
             <Link href="/ai-org/employees" className="text-tertiary-text hover:text-foreground">AI Payroll Manager →</Link>
           </div>
         </Collapsible>
 
-        <Collapsible title="Data sources" summary={sources.map((s) => `${s.label} ${(s.key === "instawork" && s.state === "ok" ? "snapshot saved" : SRC_STATE[s.state].label).toLowerCase()}`).join(" · ")} open={view.showSources}>
+        <Collapsible title="Data sources" summary={sources.map((s) => `${s.label} ${srcLabel(s).toLowerCase()}`).join(" · ")} open={view.showSources}>
           <p className="mb-2 text-[11px] text-meta">The saved data payroll uses. The bar at the top of the app shows live sign-in status, which can differ.</p>
-          <ul className="space-y-2 text-[12px]">
-            {sources.map((s) => (
-              <li key={s.key}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium text-foreground">{s.label}</span>
-                  <StatusBadge tone={SRC_STATE[s.state].tone} size="sm">{s.key === "instawork" && s.state === "ok" ? "Snapshot saved" : SRC_STATE[s.state].label}</StatusBadge>
-                </div>
-                <div className="text-[11px] text-meta">{s.role} · {s.detail}{s.lastAt ? ` · saved ${rel(s.lastAt)}` : ""}</div>
-              </li>
-            ))}
-          </ul>
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
+                <th className="py-1.5 pr-3 font-medium">Source</th>
+                <th className="py-1.5 pr-3 font-medium">Used for</th>
+                <th className="py-1.5 pr-3 font-medium">Status</th>
+                <th className="py-1.5 pr-3 font-medium">Last saved</th>
+                <th className="py-1.5 font-medium">Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sources.map((s) => (
+                <tr key={s.key} className="border-b border-rule/50 last:border-0 align-top">
+                  <td className="py-2 pr-3 font-medium text-foreground">{s.label}</td>
+                  <td className="py-2 pr-3 text-secondary-text">{s.role}</td>
+                  <td className="whitespace-nowrap py-2 pr-3"><StatusBadge tone={SRC_STATE[s.state].tone} size="sm">{srcLabel(s)}</StatusBadge></td>
+                  <td className="whitespace-nowrap py-2 pr-3 tabular-nums text-secondary-text">{s.lastAt ? rel(s.lastAt) : "—"}</td>
+                  <td className="py-2 text-meta">{s.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </Collapsible>
 
         <Collapsible title="Workflow checklist" summary={`${gates.filter((g) => g.state === "PASS").length} of ${gates.length} steps done`} open={view.showChecklist}>
-          <ol className="space-y-1.5 text-[12px]">
-            {gates.map((g) => (
-              <li key={g.key} className="flex items-start justify-between gap-2">
-                <span className="text-secondary-text">{g.label}<span className="block text-[11px] text-meta">{g.detail}</span></span>
-                <StatusBadge tone={GATE_STATE[g.state].tone} size="sm">{GATE_STATE[g.state].label}</StatusBadge>
-              </li>
-            ))}
-          </ol>
+          <table className="w-full text-[12px]">
+            <thead>
+              <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
+                <th className="w-10 py-1.5 pr-3 font-medium">#</th>
+                <th className="py-1.5 pr-3 font-medium">Step</th>
+                <th className="py-1.5 pr-3 font-medium">Status</th>
+                <th className="py-1.5 font-medium">Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gates.map((g, i) => (
+                <tr key={g.key} className="border-b border-rule/50 last:border-0 align-top">
+                  <td className="py-2 pr-3 tabular-nums text-meta">{i + 1}</td>
+                  <td className="py-2 pr-3 font-medium text-foreground">{g.label}</td>
+                  <td className="whitespace-nowrap py-2 pr-3"><StatusBadge tone={GATE_STATE[g.state].tone} size="sm">{GATE_STATE[g.state].label}</StatusBadge></td>
+                  <td className="py-2 text-meta">{g.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
           {setupIssues.length > 0 && (
             <p className="mt-2 border-t border-rule pt-2 text-[11px] text-meta">Setup notes (don&apos;t block the run): {setupIssues.map((i) => `${i.title} (${i.count})`).join(", ")}</p>
           )}
         </Collapsible>
       </div>
     </div>
+  );
+}
+
+const srcLabel = (s: PayrollSourceHealth): string => (s.key === "instawork" && s.state === "ok" ? "Snapshot saved" : SRC_STATE[s.state].label);
+
+function TRow({ cells, muted = [] }: { cells: string[]; muted?: number[] }): React.JSX.Element {
+  return (
+    <tr className="border-b border-rule/50 last:border-0">
+      {cells.map((c, i) => (
+        <td key={i} className={`py-2 pr-3 ${i === 0 ? "text-meta" : muted.includes(i) ? "text-meta" : "font-medium text-secondary-text"}`}>{c}</td>
+      ))}
+    </tr>
   );
 }
 
@@ -267,11 +318,3 @@ function Collapsible({ title, summary, open, children }: { title: string; summar
   );
 }
 
-function Rail({ label, value, muted }: { label: string; value: string; muted?: boolean }): React.JSX.Element {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <dt className="text-meta">{label}</dt>
-      <dd className={muted ? "text-meta" : "font-medium text-secondary-text"}>{value}</dd>
-    </div>
-  );
-}

@@ -98,7 +98,7 @@ export function ExcludeControl(props: ExcludeControlProps): React.JSX.Element {
         <Ban className="size-3.5" /> {busy ? "…" : "Exclude"} <ChevronDown className="size-3" />
       </button>
       {open && (
-        <div className="absolute right-0 top-8 z-10 w-60 overflow-hidden rounded-md border border-border bg-[var(--surface)] shadow-lg">
+        <div className="absolute right-0 top-8 z-10 w-60 overflow-hidden rounded-md border border-border bg-[var(--panel)] shadow-lg">
           {pending === null ? (
             <>
               <button onClick={() => { setPending("period"); setErr(null); }} className="block w-full px-3 py-2 text-left text-[11.5px] text-secondary-text hover:bg-[var(--row-hover)]">
@@ -127,7 +127,7 @@ export function ExcludeControl(props: ExcludeControlProps): React.JSX.Element {
                 <button
                   onClick={submit}
                   disabled={busy || !reason.trim()}
-                  className="inline-flex h-7 items-center rounded bg-foreground px-2.5 text-[11.5px] font-medium text-[var(--surface)] transition-opacity hover:opacity-90 disabled:opacity-40"
+                  className="inline-flex h-7 items-center rounded bg-foreground px-2.5 text-[11.5px] font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-40"
                 >
                   {busy ? "…" : "Confirm"}
                 </button>
