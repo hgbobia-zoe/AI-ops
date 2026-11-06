@@ -151,7 +151,33 @@
     return false;
   }
   // If the "Safe expedite" step is present, choose wire. Returns true if we clicked it.
+  // Late payroll: Gusto inserts a "safe expedite" step (path .../safe-expedite) before the hours page, offering
+  // three cards (Pay by check / Pay by wire transfer / Pay by 4-day pay), each with its own generic "Continue"
+  // button (verified live 2026-11-06). The owner's rule: always wire, even when that pays the team a few days
+  // later. We click Continue ONLY inside the card titled "Pay by wire transfer" (the nearest ancestor holding a
+  // single Continue button), never check or 4-day. Choosing the payment method only sets up the draft.
+  function chooseWireCard() {
+    try {
+      const continues = Array.from(document.querySelectorAll("a,button,[role=button]"))
+        .filter((n) => /^\s*continue\s*$/i.test(n.textContent || "") && n.offsetParent !== null);
+      for (const btn of continues) {
+        let card = null;
+        let el = btn;
+        for (let i = 0; i < 8 && el && el.parentElement; i++) {
+          el = el.parentElement;
+          const n = Array.from(el.querySelectorAll("a,button,[role=button]")).filter((x) => /^\s*continue\s*$/i.test(x.textContent || "")).length;
+          if (n > 1) break;
+          card = el;
+        }
+        const t = (card && card.textContent) || "";
+        if (/pay by wire transfer/i.test(t) && !/pay by check|4-day pay/i.test(t)) { btn.click(); return true; }
+      }
+    } catch (e) { /* ignore */ }
+    return false;
+  }
+
   function chooseWireIfExpedite() {
+    if (chooseWireCard()) return true;
     try {
       const nodes = Array.from(document.querySelectorAll("a,button,[role=button]"));
       const el = nodes.find((n) => {

@@ -202,6 +202,31 @@
     } catch (e) { return false; }
   }
 
+  // Late payroll: Gusto inserts a "safe expedite" step (path .../safe-expedite) before the hours page, offering
+  // three cards (Pay by check / Pay by wire transfer / Pay by 4-day pay), each with its own generic "Continue"
+  // button (verified live 2026-11-06). The owner's rule: always wire, even when that pays the team a few days
+  // later. We click Continue ONLY inside the card titled "Pay by wire transfer" (the nearest ancestor holding a
+  // single Continue button), never check or 4-day. Choosing the payment method only sets up the draft.
+  function chooseWireCard() {
+    try {
+      const continues = Array.from(document.querySelectorAll("a,button,[role=button]"))
+        .filter((n) => /^\s*continue\s*$/i.test(n.textContent || "") && n.offsetParent !== null);
+      for (const btn of continues) {
+        let card = null;
+        let el = btn;
+        for (let i = 0; i < 8 && el && el.parentElement; i++) {
+          el = el.parentElement;
+          const n = Array.from(el.querySelectorAll("a,button,[role=button]")).filter((x) => /^\s*continue\s*$/i.test(x.textContent || "")).length;
+          if (n > 1) break;
+          card = el;
+        }
+        const t = (card && card.textContent) || "";
+        if (/pay by wire transfer/i.test(t) && !/pay by check|4-day pay/i.test(t)) { btn.click(); return true; }
+      }
+    } catch (e) { /* ignore */ }
+    return false;
+  }
+
   function waitForInputs(timeoutMs, checkDate) {
     return new Promise((resolve) => {
       const start = Date.now();
@@ -209,7 +234,8 @@
         if (memberMap) return resolve("inputs");
         if (Date.now() - start > 4000 && onAuthPage()) return resolve("auth");
         if (Date.now() - start > timeoutMs) return resolve("timeout");
-        if (!clickRunLink(checkDate)) clickCandidates(); // nudge the flow forward one safe step, then re-poll
+        // nudge the flow forward one safe step, then re-poll: run link → late-payroll wire choice → other safe steps
+        if (!clickRunLink(checkDate) && !chooseWireCard()) clickCandidates();
         setTimeout(tick, 1500);
       };
       tick();
