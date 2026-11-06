@@ -14,17 +14,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { BadgeCheck, Loader2 } from "lucide-react";
-import { EXTENSION_ID } from "@/lib/extensionId";
+import { canMessageExtension, sendToExtension } from "@/lib/extensionId";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
 const REFRESH_DELAY_MS = 12000;
-
-interface ChromeRuntimeLike {
-  runtime?: {
-    sendMessage?: (extensionId: string, message: unknown, callback?: (response: unknown) => void) => void;
-    lastError?: { message?: string };
-  };
-}
 
 function usd(n: number | null): string {
   if (n == null || !Number.isFinite(n)) return "the amount shown in Gusto";
@@ -62,9 +55,7 @@ export function ConfirmWireButton({
   const [ask, confirmDialog] = useConfirm();
 
   async function confirm(): Promise<void> {
-    const chromeApi = (window as unknown as { chrome?: ChromeRuntimeLike }).chrome;
-    const hasExtension = !!chromeApi?.runtime && typeof chromeApi.runtime.sendMessage === "function";
-    if (!hasExtension) {
+    if (!canMessageExtension()) {
       toast.error("Auto-Pull extension not found in this browser", {
         description: "Confirm the wire from the Chrome that has the extension and a signed-in Gusto.",
       });
@@ -91,25 +82,17 @@ export function ConfirmWireButton({
     try {
       toast.loading("Confirming the wire in Gusto…", { id: "confirm-wire" });
       const payload = { period, checkDate, amount, wireDate, initiatedBy };
-      let settled = false;
-      const done = (): void => {
-        if (settled) return;
-        settled = true;
+      const sent = await sendToExtension({ type: "zoe-gusto-confirm-wire", payload });
+      if (!sent.ok) {
+        toast.error("Couldn't reach the Auto-Pull extension", { id: "confirm-wire", description: "Make sure it's installed and enabled (v1.16.0+)." });
         setBusy(false);
-      };
-      chromeApi!.runtime!.sendMessage!(EXTENSION_ID, { type: "zoe-gusto-confirm-wire", payload }, () => {
-        if (chromeApi!.runtime?.lastError) {
-          toast.error("Couldn't reach the Auto-Pull extension", { id: "confirm-wire", description: "Make sure it's installed and enabled (v1.16.0+)." });
-          done();
-          return;
-        }
-        setTimeout(() => {
-          router.refresh();
-          toast.success("Confirm started — status updates when the extension reports back.", { id: "confirm-wire" });
-          done();
-        }, REFRESH_DELAY_MS);
-      });
-      setTimeout(done, 25000);
+        return;
+      }
+      setTimeout(() => {
+        router.refresh();
+        toast.success("Confirm started. Status updates when the extension reports back.", { id: "confirm-wire" });
+        setBusy(false);
+      }, REFRESH_DELAY_MS);
     } catch {
       toast.error("Couldn't start the wire confirm.");
       setBusy(false);
