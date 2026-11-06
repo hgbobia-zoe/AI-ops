@@ -177,9 +177,9 @@
   // or "timeout". Give the auth check a beat to settle (the hidden tab may still be redirecting to login on
   // the first ticks), so we only trust it after a short grace period.
   // The hidden tab lands on Gusto's home page, whose way into a draft run is the "Run payroll" LINK. Its href
-  // carries the run key regular.<schedule>.<group>.<checkDate>. Following that link only opens the run's
+  // carries the run key regular.<schedule>.<group>.<payPeriodEnd>. Following that link only opens the run's
   // hours step (it is a link, not a submit control), so it is safe here even though we never click anything
-  // LABELED "run payroll". We pick the link for this week's check date; with no date match we only follow a
+  // LABELED "run payroll". We pick the link for this pay period's end date; with no date match we only follow a
   // link when exactly one run is offered (never guess between weeks).
   const RUN_LINK_RE = /regular\.[0-9a-f][0-9a-f-]{7,}\.[0-9a-f][0-9a-f-]{7,}\.(\d{4}-\d{2}-\d{2})/i;
   let runLinkClicked = null;
@@ -285,7 +285,9 @@
     if (!entries.length) { result.aborted = "no_entries"; return result; }
 
     // 1) Reach the inputs step + capture the member map (and thereby confirm DRAFT). Never submits.
-    const reached = await waitForInputs(45000, (job && job.checkDate) || null);
+    // Gusto's run key ends with the PAY PERIOD END date (verified live 2026-11-06: regular.<schedule>.<group>.2026-11-01
+    // for the Oct 26 to Nov 1 run, href /<company>/pay/payrolls/scheduled/<key>/inputs), not the check date.
+    const reached = await waitForInputs(45000, period.end || null);
     if (reached === "auth") {
       // Expired Gusto session — reveal this tab so the operator can sign in, then re-run the push.
       revealTab();

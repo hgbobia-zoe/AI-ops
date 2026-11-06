@@ -171,7 +171,7 @@
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (Date.now() - start > 3000 && onAuthPage()) return "auth";
-      const uid = pickUniqueId(checkDate);
+      const uid = pickUniqueId(runDate);
       if (uid && headerTemplate) return "ready";
       clickByText(SAFE_CLICK_TEXT);
       await sleep(1200);
@@ -275,12 +275,15 @@
       headcount: (job && job.headcount != null) ? job.headcount : null, wirePathTaken: false, errors: [],
     };
 
-    const reached = await waitForRun(checkDate, 45000);
+    // The run key ends with the PAY PERIOD END date, not the check date (verified live 2026-11-06), so match on
+    // period.end. Falling back to the check date keeps older jobs working.
+    const runDate = period.end || checkDate;
+    const reached = await waitForRun(runDate, 45000);
     if (reached === "auth") { revealTab(); result.aborted = "not_logged_in"; return result; }
     if (reached !== "ready") { result.aborted = "could_not_find_run"; return result; }
     if (!headerTemplate) { result.aborted = "no_graphql_headers"; return result; }
 
-    const uid = pickUniqueId(checkDate);
+    const uid = pickUniqueId(runDate);
     if (!uid) { result.aborted = "no_unique_identifier"; return result; }
     result.uniqueIdentifier = uid;
 
