@@ -18,14 +18,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Loader2, PlayCircle } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { EXTENSION_ID } from "@/lib/extensionId";
-
-interface ChromeRuntimeLike {
-  runtime?: {
-    sendMessage?: (extensionId: string, message: unknown, callback?: (response: unknown) => void) => void;
-    lastError?: { message?: string };
-  };
-}
+import { canMessageExtension, sendToExtension } from "@/lib/extensionId";
 
 interface PushEntry { gustoMemberId: string; name: string; regularHours: number; overtimeHours: number; doubleOvertimeHours: number }
 interface PushPayload {
@@ -121,22 +114,13 @@ export function RunPayrollFlow({
   const ackOnly = !approved && readyCount === 0 && acknowledgeableCount > 0;
   const nothing = !approved && readyCount === 0 && acknowledgeableCount === 0;
 
-  function chromeApi(): ChromeRuntimeLike | null {
-    const c = (window as unknown as { chrome?: ChromeRuntimeLike }).chrome;
-    return c?.runtime && typeof c.runtime.sendMessage === "function" ? c : null;
-  }
-
-  function send(type: string, payload: unknown): Promise<{ ok: boolean; reason?: string }> {
-    const c = chromeApi();
-    if (!c) return Promise.resolve({ ok: false, reason: "no_extension" });
-    return new Promise((resolve) => {
-      c.runtime!.sendMessage!(EXTENSION_ID, { type, payload }, (resp) => {
-        if (c.runtime?.lastError) return resolve({ ok: false, reason: "no_extension" });
-        const r = (resp ?? {}) as { push?: { ok: boolean; reason?: string }; submit?: { ok: boolean; reason?: string } };
-        const inner = r.push ?? r.submit ?? { ok: true };
-        resolve({ ok: inner.ok !== false, reason: inner.reason });
-      });
-    });
+  // Reaches the store build or the "Load unpacked" build, whichever is installed.
+  async function send(type: string, payload: unknown): Promise<{ ok: boolean; reason?: string }> {
+    const sent = await sendToExtension({ type, payload });
+    if (!sent.ok) return { ok: false, reason: "no_extension" };
+    const r = (sent.response ?? {}) as { push?: { ok: boolean; reason?: string }; submit?: { ok: boolean; reason?: string } };
+    const inner = r.push ?? r.submit ?? { ok: true };
+    return { ok: inner.ok !== false, reason: inner.reason };
   }
 
   async function waitFor<K extends "push" | "submit">(key: K, since: number, id: number): Promise<StatusResponse[K] | "timeout" | "closed"> {
@@ -169,7 +153,7 @@ export function RunPayrollFlow({
 
   async function start(acknowledge: boolean): Promise<void> {
     const id = ++runId.current;
-    if (!chromeApi()) { noExtension(); return; }
+    if (!canMessageExtension()) { noExtension(); return; }
 
     // 1) Approve (records the sign-off + locks Connecteam days). Skipped when already approved.
     if (!approved) {
