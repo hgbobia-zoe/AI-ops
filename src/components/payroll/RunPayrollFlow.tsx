@@ -34,6 +34,7 @@ interface PushPayload {
   skipped: { name: string; reason: string }[];
   totals: { regular: number; overtime: number };
   period: { start: string; end: string; label: string };
+  checkDate?: string;
   error?: string;
 }
 interface PushWorker { gustoMemberId: string; name: string | null; outcome: "pushed" | "skipped" | "failed"; regularHours?: number | null; overtimeHours?: number | null; reason?: string | null }
@@ -64,14 +65,21 @@ const WAIT_MS = 210_000; // the extension's watchdog is 180s and it reports when
 
 const ABORT_TEXT: Record<string, string> = {
   not_logged_in: "Gusto is signed out. A Gusto tab is now open in front of you: sign in there, then click Try again.",
-  no_response: "The Gusto tab never started the job. Update the Auto-Pull extension (v1.20.1 or later), make sure Gusto opens in this Chrome, then try again.",
+  no_response: "The Gusto tab never started the job. Update the Auto-Pull extension (v1.20.2 or later), make sure Gusto opens in this Chrome, then try again.",
+  claimed_no_result: "The Gusto tab started but never finished. Try again; if it repeats, tell Claude the Gusto page shown here.",
   could_not_reach_inputs: "Couldn't reach the hours page of this week's Gusto draft. Check in Gusto that a draft payroll is open for this week.",
   not_a_draft: "This week's Gusto run is no longer a draft (it may already be submitted). Check it in Gusto.",
   no_graphql_headers: "Gusto loaded but the page did not finish starting. Try again.",
   could_not_find_run: "Couldn't find this week's payroll run in Gusto.",
   no_entries: "There were no hours to send.",
 };
-const abortText = (code: string): string => ABORT_TEXT[code] ?? (code.startsWith("exception:") ? `Gusto step failed: ${code.slice(10)}` : `Gusto step stopped (${code}).`);
+// Codes may carry where it stopped: "could_not_reach_inputs@/some/gusto/path".
+function abortText(raw: string): string {
+  if (raw.startsWith("exception:")) return `Gusto step failed: ${raw.slice(10)}`;
+  const [code, where] = raw.split("@");
+  const base = ABORT_TEXT[code] ?? `Gusto step stopped (${code}).`;
+  return where ? `${base} (Gusto page: ${where})` : base;
+}
 
 const usd = (n: number | null): string =>
   n == null || !Number.isFinite(n) ? "shown in Gusto" : `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -190,7 +198,7 @@ export function RunPayrollFlow({
 
     const since = Date.now();
     setPhase({ kind: "working", label: `Writing ${plan.mappedCount} workers' hours into the Gusto draft…`, since });
-    const sent = await send("zoe-gusto-push", { which: "previous", period: plan.period, entries: plan.entries });
+    const sent = await send("zoe-gusto-push", { which: "previous", period: plan.period, checkDate: plan.checkDate ?? null, entries: plan.entries });
     if (runId.current !== id) return;
     if (!sent.ok) {
       if (sent.reason === "no_extension") noExtension();
@@ -201,7 +209,7 @@ export function RunPayrollFlow({
     const result = await waitFor("push", since, id);
     if (result === "closed") return;
     if (result === "timeout" || result == null) {
-      setPhase({ kind: "error", title: "Gusto didn't answer", detail: "No result came back from the Gusto tab. Make sure the Auto-Pull extension is on (v1.20.1 or later) and try again.", retry: "start" });
+      setPhase({ kind: "error", title: "Gusto didn't answer", detail: "No result came back from the Gusto tab. Make sure the Auto-Pull extension is on (v1.20.2 or later) and try again.", retry: "start" });
       return;
     }
     if (result.aborted) { setPhase({ kind: "error", title: "Hours not sent to Gusto", detail: abortText(result.aborted), retry: "start" }); return; }
