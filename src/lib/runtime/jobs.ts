@@ -411,7 +411,7 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     note: "Keeps the sales timeline's two-way SMS history complete via the OpenPhone API, independent of the webhook: BACKFILLS past texts a webhook could never recover and captures texts sent/received NATIVELY in Quo that the app never recorded. Syncs the active/open pipeline leads with a phone on file (reuses getPipelineLeads; unsigned leads first, capped per run so we don't hammer the API), one lead at a time. Every message upserts into comms_events keyed by its OpenPhone message id (provider_id UNIQUE), so it dedupes against the webhook, the app's own sender, and prior runs — running both paths never double-counts. FACTS ONLY: inserts exactly what the API returns, never a synthesized message. Key-gated (no-op without an OpenPhone API key), bounded, best-effort (one lead failing never aborts the rest), never throws into the tick.",
     run: async () => {
       const r = await syncActiveLeadTextThreads();
-      return { ok: true, detail: `${r.leads} lead${r.leads === 1 ? "" : "s"} synced, ${r.inserted} new message${r.inserted === 1 ? "" : "s"}` };
+      return { ok: true, detail: `${r.leads} lead${r.leads === 1 ? "" : "s"} synced, ${r.inserted} new message${r.inserted === 1 ? "" : "s"}, notes queued: ${r.textNotes} text${r.textNotes === 1 ? "" : "s"} + ${r.callNotes} call${r.callNotes === 1 ? "" : "s"}` };
     },
   },
   {

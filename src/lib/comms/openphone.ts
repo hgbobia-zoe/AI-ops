@@ -192,6 +192,8 @@ export interface QuoCall {
   participants: string[]; // the other party (E.164), excludes our Quo number
   durationSec: number | null;
   occurredAt: string | null;
+  userId?: string | null; // the Quo user who placed / answered it (rep attribution)
+  status?: string | null; // e.g. completed, no-answer, missed, in-progress
 }
 
 /** One page of calls between our `phoneNumberId` and `participant`. Empty when not configured. */
@@ -217,6 +219,8 @@ export async function listOpenphoneCalls(
       participants: Array.isArray(c.participants) ? (c.participants as unknown[]).map(String) : [],
       durationSec: typeof c.duration === "number" ? (c.duration as number) : null,
       occurredAt: (c.completedAt as string) ?? (c.createdAt as string) ?? null,
+      userId: (c.userId as string) ?? null,
+      status: (c.status as string) ?? null,
     }));
   return { calls, nextPageToken: (json.nextPageToken as string) ?? null };
 }
@@ -226,6 +230,7 @@ export interface QuoMessage {
   direction: "inbound" | "outbound";
   body: string;
   occurredAt: string | null;
+  userId?: string | null; // the Quo user who sent it (outbound), for rep attribution
 }
 
 /** One page of SMS between our `phoneNumberId` and `participant` (E.164). Empty when not configured. */
@@ -250,6 +255,7 @@ export async function listOpenphoneMessages(
       direction: m.direction === "outgoing" || m.direction === "outbound" ? "outbound" : "inbound",
       body: String((m.text ?? m.body ?? "") as string),
       occurredAt: (m.createdAt as string) ?? null,
+      userId: (m.userId as string) ?? null,
     }));
   return { messages, nextPageToken: (json.nextPageToken as string) ?? null };
 }
@@ -279,7 +285,8 @@ export async function getCustomerTextThread(customerPhone: string | null | undef
           fromPhone: m.direction === "inbound" ? participant : n.number,
           toPhone: m.direction === "inbound" ? n.number : participant,
           body: m.body,
-          actor: m.direction === "inbound" ? "Customer" : "Zoe",
+          // the rep's initials when Quo says who sent it (e.g. JM), else the generic "Zoe"
+          actor: m.direction === "inbound" ? "Customer" : ((await openphoneUserInitials(m.userId)) ?? "Zoe"),
           occurredAt: m.occurredAt,
           ts: m.occurredAt ?? new Date().toISOString(),
         });

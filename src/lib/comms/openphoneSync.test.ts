@@ -6,6 +6,11 @@ import type { CommsEventView } from "@/lib/db/repo";
 vi.mock("./openphone", () => ({
   getCustomerTextThread: vi.fn(),
   openphoneApiKey: vi.fn(),
+  // note sweep (noteSweep.ts) reads calls too: no calls in these tests
+  getOpenphonePhoneNumbers: vi.fn(async () => []),
+  listOpenphoneCalls: vi.fn(async () => ({ calls: [], nextPageToken: null })),
+  getCallSummary: vi.fn(async () => null),
+  openphoneUserInitials: vi.fn(async () => null),
 }));
 
 import { getCustomerTextThread, openphoneApiKey } from "./openphone";
@@ -149,7 +154,7 @@ describe("syncActiveLeadTextThreads", () => {
   it("no-ops when the OpenPhone API key is not configured", async () => {
     mockKey.mockReturnValue(null);
     const r = await syncActiveLeadTextThreads();
-    expect(r).toEqual({ leads: 0, inserted: 0 });
+    expect(r).toEqual({ leads: 0, inserted: 0, textNotes: 0, callNotes: 0 });
     expect(mockThread).not.toHaveBeenCalled();
   });
 
