@@ -87,7 +87,16 @@ export interface GateResult {
   reason: string | null;
   /** Mark the Goodshuffle project lost and archive it (3 days or less to an unsigned event). */
   lose?: boolean;
+  /** Why it is held, as a category the recap can group by. */
+  kind?: HoldKind;
+  /** Cadence holds: when the next follow up is due ("Nov 25") and the last touch ("text 2d ago"). */
+  nextOn?: string;
+  last?: string;
+  /** The client's last words, when they wrote last. */
+  said?: string;
 }
+
+export type HoldKind = "lose" | "lose_waiting" | "no_phone" | "opt_out" | "client_done" | "waiting" | "board_flag" | "cadence";
 
 /** Owner call (2026-11-03): follow up less often the further away the event is, keep going until 3 days
  *  before the event, then mark the project lost and archive it. A follow up goes out only when nobody
@@ -154,25 +163,31 @@ export function gateLead(g: GateInput): GateResult {
   while (skip < list.length && isBareThanks(list[skip])) skip++;
   const closedByThanks = skip > 0;
   const latest = list[skip];
-  // A fresh reply puts the lead in action_needed; when that reply is only a thank you it is not a reason to hold.
-  const waiting = (g.subStatus === "action_needed" && !closedByThanks) || latest?.dir === "in";
-  const said = waiting ? list.find((x) => x.dir === "in" && x.detail && x.channel !== "call" && !isBareThanks(x)) : undefined;
-  const waitingWhy = `The client is waiting on us${said ? ` (their last message: "${clip(said.detail, 90)}")` : ""}`;
+  // The client wrote last: they are waiting on us. A lead the Sales board flags Action Needed (a fresh reply,
+  // an open objection, ready to book) is held too, but labelled as the board flag, not as a client waiting.
+  const wroteLast = latest?.dir === "in";
+  const boardFlag = !wroteLast && g.subStatus === "action_needed" && !closedByThanks;
+  const waiting = wroteLast || boardFlag;
+  const saidRow = wroteLast ? list.find((x) => x.dir === "in" && x.detail && x.channel !== "call" && !isBareThanks(x)) : undefined;
+  const said = saidRow ? clip(saidRow.detail, 90) : undefined;
+  const waitingWhy = wroteLast
+    ? `The client is waiting on us${said ? ` (their last message: "${said}")` : ""}`
+    : "The Sales board flags this one Action Needed (a fresh reply, an open objection or ready to book)";
 
   // 3 days out (or less, or past) with the quote still unsigned: the lead is lost. Never auto close a lead
   // whose client is waiting on an answer; a person decides that one.
   if (g.daysToEvent != null && g.daysToEvent <= LOSE_AT_DAYS) {
-    if (waiting) return { send: false, reason: `The event ${inDays(g.daysToEvent)} and ${waitingWhy.charAt(0).toLowerCase()}${waitingWhy.slice(1)}. A person should answer before it is marked lost.` };
-    return { send: false, lose: true, reason: `The event ${inDays(g.daysToEvent)} and the quote is not signed. Mark it lost and archive it.` };
+    if (waiting) return { send: false, kind: "lose_waiting", said, reason: `The event ${inDays(g.daysToEvent)} and ${waitingWhy.charAt(0).toLowerCase()}${waitingWhy.slice(1)}. A person should answer before it is marked lost.` };
+    return { send: false, lose: true, kind: "lose", reason: `The event ${inDays(g.daysToEvent)} and the quote is not signed. Mark it lost and archive it.` };
   }
 
-  if (!g.hasPhone) return { send: false, reason: "No phone number on file." };
+  if (!g.hasPhone) return { send: false, kind: "no_phone", reason: "No phone number on file." };
   const inboundTexts = g.timeline.filter((e) => e.direction === "in" && (e.channel === "sms" || e.channel === "email") && e.detail);
   const stop = inboundTexts.find((e) => STOP_RE.test(e.detail ?? ""));
-  if (stop) return { send: false, reason: `The client asked us to stop: "${clip(stop.detail, 90)}".` };
+  if (stop) return { send: false, kind: "opt_out", said: clip(stop.detail, 90), reason: `The client asked us to stop: "${clip(stop.detail, 90)}".` };
   const done = inboundTexts.find((e) => DONE_RE.test(e.detail ?? ""));
-  if (done) return { send: false, reason: `The client said: "${clip(done.detail, 110)}".` };
-  if (waiting) return { send: false, reason: `${waitingWhy}. A person should answer.` };
+  if (done) return { send: false, kind: "client_done", said: clip(done.detail, 90), reason: `The client said: "${clip(done.detail, 110)}".` };
+  if (waiting) return { send: false, kind: wroteLast ? "waiting" : "board_flag", said, reason: `${waitingWhy}. A person should ${wroteLast ? "answer" : "handle it"}.` };
 
   // Cadence: the further out the event, the longer between follow ups (bot or team, any channel).
   const every = followUpEveryDays(g.daysToEvent);
@@ -181,7 +196,8 @@ export function gateLead(g: GateInput): GateResult {
     const h = Math.max(1, Math.round((g.now - lastOut.at) / 3_600_000));
     const next = shortDate(lastOut.at + every * 86_400_000);
     const why = g.daysToEvent == null ? "when there is no event date" : `with the event ${g.daysToEvent} days out`;
-    return { send: false, reason: `We already reached out ${h < 24 ? `${h}h` : `${Math.round(h / 24)}d`} ago (${lastOut.channel === "sms" ? "text" : lastOut.channel}). Every ${every} days ${why}, so next on ${next}.` };
+    const ago = h < 24 ? `${h}h` : `${Math.round(h / 24)}d`;
+    return { send: false, kind: "cadence", nextOn: next, last: `${lastOut.channel === "sms" ? "text" : lastOut.channel} ${ago} ago`, reason: `We already reached out ${h < 24 ? `${h}h` : `${Math.round(h / 24)}d`} ago (${lastOut.channel === "sms" ? "text" : lastOut.channel}). Every ${every} days ${why}, so next on ${next}.` };
   }
   return { send: true, reason: null };
 }
@@ -275,6 +291,12 @@ export interface MorningPlanRow {
   send: boolean;
   /** Would mark the Goodshuffle project lost and archive it instead of texting. */
   lose: boolean;
+  /** Structured hold (for the recap tables): category, days to the event, next due, last touch, client's words. */
+  holdKind: HoldKind | null;
+  daysToEvent: number | null;
+  nextOn: string | null;
+  last: string | null;
+  said: string | null;
   reason: string | null;
   draft: string | null;
   caution: string | null;
@@ -361,6 +383,11 @@ async function planLead(card: LeadCard, numbers: QuoNumber[], sendDay: string, n
     context: contextCounts(timeline, liveCalls),
     send,
     lose: !!gate.lose,
+    holdKind: gate.kind ?? null,
+    daysToEvent: daysToEvent ?? null,
+    nextOn: gate.nextOn ?? null,
+    last: gate.last ?? null,
+    said: gate.said ?? null,
     reason: gate.send && !draft ? "The drafter found no sensible next step." : gate.reason,
     draft: send ? draft : null,
     caution: send ? caution : null,
