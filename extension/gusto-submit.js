@@ -160,6 +160,7 @@
     try {
       const continues = Array.from(document.querySelectorAll("a,button,[role=button]"))
         .filter((n) => /^\s*continue\s*$/i.test(n.textContent || "") && n.offsetParent !== null);
+      let wireCardBtn = null;
       for (const btn of continues) {
         let card = null;
         let el = btn;
@@ -170,8 +171,13 @@
           card = el;
         }
         const t = (card && card.textContent) || "";
-        if (/pay by wire transfer/i.test(t) && !/pay by check|4-day pay/i.test(t)) { btn.click(); return true; }
+        // After the wire card, Gusto opens a "Wire transfer requirements" dialog with its own Continue
+        // (verified live 2026-11-06). It only acknowledges the wire terms. Click it first when it's open, so we
+        // never re-click the wire card behind it.
+        if (/wire transfer requirements/i.test(t)) { btn.click(); return true; }
+        if (/pay by wire transfer/i.test(t) && !/pay by check|4-day pay/i.test(t)) wireCardBtn = wireCardBtn || btn;
       }
+      if (wireCardBtn) { wireCardBtn.click(); return true; }
     } catch (e) { /* ignore */ }
     return false;
   }
