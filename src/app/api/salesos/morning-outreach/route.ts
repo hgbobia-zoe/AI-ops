@@ -6,11 +6,15 @@ import { NextResponse } from "next/server";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 import { getMorningRunState, startMorningDryRun } from "@/lib/salesos/morningOutreach";
+import { getMorningLiveDay } from "@/lib/salesos/morningLive";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(req: Request): Promise<NextResponse> {
   if (!canManageSettings(await viewerRole())) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  // ?live=1 → today's live run (or ?day=YYYY-MM-DD); otherwise the last dry run
+  const sp = new URL(req.url).searchParams;
+  if (sp.get("live") === "1") return NextResponse.json(getMorningLiveDay(sp.get("day") ?? undefined) ?? { status: "none" });
   return NextResponse.json(getMorningRunState());
 }
 

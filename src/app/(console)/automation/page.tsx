@@ -271,7 +271,7 @@ export default async function AutomationPage(): Promise<React.JSX.Element> {
         <div className="text-[11px] uppercase tracking-[0.07em] text-meta">What is not here</div>
         <p className="text-[11.5px] leading-relaxed text-meta">
           Event triggered actions (the texts drivers set off, lead intake, Slack alerts) run when their event happens, not on a
-          schedule, so they show only as switches. Morning outreach is still a dry run you start by hand.
+          schedule, so they show only as switches.
         </p>
       </Surface>
     </>
