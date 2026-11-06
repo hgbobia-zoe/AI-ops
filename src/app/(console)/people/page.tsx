@@ -35,7 +35,7 @@ import { getAdapter } from "@/lib/people/adapters";
 import { connecteamScopeStatus } from "@/lib/people/connecteamScope";
 import { lastMatchReport, type MatchReport } from "@/lib/people/matchRun";
 import type { MatchException } from "@/lib/people/match";
-import { RunMatchButton, ConfirmLinkButton, VerifyConnecteamButton, AddFromGustoControls } from "@/components/people/PeopleControls";
+import { RunMatchButton, ConfirmLinkButton, VerifyConnecteamButton, AddFromGustoCell } from "@/components/people/PeopleControls";
 import { SyncGustoButton } from "@/components/payroll/SyncGustoButton";
 import { gustoDisplayName, gustoNewHireList, suggestedPolicy } from "@/lib/people/gustoNewHires";
 import { getLatestImportBySource } from "@/lib/pull/state";
@@ -432,6 +432,32 @@ function fmtDate(ymd: string | null): string | null {
   return Number.isFinite(d.getTime()) ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }) : ymd;
 }
 
+// Table cells match the Payroll review table (Nocturne). Sized to fit a laptop-width console without scrolling.
+const TH = "whitespace-nowrap px-2.5 py-2.5 font-medium";
+const TD = "whitespace-nowrap px-2.5 py-2.5 align-top";
+const DASH = "—";
+
+function workerTypeLabel(t: string | null): string {
+  if (!t) return DASH;
+  const k = t.toUpperCase();
+  if (k === "EMPLOYEE" || k === "W2") return "Employee";
+  if (k.includes("CONTRACTOR")) return "Contractor";
+  return k.charAt(0) + k.slice(1).toLowerCase().replace(/_/g, " ");
+}
+
+/** US numbers as (240) 555-0123; anything else as stored. */
+function fmtPhone(e164: string | null): string {
+  if (!e164) return DASH;
+  const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164);
+  return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e164;
+}
+
+function GustoStatus({ p }: { p: { source: "member" | "draft"; setupStatus: string | null } }): React.JSX.Element {
+  if (p.source === "draft") return <StatusBadge tone="neutral" size="sm">Draft offer</StatusBadge>;
+  if (p.setupStatus === "COMPLETED") return <StatusBadge tone="positive" size="sm">Set up in Gusto</StatusBadge>;
+  return <StatusBadge tone="neutral" size="sm">Onboarding in Gusto</StatusBadge>;
+}
+
 function NewInGusto({ policies }: { policies: { id: string; name: string }[] }): React.JSX.Element {
   const list = gustoNewHireList();
   const last = getLatestImportBySource()["gusto-new-hires"] ?? null;
@@ -442,8 +468,7 @@ function NewInGusto({ policies }: { policies: { id: string; name: string }[] }):
         <div className="min-w-0 flex-1">
           <h2 id="gusto-new-h" className="text-[14px] font-medium text-foreground">New in Gusto</h2>
           <p className="mt-0.5 text-[12px] text-secondary-text">
-            Only people in Gusto who are not in People yet, with their legal name, birth date, phone and personal email for
-            Connecteam. Pull runs on the office browser with the Auto-Pull extension and a signed in Gusto.
+            Only people in Gusto who are not in People yet, with what Connecteam needs to set them up. Pull runs on the office browser with the Auto-Pull extension and a signed in Gusto.
           </p>
           {list && (
             <p className="mt-1 text-[11.5px] text-meta">
@@ -457,35 +482,45 @@ function NewInGusto({ policies }: { policies: { id: string; name: string }[] }):
 
       {list && people.length === 0 && <p className="mt-3 text-[12.5px] text-meta">Nobody new in Gusto.</p>}
       {people.length > 0 && (
-        <ul className="mt-3 divide-y divide-[var(--row-rule)] overflow-hidden rounded-md border border-border">
-          {people.map((p) => {
-            const name = gustoDisplayName(p);
-            const d = p.details;
-            const status = p.source === "draft" ? "Draft offer" : p.setupStatus === "COMPLETED" ? "Set up in Gusto" : "Onboarding in Gusto";
-            return (
-              <li key={p.id} className="flex flex-wrap items-start justify-between gap-3 px-3 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[13px] font-medium text-foreground">{name}</span>
-                    <StatusBadge tone={p.source === "draft" ? "neutral" : "info"} size="sm">{status}</StatusBadge>
-                  </div>
-                  <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11.5px] text-meta">
-                    {p.jobTitle && <span>{p.jobTitle}</span>}
-                    {p.workerType && <span className="capitalize">{p.workerType.toLowerCase().replace(/_/g, " ")}</span>}
-                    {(d?.startDate ?? p.startDate) && <span>Starts {fmtDate(d?.startDate ?? p.startDate)}</span>}
-                    {d?.legalFirstName && d.legalLastName && `${d.legalFirstName} ${d.legalLastName}` !== name && <span>Legal name {d.legalFirstName} {d.legalLastName}</span>}
-                    {d?.birthDate && <span>Born {fmtDate(d.birthDate)}</span>}
-                    {d?.phone && <span>{d.phone}</span>}
-                    {d?.personalEmail && <span>{d.personalEmail}</span>}
-                    {p.source === "draft" && <span>Details arrive once the offer is sent in Gusto.</span>}
-                    {p.source === "member" && !d && <span>Details not read yet. Pull again.</span>}
-                  </div>
-                </div>
-                <AddFromGustoControls id={p.id} name={name} policies={policies} suggested={suggestedPolicy(p)} />
-              </li>
-            );
-          })}
-        </ul>
+        <div className="mt-3 overflow-x-auto rounded-md border border-border">
+          <table className="w-full min-w-[880px] text-[12.5px]">
+            <thead className="bg-[var(--panel)]">
+              <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
+                <th className={TH}>Name</th>
+                <th className={TH}>Gusto job title</th>
+                <th className={TH}>Type</th>
+                <th className={TH}>Start date</th>
+                <th className={TH}>Phone</th>
+                <th className={TH}>Personal email</th>
+                <th className={TH}>Add to People</th>
+              </tr>
+            </thead>
+            <tbody>
+              {people.map((p) => {
+                const name = gustoDisplayName(p);
+                const d = p.details;
+                const legal = d?.legalFirstName && d.legalLastName ? `${d.legalFirstName} ${d.legalLastName}` : null;
+                const note = p.source === "draft" ? "Details arrive once the offer is sent in Gusto." : !d ? "Details not read yet. Pull again." : null;
+                return (
+                  <tr key={p.id} className="border-b border-rule/60 last:border-0 hover:bg-[var(--row-hover)]">
+                    <td className={TD}>
+                      <div className="font-medium text-foreground">{name}</div>
+                      <div className="mt-0.5"><GustoStatus p={p} /></div>
+                      {legal && legal !== name && <div className="mt-0.5 text-[11px] text-meta">Legal name {legal}</div>}
+                      {note && <div className="mt-0.5 max-w-[220px] whitespace-normal text-[11px] text-attention">{note}</div>}
+                    </td>
+                    <td className={`${TD} text-secondary-text`}>{p.jobTitle ?? DASH}</td>
+                    <td className={`${TD} text-tertiary-text`}>{workerTypeLabel(p.workerType)}</td>
+                    <td className={`${TD} tabular-nums text-secondary-text`}>{fmtDate(d?.startDate ?? p.startDate) ?? DASH}</td>
+                    <td className={`${TD} tabular-nums text-secondary-text`}>{fmtPhone(d?.phone ?? null)}</td>
+                    <td className={`${TD} text-secondary-text`}><span className="block max-w-[180px] truncate" title={d?.personalEmail ?? undefined}>{d?.personalEmail ?? DASH}</span></td>
+                    <AddFromGustoCell id={p.id} name={name} policies={policies} suggested={suggestedPolicy(p)} cellClass={TD} />
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </Surface>
   );
