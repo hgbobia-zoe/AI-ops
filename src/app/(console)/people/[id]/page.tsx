@@ -107,6 +107,8 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
               : <PolicyPicker id={emp.id} policies={listPolicies().map((p) => ({ id: p.id, name: p.name }))} />}</div>
             {emp.workEmail && <div className="inline-flex items-center gap-1.5"><Mail className="size-3.5" aria-hidden /> {emp.workEmail}</div>}
             <div className="inline-flex items-center gap-1.5"><Phone className="size-3.5" aria-hidden /> <PhoneEdit id={emp.id} phone={emp.phone} /></div>
+            {emp.birthDate && <div className="inline-flex items-center gap-1.5"><Calendar className="size-3.5" aria-hidden /> Born {emp.birthDate}</div>}
+            {emp.personalEmail && <div className="inline-flex items-center gap-1.5"><Mail className="size-3.5" aria-hidden /> {emp.personalEmail} <span className="text-meta">(personal)</span></div>}
             {emp.startDate && <div className="inline-flex items-center gap-1.5"><Calendar className="size-3.5" aria-hidden /> Start {emp.startDate}</div>}
             {emp.endDate && <div className="inline-flex items-center gap-1.5 text-attention"><Calendar className="size-3.5" aria-hidden /> End {emp.endDate}</div>}
           </dl>

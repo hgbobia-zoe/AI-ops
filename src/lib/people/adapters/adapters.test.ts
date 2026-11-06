@@ -5,6 +5,7 @@
 //  • The actions never fake a write: a not-yet-capable adapter returns a manual/blocked result, and a
 //    capable one performs the real action (Connecteam REST create/archive, mocked) or enqueues the replay op.
 
+import { resetConnecteamReadCaches } from "@/lib/connecteam";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "@/lib/db";
 import { allAdapters, getAdapter, hasVerifiedProvisioningScope } from "./index";
@@ -15,7 +16,7 @@ import type { Employee } from "../types";
 
 function fakeEmp(over: Partial<Employee> = {}): Employee {
   return {
-    id: "E-1", displayName: "Pat Driver", workEmail: null, phone: null, lifecycleState: "ONBOARD", role: "member",
+    id: "E-1", displayName: "Pat Driver", workEmail: null, phone: null, birthDate: null, personalEmail: null, lifecycleState: "ONBOARD", role: "member",
     department: "sales", startDate: null, endDate: null, userId: null, hrWorkerId: null, connecteamUserId: null,
     instaworkWorker: null, openphoneUserId: null, gustoId: null, aiOrgHumanName: null, createdAt: "", updatedAt: "",
     ...over,
@@ -85,6 +86,27 @@ describe("Connecteam adapter actions (real REST, mocked)", () => {
     expect(r.status).toBe("completed");
     expect(r.externalRef).toBe("connecteam:4242");
     expect(getEmployee(emp.id)!.connecteamUserId).toBe(4242); // link stored
+  });
+
+  it("fills Connecteam's birthday and hire date fields, and falls back without them if Connecteam refuses", async () => {
+    process.env.CONNECTEAM_API_KEY = "test-key";
+    setSecret("connecteam.provisioningScope", "verified");
+    resetConnecteamReadCaches();
+    const emp = createEmployee({ displayName: "Maria Lopez", role: "member", department: "sales_associate", phone: "+13015550177", birthDate: "1999-04-02", startDate: "2026-11-08" });
+    const creates: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+      if (url.includes("/custom-fields")) return json(200, { data: { customFields: [{ id: 11, name: "Birthday", type: "date" }, { id: 12, name: "Hire Date", type: "date" }, { id: 13, name: "Title", type: "dropdown" }] } });
+      const body = JSON.parse(String(init?.body ?? "[]")) as Array<{ customFields?: unknown }>;
+      creates.push(body[0]);
+      return body[0].customFields ? json(400, { message: "bad custom field value" }) : json(200, { data: { results: [{ userId: 5151 }] } });
+    }));
+
+    const r = await getAdapter("connecteam").automate(getEmployee(emp.id)!);
+    expect(creates[0]).toMatchObject({ customFields: [{ customFieldId: 11, value: "1999-04-02" }, { customFieldId: 12, value: "2026-11-08" }] });
+    expect(creates[1]).not.toHaveProperty("customFields");
+    expect(r.status).toBe("completed");
+    expect(r.detail).toMatch(/fill those in by hand/);
   });
 
   it("a 403 (missing write scope) at run time → manual_required, NOT a faked completion, no link stored", async () => {

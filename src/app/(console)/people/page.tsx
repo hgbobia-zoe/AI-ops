@@ -35,7 +35,10 @@ import { getAdapter } from "@/lib/people/adapters";
 import { connecteamScopeStatus } from "@/lib/people/connecteamScope";
 import { lastMatchReport, type MatchReport } from "@/lib/people/matchRun";
 import type { MatchException } from "@/lib/people/match";
-import { RunMatchButton, ConfirmLinkButton, VerifyConnecteamButton } from "@/components/people/PeopleControls";
+import { RunMatchButton, ConfirmLinkButton, VerifyConnecteamButton, AddFromGustoControls } from "@/components/people/PeopleControls";
+import { SyncGustoButton } from "@/components/payroll/SyncGustoButton";
+import { gustoDisplayName, gustoNewHireList, suggestedPolicy } from "@/lib/people/gustoNewHires";
+import { getLatestImportBySource } from "@/lib/pull/state";
 
 export const dynamic = "force-dynamic";
 
@@ -84,6 +87,7 @@ export default async function PeoplePage({ searchParams }: { searchParams: Promi
         </MetricGrid>
 
         {tab !== "matching" && <MatchBanner report={lastMatchReport()} />}
+        {tab === "onboarding" && <NewInGusto policies={policies.map((p) => ({ id: p.id, name: p.name }))} />}
         {tab === "onboarding" && <OnboardingTab stage={sp.stage} q={sp.q} policies={policyOptions} />}
         {tab === "offboarding" && <OffboardingTab stage={sp.stage} q={sp.q} />}
         {tab === "matching" && <MatchingTab report={lastMatchReport()} />}
@@ -417,6 +421,72 @@ function ConnecteamCard(): React.JSX.Element {
         </div>
         {st.configured && <VerifyConnecteamButton verified={st.verified} />}
       </div>
+    </Surface>
+  );
+}
+
+// ══ NEW IN GUSTO — on-demand: only people in Gusto who are not in People yet ═══════════════════════════
+function fmtDate(ymd: string | null): string | null {
+  if (!ymd) return null;
+  const d = new Date(`${ymd}T12:00:00Z`);
+  return Number.isFinite(d.getTime()) ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }) : ymd;
+}
+
+function NewInGusto({ policies }: { policies: { id: string; name: string }[] }): React.JSX.Element {
+  const list = gustoNewHireList();
+  const last = getLatestImportBySource()["gusto-new-hires"] ?? null;
+  const people = list?.people ?? [];
+  return (
+    <Surface className="mb-5" aria-labelledby="gusto-new-h">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <h2 id="gusto-new-h" className="text-[14px] font-medium text-foreground">New in Gusto</h2>
+          <p className="mt-0.5 text-[12px] text-secondary-text">
+            Only people in Gusto who are not in People yet, with their legal name, birth date, phone and personal email for
+            Connecteam. Pull runs on the office browser with the Auto-Pull extension and a signed in Gusto.
+          </p>
+          {list && (
+            <p className="mt-1 text-[11.5px] text-meta">
+              Last pulled {new Date(list.pulledAt).toLocaleString()}.
+              {list.linked.length > 0 ? ` Linked ${list.linked.length} existing ${list.linked.length === 1 ? "person" : "people"} to Gusto.` : ""}
+            </p>
+          )}
+        </div>
+        <SyncGustoButton lastSyncedAt={last?.ts ?? null} lastOk={last?.ok ?? false} label="Pull from Gusto" />
+      </div>
+
+      {list && people.length === 0 && <p className="mt-3 text-[12.5px] text-meta">Nobody new in Gusto.</p>}
+      {people.length > 0 && (
+        <ul className="mt-3 divide-y divide-[var(--row-rule)] overflow-hidden rounded-md border border-border">
+          {people.map((p) => {
+            const name = gustoDisplayName(p);
+            const d = p.details;
+            const status = p.source === "draft" ? "Draft offer" : p.setupStatus === "COMPLETED" ? "Set up in Gusto" : "Onboarding in Gusto";
+            return (
+              <li key={p.id} className="flex flex-wrap items-start justify-between gap-3 px-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[13px] font-medium text-foreground">{name}</span>
+                    <StatusBadge tone={p.source === "draft" ? "neutral" : "info"} size="sm">{status}</StatusBadge>
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11.5px] text-meta">
+                    {p.jobTitle && <span>{p.jobTitle}</span>}
+                    {p.workerType && <span className="capitalize">{p.workerType.toLowerCase().replace(/_/g, " ")}</span>}
+                    {(d?.startDate ?? p.startDate) && <span>Starts {fmtDate(d?.startDate ?? p.startDate)}</span>}
+                    {d?.legalFirstName && d.legalLastName && `${d.legalFirstName} ${d.legalLastName}` !== name && <span>Legal name {d.legalFirstName} {d.legalLastName}</span>}
+                    {d?.birthDate && <span>Born {fmtDate(d.birthDate)}</span>}
+                    {d?.phone && <span>{d.phone}</span>}
+                    {d?.personalEmail && <span>{d.personalEmail}</span>}
+                    {p.source === "draft" && <span>Details arrive once the offer is sent in Gusto.</span>}
+                    {p.source === "member" && !d && <span>Details not read yet. Pull again.</span>}
+                  </div>
+                </div>
+                <AddFromGustoControls id={p.id} name={name} policies={policies} suggested={suggestedPolicy(p)} />
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </Surface>
   );
 }

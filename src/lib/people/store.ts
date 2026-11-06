@@ -14,6 +14,8 @@ interface EmpRow {
   display_name: string;
   work_email: string | null;
   phone: string | null;
+  birth_date: string | null;
+  personal_email: string | null;
   lifecycle_state: string;
   role: string;
   department: string | null;
@@ -36,6 +38,8 @@ function toEmployee(r: EmpRow): Employee {
     displayName: r.display_name,
     workEmail: r.work_email,
     phone: r.phone,
+    birthDate: r.birth_date ?? null,
+    personalEmail: r.personal_email ?? null,
     lifecycleState: r.lifecycle_state as LifecycleState,
     role: r.role as Role,
     department: r.department,
@@ -57,6 +61,8 @@ export interface NewEmployee {
   displayName: string;
   workEmail?: string | null;
   phone?: string | null;
+  birthDate?: string | null;
+  personalEmail?: string | null;
   role: Role;
   department?: string | null;
   startDate?: string | null;
@@ -75,16 +81,18 @@ export function createEmployee(input: NewEmployee): Employee {
   const now = new Date().toISOString();
   getDb()
     .prepare(
-      `INSERT INTO employee (id, display_name, work_email, phone, lifecycle_state, role, department, start_date,
+      `INSERT INTO employee (id, display_name, work_email, phone, birth_date, personal_email, lifecycle_state, role, department, start_date,
         user_id, hr_worker_id, connecteam_user_id, instawork_worker, openphone_user_id, gusto_id,
         ai_org_human_name, created_at, updated_at)
-       VALUES (@id,@name,@email,@phone,@state,@role,@dept,@start,@userId,@hrId,@ctId,NULL,@opId,@gustoId,@aiName,@now,@now)`,
+       VALUES (@id,@name,@email,@phone,@birth,@pemail,@state,@role,@dept,@start,@userId,@hrId,@ctId,NULL,@opId,@gustoId,@aiName,@now,@now)`,
     )
     .run({
       id,
       name: input.displayName.trim(),
       email: input.workEmail?.trim() || null,
       phone: input.phone?.trim() || null,
+      birth: input.birthDate ?? null,
+      pemail: input.personalEmail?.trim() || null,
       state: input.lifecycleState ?? "HIRE",
       role: input.role,
       dept: input.department ?? null,

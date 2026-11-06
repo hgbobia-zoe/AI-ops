@@ -1721,6 +1721,36 @@ export interface NewConnecteamUser {
   phoneNumber: string; // +E.164 — Connecteam's primary identifier for a user
   userType: "user";
   email?: string;
+  /** Values for the account's own custom fields (birthday, hire date…), by Connecteam custom field id. */
+  customFields?: { customFieldId: number; value: string }[];
+}
+
+export interface ConnecteamCustomField {
+  id: number;
+  name: string;
+  type: string | null;
+}
+
+const _customFieldsCache = ttlCache<ConnecteamCustomField[]>(6 * 60 * 60_000, (l) => l.length > 0);
+
+/** The account's user custom fields (GET /users/v1/custom-fields). Empty when unreachable/unconfigured. */
+export async function getConnecteamCustomFields(): Promise<ConnecteamCustomField[]> {
+  if (!connecteamConfigured()) return [];
+  return _customFieldsCache("fields", async () => {
+    const j = await ctGet("/users/v1/custom-fields");
+    return findArray(j, ["customFields", "fields", "items"])
+      .map((f) => ({ id: num(f.id ?? f.customFieldId), name: String(f.name ?? "").trim(), type: typeof f.type === "string" ? f.type : null }))
+      .filter((f): f is ConnecteamCustomField => f.id != null && f.name.length > 0);
+  }).catch(() => []);
+}
+
+/** Which custom fields hold a person's birthday and start date, matched by name. PURE. */
+export function pickPersonFields(fields: ConnecteamCustomField[]): { birthday: number | null; startDate: number | null } {
+  const find = (re: RegExp): number | null => fields.find((f) => re.test(f.name.toLowerCase()))?.id ?? null;
+  return {
+    birthday: find(/^(birthday|birth ?date|date of birth|dob)$/),
+    startDate: find(/^(hire date|start date|date of hire|hired|seniority date)$/),
+  };
 }
 
 export interface ConnecteamUserWriteResult {
