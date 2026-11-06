@@ -156,6 +156,22 @@ describe("buildPushEntries", () => {
     expect(overtimeCutoff({ ...DEFAULT_PAYROLL_CONFIG, overtimePaid: true, overtimeThreshold: 40 })).toBe(40);
   });
 
+  it("keeps contractors out of the employee run (they are paid in Contractor payments)", () => {
+    const review = [
+      rw({ key: "ct:1", name: "Emp", status: "READY", hours: 20 }),
+      rw({ key: "ct:2", name: "US Con", status: "READY", hours: 27 }),
+      rw({ key: "ct:3", name: "Intl Con", status: "READY", hours: 35 }),
+    ];
+    const unified = [
+      uw({ key: "ct:1", gustoId: "g1" }),
+      uw({ key: "ct:2", gustoId: "g2", workerType: "US_CONTRACTOR" }),
+      uw({ key: "ct:3", gustoId: "g3", workerType: "INTERNATIONAL_CONTRACTOR" }),
+    ];
+    const r = buildPushEntries(review, unified, Number.POSITIVE_INFINITY);
+    expect(r.entries.map((e) => e.name)).toEqual(["Emp"]);
+    expect(r.skipped.map((s) => s.reason)).toEqual([expect.stringMatching(/contractor/), expect.stringMatching(/contractor/)]);
+  });
+
   it("never pushes a blocked worker even when a gusto_id is present", () => {
     const review = [rw({ key: "ct:1", name: "Ann", status: "BLOCKED", hours: 30 })];
     const unified = [uw({ key: "ct:1", gustoId: "g1" })];

@@ -35,8 +35,12 @@
   // Any operation that could advance/submit payroll — we must NEVER POST one of these. Belt-and-braces guard.
   const FORBIDDEN_OP = /(submit|run|process|approve|finaliz|cancel|delete|skip)/i;
   // Fallback mutation doc (the app's own captured query is preferred — see captureTemplate).
+  // Verified live 2026-11-06 against the app's own request: the doc must USE $employeeUuid (GraphQL rejects an
+  // unused variable), and input.uniqueIdentifier is the DRAFT PAYROLL ID (regular.<schedule>.<group>.<periodEnd>),
+  // not a random string. payrollActivitySessionId is a uuid; a freshly generated one is accepted.
   const SAVE_DOC =
-    "mutation AutoSaveWorkedHours($employeeUuid: ID!, $input: UpdateDraftPayrollInput!) { updateDraftPayroll(input: $input) { draftPayroll { id } } }";
+    "mutation AutoSaveWorkedHours($employeeUuid: ID!, $input: UpdateDraftPayrollInput!) { updateDraftPayroll(input: $input) { draftPayroll { id draftEmployeePayroll(employeeUuid: $employeeUuid) { id allWorkedHours { id regularHours overtimeHours } } } } }";
+  const MARK_DOC = "mutation MarkCompanyTouchedHours { markCompanyTouchedHours { success } }";
 
   const origFetch = window.fetch;
   if (!origFetch) return;
@@ -135,7 +139,7 @@
           current: currentHours(dp.allWorkedHours, employeeJobUuid),
         };
       }
-      memberMap = map;
+      memberMap = Object.assign(memberMap || {}, map); // the app loads employees in batches: merge, don't replace
     } catch (e) { /* defensive — a shape change just leaves memberMap null → abort cleanly */ }
   }
 
@@ -281,7 +285,7 @@
                 regularHours: num(entry.regularHours),
                 overtimeHours: num(entry.overtimeHours),
                 doubleOvertimeHours: num(entry.doubleOvertimeHours),
-                missedBreakHours: "0.0",
+                missedBreakHours: null,
               },
             ],
           },
@@ -298,23 +302,48 @@
       && Math.abs(num(target.doubleOvertimeHours) - current.doubleOvertimeHours) < e;
   }
 
+  // Each Gusto GraphQL call carries its own name in the URL (?operationName=X); reusing another call's URL is
+  // rejected. Build the URL for the op we are sending.
+  function gqlUrl(op) {
+    try { const u = new URL(headerTemplate.url); return u.origin + u.pathname.replace(/\/$/, "") + "?operationName=" + encodeURIComponent(op); }
+    catch (e) { return "https://" + GQL_HOST + "?operationName=" + encodeURIComponent(op); }
+  }
+  function freshHeaders() {
+    const h = Object.assign({}, headerTemplate.headers);
+    try { const m = document.querySelector('meta[name="csrf-token"]'); if (m && m.content) h["x-csrf-token"] = m.content; } catch (e) { /* keep captured */ }
+    return h;
+  }
+  async function gqlError(res) {
+    const txt = await res.text().catch(() => "");
+    let msg = "http_" + res.status;
+    try { const j = JSON.parse(txt); if (j && j.errors && j.errors[0] && j.errors[0].message) msg += ": " + j.errors[0].message; } catch (e) { if (txt) msg += ": " + txt.slice(0, 160); }
+    return msg;
+  }
+
+  // The app marks hours as touched before its first save; do the same once (harmless, no payroll data).
+  async function markTouched() {
+    try {
+      await origFetch(gqlUrl(MARK_OP), { method: "POST", headers: freshHeaders(), credentials: "include", body: JSON.stringify({ operationName: MARK_OP, query: MARK_DOC, variables: {} }) });
+    } catch (e) { /* best-effort */ }
+  }
+
   async function postSave(ids, entry, sharedSessionId) {
     const query = saveTemplate && saveTemplate.query ? saveTemplate.query : SAVE_DOC;
     const session = {
       payrollActivitySessionId: sharedSessionId, // shared across the batch (captured real id, or one generated uuid)
-      uniqueIdentifier: uniqueIdentifier(), // fresh per request
+      uniqueIdentifier: draftPayrollId, // the draft payroll id, exactly as the app sends it
     };
     const variables = buildVariables(ids, entry, session);
     // FINAL SAFETY CHECK before the only write we ever make.
     if (FORBIDDEN_OP.test(SAVE_OP)) throw new Error("refused: op name failed safety check");
-    const res = await origFetch(headerTemplate.url, {
+    const res = await origFetch(gqlUrl(SAVE_OP), {
       method: "POST",
-      headers: headerTemplate.headers,
+      headers: freshHeaders(),
       body: JSON.stringify({ operationName: SAVE_OP, query, variables }),
       credentials: "include",
     });
+    if (!res.ok) throw new Error(await gqlError(res));
     const json = await res.json().catch(() => null);
-    if (!res.ok) throw new Error("http_" + res.status);
     if (json && json.errors && json.errors.length) throw new Error((json.errors[0] && json.errors[0].message) || "graphql_error");
     return json;
   }
@@ -355,6 +384,8 @@
     const sessionMode = saveTemplate && saveTemplate.payrollActivitySessionId ? "captured" : "generated";
     const sharedSessionId = sessionMode === "captured" ? saveTemplate.payrollActivitySessionId : uuid();
     result.sessionMode = sessionMode;
+    if (!draftPayrollId) { result.aborted = "no_draft_payroll_id"; return result; }
+    await markTouched();
 
     // 3) Write each matched worker's hours. Skip unmatched + idempotent-no-change. One failure never aborts
     //    the batch (DRAFT writes are independent per worker).

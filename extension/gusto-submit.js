@@ -280,14 +280,19 @@
   // ── the writes ─────────────────────────────────────────────────────────────────────────────────────
   async function gqlPost(op, query, variables) {
     if (!ALLOWED_OPS[op]) throw new Error("refused: op not allowed (" + op + ")");
-    const res = await origFetch(headerTemplate.url, {
-      method: "POST",
-      headers: headerTemplate.headers,
-      body: JSON.stringify({ operationName: op, query, variables }),
-      credentials: "include",
-    });
+    // Each Gusto GraphQL call carries its own name in the URL (?operationName=X); reusing another call's URL is
+    // rejected (verified live 2026-11-06). Also refresh the CSRF token from the page.
+    let url;
+    try { const u = new URL(headerTemplate.url); url = u.origin + u.pathname.replace(/\/$/, "") + "?operationName=" + encodeURIComponent(op); }
+    catch (e) { url = "https://" + GQL_HOST + "?operationName=" + encodeURIComponent(op); }
+    const headers = Object.assign({}, headerTemplate.headers);
+    try { const m = document.querySelector('meta[name="csrf-token"]'); if (m && m.content) headers["x-csrf-token"] = m.content; } catch (e) { /* keep captured */ }
+    const res = await origFetch(url, { method: "POST", headers, body: JSON.stringify({ operationName: op, query, variables }), credentials: "include" });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error("http_" + res.status + (txt ? ": " + txt.slice(0, 160) : ""));
+    }
     const json = await res.json().catch(() => null);
-    if (!res.ok) throw new Error("http_" + res.status);
     return json;
   }
 

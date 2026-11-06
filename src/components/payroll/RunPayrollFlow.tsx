@@ -327,8 +327,8 @@ export function RunPayrollFlow({
                 <>
                   <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
                     <dt className="text-meta">Pay period</dt><dd>{phase.ctx.period.start} to {phase.ctx.period.end}</dd>
-                    <dt className="text-meta">Check date</dt><dd>{phase.ctx.checkDate}</dd>
-                    <dt className="text-meta">Workers</dt><dd>{phase.ctx.headcount}</dd>
+                    <dt className="text-meta">Check date</dt><dd>Set by Gusto (late runs paid by wire move to the next business day)</dd>
+                    <dt className="text-meta">Employees in this run</dt><dd>{phase.ctx.headcount}</dd>
                     <dt className="text-meta">Estimated total</dt><dd>{usd(phase.ctx.expectedTotal)}</dd>
                   </dl>
                   <label className="flex items-start gap-2 text-[12.5px]">

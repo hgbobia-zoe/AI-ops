@@ -72,6 +72,12 @@ export function buildPushEntries(
     // Overtime follows the worker's pay type (overtime.ts): hourly is split at the threshold; salaried is
     // left to Gusto (it pays the salary, there are no hours to enter); unknown pay type over the threshold is
     // held back rather than guessed.
+    // Contractors are paid through Gusto's Contractor payments, never this employee run.
+    const workerType = u?.workerType ?? w.workerType;
+    if (workerType === "US_CONTRACTOR" || workerType === "INTERNATIONAL_CONTRACTOR") {
+      skipped.push({ key: w.key, name: w.name, reason: "contractor (paid in Contractor payments, not this run)" });
+      continue;
+    }
     const rule = overtimeRule(u?.payType ?? w.payType);
     const hours = w.hours ?? 0;
     if (rule === "salaried") {
