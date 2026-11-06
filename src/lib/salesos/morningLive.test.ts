@@ -75,8 +75,9 @@ describe("morning outreach live", () => {
     expect(send).toHaveBeenCalledTimes(1); // never twice
     expect(getMorningLiveDay(DAY)!.rows[0].status).toBe("sent");
     expect(getMorningLiveDay(DAY)!.recapPosted).toBe(true);
-    const titles = (botAnnounce as unknown as Mock).mock.calls.map((c) => c[1].title);
-    expect(titles).toEqual(["Morning outreach: 1 texted, 1 marked lost", "Chang Party - Holly Chang", "Late Event - Pat Lee"]);
+    const calls = (botAnnounce as unknown as Mock).mock.calls;
+    expect(calls.map((c) => c[1].title)).toEqual(["Morning outreach: 1 texted, 1 marked lost", "Chang Party - Holly Chang", "Marked lost and archived (1)"]);
+    expect(calls.every((c) => c[0] === "sales" && c[2]?.fallback === false)).toBe(true); // never spills into the ops channel
   });
 
   it("skips a client who wrote back since the plan", async () => {
@@ -113,6 +114,26 @@ describe("morning outreach live", () => {
     const rows = rowsFromPlan([row({ leadId: "A", sendAt: `${DAY}T14:16:00Z` }), row({ leadId: "B", sendAt: `${DAY}T14:12:30Z` }), row({ leadId: "C", send: false, draft: null, sendAt: null, reason: "next on Nov 27" })], 1);
     expect(rows.map((r) => [r.leadId, r.status])).toEqual([["A", "held"], ["B", "pending"], ["C", "held"]]);
     expect(rows[0].reason).toContain("Daily cap of 1");
-    expect(liveRecapCards({ ymd: DAY, status: "ready", startedAt: "", rows }).at(-1)?.title).toBe("Held back (3)");
+    expect(liveRecapCards({ ymd: DAY, status: "ready", startedAt: "", rows }).map((c) => c.title).slice(1)).toEqual(["Not due yet (1)", "Other holds (1)"]);
+  });
+
+  it("groups the held ones into short tables that stay under Slack's block limit", () => {
+    const many = Array.from({ length: 60 }, (_, i) =>
+      row({ leadId: `C${i}`, clientName: `Client Number ${i} With A Long Name`, send: false, draft: null, sendAt: null, holdKind: "cadence", daysToEvent: 100 + i, last: "text 2d ago", nextOn: "Nov 25", reason: "We already reached out 2d ago (text)." }),
+    );
+    const waiting = row({ leadId: "W", clientName: "Temera Duncan", send: false, draft: null, sendAt: null, holdKind: "waiting", daysToEvent: 40, said: "Will do", reason: "x" });
+    const flagged = row({ leadId: "F", clientName: "Gayle Brown", send: false, draft: null, sendAt: null, holdKind: "board_flag", daysToEvent: 60, reason: "x" });
+    const cards = liveRecapCards({ ymd: DAY, status: "ready", startedAt: "", rows: rowsFromPlan([...many, waiting, flagged], 25) });
+    expect(cards.map((c) => c.title)).toEqual(["Morning outreach: 0 texted, 0 marked lost", "Needs a person (2)", "Not due yet (60)"]);
+    const person = cards[1].sections!.join("\n");
+    expect(person).toContain("Temera Duncan          40d      wrote last: \"Will do\"");
+    expect(person).toContain("Gayle Brown            60d      Sales board: Action Needed");
+    const notDue = cards[2].sections!;
+    expect(notDue.length).toBeGreaterThan(1); // split into several code blocks
+    for (const s of notDue) {
+      expect(s.length).toBeLessThan(3000);
+      expect(s.startsWith("```\nClient")).toBe(true);
+    }
+    expect(notDue[0]).toContain("Client Number 0 With … 100d     text 2d ago    Nov 25");
   });
 });

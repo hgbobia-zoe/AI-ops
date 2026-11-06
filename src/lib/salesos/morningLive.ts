@@ -45,6 +45,12 @@ export interface LiveRow {
   status: LiveStatus;
   detail?: string | null;
   doneAt?: string | null;
+  /** Structured hold, for the recap tables. */
+  holdKind?: MorningPlanRow["holdKind"];
+  daysToEvent?: number | null;
+  nextOn?: string | null;
+  last?: string | null;
+  said?: string | null;
 }
 
 export interface LiveDay {
@@ -77,7 +83,11 @@ export function rowsFromPlan(rows: MorningPlanRow[], max: number): LiveRow[] {
   const sendable = rows.filter((r) => r.send && r.draft && r.sendAt).sort((a, b) => a.sendAt!.localeCompare(b.sendAt!));
   const within = new Set(sendable.slice(0, max).map((r) => r.leadId));
   return rows.map((r) => {
-    const base = { leadId: r.leadId, eventName: r.eventName, clientName: r.clientName, value: r.value, whereWeAre: r.whereWeAre, signedAs: r.signedAs, reason: r.reason, draft: null as string | null, sendAt: null as string | null };
+    const base = {
+      leadId: r.leadId, eventName: r.eventName, clientName: r.clientName, value: r.value, whereWeAre: r.whereWeAre, signedAs: r.signedAs, reason: r.reason,
+      draft: null as string | null, sendAt: null as string | null,
+      holdKind: r.holdKind ?? null, daysToEvent: r.daysToEvent ?? null, nextOn: r.nextOn ?? null, last: r.last ?? null, said: r.said ?? null,
+    };
     if (r.send && r.draft && r.sendAt) {
       return within.has(r.leadId)
         ? { ...base, draft: r.draft, sendAt: r.sendAt, status: "pending" as const }
@@ -186,20 +196,67 @@ export async function sendRow(ymd: string, leadId: string): Promise<LiveStatus> 
 
 const money = (v: number | null): string => (v != null ? ` · $${Math.round(v).toLocaleString("en-US")}` : "");
 
+const fit = (s: string | null | undefined, n: number): string => {
+  const x = (s ?? "").replace(/\s+/g, " ").trim();
+  return x.length > n ? `${x.slice(0, n - 1)}…` : x.padEnd(n);
+};
+const eventIn = (d: number | null | undefined): string => (d == null ? "no date" : d < 0 ? "passed" : d === 0 ? "today" : `${d}d`);
+const FENCE = "```";
+
+/** A monospace table (code block), split so every block stays under Slack's 3000 character section limit. */
+export function tableBlocks(head: string, lines: string[], max = 2800): string[] {
+  const wrap = (rows: string[]) => `${FENCE}\n${[head, ...rows].join("\n")}\n${FENCE}`;
+  const out: string[] = [];
+  let cur: string[] = [];
+  for (const l of lines) {
+    if (cur.length && wrap([...cur, l]).length > max) {
+      out.push(wrap(cur));
+      cur = [];
+    }
+    cur.push(l);
+  }
+  if (cur.length) out.push(wrap(cur));
+  return out;
+}
+
+const NEEDS_PERSON = new Set(["waiting", "board_flag", "lose_waiting"]);
+
+function personWhy(r: LiveRow): string {
+  if (r.holdKind === "board_flag") return "Sales board: Action Needed";
+  const when = r.holdKind === "lose_waiting" ? `event ${eventIn(r.daysToEvent)}, ` : "";
+  return `${when}wrote last${r.said ? `: "${r.said}"` : ""}`;
+}
+
+function otherWhy(r: LiveRow): string {
+  if (r.status === "failed") return `Send failed: ${r.detail ?? ""}`;
+  if (r.status === "skipped") return `Skipped: ${r.detail ?? ""}`;
+  if (r.status === "missed") return "Missed the send window";
+  if (r.status === "lost_skipped" && r.detail) return `Not marked lost: ${r.detail}`;
+  if (r.holdKind === "no_phone") return "No phone number";
+  if (r.holdKind === "opt_out") return `Asked us to stop${r.said ? `: "${r.said}"` : ""}`;
+  if (r.holdKind === "client_done") return `Said no${r.said ? `: "${r.said}"` : ""}`;
+  return r.reason ?? "Held";
+}
+
 export function liveRecapCards(d: LiveDay): BotCard[] {
-  const by = (s: LiveStatus[]) => d.rows.filter((r) => s.includes(r.status));
-  const sent = by(["sent"]);
-  const lost = by(["lost_queued"]);
-  const other = d.rows.filter((r) => !["sent", "lost_queued"].includes(r.status));
+  const sent = d.rows.filter((r) => r.status === "sent");
+  const lost = d.rows.filter((r) => r.status === "lost_queued");
+  const rest = d.rows.filter((r) => !["sent", "lost_queued", "pending", "sending"].includes(r.status));
+  const person = rest.filter((r) => r.status === "held" && NEEDS_PERSON.has(r.holdKind ?? ""));
+  const notDue = rest.filter((r) => r.status === "held" && (r.holdKind === "cadence" || !!r.reason?.startsWith("Daily cap")));
+  const other = rest.filter((r) => !person.includes(r) && !notDue.includes(r));
+  const day = new Date(`${d.ymd}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", weekday: "long", month: "short", day: "numeric" });
   const cards: BotCard[] = [
     {
       emoji: "☀️",
       title: `Morning outreach: ${sent.length} texted, ${lost.length} marked lost`,
-      subtitle: `${new Date(`${d.ymd}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", weekday: "long", month: "short", day: "numeric" })} · ${d.rows.length} open quotes checked`,
+      subtitle: `${day} · ${d.rows.length} open quotes checked`,
       fields: [
         { label: "Texted", value: String(sent.length) },
         { label: "Marked lost", value: String(lost.length) },
-        { label: "Held", value: String(other.length) },
+        { label: "Needs a person", value: String(person.length) },
+        { label: "Not due yet", value: String(notDue.length) },
+        ...(other.length ? [{ label: "Other", value: String(other.length) }] : []),
       ],
       context: "Sales Bot · live · MORNING_OUTREACH_LIVE=false stops it",
     },
@@ -213,24 +270,52 @@ export function liveRecapCards(d: LiveDay): BotCard[] {
       context: "Sales Bot · note added to the Goodshuffle project",
     });
   }
-  for (const r of lost) {
+  const usd = (v: number | null) => (v != null ? `$${Math.round(v).toLocaleString("en-US")}` : "");
+  if (lost.length) {
     cards.push({
-      title: `${r.eventName} - ${r.clientName}`.slice(0, 140),
-      subtitle: `Marked lost and archived in Goodshuffle${money(r.value)}`,
-      sections: [`*Why:* ${r.reason ?? ""}`],
+      emoji: "🗄️",
+      title: `Marked lost and archived (${lost.length})`,
+      subtitle: "3 days or less to the event and the quote is not signed. The office browser makes the change on its next pull.",
+      sections: tableBlocks(`${fit("Client", 22)} ${fit("Event in", 8)} Value`, lost.map((r) => `${fit(r.clientName, 22)} ${fit(eventIn(r.daysToEvent), 8)} ${usd(r.value)}`)),
+      context: "Sales Bot · live",
+    });
+  }
+  if (person.length) {
+    cards.push({
+      emoji: "🙋",
+      title: `Needs a person (${person.length})`,
+      subtitle: "The client wrote last, or the Sales board flags it. Sales Bot does not text these.",
+      sections: tableBlocks(`${fit("Client", 22)} ${fit("Event in", 8)} Why`, person.map((r) => `${fit(r.clientName, 22)} ${fit(eventIn(r.daysToEvent), 8)} ${fit(personWhy(r), 60).trimEnd()}`)),
       link: { text: "Open in Sales OS", url: appUrl("/salesos") },
-      context: "Sales Bot · the office browser makes the change on its next pull",
+      context: "Sales Bot · live",
+    });
+  }
+  if (notDue.length) {
+    const sorted = [...notDue].sort((a, b) => (a.daysToEvent ?? 9999) - (b.daysToEvent ?? 9999));
+    cards.push({
+      emoji: "🗓️",
+      title: `Not due yet (${notDue.length})`,
+      subtitle: "Followed up recently. The further out the event, the longer the gap: 3, 7, 14, 21 or 30 days.",
+      sections: tableBlocks(
+        `${fit("Client", 22)} ${fit("Event in", 8)} ${fit("Last touch", 14)} Next`,
+        sorted.map((r) => `${fit(r.clientName, 22)} ${fit(eventIn(r.daysToEvent), 8)} ${fit(r.last ?? "", 14)} ${r.reason?.startsWith("Daily cap") ? "tomorrow (cap)" : r.nextOn ?? ""}`),
+      ),
+      context: "Sales Bot · live",
     });
   }
   if (other.length) {
-    const line = (r: LiveRow) => `• *${r.clientName}* (${r.eventName}): ${r.status === "held" || r.status === "lost_skipped" ? r.reason ?? r.detail ?? "held" : `${r.status}: ${r.detail ?? ""}`}`;
-    cards.push({ title: `Held back (${other.length})`, sections: [other.slice(0, 40).map(line).join("\n")], context: "Sales Bot · live" });
+    cards.push({
+      title: `Other holds (${other.length})`,
+      sections: tableBlocks(`${fit("Client", 22)} Why`, other.map((r) => `${fit(r.clientName, 22)} ${fit(otherWhy(r), 70).trimEnd()}`)),
+      context: "Sales Bot · live",
+    });
   }
   return cards;
 }
 
 async function postRecap(d: LiveDay): Promise<void> {
-  for (const c of liveRecapCards(d)) await botAnnounce("sales", c);
+  // fallback:false: if the Sales Bot channel post fails, never spill the recap into the ops (delivery) channel
+  for (const c of liveRecapCards(d)) await botAnnounce("sales", c, { fallback: false });
   const cur = load(d.ymd);
   if (cur) save({ ...cur, recapPosted: true });
 }

@@ -109,6 +109,19 @@ describe("gateLead", () => {
     expect(gateLead(gate({ timeline: tl })).reason).toContain("already reached out");
   });
 
+  it("tells a client who wrote last apart from a lead the Sales board flags", () => {
+    const answered = [
+      e({ at: "2026-10-30T15:00:00Z", direction: "out", channel: "sms", detail: "Here you go" }),
+      e({ at: "2026-10-29T15:00:00Z", direction: "in", channel: "sms", detail: "Can I get a quote?" }),
+    ];
+    const flagged = gateLead(gate({ timeline: answered, subStatus: "action_needed" }));
+    expect(flagged).toMatchObject({ send: false, kind: "board_flag" });
+    expect(flagged.reason).toContain("Sales board flags this one Action Needed");
+    expect(flagged.reason).not.toContain("waiting on us");
+    const wrote = gateLead(gate({ timeline: [e({ at: "2026-11-01T15:00:00Z", direction: "in", channel: "sms", detail: "Will do" })] }));
+    expect(wrote).toMatchObject({ kind: "waiting", said: "Will do" });
+  });
+
   it("does not treat a quote open as the client talking", () => {
     const tl = [
       e({ at: "2026-11-01T15:00:00Z", direction: "in", channel: "quote", title: "Client opened the quote" }),

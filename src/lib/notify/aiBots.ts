@@ -101,7 +101,33 @@ export function appUrl(path: string): string | null {
   return `${base}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
-/** Build Block Kit blocks for a card. Keeps within Slack's limits (10 section fields, 150-char header). */
+/** Slack rejects a section whose text is over 3000 characters, and then the whole post fails. */
+export const SLACK_SECTION_MAX = 2900;
+
+/** Split text into Slack-sized pieces at line breaks (a single over-long line is hard cut). */
+export function splitForSlack(text: string, max: number = SLACK_SECTION_MAX): string[] {
+  const t = text.trim();
+  if (!t) return [];
+  if (t.length <= max) return [t];
+  const out: string[] = [];
+  let cur = "";
+  const push = (piece: string) => {
+    if (cur && cur.length + 1 + piece.length > max) {
+      out.push(cur);
+      cur = "";
+    }
+    cur = cur ? `${cur}\n${piece}` : piece;
+  };
+  for (const line of t.split("\n")) {
+    if (line.length <= max) push(line);
+    else for (let i = 0; i < line.length; i += max) push(line.slice(i, i + max));
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/** Build Block Kit blocks for a card. Keeps within Slack's limits (10 section fields, 150-char header,
+ *  3000-char sections). */
 export function cardBlocks(card: BotCard): unknown[] {
   const blocks: unknown[] = [];
   const header = `${card.emoji ? `${card.emoji} ` : ""}${card.title}`.slice(0, 150);
@@ -112,9 +138,9 @@ export function cardBlocks(card: BotCard): unknown[] {
     blocks.push({ type: "section", fields: card.fields.slice(0, 10).map((f) => ({ type: "mrkdwn", text: `*${f.label}:*\n${f.value}` })) });
   }
   for (const s of card.sections ?? []) {
-    if (s?.trim()) blocks.push({ type: "section", text: { type: "mrkdwn", text: s.trim() } });
+    for (const part of splitForSlack(s ?? "")) blocks.push({ type: "section", text: { type: "mrkdwn", text: part } });
   }
-  if (card.body?.trim()) blocks.push({ type: "section", text: { type: "mrkdwn", text: card.body.trim() } });
+  for (const part of splitForSlack(card.body ?? "")) blocks.push({ type: "section", text: { type: "mrkdwn", text: part } });
   const elements: unknown[] = [];
   for (const b of card.buttons ?? []) {
     elements.push({ type: "button", text: { type: "plain_text", text: b.text, emoji: true }, action_id: b.actionId, value: b.value, ...(b.style ? { style: b.style } : {}) });
@@ -143,14 +169,17 @@ export function cardToText(card: BotCard): string {
  * webhook fallback). Never silent: if the bot token or channel isn't available (or the post fails), falls
  * back to the ops webhook so the action is still surfaced. Never throws.
  */
-export async function botAnnounce(bot: BotId, message: string | BotCard): Promise<SlackResult> {
+export async function botAnnounce(bot: BotId, message: string | BotCard, opts: { fallback?: boolean } = {}): Promise<SlackResult> {
   const text = typeof message === "string" ? message : cardToText(message);
   const blocks = typeof message === "string" ? undefined : cardBlocks(message);
   const channel = channelFor(bot);
   if (channel && slackBotConfigured()) {
     const r = await slackPostAs(channel, BOTS[bot], text, { blocks });
     if (r.ok) return r;
-    // bot token present but post failed (e.g. not in that channel) → fall through so it's still surfaced
+    // bot token present but post failed (e.g. not in that channel) → fall through so it's still surfaced,
+    // unless the caller would rather not post than land in the ops channel (fallback: false)
+    if (opts.fallback === false) return r;
   }
+  if (opts.fallback === false) return { ok: false, skipped: true };
   return slackNotify(text); // webhook can't render blocks — the flattened text carries the full content
 }

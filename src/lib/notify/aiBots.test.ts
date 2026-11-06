@@ -48,3 +48,17 @@ describe("appUrl (card 'View in app' links)", () => {
     expect(appUrl("ai-org/approvals")).toBe("https://zoe-dispatch.fly.dev/ai-org/approvals");
   });
 });
+
+
+describe("Slack size limits", () => {
+  it("splits a section over 3000 characters at line breaks, so the post is not rejected", async () => {
+    const { cardBlocks, splitForSlack } = await import("./aiBots");
+    const long = Array.from({ length: 80 }, (_, i) => `line ${i} `.padEnd(60, "x")).join("\n");
+    const parts = splitForSlack(long);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.every((p) => p.length <= 2900)).toBe(true);
+    expect(parts.join("\n")).toBe(long);
+    const sections = (cardBlocks({ title: "t", sections: [long] }) as { type: string; text?: { text: string } }[]).filter((b) => b.type === "section");
+    expect(sections.length).toBe(parts.length);
+  });
+});
