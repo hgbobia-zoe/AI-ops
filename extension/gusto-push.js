@@ -78,6 +78,22 @@
     return res;
   };
 
+  // Live step for the Run payroll dialog (no payroll data, just a step code + an "i of n" detail). Posted only
+  // when the step changes; best-effort, never blocks the job.
+  let lastStage = null;
+  function progress(stage, detail) {
+    const k = stage + "|" + (detail || "");
+    if (k === lastStage) return;
+    lastStage = k;
+    try {
+      origFetch(API + "/api/payroll/gusto/progress", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "push", stage, detail: detail || null }),
+      }).catch(() => {});
+    } catch (e) { /* best-effort */ }
+  }
+
   function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 
   // Are we sitting on a Gusto sign-in / MFA page (expired session) rather than the app?
@@ -197,6 +213,7 @@
       const key = pick.getAttribute("href");
       if (runLinkClicked === key) return false; // once per page; wait for the route to load
       runLinkClicked = key;
+      progress("opening_run");
       pick.click();
       return true;
     } catch (e) { return false; }
@@ -225,10 +242,10 @@
         // After the wire card, Gusto opens a "Wire transfer requirements" dialog with its own Continue
         // (verified live 2026-11-06). It only acknowledges the wire terms. Click it first when it's open, so we
         // never re-click the wire card behind it.
-        if (/wire transfer requirements/i.test(t)) { btn.click(); return true; }
+        if (/wire transfer requirements/i.test(t)) { progress("wire_terms"); btn.click(); return true; }
         if (/pay by wire transfer/i.test(t) && !/pay by check|4-day pay/i.test(t)) wireCardBtn = wireCardBtn || btn;
       }
-      if (wireCardBtn) { wireCardBtn.click(); return true; }
+      if (wireCardBtn) { progress("choosing_wire"); wireCardBtn.click(); return true; }
     } catch (e) { /* ignore */ }
     return false;
   }
@@ -315,6 +332,7 @@
       workers: [],
     };
     if (!entries.length) { result.aborted = "no_entries"; return result; }
+    progress("opened");
 
     // 1) Reach the inputs step + capture the member map (and thereby confirm DRAFT). Never submits.
     // Gusto's run key ends with the PAY PERIOD END date (verified live 2026-11-06: regular.<schedule>.<group>.2026-11-01
@@ -331,6 +349,7 @@
     if (!isDraft) { result.aborted = "not_a_draft"; return result; } // HARD SAFETY: only ever a DRAFT run
     if (!headerTemplate) { result.aborted = "no_graphql_headers"; return result; }
     result.draftPayrollId = draftPayrollId;
+    progress("hours_page");
 
     // 2) Session-id strategy (HYPOTHESIS): prefer a captured real session if the app fired a save; else generate.
     const sessionMode = saveTemplate && saveTemplate.payrollActivitySessionId ? "captured" : "generated";
@@ -339,7 +358,9 @@
 
     // 3) Write each matched worker's hours. Skip unmatched + idempotent-no-change. One failure never aborts
     //    the batch (DRAFT writes are independent per worker).
+    let n = 0;
     for (const entry of entries) {
+      progress("writing", ++n + " of " + entries.length);
       const ids = memberMap[entry.gustoMemberId];
       const row = { gustoMemberId: entry.gustoMemberId, name: entry.name || null, regularHours: num(entry.regularHours), overtimeHours: num(entry.overtimeHours) };
       if (!ids) { result.workers.push({ ...row, outcome: "skipped", reason: "not in draft (no matching employee)" }); continue; }

@@ -81,6 +81,22 @@
     return res;
   };
 
+  // Live step for the Run payroll dialog (no payroll data, just a step code + an "i of n" detail). Posted only
+  // when the step changes; best-effort, never blocks the job.
+  let lastStage = null;
+  function progress(stage, detail) {
+    const k = stage + "|" + (detail || "");
+    if (k === lastStage) return;
+    lastStage = k;
+    try {
+      origFetch(API + "/api/payroll/gusto/progress", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "submit", stage, detail: detail || null }),
+      }).catch(() => {});
+    } catch (e) { /* best-effort */ }
+  }
+
   function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
 
   function onAuthPage() {
@@ -174,10 +190,10 @@
         // After the wire card, Gusto opens a "Wire transfer requirements" dialog with its own Continue
         // (verified live 2026-11-06). It only acknowledges the wire terms. Click it first when it's open, so we
         // never re-click the wire card behind it.
-        if (/wire transfer requirements/i.test(t)) { btn.click(); return true; }
+        if (/wire transfer requirements/i.test(t)) { progress("wire_terms"); btn.click(); return true; }
         if (/pay by wire transfer/i.test(t) && !/pay by check|4-day pay/i.test(t)) wireCardBtn = wireCardBtn || btn;
       }
-      if (wireCardBtn) { wireCardBtn.click(); return true; }
+      if (wireCardBtn) { progress("choosing_wire"); wireCardBtn.click(); return true; }
     } catch (e) { /* ignore */ }
     return false;
   }
@@ -297,6 +313,7 @@
 
   // ── job runners ────────────────────────────────────────────────────────────────────────────────────
   async function runSubmit(job) {
+    progress("opened");
     const period = (job && job.period) || {};
     const checkDate = (job && job.checkDate) || null;
     const result = {
@@ -318,6 +335,7 @@
     const uid = pickUniqueId(runDate);
     if (!uid) { result.aborted = "no_unique_identifier"; return result; }
     result.uniqueIdentifier = uid;
+    progress("submitting");
 
     // Past-deadline runs first show a "Safe expedite" step — choose WIRE. On-time runs skip straight to submit.
     result.wirePathTaken = chooseWireIfExpedite();

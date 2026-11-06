@@ -13,7 +13,7 @@
 // the explicit confirm on the real numbers. The dialog polls /api/payroll/gusto/status for what the extension
 // reports, so it never sits silent: a signed-out Gusto or a stalled tab comes back as a clear reason.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CheckCircle2, Loader2, PlayCircle } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -31,7 +31,9 @@ interface PushPayload {
   error?: string;
 }
 interface PushWorker { gustoMemberId: string; name: string | null; outcome: "pushed" | "skipped" | "failed"; regularHours?: number | null; overtimeHours?: number | null; reason?: string | null }
+interface ProgressStep { stage: string; detail: string | null; at: string }
 interface StatusResponse {
+  progress?: { push: ProgressStep | null; submit: ProgressStep | null };
   push: { at: string; ok: boolean; aborted: string | null; pushed: number; skipped: number; failed: number; workers: PushWorker[] } | null;
   submit: { at: string; ok: boolean; aborted: string | null; submitted: boolean; alreadySubmitted: boolean; errors: { message: string }[] } | null;
 }
@@ -48,12 +50,23 @@ interface SubmitContext {
 
 type Phase =
   | { kind: "ack" }
-  | { kind: "working"; label: string; since: number }
+  | { kind: "working"; label: string; since: number; steps?: { stage: string; text: string }[] }
   | { kind: "error"; title: string; detail: string; retry: "start" | "submit" | null }
   | { kind: "draft"; plan: PushPayload; result: NonNullable<StatusResponse["push"]>; ctx: SubmitContext | null; ctxError: string | null }
   | { kind: "done"; ctx: SubmitContext };
 
-const POLL_MS = 2500;
+const POLL_MS = 2000;
+
+// What each step the extension reports means, in plain words.
+const STAGE_LABEL: Record<string, string> = {
+  opened: "Gusto opened",
+  opening_run: "Opening this week's payroll run",
+  choosing_wire: "Late payroll: choosing pay by wire",
+  wire_terms: "Accepting Gusto's wire terms",
+  hours_page: "Reached the hours page",
+  writing: "Writing hours",
+  submitting: "Submitting payroll",
+};
 const WAIT_MS = 210_000; // the extension's watchdog is 180s and it reports when it fires
 
 const ABORT_TEXT: Record<string, string> = {
@@ -131,6 +144,21 @@ export function RunPayrollFlow({
       const data = (await res?.json().catch(() => null)) as StatusResponse | null;
       const r = data?.[key];
       if (r && Date.parse(r.at) >= since - 2000) return r as StatusResponse[K];
+      // Live step from the Gusto tab: append it to the checklist the dialog shows.
+      const p = data?.progress?.[key];
+      if (p && Date.parse(p.at) >= since - 2000) {
+        const label = STAGE_LABEL[p.stage] ?? p.stage;
+        setPhase((cur) => {
+          if (cur.kind !== "working") return cur;
+          const steps = cur.steps ?? [];
+          const last = steps[steps.length - 1];
+          const text = p.detail ? `${label} (${p.detail})` : label;
+          if (last && last.stage === p.stage) {
+            return last.text === text ? cur : { ...cur, steps: [...steps.slice(0, -1), { stage: p.stage, text }] };
+          }
+          return { ...cur, steps: [...steps, { stage: p.stage, text }] };
+        });
+      }
     }
     return "timeout";
   }
@@ -279,12 +307,7 @@ export function RunPayrollFlow({
             </div>
           )}
 
-          {phase.kind === "working" && (
-            <div className="flex items-center gap-3 py-4 text-[13px]">
-              <Loader2 className="size-4 animate-spin text-meta" />
-              <span>{phase.label}</span>
-            </div>
-          )}
+          {phase.kind === "working" && <WorkingView label={phase.label} since={phase.since} steps={phase.steps ?? []} />}
 
           {phase.kind === "error" && (
             <div className="flex gap-3 rounded-md border border-critical/40 bg-critical/10 p-3 text-[13px]">
@@ -426,6 +449,40 @@ function DraftView({ plan, result }: { plan: PushPayload; result: NonNullable<St
         </div>
       )}
       {result.failed > 0 && <p className="text-critical">Some hours did not save in Gusto. Try again before submitting.</p>}
+    </div>
+  );
+}
+
+// The live checklist while a step runs: finished steps get a check, the current one spins, and a seconds
+// counter keeps ticking so it's obvious the run is alive even between Gusto updates.
+function WorkingView({ label, since, steps }: { label: string; since: number; steps: { stage: string; text: string }[] }): React.JSX.Element {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const secs = since ? Math.max(0, Math.round((now - since) / 1000)) : 0;
+  return (
+    <div className="space-y-2 py-2 text-[13px]">
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-medium text-foreground">{label}</span>
+        {since > 0 && <span className="tabular-nums text-[11.5px] text-meta">{secs}s</span>}
+      </div>
+      {steps.length === 0 ? (
+        <p className="flex items-center gap-2 text-secondary-text"><Loader2 className="size-3.5 animate-spin text-meta" /> Working…</p>
+      ) : (
+        <ol className="space-y-1">
+          {steps.map((s, i) => {
+            const current = i === steps.length - 1;
+            return (
+              <li key={`${s.stage}-${i}`} className={`flex items-center gap-2 ${current ? "text-foreground" : "text-meta"}`}>
+                {current ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5 text-positive" />}
+                {s.text}
+              </li>
+            );
+          })}
+        </ol>
+      )}
     </div>
   );
 }
