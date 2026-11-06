@@ -11,9 +11,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
-  Wallet, Users, UserCheck, History, Settings as SettingsIcon,
-  ArrowRight, ChevronLeft, ChevronRight, CheckCircle2, CircleAlert, HelpCircle, Clock,
-  ClipboardCheck, Plug, CalendarClock, BrainCircuit,
+  Wallet, Users, UserCheck, History,
+  ArrowRight, ChevronLeft, ChevronRight, CheckCircle2, Clock,
+  ClipboardCheck, CalendarClock,
 } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManagePayroll, canRunPayroll } from "@/lib/auth/roles";
@@ -28,10 +28,9 @@ import { listExceptions, listSyncRuns, countTimeEntries } from "@/lib/payroll/st
 import { gustoConfigured } from "@/lib/payroll/gusto";
 import { instaworkTempPay } from "@/lib/payroll/instawork";
 import {
-  WORKER_TYPE_LABEL, APPROVAL_STATUS_LABEL,
-  type UnifiedWorker, type ExceptionSeverity, type PayrollReadinessModel, type PayrollTone, type GateState,
-  type UnifiedWorkerRow, type AttentionGroup, type PayrollSourceHealth,
-  type PayrollActivityEvent,
+  WORKER_TYPE_LABEL,
+  type UnifiedWorker, type ExceptionSeverity,
+  type UnifiedWorkerRow,
 } from "@/lib/payroll/types";
 import { getPayrollConfig } from "@/lib/payroll/config";
 import { readGustoSnapshot } from "@/lib/payroll/gustoSnapshot";
@@ -52,8 +51,10 @@ import { ExceptionActions } from "@/components/payroll/ExceptionActions";
 import { RateSyncPanel } from "@/components/payroll/RateSyncPanel";
 import { PayrollReviewBoard, type ReviewRow, type ReviewTimesheet } from "@/components/payroll/PayrollReviewBoard";
 import { buildRateSyncPlan } from "@/lib/payroll/rateSync";
+import { runReadiness } from "@/lib/payroll/runReadiness";
+import { buildOverviewView, type OverviewLedgers } from "@/lib/payroll/overviewView";
+import { PayrollOverview } from "@/components/payroll/PayrollOverview";
 import { StatusBadge } from "@/components/ui/status";
-import type { Tone } from "@/lib/tone";
 import { Fragment } from "react";
 
 export const dynamic = "force-dynamic";
@@ -88,13 +89,6 @@ function periodYear(p: { start: string; end: string }): string {
   return ys === ye ? ys : `${ys}–${ye}`;
 }
 
-// ── tone tokens (colour ALWAYS paired with text/icon — never colour alone) ──────────────────────────────
-const TONE_BADGE: Record<PayrollTone, string> = {
-  critical: "text-critical border-critical/40 bg-critical/10",
-  attention: "text-attention border-attention/40 bg-attention/10",
-  positive: "text-positive border-positive/40 bg-positive/10",
-  neutral: "text-tertiary-text border-border bg-[var(--row)]",
-};
 
 export default async function PayrollPage({
   searchParams,
@@ -191,8 +185,8 @@ function PayrollHeader({ tab, period, weeksAgo }: { tab: Tab; period: { start: s
 
       {/* Deadline + last-verified + a secondary sync (dedupe + progress handled by SyncButton) */}
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[11.5px] text-meta">
-        <span className="inline-flex items-center gap-1.5"><CalendarClock className="size-3.5" aria-hidden /> Payroll runs {payrollDeadlineText(cfg)}</span>
-        <span className="inline-flex items-center gap-1.5"><Clock className="size-3.5" aria-hidden /> Hours last verified {relTime(last?.finishedAt ?? last?.startedAt ?? null)}{last ? ` · ${last.status.toLowerCase().replace(/_/g, " ")}` : ""}</span>
+        <span className="inline-flex items-center gap-1.5"><CalendarClock className="size-3.5" aria-hidden /> {tab === "overview" ? "Recurring run: " : "Payroll runs "}{payrollDeadlineText(cfg)}</span>
+        {tab !== "overview" && <span className="inline-flex items-center gap-1.5"><Clock className="size-3.5" aria-hidden /> Hours last verified {relTime(last?.finishedAt ?? last?.startedAt ?? null)}{last ? ` · ${last.status.toLowerCase().replace(/_/g, " ")}` : ""}</span>}
         {/* One Sync control per view (never two "Sync hours" doing the same thing): Overview's readiness banner
             and the Time Sync tab each already own a primary sync, so the header sync is shown on the rest only. */}
         {tab !== "overview" && tab !== "sync" && <span className="ml-auto"><SyncButton period={period} label="Sync hours" variant="secondary" /></span>}
@@ -222,354 +216,22 @@ function PagerLink({ href, disabled, label, dir }: { href: string; disabled: boo
 }
 
 // ══ OVERVIEW ════════════════════════════════════════════════════════════════════════════════════════════
+// Can this period proceed, what to do next, and what happened on the latest attempt. The view is built from the
+// same readiness model as Payroll Review (buildOverviewView → runReadiness), plus the sync and Gusto ledgers.
 async function OverviewTab({ period, weeksAgo }: { period: { start: string; end: string; label: string }; weeksAgo: number }): Promise<React.JSX.Element> {
   const m = await derivePayrollReadiness(period);
-  return (
-    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_304px]">
-      {/* MAIN COLUMN */}
-      <div className="flex min-w-0 flex-col gap-5">
-        <StatusPanel m={m} weeksAgo={weeksAgo} />
-        <NeedsAttention m={m} />
-        <PeriodSummary m={m} />
-        <RecentActivity events={m.activity} />
-      </div>
-      {/* RIGHT COLUMN */}
-      <aside className="flex min-w-0 flex-col gap-4">
-        <ScheduleCard m={m} />
-        <SourceHealthCard sources={m.sources} />
-        <ConfigCard m={m} />
-        <AiManagerLink />
-      </aside>
-    </div>
-  );
-}
-
-// ONE authoritative status panel — no competing banners. Status + explanation + next valid action + the
-// pipeline gates + the reconciled counts.
-function StatusPanel({ m, weeksAgo }: { m: PayrollReadinessModel; weeksAgo: number }): React.JSX.Element {
   const periodQS = weeksAgo > 1 ? `&weeksAgo=${weeksAgo}` : "";
-  const na = m.nextAction;
-  return (
-    <section className="surface border p-4" aria-labelledby="payroll-status-h">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 id="payroll-status-h" className="text-[10.5px] uppercase tracking-[0.1em] text-meta">Payroll status</h2>
-          <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            <StatusBadge tone={m.tone} size="md" className="font-semibold">{m.headline}</StatusBadge>
-            {m.approval && (
-              <span className="rounded border border-border bg-[var(--row)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-tertiary-text">
-                {APPROVAL_STATUS_LABEL[m.approval.status]}{m.approval.approvedBy ? ` · ${m.approval.approvedBy}` : ""}
-              </span>
-            )}
-          </div>
-          <p className="mt-2 max-w-xl text-[12.5px] leading-snug text-secondary-text">{m.explain}</p>
-        </div>
-        {/* The single next valid action */}
-        <NextActionControl m={m} periodQS={periodQS} na={na} />
-      </div>
-
-      {/* Reconciled counts — identical to the Review tab (same model) */}
-      <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 border-t border-rule pt-3 text-[12px]">
-        <Count n={m.counts.included} label="in run" tone="neutral" />
-        <Count n={m.counts.ready} label="ready" tone="positive" />
-        <Count n={m.counts.actionRequired} label="to review" tone="attention" />
-        <Count n={m.counts.unverified} label="unverified" tone="attention" />
-        <Count n={m.counts.blocked} label="blocked" tone="critical" />
-        {m.counts.excluded > 0 && <Count n={m.counts.excluded} label="excluded" tone="neutral" />}
-      </div>
-
-      {/* Pipeline gates — each labelled with its own state (the reconciliation made explicit) */}
-      <GateStrip m={m} />
-    </section>
-  );
-}
-
-function NextActionControl({ m, periodQS, na }: { m: PayrollReadinessModel; periodQS: string; na: PayrollReadinessModel["nextAction"] }): React.JSX.Element {
-  // Hours gate → the real Sync control (dedupe + progress). Navigable gates (incl. reviewing + approving
-  // timesheets in-app) → a Link. A step that still happens OUTSIDE the app (submit in Gusto) → a labelled
-  // static control, never a dead link.
-  if (na.gate === "hours") {
-    return (
-      <div className="flex flex-col items-end gap-1">
-        <SyncButton period={m.period} label="Sync hours" variant="primary" />
-        <span className="max-w-[15rem] text-right text-[11px] text-meta">{na.explain}</span>
-      </div>
-    );
-  }
-  const href = na.href ? (na.href.includes("?") ? `${na.href}${periodQS}` : `${na.href}${periodQS ? `?${periodQS.slice(1)}` : ""}`) : null;
-  return (
-    <div className="flex flex-col items-end gap-1">
-      {href ? (
-        <Link href={href} className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-foreground px-4 text-[13px] font-medium text-background transition-opacity hover:opacity-90">
-          <ArrowRight className="size-4" aria-hidden /> {na.label}
-        </Link>
-      ) : (
-        <span className={`inline-flex h-9 items-center justify-center gap-2 rounded-md border px-4 text-[13px] font-medium ${TONE_BADGE.attention}`}>
-          <CircleAlert className="size-4" aria-hidden /> {na.label}
-        </span>
-      )}
-      <span className="max-w-[16rem] text-right text-[11px] leading-snug text-meta">{na.explain}</span>
-    </div>
-  );
-}
-
-const GATE_STATE_UI: Record<GateState, { dot: string; label: string; tone: PayrollTone }> = {
-  PASS: { dot: "bg-positive", label: "Done", tone: "positive" },
-  ACTION: { dot: "bg-attention", label: "Action", tone: "attention" },
-  UNVERIFIED: { dot: "bg-attention", label: "Unverified", tone: "attention" },
-  BLOCKED: { dot: "bg-critical", label: "Blocked", tone: "critical" },
-  UNAVAILABLE: { dot: "bg-critical", label: "Unavailable", tone: "critical" },
-  PENDING: { dot: "bg-[var(--bar)]", label: "Pending", tone: "neutral" },
-  NA: { dot: "bg-[var(--bar)]", label: "—", tone: "neutral" },
-};
-function GateStrip({ m }: { m: PayrollReadinessModel }): React.JSX.Element {
-  return (
-    <div className="mt-3 border-t border-rule pt-3">
-      <h3 className="mb-2 text-[10.5px] uppercase tracking-[0.1em] text-meta">Payroll workflow</h3>
-      <ol className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 lg:grid-cols-5">
-      {m.gates.map((g) => {
-        const ui = GATE_STATE_UI[g.state];
-        return (
-          <li key={g.key} className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <span className={`size-2 shrink-0 rounded-full ${ui.dot}`} aria-hidden />
-              <span className="truncate text-[11.5px] font-medium text-secondary-text" title={g.label}>{g.label}</span>
-            </div>
-            <div className={`mt-0.5 pl-3.5 text-[10.5px] ${ui.tone === "positive" ? "text-positive" : ui.tone === "critical" ? "text-critical" : ui.tone === "attention" ? "text-attention" : "text-meta"}`}>
-              {ui.label}{g.affected > 0 ? ` · ${g.affected}` : ""}
-            </div>
-          </li>
-        );
-      })}
-      </ol>
-    </div>
-  );
-}
-
-function Count({ n, label, tone }: { n: number; label: string; tone: PayrollTone }): React.JSX.Element {
-  const c = tone === "positive" ? "text-positive" : tone === "attention" ? "text-attention" : tone === "critical" ? "text-critical" : "text-tertiary-text";
-  return <span className={c}><span className="font-semibold tabular-nums">{n}</span> <span className="text-meta">{label}</span></span>;
-}
-
-const SEV_CHIP: Record<AttentionGroup["severity"], { cls: string; label: string }> = {
-  blocker: { cls: "bg-critical/15 text-critical", label: "Blocker" },
-  review: { cls: "bg-attention/15 text-attention", label: "Review" },
-  unverified: { cls: "bg-attention/15 text-attention", label: "Unverified" },
-  setup: { cls: "bg-[var(--row)] text-tertiary-text", label: "Setup" },
-};
-function NeedsAttention({ m }: { m: PayrollReadinessModel }): React.JSX.Element {
-  const groups = m.attention;
-  return (
-    <section className="surface border p-4" aria-labelledby="needs-attn-h">
-      <div className="flex items-center justify-between gap-2">
-        <h2 id="needs-attn-h" className="text-[10.5px] uppercase tracking-[0.1em] text-meta">Needs attention</h2>
-        {groups.length > 0 && <Link href="/payroll?tab=exceptions" className="text-[11px] text-meta transition-colors hover:text-foreground">All exceptions →</Link>}
-      </div>
-      {groups.length === 0 ? (
-        <NeedsAttentionEmpty m={m} />
-      ) : (
-        <ul className="mt-3 flex flex-col divide-y divide-[var(--row-rule)]">
-          {groups.slice(0, 6).map((g) => {
-            const chip = SEV_CHIP[g.severity];
-            return (
-              <li key={g.code} className="py-2 first:pt-0">
-                <details className="group">
-                  <summary className="flex cursor-pointer list-none items-center gap-2.5">
-                    <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide ${chip.cls}`}>{chip.label}</span>
-                    <span className="min-w-0 flex-1 text-[12.5px] text-foreground">
-                      {g.title} <span className="text-meta">· {g.count} worker{g.count === 1 ? "" : "s"}</span>
-                    </span>
-                    {g.action.href ? (
-                      <Link href={g.action.href} className="shrink-0 rounded border border-border px-2 py-0.5 text-[11px] text-secondary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground">{g.action.label}</Link>
-                    ) : (
-                      <span className="shrink-0 rounded border border-border px-2 py-0.5 text-[11px] text-meta">{g.action.label}</span>
-                    )}
-                  </summary>
-                  <div className="mt-1.5 pl-[3.1rem] text-[11.5px] text-meta">
-                    {g.detail && <p className="mb-1">{g.detail}</p>}
-                    <span>{g.workers.map((w) => w.name).join(", ")}</span>
-                  </div>
-                </details>
-              </li>
-            );
-          })}
-          {groups.length > 6 && <li className="pt-2 text-[11px] text-meta">…and {groups.length - 6} more. <Link href="/payroll?tab=review" className="underline-offset-2 hover:underline">Open Payroll Review</Link>.</li>}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-// The empty "Needs attention" state, told honestly. Unavailable and stale sources must NEVER render as a
-// verified all-clear: an empty attention list only means "clear" when the time source actually reported.
-function NeedsAttentionEmpty({ m }: { m: PayrollReadinessModel }): React.JSX.Element {
-  if (!m.connecteamOk) {
-    return (
-      <div className="mt-3 flex items-start gap-2 text-[12.5px] text-attention">
-        <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
-        <span>Connecteam is unavailable, so no worker could be checked. This period is <span className="font-medium">unverified</span>, not clear. Retry the hours sync before relying on it.</span>
-      </div>
-    );
-  }
-  if (m.counts.included === 0) {
-    return (
-      <div className="mt-3 flex items-start gap-2 text-[12.5px] text-meta">
-        <HelpCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
-        <span>No worker hours were recorded for this completed week. Nothing to pay — a verified empty period, not a pending one.</span>
-      </div>
-    );
-  }
-  const gustoStale = m.sources.some((s) => s.key === "gusto" && s.state === "stale");
-  return (
-    <div className="mt-3 flex flex-col gap-1.5">
-      <div className="flex items-center gap-2 text-[12.5px] text-positive">
-        <CheckCircle2 className="size-4" aria-hidden /> All {m.counts.included} worker{m.counts.included === 1 ? "" : "s"} are clear for this period.
-      </div>
-      {gustoStale && (
-        <div className="flex items-start gap-2 text-[11.5px] text-attention">
-          <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          <span>Worker checks are clean, but the Gusto snapshot is stale, so pay rates may be out of date. Re-run the Gusto pull to verify rates.</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PeriodSummary({ m }: { m: PayrollReadinessModel }): React.JSX.Element {
-  const t = m.totals;
-  const grossSub = t.estGross == null ? "no costable rates" : t.estGrossPartial ? "floor · some rates missing" : "from hours × rate";
-  return (
-    <section className="surface border p-4" aria-labelledby="summary-h">
-      <h2 id="summary-h" className="text-[10.5px] uppercase tracking-[0.1em] text-meta">Period summary</h2>
-      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Workers in run" value={String(m.counts.included)} sub={`${m.counts.ready} ready · ${m.counts.excluded} excluded`} />
-        <Stat label="Recorded hours" value={hrs(t.hours)} sub={m.connecteamOk ? "actual · Connecteam" : "source unavailable"} tone={m.connecteamOk ? undefined : "attention"} />
-        <Stat label="Est. gross pay" value={t.estGross == null ? "unknown" : money(t.estGross)} sub={grossSub} tone={t.estGross == null ? "attention" : undefined} />
-        <Stat label="Approved hours" value={t.approvedHours == null ? "unknown" : hrs(t.approvedHours)} sub={m.approvalKnown ? "verified in Connecteam" : "approval not exposed"} tone={m.approvalKnown ? undefined : "attention"} />
-      </div>
-      <p className="mt-2.5 text-[11px] text-meta">
-        Estimated gross is hours × the known rate for costable workers — an in-app estimate, not a payroll cost or bank debit. Gusto applies its own stored rate on the actual run.
-      </p>
-    </section>
-  );
-}
-
-const ACTIVITY_DOT: Record<PayrollTone, string> = { positive: "bg-positive", attention: "bg-attention", critical: "bg-critical", neutral: "bg-[var(--bar)]" };
-function RecentActivity({ events }: { events: PayrollActivityEvent[] }): React.JSX.Element {
-  return (
-    <section className="surface border p-4" aria-labelledby="activity-h">
-      <h2 id="activity-h" className="text-[10.5px] uppercase tracking-[0.1em] text-meta">Recent payroll activity</h2>
-      {events.length === 0 ? (
-        <p className="mt-3 text-[12px] text-meta">No payroll activity recorded yet. Syncs, reviews, approvals and pushes appear here with who did them.</p>
-      ) : (
-        <ul className="mt-3 flex flex-col divide-y divide-[var(--row-rule)]">
-          {events.map((e) => (
-            <li key={e.id} className="flex items-center gap-2.5 py-1.5 first:pt-0 text-[12px]">
-              <span className={`size-1.5 shrink-0 rounded-full ${ACTIVITY_DOT[e.tone]}`} aria-hidden />
-              <span className="min-w-0 flex-1 truncate text-secondary-text">{e.label}{e.outcome ? <span className="text-meta"> · {e.outcome}</span> : ""}</span>
-              <span className="shrink-0 text-[11px] text-meta">{e.actor ?? "system"} · {relTime(e.at)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <p className="mt-2 text-[10.5px] text-meta">Zoe approval records a sign-off; it is distinct from the Gusto draft push and from payroll being submitted/processed in Gusto.</p>
-    </section>
-  );
-}
-
-// ── Right column ───────────────────────────────────────────────────────────────────────────────────────
-function ScheduleCard({ m }: { m: PayrollReadinessModel }): React.JSX.Element {
-  return (
-    <section className="surface border p-4" aria-labelledby="sched-h">
-      <h2 id="sched-h" className="flex items-center gap-1.5 text-[10.5px] uppercase tracking-[0.1em] text-meta"><CalendarClock className="size-3.5" aria-hidden /> Payroll schedule</h2>
-      <dl className="mt-2.5 space-y-2 text-[12px]">
-        <RailRow label="Payroll runs" value={m.schedule.deadlineLabel} />
-        <RailRow label="Readiness pre-check" value={m.schedule.precheckLabel ?? "off"} muted={!m.schedule.precheckLabel} />
-        <RailRow label="Auto hours-sync" value={m.schedule.autoSyncLabel ?? "off"} muted={!m.schedule.autoSyncLabel} />
-      </dl>
-      <p className="mt-2 text-[10.5px] text-meta">Payday isn&apos;t configured here, so it isn&apos;t shown. Set the schedule in Settings.</p>
-    </section>
-  );
-}
-
-const SRC_STATE: Record<PayrollSourceHealth["state"], { dot: string; label: string; cls: string }> = {
-  ok: { dot: "bg-positive", label: "OK", cls: "text-positive" },
-  stale: { dot: "bg-attention", label: "Stale", cls: "text-attention" },
-  unavailable: { dot: "bg-critical", label: "Unavailable", cls: "text-critical" },
-  idle: { dot: "bg-[var(--bar)]", label: "No pull", cls: "text-meta" },
-  off: { dot: "bg-[var(--bar)]", label: "Off", cls: "text-meta" },
-};
-function SourceHealthCard({ sources }: { sources: PayrollSourceHealth[] }): React.JSX.Element {
-  return (
-    <section className="surface border p-4" aria-labelledby="src-h">
-      <h2 id="src-h" className="flex items-center gap-1.5 text-[10.5px] uppercase tracking-[0.1em] text-meta"><Plug className="size-3.5" aria-hidden /> Data sources</h2>
-      <ul className="mt-2.5 space-y-2.5">
-        {sources.map((s) => {
-          const st = SRC_STATE[s.state];
-          return (
-            <li key={s.key} className="text-[12px]">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-medium text-foreground">{s.label}</span>
-                <span className={`inline-flex items-center gap-1.5 text-[11px] ${st.cls}`}><span className={`size-1.5 rounded-full ${st.dot}`} aria-hidden /> {st.label}</span>
-              </div>
-              <div className="text-[11px] text-meta">{s.role}</div>
-              <div className="mt-0.5 flex items-center justify-between gap-2 text-[11px] text-meta">
-                <span>{s.detail}{s.lastAt ? ` · ${relTime(s.lastAt)}` : ""}</span>
-                {s.fixHref && <Link href={s.fixHref} className="shrink-0 text-tertiary-text underline-offset-2 hover:text-foreground hover:underline">Fix</Link>}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-    </section>
-  );
-}
-
-function ConfigCard({ m }: { m: PayrollReadinessModel }): React.JSX.Element {
-  return (
-    <section className="surface border p-4" aria-labelledby="cfg-h">
-      <h2 id="cfg-h" className="flex items-center gap-1.5 text-[10.5px] uppercase tracking-[0.1em] text-meta"><SettingsIcon className="size-3.5" aria-hidden /> Automation</h2>
-      <dl className="mt-2.5 space-y-2 text-[12px]">
-        <RailRow label="Pre-check" value={m.schedule.precheckLabel ? "scheduled" : "manual only"} muted={!m.schedule.precheckLabel} />
-        <RailRow label="Auto-sync" value={m.schedule.autoSyncLabel ? "on" : "off"} muted={!m.schedule.autoSyncLabel} />
-      </dl>
-      <Link href="/payroll?tab=settings" className="mt-2.5 inline-flex items-center gap-1 text-[11.5px] text-tertiary-text transition-colors hover:text-foreground">Configure in Settings <ArrowRight className="size-3" aria-hidden /></Link>
-    </section>
-  );
-}
-
-// Honest, compact access to the AI Payroll Manager — NOT a claim that an agent is working. Replaces the
-// oversized "AI employees working here / COMING" panel.
-function AiManagerLink(): React.JSX.Element {
-  return (
-    <Link href="/ai-org/employees" className="surface flex items-center gap-2.5 border p-3 transition-colors hover:bg-[var(--row-hover)]">
-      <BrainCircuit className="size-4 text-meta" aria-hidden />
-      <span className="min-w-0 flex-1 text-[12px]">
-        <span className="font-medium text-secondary-text">AI Payroll Manager</span>
-        <span className="block text-[11px] text-meta">Not active — manage in AI Org</span>
-      </span>
-      <ArrowRight className="size-3.5 text-meta" aria-hidden />
-    </Link>
-  );
-}
-
-function RailRow({ label, value, muted }: { label: string; value: string; muted?: boolean }): React.JSX.Element {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <dt className="text-meta">{label}</dt>
-      <dd className={muted ? "text-meta" : "font-medium text-secondary-text"}>{value}</dd>
-    </div>
-  );
-}
-
-function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: "attention" }): React.JSX.Element {
-  return (
-    <div>
-      <div className="text-[10px] uppercase tracking-[0.08em] text-meta">{label}</div>
-      <div className={`mt-1 text-[17px] font-semibold tabular-nums leading-tight ${tone === "attention" ? "text-attention" : "text-foreground"}`}>{value}</div>
-      {sub && <div className="mt-0.5 text-[10.5px] text-meta">{sub}</div>}
-    </div>
-  );
+  const runs = listSyncRuns(20);
+  const lastRun = runs.find((r) => r.periodStart === period.start && r.periodEnd === period.end) ?? runs[0] ?? null;
+  const push = readGustoPushResult();
+  const submit = readGustoSubmitResult(periodKey(period.start, period.end));
+  const ledgers: OverviewLedgers = {
+    lastSync: lastRun ? { status: lastRun.status, at: lastRun.finishedAt ?? lastRun.startedAt, periodStart: lastRun.periodStart, periodEnd: lastRun.periodEnd, reviewCount: lastRun.reviewCount } : null,
+    lastPush: push ? { at: push.at, ok: push.ok, aborted: push.aborted, pushed: push.pushed, failed: push.failed, skipped: push.skipped, periodStart: push.periodStart, periodEnd: push.periodEnd } : null,
+    lastSubmit: submit ? { at: submit.at, ok: submit.ok, aborted: submit.aborted, submitted: submit.submitted, alreadySubmitted: submit.alreadySubmitted, errors: submit.errors } : null,
+  };
+  const view = buildOverviewView(m, ledgers, periodQS);
+  return <PayrollOverview view={view} period={m.period} gates={m.gates} sources={m.sources} schedule={m.schedule} activity={m.activity} />;
 }
 
 // ══ PAYROLL REVIEW ══════════════════════════════════════════════════════════════════════════════════════
@@ -600,16 +262,11 @@ async function ReviewTab({ period, weeksAgo }: {
   ];
 
   // Run summary (always the full run).
-  const blocked = m.workers.filter((w) => w.status === "BLOCKED").length;
-  const warnings = m.workers.filter((w) => w.status === "ACTION_REQUIRED" || w.status === "UNVERIFIED").length;
-  const contractors = m.workers.filter((w) => w.workerType === "US_CONTRACTOR" || w.workerType === "INTERNATIONAL_CONTRACTOR").length;
+  // The run-level line is the shared runReadiness() — Overview shows the exact same result.
+  const readiness = runReadiness(m);
+  const contractors = readiness.contractors;
   const totalHours = m.workers.reduce((s, w) => s + (w.hours ?? 0), 0);
   const payrollApproved = m.approval?.status === "APPROVED";
-  const readiness: { tone: Tone; text: string } =
-    blocked > 0 ? { tone: "critical", text: `${blocked} worker${blocked === 1 ? " is" : "s are"} blocked and won't be sent to Gusto until fixed or excluded.` }
-      : warnings > 0 ? { tone: "attention", text: `${warnings} worker${warnings === 1 ? " needs" : "s need"} review before approval.` }
-        : payrollApproved ? { tone: "positive", text: "Approved. Ready to run payroll." }
-          : { tone: "positive", text: "Every worker is ready. Run payroll approves and fills the Gusto draft." };
 
   // Run payroll + wire confirm (last completed week only; the submit itself is admin-only).
   const pushDisabled = gustoPushDisabled();
@@ -644,7 +301,7 @@ async function ReviewTab({ period, weeksAgo }: {
             <SummaryFigure label="Est. gross" value={m.totals.estGross == null ? "—" : `$${m.totals.estGross.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} />
           </div>
           <div className="mt-1.5 flex items-center gap-2 text-[12px]">
-            <StatusBadge tone={readiness.tone} size="sm">{readiness.tone === "positive" ? "Ready" : readiness.tone === "critical" ? "Blocked" : "Review"}</StatusBadge>
+            <StatusBadge tone={readiness.tone} size="sm">{readiness.label}</StatusBadge>
             <span className="text-secondary-text">{readiness.text}</span>
           </div>
           {contractors > 0 && <p className="mt-1 text-[11px] text-meta">{contractors} contractor{contractors === 1 ? " is" : "s are"} paid separately through Gusto contractor payments.</p>}
