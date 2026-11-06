@@ -361,8 +361,8 @@ function WorkerPanel({ worker: w, onClose, timesheetsOk, period, gustoMembers }:
               )}
             </section>
 
-            {/* Routine actions live here, not in the table. */}
-            <section className="flex flex-wrap items-center gap-2 border-t border-rule pt-3">
+            {/* Routine actions live here, not in the table. Right-aligned so the Exclude menu (which opens leftward) stays inside the panel. */}
+            <section className="flex flex-wrap items-center justify-end gap-2 border-t border-rule pt-3">
               {w.excluded ? (
                 <ExcludeControl workerKey={w.key} recordId={w.recordId} connecteamUserId={w.connecteamUserId} name={w.name} periodStart={period.start} periodEnd={period.end} excluded excludeMode={w.excludeMode} />
               ) : (
