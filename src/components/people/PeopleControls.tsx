@@ -115,19 +115,22 @@ export function VerifyConnecteamButton({ verified }: { verified: boolean }): Rea
   );
 }
 
-export function AddFromGustoControls({ id, name, policies, suggested }: {
-  id: string; name: string; policies: { id: string; name: string }[]; suggested: string;
+/** The "Add to People" cell for one New in Gusto row: pick the role in People, add, or stop tracking. */
+export function AddFromGustoCell({ id, name, policies, suggested, cellClass }: {
+  id: string; name: string; policies: { id: string; name: string }[]; suggested: string; cellClass: string;
 }): React.JSX.Element {
   const { busy, msg, post } = usePost();
   const [policy, setPolicy] = useState(suggested);
   return (
-    <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
-      <select aria-label={`Access policy for ${name}`} className="h-7 rounded-md border border-input bg-[var(--panel)] px-2 text-[12px] text-foreground" value={policy} onChange={(e) => setPolicy(e.target.value)}>
-        {policies.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-      </select>
-      <Button size="xs" disabled={busy} onClick={() => void post("/api/people/gusto", { action: "add", id, policyId: policy })}>{busy ? "Adding…" : "Add to People"}</Button>
-      <Button variant="ghost" size="xs" disabled={busy} onClick={() => void post("/api/people/gusto", { action: "hide", id })}>Not tracked here</Button>
-      <Note msg={msg} />
-    </span>
+    <td className={cellClass}>
+      <div className="flex w-[150px] flex-col items-stretch gap-1">
+        <select aria-label={`Role in People for ${name}`} className="h-7 w-full rounded-md border border-input bg-[var(--panel)] px-2 text-[12px] text-foreground" value={policy} onChange={(e) => setPolicy(e.target.value)}>
+          {policies.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <Button size="xs" disabled={busy} onClick={() => void post("/api/people/gusto", { action: "add", id, policyId: policy })}>{busy ? "Adding…" : "Add to People"}</Button>
+        <Button variant="ghost" size="xs" disabled={busy} onClick={() => void post("/api/people/gusto", { action: "hide", id })}>Not tracked here</Button>
+        {msg && <div className="whitespace-normal"><Note msg={msg} /></div>}
+      </div>
+    </td>
   );
 }
