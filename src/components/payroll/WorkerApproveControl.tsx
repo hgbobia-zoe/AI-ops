@@ -10,6 +10,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2 } from "lucide-react";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 interface FinalizeResult { locked?: number; failed?: number; na?: number }
 
@@ -24,6 +25,7 @@ export function WorkerApproveControl({
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; tone: "ok" | "bad" } | null>(null);
+  const [ask, confirmDialog] = useConfirm();
 
   function finalizeText(f: FinalizeResult | undefined): string {
     if (!f) return "";
@@ -34,7 +36,12 @@ export function WorkerApproveControl({
   }
 
   async function run(): Promise<void> {
-    if (!confirm(`Approve ${name}'s timesheet for this period?\n\nThis records the Zoe approval for this worker and locks (finalizes) their worked days in Connecteam. It does NOT submit or run payroll in Gusto.`)) return;
+    const ok = await ask({
+      title: `Approve ${name}'s timesheet?`,
+      body: <p>This records the Zoe approval for {name} and locks their days in Connecteam for this period. It does not submit payroll in Gusto.</p>,
+      confirmLabel: "Approve",
+    });
+    if (!ok) return;
     setBusy(true);
     setMsg(null);
     try {
@@ -66,6 +73,7 @@ export function WorkerApproveControl({
         <CheckCircle2 className="size-3.5" /> {busy ? "Approving…" : `Approve ${name.split(" ")[0]}'s timesheet`}
       </button>
       {msg && <span className={`text-[11px] ${msg.tone === "ok" ? "text-positive" : "text-critical"}`}>{msg.text}</span>}
+      {confirmDialog}
     </span>
   );
 }

@@ -110,6 +110,32 @@ describe("composeReadinessModel — states", () => {
     expect(m.nextAction.gate).toBe("gustoMapping");
   });
 
+  it("blocked workers held out of an otherwise approved run → APPROVED in amber, not red; mapping gate still BLOCKED", () => {
+    // The real case: 8 approved, 2 unmapped with unapproved time. The 2 are held out; the run can go ahead.
+    const m = compose({
+      workers: [
+        rv({ key: "ct:1", name: "A" }),
+        rv({ key: "ct:2", name: "B", mappingStatus: "UNMATCHED", issues: [BLOCKER] }),
+      ],
+      readiness: [rdw({ key: "ct:1", name: "A" }), rdw({ key: "ct:2", name: "B", unapprovedHours: 5, issues: [UNAPPROVED] })],
+      approval: { status: "APPROVED", approvedBy: "Lisa", approvedAt: "x" },
+    });
+    expect(m.status).toBe("APPROVED");
+    expect(m.tone).toBe("attention");
+    expect(m.headline).toBe("Payroll approved · 1 held out");
+    expect(m.gates.find((g) => g.key === "gustoMapping")?.state).toBe("BLOCKED");
+    expect(m.nextAction.label).toBe("Run payroll");
+  });
+
+  it("blocked workers do not hide a payable worker's own unapproved time", () => {
+    const m = compose({
+      workers: [rv({ key: "ct:1", name: "A" }), rv({ key: "ct:2", name: "B", mappingStatus: "UNMATCHED", issues: [BLOCKER] })],
+      readiness: [rdw({ key: "ct:1", name: "A", unapprovedHours: 2, issues: [UNAPPROVED] }), rdw({ key: "ct:2", name: "B" })],
+    });
+    expect(m.status).toBe("ACTION_REQUIRED");
+    expect(m.nextAction.gate).toBe("timesheetApproval");
+  });
+
   it("THE CONTRADICTION FIX: mapped + rate present but unapproved timesheet → NOT ready (ACTION_REQUIRED)", () => {
     // review.ts alone would call this worker READY (mapping only); the model reconciles in the Connecteam
     // source-approval gate, so it is ACTION_REQUIRED and the period is never silently READY.

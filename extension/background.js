@@ -448,6 +448,56 @@ async function startGustoSubmit(kind, payload) {
   return { ok: true, tabId: tab.id };
 }
 
+// ── Report a push/submit job that our page scripts could not report themselves ──────────────────────
+// Two cases leave the app waiting with nothing: (1) Gusto is signed out, so the hidden tab is redirected to
+// login.gusto.com, where none of our Gusto scripts run; (2) the script never claimed the job before the
+// watchdog fired. We POST the same result shape the page scripts send, so the app shows the reason at once.
+async function reportGustoJob(kind, job, aborted) {
+  try {
+    const { apiBase } = await cfg();
+    const period = (job && job.period) || {};
+    const confirmWire = kind === "submit" && job && job.kind === "confirm_wire";
+    const path = kind === "push" ? "/api/payroll/gusto/push-result"
+      : confirmWire ? "/api/payroll/gusto/confirm-wire-result" : "/api/payroll/gusto/submit-result";
+    const body = {
+      ok: false,
+      aborted,
+      periodStart: period.start || null,
+      periodEnd: period.end || null,
+      initiatedBy: (job && job.initiatedBy) || null,
+      workers: [],
+      errors: [],
+      submitted: false,
+      confirmed: false,
+    };
+    await fetch(apiBase + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  } catch (e) {
+    /* best-effort */
+  }
+}
+
+// Signed-out Gusto: show the job tab so the operator can sign in, stop the watchdog from closing it, and
+// report not_logged_in. The operator signs in there, then starts the step again from Zoe.
+const GUSTO_AUTH_URL_RE = /^https:\/\/(login|accounts|auth|sso)\.gusto\.com\//i;
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  const url = changeInfo && changeInfo.url;
+  if (!url || !GUSTO_AUTH_URL_RE.test(url)) return;
+  (async () => {
+    const push = await getGustoPush();
+    const submit = await getGustoSubmit();
+    let kind = null;
+    let job = null;
+    if (push && push.tabId === tabId) { kind = "push"; job = push.job; await detachGustoPush(); }
+    else if (submit && submit.tabId === tabId) { kind = "submit"; job = submit.job; await detachGustoSubmit(); }
+    if (!kind) return;
+    try {
+      const tab = await chrome.tabs.update(tabId, { active: true });
+      if (tab && tab.windowId != null) await chrome.windows.update(tab.windowId, { focused: true });
+    } catch (e) { /* tab gone */ }
+    await reportGustoJob(kind, job, "not_logged_in");
+  })();
+});
+
 /** Trigger one on-demand Gusto sync. Guards against a concurrent sync: if one is already in flight (and
  *  not stale), we leave it running instead of opening a second tab. */
 async function startGustoSync(reason) {
@@ -935,16 +985,24 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       if (p && Date.now() - p.startedAt > GUSTO_SYNC_TIMEOUT_MS - 1000) reapGustoSync(p);
     });
   } else if (alarm.name === GUSTO_PUSH_WATCHDOG) {
-    getGustoPush().then((p) => {
-      if (p && Date.now() - p.startedAt > GUSTO_PUSH_TIMEOUT_MS - 1000) reapGustoPush(p);
+    getGustoPush().then(async (p) => {
+      if (p && Date.now() - p.startedAt > GUSTO_PUSH_TIMEOUT_MS - 1000) {
+        // Never claimed = our script never ran in that tab, so nothing was reported. Say so instead of
+        // closing the tab silently (the app is waiting on a result).
+        if (!p.claimed) await reportGustoJob("push", p.job, "no_response");
+        reapGustoPush(p);
+      }
     });
   } else if (alarm.name === GUSTO_CONTRACTOR_WATCHDOG) {
     getGustoContractor().then((p) => {
       if (p && Date.now() - p.startedAt > GUSTO_CONTRACTOR_TIMEOUT_MS - 1000) reapGustoContractor(p);
     });
   } else if (alarm.name === GUSTO_SUBMIT_WATCHDOG) {
-    getGustoSubmit().then((p) => {
-      if (p && Date.now() - p.startedAt > GUSTO_SUBMIT_TIMEOUT_MS - 1000) reapGustoSubmit(p);
+    getGustoSubmit().then(async (p) => {
+      if (p && Date.now() - p.startedAt > GUSTO_SUBMIT_TIMEOUT_MS - 1000) {
+        if (!p.claimed) await reportGustoJob("submit", p.job, "no_response");
+        reapGustoSubmit(p);
+      }
     });
   }
 });

@@ -15,6 +15,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { BadgeCheck, Loader2 } from "lucide-react";
 import { EXTENSION_ID } from "@/lib/extensionId";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 const REFRESH_DELAY_MS = 12000;
 
@@ -58,6 +59,7 @@ export function ConfirmWireButton({
 }): React.JSX.Element {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [ask, confirmDialog] = useConfirm();
 
   async function confirm(): Promise<void> {
     const chromeApi = (window as unknown as { chrome?: ChromeRuntimeLike }).chrome;
@@ -69,14 +71,20 @@ export function ConfirmWireButton({
       return;
     }
 
-    const ok = window.confirm(
-      `Confirm the Gusto wire for ${period.label}?\n\n` +
-        `Pay period: ${period.start} to ${period.end}\n` +
-        `Amount: ${usd(amount)}\n` +
-        `Wire date: ${wireDate}\n\n` +
-        `Only do this after you have actually wired the funds to Gusto from Mercury. ` +
-        `Gusto's own wire amount is verified before confirming. Continue?`,
-    );
+    const ok = await ask({
+      title: `Confirm the Gusto wire for ${period.label}?`,
+      body: (
+        <>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+            <dt className="text-meta">Pay period</dt><dd>{period.start} to {period.end}</dd>
+            <dt className="text-meta">Amount</dt><dd>{usd(amount)}</dd>
+            <dt className="text-meta">Wire date</dt><dd>{wireDate}</dd>
+          </dl>
+          <p>Only do this after you have wired the funds to Gusto from Mercury. Gusto&apos;s own wire amount is checked before confirming.</p>
+        </>
+      ),
+      confirmLabel: "Confirm wire",
+    });
     if (!ok) return;
 
     setBusy(true);
@@ -132,6 +140,7 @@ export function ConfirmWireButton({
           `Confirm after wiring ${usd(amount)} from Mercury`
         )}
       </span>
+      {confirmDialog}
     </div>
   );
 }
