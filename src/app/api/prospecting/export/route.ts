@@ -1,7 +1,6 @@
-// Export due Tier-B email steps to the cold-email sequencer: returns a CSV (imports into Instantly /
-// Smartlead / Apollo / lemlist) and pushes to the configured provider when one is set. We never send
-// from here — the sequencer owns sending, warmup, throttling and unsubscribe on a separate warmed
-// domain. Gated to users who can manage settings.
+// Export due email steps as a CSV, for manual sending or a tool other than Smartlead. Skips the
+// do-not-contact list, contacts Sales OS owns, and leads already handed to Smartlead. Smartlead itself is
+// fed by the approved push (/api/prospecting/push), never from here. Gated to settings managers.
 
 import { NextResponse } from "next/server";
 import { exportEmailTasks } from "@/lib/prospecting/service";

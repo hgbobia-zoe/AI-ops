@@ -13,6 +13,7 @@ import { syncTouchpointNote, shortHash } from "@/lib/comms/noteSync";
 import { todayInOpsTz } from "@/lib/dates";
 import { logSalesEvent } from "./audit";
 import { flagOn } from "@/lib/flags";
+import { isSuppressed } from "@/lib/prospecting/store";
 
 export const SMS_MAX_LEN = 1000;
 const DEDUPE_MS = 120_000;
@@ -43,6 +44,8 @@ export async function sendLeadSms(input: { id: string; body: string; userId?: st
   if (!lead) return { ok: false, error: "lead not found" };
   const phone = (lead.clientPhone ?? "").trim();
   if (!phone) return { ok: false, error: "No phone number on file for this lead." };
+  // The shared do-not-contact list (a texted STOP lands there too) wins over any send.
+  if (isSuppressed({ phone, email: lead.clientEmail })) return { ok: false, error: "This number is on the do-not-contact list." };
 
   // Idempotency — never double-text the same message in quick succession.
   if (smsRecentlySent(phone, text, new Date(Date.now() - DEDUPE_MS).toISOString())) {

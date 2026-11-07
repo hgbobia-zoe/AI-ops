@@ -28,6 +28,8 @@ import { initialsOf } from "@/lib/salesos/noteFormat";
 import { logSalesEventBy } from "@/lib/salesos/audit";
 import { resolveAndStore, debriefCall } from "@/lib/salesos/stateService";
 import { todayInOpsTz } from "@/lib/dates";
+import { isOptOut } from "./optOut";
+import { addSuppression } from "@/lib/prospecting/store";
 import type { BookingView } from "@/lib/db/repo";
 
 export interface IngestCallInput extends CallEventInput {
@@ -260,6 +262,15 @@ export function ingestInboundSms(input: InboundSmsInput): InboundSmsResult {
     occurredAt: input.occurredAt ?? null,
   });
   if (!id) return { recorded: false, leadId, duplicate: true };
+
+  // A texted opt out joins the shared do-not-contact list, so no system texts this number again.
+  if (digits && isOptOut(input.body)) {
+    try {
+      addSuppression("phone", digits, "texted STOP", "Customer", new Date());
+    } catch {
+      /* never block ingestion */
+    }
+  }
 
   if (leadId) {
     logSalesEventBy("INBOUND_SMS", leadId, "Customer", { preview: input.body.slice(0, 140) });
