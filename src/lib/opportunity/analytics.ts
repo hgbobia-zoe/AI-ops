@@ -51,9 +51,10 @@ function accumulate(rows: OpportunityView[], keyOf: (v: OpportunityView) => stri
   return [...map.values()].sort((a, b) => b.total - a.total);
 }
 
-export function opportunityAnalytics(today: string = todayInOpsTz()): AnalyticsView {
+/** Real records only by default: demo / seed rows never count toward the funnel or pipeline. */
+export function opportunityAnalytics(today: string = todayInOpsTz(), opts: { includeSeed?: boolean } = {}): AnalyticsView {
   const board = opportunityBoard(today);
-  const rows = board.all;
+  const rows = opts.includeSeed ? board.all : board.all.filter((v) => !v.opp.isSeed);
 
   const funnel = STAGE_BUCKETS.map((s) => ({ key: s.key, label: s.label, count: rows.filter(s.match).length }));
 

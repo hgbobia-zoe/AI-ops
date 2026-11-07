@@ -48,6 +48,7 @@ import { syncLeadLogFromSlack, LEAD_LOG_JOB_KEY } from "@/lib/marketing/leadLog"
 import { getRiskQueue } from "@/lib/risk/store";
 import { viktorHealthNow, drainPendingInstructions } from "@/lib/ai/viktor/worker";
 import { runOutboxHealthTick } from "@/lib/aiorg/outboxHealth";
+import { runRadarCycle, radarCycleConfigured, RADAR_JOB_KEY } from "@/lib/opportunity/radarCycle";
 import { runExceptionResolutionTick } from "@/lib/exceptions/engine";
 import { runPostEventDigestIfDue, digestEnabled } from "@/lib/postevent/digest";
 import { countPendingInstructions } from "@/lib/ai/sessions";
@@ -457,6 +458,14 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     configured: digestEnabled, // on by default; POSTEVENT_DAILY_DIGEST=false is the kill switch
     note: "Once each morning (default 9am ET, POSTEVENT_DIGEST_HOUR; Monday to Saturday) the Customer Experience Bot posts one card listing the customers who need us today, service first: open issues, overdue follow ups, due today, ready for a review invite, each with its owner. Built from the same board cards as the Kanban, so every count is real. Silent when nothing is due; once per ET day (kv postevent.digest.lastSentYmd); a 4h morning window so a late restart never posts at night. Never contacts a customer.",
     run: async () => runPostEventDigestIfDue(),
+  },
+  {
+    key: RADAR_JOB_KEY,
+    label: "Opportunity Radar discovery (SAM.gov + event calendars)",
+    bucket: "server",
+    configured: radarCycleConfigured, // needs SAM_API_KEY and/or RADAR_ICS_FEEDS
+    note: "Pulls new federal solicitations for MD, DC and VA from SAM.gov once a day (RADAR_SAM_INTERVAL_HOURS, quota aware: at most RADAR_SAM_MAX_CALLS calls a pass, resumes where it stopped) and the configured public event calendars every 6 hours (RADAR_ICS_INTERVAL_HOURS). Everything goes through the same scoring and dedupe pipeline and lands on /radar. Discovery only: it never contacts anyone. A failing source turns this red and alerts ops once.",
+    run: async () => runRadarCycle(),
   },
   {
     key: "route",

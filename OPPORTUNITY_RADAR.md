@@ -85,7 +85,7 @@ portal = a registry row + an adapter; nothing downstream changes.
 - **BROWSER** — portals with no API are pulled by the **local browser agent**, which runs a defined
   per-source **workflow** (`sources/browser.ts`: search terms + geographic filters — no blind crawl),
   extracts rows, and POSTs them to **`POST /api/radar/ingest`** (CORS-locked, token-gated by
-  `RADAR_INGEST_TOKEN`, fail-open until set). One worked example: **Montgomery County**. eMMA /
+  `RADAR_INGEST_TOKEN`, fail-closed: 503 until set). One worked example: **Montgomery County**. eMMA /
   Rockville / Gaithersburg / DC are registered as disabled stubs for Phase 2.
 - **MANUAL** — human upload to the same endpoint.
 
@@ -191,7 +191,7 @@ set-aside). When awarded, it flags the awardee as the likely partner to approach
 | Env | Effect |
 |---|---|
 | `SAM_API_KEY` | Activates the live SAM.gov federal feed (dormant without it). |
-| `RADAR_INGEST_TOKEN` | Locks the browser-agent ingest endpoint (fail-open until set). |
+| `RADAR_INGEST_TOKEN` | Required by the browser-agent ingest and the manual cron / events-pull triggers (header `x-radar-token`; fail-closed, 503 until set). Scheduled discovery does not need it: it runs on the runtime clock (job `opportunity-radar`). |
 | `SLACK_ALERT_WEBHOOK_URL` / `alerts.slackWebhook` | Opportunity alerts (reuses the existing alerts channel). |
 | `ANTHROPIC_API_KEY` (or `LLM_BASE_URL`) | Turns on AI interpretation + outreach refinement; template-only fallback otherwise. |
 | `APIFY_TOKEN` (+ `APIFY_CONTACT_ACTOR`) | Contact enrichment for prospecting (find a missing email). Dormant otherwise. |
