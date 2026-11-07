@@ -29,6 +29,7 @@ import { logImport } from "@/lib/pull/state";
 import { logIntakeEvent } from "@/lib/intake/audit";
 import { notify } from "@/lib/notify/channels";
 import { adaptLeadBody, newLeadSlackText } from "@/lib/intake/sourceAdapters";
+import { parseLeadBodyText } from "@/lib/intake/lenientBody";
 import { postNewLeadToSlack } from "@/lib/intake/leadSlackReply";
 import { sendSms } from "@/lib/notify/sms";
 import { webLeadSmsApplies, webLeadSmsEnabled, webLeadSmsText } from "@/lib/intake/webLead";
@@ -68,10 +69,16 @@ export async function POST(req: Request): Promise<NextResponse> {
   const fail = (error: string, status: number) =>
     NextResponse.json(soft ? { ok: false, created: false, error } : { error }, { status: soft ? 200 : status, headers: CORS });
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
+  // Lenient: a Zap that pastes form fields into a JSON template breaks on a message with a line break or a
+  // quote. Read those bodies anyway rather than losing the lead.
+  const text = await req.text().catch(() => "");
+  const body = parseLeadBodyText(text, req.headers.get("content-type") ?? "");
+  if (body == null) {
+    try {
+      logImport(`intake:${url.searchParams.get("source") || "unknown"}`, false, { rowsIn: 1, rowsWritten: 0, detail: `unreadable body (${text.length} chars)` });
+    } catch {
+      /* observability only */
+    }
     return fail("invalid_json", 400);
   }
   const { input: raw, yelp } = adaptLeadBody(body, url.searchParams.get("source") ?? "");
