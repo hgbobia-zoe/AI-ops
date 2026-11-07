@@ -3,11 +3,15 @@
 // Runs SERVER-SIDE (no browser needed) — today that's SAM.gov (federal solicitations); browser-agent
 // procurement sources are fed separately via /api/radar/ingest.
 //
-// Auth: RADAR_INGEST_TOKEN (the one radar token) via ?token= or the x-radar-token header. Fails OPEN
-// only when the token is unset (dev); once set, a caller must present it. Public in the proxy (token,
-// not a session). Idempotent — re-running upserts in place, so a scheduler can hit it freely.
+// The app runs this cycle on its own runtime clock (job "opportunity-radar"); this endpoint is only a
+// manual / external trigger. Note it ignores the per-source cadence, so each call spends SAM.gov quota.
+//
+// Auth: RADAR_INGEST_TOKEN in the x-radar-token header (or Bearer). FAIL CLOSED: 503 when the token is
+// unset, 401 when wrong; a ?token= query string is not accepted. Public in the proxy (token, not a
+// session). Idempotent: re-running upserts in place.
 
 import { NextResponse } from "next/server";
+import { requireMachineToken } from "@/lib/auth/machineToken";
 import { runOpportunitySource } from "@/lib/opportunity/ingest";
 import { samGovSource, samGovConfigured } from "@/lib/opportunity/sources/samgov";
 import { syncEventOpportunities } from "@/lib/opportunity/eventBridge";
@@ -17,11 +21,8 @@ import { configuredIcsSources, icsFeedsConfigured } from "@/lib/radar/sources/ic
 export const dynamic = "force-dynamic";
 
 async function run(req: Request): Promise<NextResponse> {
-  const token = process.env.RADAR_INGEST_TOKEN;
-  if (token) {
-    const provided = req.headers.get("x-radar-token") || new URL(req.url).searchParams.get("token") || "";
-    if (provided !== token) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const denied = requireMachineToken(req, { env: "RADAR_INGEST_TOKEN", header: "x-radar-token", bearer: true });
+  if (denied) return denied;
 
   const ran: Record<string, unknown>[] = [];
   // Configured API sources. SAM.gov is the only one today; add future API adapters to this list.

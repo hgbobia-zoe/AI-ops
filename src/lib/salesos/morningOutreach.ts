@@ -24,6 +24,7 @@ import { openQuoteCards, SUBSTATUS_LABEL, type OpenQuoteSubStatus } from "./bulk
 import { ensureLeadThreadSynced } from "@/lib/comms/openphoneSync";
 import { getOpenphonePhoneNumbers, listOpenphoneCalls, openphoneApiKey, type QuoNumber } from "@/lib/comms/openphone";
 import { botAnnounce, appUrl, type BotCard } from "@/lib/notify/aiBots";
+import { STOP_RE } from "@/lib/comms/optOut";
 import { todayInOpsTz, shiftYmd, opsLocalInputToIso, DISPLAY_TZ } from "@/lib/dates";
 import { getJson, setJson } from "@/lib/kv";
 
@@ -118,8 +119,7 @@ export function followUpEveryDays(daysToEvent: number | null): number {
   return (CADENCE.find((c) => daysToEvent <= c.maxDaysOut) ?? CADENCE[CADENCE.length - 1]).everyDays;
 }
 
-// A bare "STOP" reply, or an explicit opt out phrase ("stop by Friday" is not an opt out).
-const STOP_RE = /^\s*(stop|unsubscribe|end|quit)\W*$|\b(unsubscribe|stop texting|do not (text|contact) (me|us)|don'?t (text|contact) (me|us)|remove me)\b/i;
+// STOP_RE (a bare "STOP" reply, or an explicit opt out phrase) is the shared definition in comms/optOut.
 const DONE_RE =
   /\b(went with (another|someone|a different)|booked (with )?(another|someone else|a different)|found (another|someone)|no longer (need|interested)|not interested|we('| a)re (all set|good)|cancel(l)?ing|cancelled the event|decided not to)\b/i;
 

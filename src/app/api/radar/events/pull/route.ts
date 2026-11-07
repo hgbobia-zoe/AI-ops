@@ -4,14 +4,15 @@
 // (runSource → radar_events), then bridges the results into the unified Opportunity layer so new events
 // surface on the board and can be handed to Sales OS.
 //
-// Auth: RADAR_INGEST_TOKEN (the one radar token) via ?token= or the x-radar-token header. Fails OPEN
-// only when the token is unset (dev); once set, a caller must present it. Idempotent — re-running upserts
-// events in place by their stable ICS UID, so a scheduler can hit it freely without creating duplicates.
+// Auth: RADAR_INGEST_TOKEN in the x-radar-token header (or Bearer). FAIL CLOSED: 503 when unset, 401
+// when wrong; no ?token= query string. Idempotent: re-running upserts events in place by their stable
+// ICS UID. The runtime clock (job "opportunity-radar") already runs these feeds on a schedule.
 //
 // Dormant until RADAR_ICS_FEEDS is configured — the response says so explicitly, which is the exact,
 // documented blocker (one or more public .ics feed URLs; no paid key).
 
 import { NextResponse } from "next/server";
+import { requireMachineToken } from "@/lib/auth/machineToken";
 import { runSource } from "@/lib/radar/ingest";
 import { configuredIcsSources, icsFeedsConfigured } from "@/lib/radar/sources/ics";
 import { syncEventOpportunities } from "@/lib/opportunity/eventBridge";
@@ -19,11 +20,8 @@ import { syncEventOpportunities } from "@/lib/opportunity/eventBridge";
 export const dynamic = "force-dynamic";
 
 async function run(req: Request): Promise<NextResponse> {
-  const token = process.env.RADAR_INGEST_TOKEN;
-  if (token) {
-    const provided = req.headers.get("x-radar-token") || new URL(req.url).searchParams.get("token") || "";
-    if (provided !== token) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const denied = requireMachineToken(req, { env: "RADAR_INGEST_TOKEN", header: "x-radar-token", bearer: true });
+  if (denied) return denied;
 
   if (!icsFeedsConfigured()) {
     return NextResponse.json({

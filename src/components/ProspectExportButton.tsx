@@ -15,16 +15,16 @@ export function ProspectExportButton() {
     setBusy(true);
     try {
       const res = await fetch("/api/prospecting/export", { method: "POST" });
-      const data = (await res.json()) as { csv?: string; count?: number; pushed?: number; pushSkipped?: boolean; provider?: string; error?: string };
+      const data = (await res.json()) as { csv?: string; count?: number; skippedOwned?: number; error?: string };
       if (!res.ok) throw new Error(data.error);
-      if (!data.count) { toast.message("No email steps are due for export"); return; }
+      if (!data.count) { toast.message(data.skippedOwned ? `No email steps to export (${data.skippedOwned} skipped: Sales OS owns them)` : "No email steps are due for export"); return; }
       // Download the CSV.
       const blob = new Blob([data.csv ?? ""], { type: "text/csv" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = `zoe-prospecting-${new Date().toISOString().slice(0, 10)}.csv`;
       a.click(); URL.revokeObjectURL(url);
-      toast.success(data.pushSkipped ? `${data.count} exported to CSV (no sequencer connected)` : `${data.count} exported · ${data.pushed} pushed to ${data.provider}`);
+      toast.success(`${data.count} email steps exported to CSV${data.skippedOwned ? ` (${data.skippedOwned} skipped: Sales OS owns them)` : ""}`);
       router.refresh();
     } catch (e) {
       toast.error((e as Error).message || "Export failed");
@@ -32,5 +32,5 @@ export function ProspectExportButton() {
       setBusy(false);
     }
   }
-  return <button onClick={run} disabled={busy} className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1 text-[12px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50"><Download className="size-3.5" /> {busy ? "Exporting…" : "Export email steps"}</button>;
+  return <button onClick={run} disabled={busy} className="inline-flex items-center gap-1.5 rounded border border-border px-2.5 py-1 text-[12px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50"><Download className="size-3.5" /> {busy ? "Exporting…" : "Export CSV"}</button>;
 }

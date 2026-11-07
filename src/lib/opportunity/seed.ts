@@ -8,7 +8,7 @@ import { runOpportunitySource, type OpportunitySource, type RawOpportunity } fro
 import { getOpportunityCount } from "./store";
 import { syncEventOpportunities } from "./eventBridge";
 import { enrichEntityMatches } from "./relationship";
-import { samGovSource, samGovConfigured } from "./sources/samgov";
+import { samGovConfigured } from "./sources/samgov";
 import { BROWSER_WORKFLOWS } from "./sources/browser";
 import { icsFeedsFromEnv } from "@/lib/radar/sources/ics";
 
@@ -18,7 +18,7 @@ interface SourceRow {
   acquisition_method: string; auth_status: string; frequency: string; adapter: string | null; is_seed: number;
 }
 
-function registerSources(now: Date): void {
+export function registerSources(now: Date): void {
   const db = getDb();
   const ts = now.toISOString();
   const rows: SourceRow[] = [
@@ -133,28 +133,24 @@ const SEED_SOURCE: OpportunitySource = {
   acquire: () => SEED_OPPS,
 };
 
-/** Idempotently register sources, bridge events, and seed the demo dataset when empty. */
+/** Idempotently register sources, bridge events, and seed the demo dataset ONLY into an empty database.
+ *  Real data (an import, a live pull) is never topped up with demo rows. */
 export async function seedOpportunitiesIfEmpty(now: Date = new Date()): Promise<boolean> {
   registerSources(now);
   syncEventOpportunities(now);
-  if (getOpportunityCount() === 0 || onlyEventOpportunities()) {
+  if (getOpportunityCount() === 0) {
     await runOpportunitySource(SEED_SOURCE, now);
     return true;
   }
   return false;
 }
 
-function onlyEventOpportunities(): boolean {
-  const n = (getDb().prepare("SELECT COUNT(*) AS n FROM opportunities WHERE kind != 'EVENT'").get() as { n: number }).n;
-  return n === 0;
-}
-
-/** Refresh on load: bridge new events + pull any live connectors that are configured (SAM.gov), then
- *  re-match discovered entities to Zoe customer history. */
+/** Refresh on page load: bridge new events and re-match entities to Zoe customer history. Live
+ *  connectors (SAM.gov, ICS) are NOT pulled here: they run on the runtime clock (opportunity-radar job),
+ *  because SAM.gov allows only a handful of calls a day and a page load must stay fast. */
 export async function refreshOpportunities(now: Date = new Date()): Promise<void> {
   registerSources(now);
   syncEventOpportunities(now);
-  if (samGovConfigured()) await runOpportunitySource(samGovSource(), now);
   try { enrichEntityMatches(); } catch { /* non-fatal */ }
 }
 

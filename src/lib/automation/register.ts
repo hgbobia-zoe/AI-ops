@@ -28,6 +28,7 @@ const JOB_AREA: Record<string, JobArea> = {
   "sales-action-items": "Sales",
   "morning-outreach": "Sales",
   "postevent-digest": "Sales", // Post-Event sits under Sales in the nav
+  "opportunity-radar": "Sales", // business development discovery
   instawork: "Crew & scheduling",
   connecteam: "Crew & scheduling",
   "connecteam-sync": "Crew & scheduling",
