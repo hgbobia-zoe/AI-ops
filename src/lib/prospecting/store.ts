@@ -18,6 +18,9 @@ export interface StoredEnrollment {
   nextActionAt: string | null;
   startedAt: string;
   updatedAt: string;
+  sequencerProvider?: string | null;
+  sequencerPushedAt?: string | null;
+  sequencerPushedBy?: string | null;
 }
 
 export interface StoredTask {
@@ -39,7 +42,12 @@ export interface StoredTask {
 }
 
 function toEnrollment(r: any): StoredEnrollment {
-  return { id: r.id, opportunityId: r.opportunity_id, entityId: r.entity_id ?? null, tier: r.tier, cadenceKey: r.cadence_key, channel: r.channel, status: r.status, owner: r.owner ?? null, nextActionAt: r.next_action_at ?? null, startedAt: r.started_at, updatedAt: r.updated_at };
+  return { id: r.id, opportunityId: r.opportunity_id, entityId: r.entity_id ?? null, tier: r.tier, cadenceKey: r.cadence_key, channel: r.channel, status: r.status, owner: r.owner ?? null, nextActionAt: r.next_action_at ?? null, startedAt: r.started_at, updatedAt: r.updated_at, sequencerProvider: r.sequencer_provider ?? null, sequencerPushedAt: r.sequencer_pushed_at ?? null, sequencerPushedBy: r.sequencer_pushed_by ?? null };
+}
+
+/** Record that a person approved the hand off and the sequencer accepted the lead. */
+export function markEnrollmentPushed(id: string, provider: string, by: string | null, now: Date): void {
+  getDb().prepare("UPDATE prospect_enrollments SET sequencer_provider=?, sequencer_pushed_at=?, sequencer_pushed_by=?, updated_at=? WHERE id=?").run(provider, now.toISOString(), by, now.toISOString(), id);
 }
 function toTask(r: any): StoredTask {
   return { id: r.id, enrollmentId: r.enrollment_id, opportunityId: r.opportunity_id, entityId: r.entity_id ?? null, channel: r.channel, stepIndex: r.step_index, dueAt: r.due_at, status: r.status, subject: r.subject ?? null, body: r.body ?? null, script: r.script ?? null, outcome: r.outcome ?? null, completedBy: r.completed_by ?? null, completedAt: r.completed_at ?? null, exportedAt: r.exported_at ?? null };
@@ -124,17 +132,33 @@ export function repliedOpportunityIds(): Set<string> {
 }
 
 // ── Suppression ───────────────────────────────────────────────────────────────────────────────────
-export interface SuppressionRow { id: string; kind: string; value: string; reason: string | null; createdAt: string }
-export function addSuppression(kind: "email" | "domain" | "company", value: string, reason: string | null, by: string | null, now: Date): void {
+// The ONE do-not-contact list, shared by Radar prospecting and Sales OS (texts check phones here too).
+export type SuppressionKind = "email" | "domain" | "company" | "phone";
+export const SUPPRESSION_KINDS: SuppressionKind[] = ["email", "domain", "company", "phone"];
+export interface SuppressionRow { id: string; kind: string; value: string; reason: string | null; createdBy: string | null; createdAt: string }
+
+/** PURE. Normalize a value for its kind: lowercase, phones to their last 10 digits. */
+export function normalizeSuppressionValue(kind: SuppressionKind, value: string): string {
+  const v = value.trim().toLowerCase();
+  if (kind === "phone") return v.replace(/\D/g, "").slice(-10);
+  if (kind === "domain") return v.replace(/^@/, "").replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+  return v;
+}
+export function addSuppression(kind: SuppressionKind, value: string, reason: string | null, by: string | null, now: Date): void {
+  const v = normalizeSuppressionValue(kind, value);
+  if (!v) return;
   getDb().prepare("INSERT OR IGNORE INTO prospect_suppression (id, kind, value, reason, created_by, created_at) VALUES (?,?,?,?,?,?)")
-    .run(`SUP-${randomUUID()}`, kind, value.trim().toLowerCase(), reason, by, now.toISOString());
+    .run(`SUP-${randomUUID()}`, kind, v, reason, by, now.toISOString());
+}
+export function removeSuppression(id: string): boolean {
+  return getDb().prepare("DELETE FROM prospect_suppression WHERE id=?").run(id).changes > 0;
 }
 export function getSuppression(): SuppressionRow[] {
-  return (getDb().prepare("SELECT id, kind, value, reason, created_at FROM prospect_suppression ORDER BY created_at DESC").all() as any[])
-    .map((r) => ({ id: r.id, kind: r.kind, value: r.value, reason: r.reason ?? null, createdAt: r.created_at }));
+  return (getDb().prepare("SELECT id, kind, value, reason, created_by, created_at FROM prospect_suppression ORDER BY created_at DESC").all() as any[])
+    .map((r) => ({ id: r.id, kind: r.kind, value: r.value, reason: r.reason ?? null, createdBy: r.created_by ?? null, createdAt: r.created_at }));
 }
-/** Is a contact suppressed? Checks email, its domain, and the company name. */
-export function isSuppressed(opts: { email?: string | null; company?: string | null }): boolean {
+/** Is a contact suppressed? Checks email, its domain, the company name and the phone number. */
+export function isSuppressed(opts: { email?: string | null; company?: string | null; phone?: string | null }): boolean {
   const db = getDb();
   const email = opts.email?.trim().toLowerCase();
   if (email) {
@@ -144,6 +168,8 @@ export function isSuppressed(opts: { email?: string | null; company?: string | n
   }
   const company = opts.company?.trim().toLowerCase();
   if (company && db.prepare("SELECT 1 FROM prospect_suppression WHERE kind='company' AND value=?").get(company)) return true;
+  const phone = opts.phone ? normalizeSuppressionValue("phone", opts.phone) : "";
+  if (phone.length === 10 && db.prepare("SELECT 1 FROM prospect_suppression WHERE kind='phone' AND value=?").get(phone)) return true;
   return false;
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */

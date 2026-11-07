@@ -11,9 +11,11 @@ import { worklist, type WorklistCard } from "@/lib/prospecting/service";
 import { seedOpportunitiesIfEmpty, refreshOpportunities } from "@/lib/opportunity/seed";
 import { seedRadarIfEmpty } from "@/lib/radar/seed";
 import { JURISDICTION_LABEL } from "@/lib/opportunity/types";
-import { sequencerConfigured } from "@/lib/prospecting/sequencer";
 import { apifyConfigured } from "@/lib/prospecting/enrich";
 import { todayInOpsTz } from "@/lib/dates";
+import { SmartleadSettings, SmartleadPushReview, DoNotContactList } from "@/components/ProspectingSmartlead";
+import { viewerRole } from "@/lib/auth/getSession";
+import { canManageSettings } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +51,7 @@ export default async function OutreachWorklistPage(): Promise<React.JSX.Element>
   try { await refreshOpportunities(); } catch { /* ignore */ }
 
   const wl = worklist();
+  const manage = canManageSettings(await viewerRole());
   const figures: Figure[] = [
     { label: "To do today", value: wl.counts.total, tone: wl.counts.total ? "attention" : "default" },
     { label: "Calls", value: wl.counts.call },
@@ -57,17 +60,23 @@ export default async function OutreachWorklistPage(): Promise<React.JSX.Element>
   ];
 
   return (
-    <main className="p-6">
+    <main className="p-4 sm:p-6">
       <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
-        <div><h1 className="text-[22px] font-medium tracking-tight">Outreach worklist</h1><p className="text-[12.5px] text-meta">Prospecting worklist — cold outreach before Goodshuffle. Tier A = call first, Tier B = email sequence.</p></div>
-        <div className="flex items-center gap-3"><FigureStrip figures={figures} /><ProspectExportButton /></div>
+        <div><h1 className="text-[22px] font-medium tracking-tight">Outreach worklist</h1><p className="text-[12.5px] text-meta">Cold outreach to new prospects. Tier A = call first, Tier B = Smartlead email sequence. Existing customers and open leads belong to Sales OS and never show up here.</p></div>
+        <div className="flex flex-wrap items-center gap-3"><FigureStrip figures={figures} />{manage && <ProspectExportButton />}</div>
       </header>
 
       <div className="mb-4 flex flex-wrap gap-3 text-[11.5px] text-meta">
         <span>Contact enrichment (Apify): <span className={apifyConfigured() ? "text-positive" : "text-meta"}>{apifyConfigured() ? "connected" : "off"}</span></span>
-        <span>Email sequencer: <span className={sequencerConfigured() ? "text-positive" : "text-meta"}>{sequencerConfigured() ? "connected" : "CSV export only"}</span></span>
         <span className="text-meta">Today: {todayInOpsTz()}</span>
       </div>
+
+      {manage && (
+        <>
+          <SmartleadSettings />
+          <div className="mb-6"><SmartleadPushReview /></div>
+        </>
+      )}
 
       {wl.counts.total === 0 ? (
         <p className="text-[13px] text-meta">Nothing due. Route qualified opportunities from the dashboard into prospecting to build the worklist.</p>
@@ -85,6 +94,8 @@ export default async function OutreachWorklistPage(): Promise<React.JSX.Element>
           </section>
         </>
       )}
+
+      <DoNotContactList canRemove={manage} />
     </main>
   );
 }

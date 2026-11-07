@@ -2402,6 +2402,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "radar_sources", column: "last_failure_at", type: "TEXT" }, // ISO of the last failed run
   { table: "opportunities", column: "expected_attendance", type: "INTEGER" }, // known/estimated size (drives the size score) — from a source or manual import
   { table: "opportunities", column: "attendance_confidence", type: "TEXT" }, // VERIFIED | INFERRED | UNKNOWN
+  { table: "prospect_enrollments", column: "sequencer_provider", type: "TEXT" }, // e.g. "smartlead" once the lead was handed to the sequencer
+  { table: "prospect_enrollments", column: "sequencer_pushed_at", type: "TEXT" }, // ISO, when a person approved and the sequencer accepted the lead
+  { table: "prospect_enrollments", column: "sequencer_pushed_by", type: "TEXT" }, // who approved the push
   // Creative Engine async providers (n8n): per-generation callback credential + the provider's run id.
   { table: "creative_generations", column: "callback_token", type: "TEXT" },
   { table: "creative_generations", column: "external_ref", type: "TEXT" },
