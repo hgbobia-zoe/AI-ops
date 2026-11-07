@@ -169,14 +169,14 @@ describe("registry integrity", () => {
     }
   });
 
-  it("the honest backing split matches the design doc (11 live, 1 seed, 7 partial, 3 coming)", () => {
+  it("the honest backing split (11 live, 0 seed, 8 partial, 3 coming): Radar demo data removed 2026-11-07", () => {
     const by = { live: 0, seed: 0, partial: 0, coming: 0 };
     for (const e of AI_EMPLOYEES) by[e.backing]++;
-    expect(by).toEqual({ live: 11, seed: 1, partial: 7, coming: 3 });
+    expect(by).toEqual({ live: 11, seed: 0, partial: 8, coming: 3 });
   });
 
-  it("badges Event Radar as SEED and Hiring + Competitive Intelligence as COMING", () => {
-    expect(AI_EMPLOYEES.find((e) => e.id === "event-radar")?.backing).toBe("seed");
+  it("badges Event Radar as PARTIAL (real records, feeds pending keys) and Hiring + Competitive Intelligence as COMING", () => {
+    expect(AI_EMPLOYEES.find((e) => e.id === "event-radar")?.backing).toBe("partial");
     expect(AI_EMPLOYEES.find((e) => e.id === "hiring")?.backing).toBe("coming");
     expect(AI_EMPLOYEES.find((e) => e.id === "competitive-intelligence")?.backing).toBe("coming");
   });

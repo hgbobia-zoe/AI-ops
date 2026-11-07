@@ -40,11 +40,6 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function fmtRange(v: { low: number; high: number }): string {
-  const f = (n: number) => `$${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
-  return `${f(v.low)}–${f(v.high)}`;
-}
-
 export default async function RadarEventDetailPage({ params }: { params: Promise<{ id: string }> }): Promise<React.JSX.Element> {
   const { id } = await params;
   const today = todayInOpsTz();
@@ -128,7 +123,7 @@ export default async function RadarEventDetailPage({ params }: { params: Promise
                 <span className="tabular-nums"><ScorePill score={q.rentalFitScore} tier={q.tier} /> <span className="text-meta">/ 100 · {q.tier}</span></span>
               </div>
               <p className="mt-2 text-[12px] text-meta">
-                Indicative rental spend: {q.estimatedValue ? <span className="text-tertiary-text">{fmtRange(q.estimatedValue)}</span> : <span>unavailable — attendance not known</span>}. A coarse range from attendance × category, not a revenue prediction.
+                Value: No value data. Radar shows a dollar value only when a source states one.
               </p>
             </div>
           </Section>

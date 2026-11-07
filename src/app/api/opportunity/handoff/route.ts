@@ -1,14 +1,16 @@
-// Opportunity Radar → Sales OS handoff. The opportunity stays the source record; this marks the bridge
-// (sales_status + optional booking link) and advances the stage. Idempotent. Proxy-gated; attributed.
+// Opportunity Radar → Goodshuffle conversion, INTENT ONLY. A person confirms the prospect's intent
+// (replied interested, meeting booked, asked for a quote) and the contact; then a Goodshuffle project is
+// queued through the existing create_project pipeline, or the contact's existing project is linked.
+// Never automatic. Attributed to the signed-in person and audited. See src/lib/opportunity/conversion.ts.
 
 import { NextResponse } from "next/server";
-import { getOpportunity, createHandoff } from "@/lib/opportunity/store";
+import { convertOpportunity, type IntentKind } from "@/lib/opportunity/conversion";
 import { currentActor } from "@/lib/auth/getSession";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request): Promise<NextResponse> {
-  let body: { id?: string; bookingId?: string; nextAction?: string };
+  let body: { id?: string; intent?: { kind?: string; note?: string }; contact?: Partial<Record<"firstName" | "lastName" | "email" | "phone", string>> };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -16,9 +18,13 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
   const id = (body.id ?? "").trim();
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
-  if (!getOpportunity(id)) return NextResponse.json({ error: "opportunity not found" }, { status: 404 });
-
-  await currentActor(); // ensures a signed-in context; attribution reserved for future audit
-  const opp = createHandoff(id, { bookingId: body.bookingId?.trim() || undefined, nextAction: body.nextAction?.trim() || undefined });
-  return NextResponse.json({ ok: true, opportunity: opp });
+  const s = (v: unknown, max: number) => (typeof v === "string" ? v.slice(0, max) : "");
+  const res = convertOpportunity({
+    opportunityId: id,
+    intent: { kind: s(body.intent?.kind, 40) as IntentKind, note: s(body.intent?.note, 300) },
+    contact: { firstName: s(body.contact?.firstName, 80), lastName: s(body.contact?.lastName, 80), email: s(body.contact?.email, 160), phone: s(body.contact?.phone, 40) },
+    actor: (await currentActor()).label,
+  });
+  if (!res.ok) return NextResponse.json(res, { status: res.error === "opportunity not found" ? 404 : 400 });
+  return NextResponse.json(res);
 }

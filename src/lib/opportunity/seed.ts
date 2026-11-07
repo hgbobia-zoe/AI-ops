@@ -1,16 +1,15 @@
-// Opportunity Radar — source registry + SEED/DEMO data. Every seeded row is is_seed=1 and badged SEED,
-// run through the REAL pipeline (normalize → classify → dedupe → change-detect → store) so the workflow
-// is evaluable with no API keys or browser agent. Registers the real connectors too: SAM.gov (dormant
-// until SAM_API_KEY) and the Montgomery County browser workflow (fed via /api/radar/ingest).
+// Opportunity Radar — source registry + page-load refresh. NO demo data: the owner asked to remove all mock
+// data (2026-11-07). Radar shows only real records (CSV imports, live SAM.gov / ICS pulls, browser
+// captures, conversions). Earlier versions seeded is_seed=1 rows; purgeDemoDataOnce() deletes them.
+// (File name kept so existing imports stay stable.)
 
 import { getDb } from "@/lib/db";
-import { runOpportunitySource, type OpportunitySource, type RawOpportunity } from "./ingest";
-import { getOpportunityCount } from "./store";
 import { syncEventOpportunities } from "./eventBridge";
 import { enrichEntityMatches } from "./relationship";
 import { samGovConfigured } from "./sources/samgov";
 import { BROWSER_WORKFLOWS } from "./sources/browser";
 import { icsFeedsFromEnv } from "@/lib/radar/sources/ics";
+import { purgeDemoDataOnce } from "./demoPurge";
 
 // ── Source registry ───────────────────────────────────────────────────────────────────────────────
 interface SourceRow {
@@ -22,14 +21,13 @@ export function registerSources(now: Date): void {
   const db = getDb();
   const ts = now.toISOString();
   const rows: SourceRow[] = [
-    { id: "seed-opportunity-demo", name: "Opportunity demo dataset", kind: "DIRECTORY", url: null, region: "DMV", enabled: 1, acquisition_method: "MANUAL", auth_status: "NONE", frequency: "manual", adapter: "seed", is_seed: 1 },
     { id: "samgov-federal", name: "SAM.gov — federal solicitations", kind: "FEDERAL_API", url: "https://sam.gov", region: "FEDERAL", enabled: 1, acquisition_method: "API", auth_status: samGovConfigured() ? "REQUIRED_OK" : "REQUIRED_MISSING", frequency: "daily", adapter: "samgov", is_seed: 0 },
   ];
   for (const w of BROWSER_WORKFLOWS) {
     rows.push({ id: w.sourceId, name: w.name, kind: "GOV_PORTAL", url: w.portalUrl, region: w.jurisdiction, enabled: 1, acquisition_method: "BROWSER", auth_status: "NONE", frequency: "weekly", adapter: `browser:${w.sourceId}`, is_seed: 0 });
   }
-  // ICS / iCal event feeds — the first live EVENT source (everything above is procurement). One row per
-  // configured feed; when none are set, a single dormant row documents the blocker right in the registry.
+  // ICS / iCal event feeds. One row per configured feed; when none are set, a single dormant row documents
+  // the blocker right in the registry.
   const feeds = icsFeedsFromEnv();
   if (feeds.length > 0) {
     for (const f of feeds) {
@@ -47,101 +45,12 @@ export function registerSources(now: Date): void {
   for (const r of rows) stmt.run({ ...r, ts });
 }
 
-// ── Seed dataset (procurement + facility signals) ────────────────────────────────────────────────
-const SEED_OPPS: RawOpportunity[] = [
-  {
-    externalId: "moco-event-mgmt-2027",
-    kind: "PROCUREMENT",
-    name: "Event Management Services for County Signature Events 2027",
-    description: "Montgomery County seeks event management for large public events, including tenting, tables, chairs, staging and flooring for outdoor festivals.",
-    sourceUrl: "https://example-demo.gov/moco/rfp-2027-event",
-    agency: "Montgomery County Government",
-    city: "Rockville", state: "MD",
-    deadline: "2026-11-16", status: "open", verificationStatus: "INFERRED",
-    entities: [
-      { name: "Montgomery County Office of Procurement", kind: "AGENCY", role: "DIRECT_BUYER", evidence: "Named issuing office (demo)." },
-      { name: "Beltway Event Management LLC", kind: "PRODUCTION", role: "EVENT_MGMT", evidence: "Incumbent event manager listed on the prior contract (demo).", isPrimaryTarget: true },
-    ],
-    procurement: { solicitationNumber: "MC-2027-EVT-014", noticeType: "RFP", responseDeadline: "2026-11-16", naics: "561920" },
-  },
-  {
-    externalId: "rockville-july4-2027",
-    kind: "PROCUREMENT",
-    name: "Independence Day Festival — Tenting, Staging & Seating",
-    description: "City of Rockville invites bids for tents, a main stage, chairs and portable restrooms for the July 4th festival.",
-    sourceUrl: "https://example-demo.gov/rockville/ifb-july4",
-    agency: "City of Rockville", city: "Rockville", state: "MD",
-    deadline: "2026-10-12", status: "open", verificationStatus: "INFERRED",
-    entities: [{ name: "City of Rockville Purchasing", kind: "AGENCY", role: "DIRECT_BUYER" }],
-    procurement: { solicitationNumber: "ROCK-IFB-2664", noticeType: "IFB", responseDeadline: "2026-10-12" },
-  },
-  {
-    externalId: "nih-wellness-expo-2027",
-    kind: "PROCUREMENT",
-    name: "Sources Sought — Campus Wellness Expo Support Services",
-    description: "Federal sources-sought for a campus wellness expo: tents, tables, chairs and exhibitor infrastructure in Bethesda.",
-    sourceUrl: "https://example-demo.gov/sam/nih-expo",
-    agency: "National Institutes of Health", city: "Bethesda", state: "MD",
-    deadline: "2027-01-20", status: "open", verificationStatus: "INFERRED",
-    entities: [{ name: "National Institutes of Health", kind: "AGENCY", role: "DIRECT_BUYER" }],
-    procurement: { solicitationNumber: "NIH-SS-88213", noticeType: "SOURCES_SOUGHT", responseDeadline: "2027-01-20", naics: "532289" },
-  },
-  {
-    externalId: "natl-harbor-grand-opening-2027",
-    kind: "FACILITY_SIGNAL",
-    name: "Grand Opening — New Waterfront Conference Hotel, National Harbor",
-    description: "Construction completion celebration and grand opening planned; likely tenting, event furniture and lighting for an outdoor reception.",
-    sourceUrl: "https://example-demo.com/natlharbor-opening",
-    agency: "Harbor Development Partners", city: "National Harbor", state: "MD",
-    estimatedDate: "2027-06-05", status: "planning", verificationStatus: "NOT_YET_VERIFIED",
-    entities: [{ name: "Harbor Development Partners", kind: "FACILITIES", role: "FACILITIES_CONTRACTOR", evidence: "Named developer in the demo listing." }],
-  },
-  {
-    externalId: "pg-cultural-festival-award-2026",
-    kind: "PROCUREMENT",
-    name: "Cultural Festival Event Services — Contract Award",
-    description: "Prince George's County awarded event services (tents, tables, chairs, staging) for its annual cultural festival.",
-    sourceUrl: "https://example-demo.gov/pg/award-cultural",
-    agency: "Prince George's County", city: "Largo", state: "MD",
-    deadline: null, status: "awarded", verificationStatus: "INFERRED",
-    entities: [
-      { name: "Prince George's County Government", kind: "AGENCY", role: "DIRECT_BUYER" },
-      { name: "XYZ Events Group", kind: "PRODUCTION", role: "EVENT_MGMT", evidence: "Named awardee (demo).", isPrimaryTarget: true },
-    ],
-    procurement: { solicitationNumber: "PG-2026-CF-07", noticeType: "AWARD", awardee: "XYZ Events Group", awardAmount: 240000, awardDate: "2026-09-01" },
-  },
-  {
-    externalId: "nyc-courthouse-2027",
-    kind: "PROCUREMENT",
-    name: "Federal Courthouse Ceremony Event Services (New York, NY)",
-    description: "Event services for a federal ceremony in Manhattan — outside the DMV service area (negative-control demo).",
-    sourceUrl: "https://example-demo.gov/sam/nyc-courthouse",
-    agency: "General Services Administration", city: "New York", state: "NY",
-    deadline: "2027-02-15", status: "open", verificationStatus: "VERIFIED",
-    entities: [{ name: "General Services Administration", kind: "AGENCY", role: "DIRECT_BUYER" }],
-    procurement: { solicitationNumber: "GSA-NY-9910", noticeType: "RFP", responseDeadline: "2027-02-15" },
-  },
-];
-
-const SEED_SOURCE: OpportunitySource = {
-  id: "seed-opportunity-demo",
-  name: "Opportunity demo dataset",
-  kind: "DIRECTORY",
-  acquisitionMethod: "MANUAL",
-  adapter: "seed",
-  isSeed: true,
-  acquire: () => SEED_OPPS,
-};
-
-/** Idempotently register sources, bridge events, and seed the demo dataset ONLY into an empty database.
- *  Real data (an import, a live pull) is never topped up with demo rows. */
+/** Page-load prep: remove legacy demo rows (once), register sources, bridge events. Never seeds.
+ *  Returns false (kept for the old call sites that expected "did it seed"). */
 export async function seedOpportunitiesIfEmpty(now: Date = new Date()): Promise<boolean> {
+  purgeDemoDataOnce();
   registerSources(now);
   syncEventOpportunities(now);
-  if (getOpportunityCount() === 0) {
-    await runOpportunitySource(SEED_SOURCE, now);
-    return true;
-  }
   return false;
 }
 
@@ -149,14 +58,8 @@ export async function seedOpportunitiesIfEmpty(now: Date = new Date()): Promise<
  *  connectors (SAM.gov, ICS) are NOT pulled here: they run on the runtime clock (opportunity-radar job),
  *  because SAM.gov allows only a handful of calls a day and a page load must stay fast. */
 export async function refreshOpportunities(now: Date = new Date()): Promise<void> {
+  purgeDemoDataOnce();
   registerSources(now);
   syncEventOpportunities(now);
   try { enrichEntityMatches(); } catch { /* non-fatal */ }
-}
-
-/** Force a (re-)seed of the demo dataset. */
-export async function reseedOpportunities(now: Date = new Date()): Promise<void> {
-  registerSources(now);
-  syncEventOpportunities(now);
-  await runOpportunitySource(SEED_SOURCE, now);
 }

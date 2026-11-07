@@ -8,8 +8,9 @@ import { notFound } from "next/navigation";
 import { ArrowUpRight, ExternalLink, FileText, Compass } from "lucide-react";
 import { viewerRole } from "@/lib/auth/getSession";
 import { StatusBadge } from "@/components/ui/status";
-import { canManageSettings } from "@/lib/auth/roles";
+import { canManageSettings, canSeeFinancials } from "@/lib/auth/roles";
 import { OpportunityActions } from "@/components/OpportunityActions";
+import { conversionState, suggestedIntent, splitName } from "@/lib/opportunity/conversion";
 import { OpportunityInterpret } from "@/components/OpportunityInterpret";
 import { RouteToProspecting } from "@/components/RouteToProspecting";
 import { ProspectTaskActions } from "@/components/ProspectTaskActions";
@@ -49,7 +50,9 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
   const today = todayInOpsTz();
   const d = opportunityDetail(id, today);
   if (!d) notFound();
-  const canPursue = canManageSettings(await viewerRole());
+  const role = await viewerRole();
+  const canPursue = canManageSettings(role);
+  const money = canSeeFinancials(role);
   const { opp: e, score: q, maturity, stage, entityMemos, value, procurement, awarded, awardee } = d;
   const changes = getOpportunityChanges(e.dedupeKey);
   const progress = stageProgress(stage);
@@ -87,7 +90,22 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
                 <FileText className="size-3.5" /> Pursue bid
               </Link>
             )}
-            <OpportunityActions id={e.id} stage={stage} salesStatus={e.salesStatus} bookingId={e.bookingId} />
+            <OpportunityActions
+              id={e.id}
+              stage={stage}
+              salesStatus={e.salesStatus}
+              bookingId={e.bookingId}
+              conversion={{
+                ...conversionState(e.id),
+                suggestedIntent: suggestedIntent(e.id),
+                prefill: {
+                  ...splitName(d.primaryTarget?.edge.entity.kind === "CONTACT" || d.primaryTarget?.edge.entity.kind === "EVENT_PLANNER" ? d.primaryTarget.edge.entity.name : ""),
+                  email: d.primaryTarget?.edge.entity.email ?? "",
+                  phone: d.primaryTarget?.edge.entity.phone ?? "",
+                },
+                booking: d.booking ? { stage: d.booking.stage, signed: d.booking.signed, statusLabel: d.booking.statusLabel, contractTotal: money ? d.booking.contractTotal : null } : null,
+              }}
+            />
           </div>
         </div>
       </header>
@@ -152,7 +170,7 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
               </ul>
               {q.unknowns.length > 0 && <div className="mt-2 border-t border-[var(--row-rule)] pt-2 text-meta">{q.unknowns.map((s) => <div key={s.key}>? {s.label} <span className="text-[11px]">— unknown, not counted</span></div>)}</div>}
               <div className="mt-2 flex items-center justify-between border-t border-[var(--row-rule)] pt-2"><span className="font-medium">Relevance</span><span><ScorePill score={q.relevanceScore} tier={q.tier} /> <span className="text-meta">/ 100 · {q.tier}</span></span></div>
-              <p className="mt-2 text-[12px] text-meta">Estimated Zoe rental value: <span className="text-tertiary-text">{value?.indicative ? "~" : ""}{fmtRange(value)}</span>{value?.indicative ? " — indicative Zoe-addressable rental range (what Zoe could rent into this), not the total event budget or a revenue prediction" : value ? " — from the source" : " — need attendance or scope to estimate"}.</p>
+              <p className="mt-2 text-[12px] text-meta">Value: <span className="text-tertiary-text">{!money ? "visible to owners and admins" : value ? `${fmtRange(value)}, stated by the source` : "No value data"}</span>.</p>
             </div>
           </Section>
 

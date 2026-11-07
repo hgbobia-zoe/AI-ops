@@ -45,8 +45,11 @@ const LEAD_SLACK_SKEW_MS = 10 * 60 * 1000;
 const SWEEP_WINDOW_MS = 2 * 24 * 60 * 60 * 1000;
 
 /** A lead from an outside source (website, Yelp, ...). In-app intakes are "manual" and have no Slack post. */
+/** Sources that are NOT inbound web leads: a person typed it (manual) or converted a Radar prospect who
+ *  showed intent (radar). They get no webform welcome email and no #new-leads thread reply. */
+const NOT_WEB_SOURCES = new Set(["manual", "radar"]);
 export function isWebLead(i: Intake): boolean {
-  return !!i.source && i.source !== "manual";
+  return !!i.source && !NOT_WEB_SOURCES.has(i.source);
 }
 
 function phoneDigits(s: string): string {

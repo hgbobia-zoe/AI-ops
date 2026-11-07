@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { qualify, tierFor, estimateValue, isMultiDay, type QualifyInput } from "./qualify";
+import { qualify, tierFor, isMultiDay, type QualifyInput } from "./qualify";
 import { DEFAULT_RADAR_CONFIG } from "./config";
 
 const base: QualifyInput = {
@@ -69,13 +69,8 @@ describe("tierFor / estimateValue / isMultiDay", () => {
     expect(tierFor(5)).toBe("UNQUALIFIED");
   });
 
-  it("estimates an indicative range only when attendance is known and in-area", () => {
-    expect(estimateValue(base)).not.toBeNull();
-    expect(estimateValue({ ...base, expectedAttendance: null })).toBeNull();
-    expect(estimateValue({ ...base, attendanceConfidence: "UNKNOWN" })).toBeNull();
-    expect(estimateValue({ ...base, region: "OUT_OF_AREA" })).toBeNull();
-    const v = estimateValue(base)!;
-    expect(v.high).toBeGreaterThan(v.low);
+  it("never invents a dollar value (real data only)", () => {
+    expect("estimatedValue" in qualify(base)).toBe(false);
   });
 
   it("detects multi-day only when end is after start", () => {

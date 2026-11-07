@@ -21,9 +21,6 @@ export interface RadarConfig {
   tinyEventPenalty: number; // very small known attendance (negative)
   /** Rental-fit score → tier. Evaluated high-to-low. */
   tierThresholds: { min: number; tier: "HIGH" | "MEDIUM" | "LOW" }[];
-  /** Indicative rental spend per attendee (dollars), by category — for the coarse value RANGE only.
-   *  Applied as [low, high] multipliers × attendance. Never a revenue prediction. */
-  valuePerAttendee: Partial<Record<EventCategory, { low: number; high: number }>>;
   /** Outreach timing: months before the event that define each engagement window. */
   timing: {
     planningWindowStartDays: number; // beyond this many days out → too early
@@ -81,19 +78,6 @@ export const DEFAULT_RADAR_CONFIG: RadarConfig = {
     { min: 45, tier: "MEDIUM" },
     { min: 20, tier: "LOW" },
   ],
-  valuePerAttendee: {
-    CONFERENCE: { low: 8, high: 25 },
-    TRADE_SHOW: { low: 10, high: 30 },
-    EXPO: { low: 10, high: 30 },
-    GALA: { low: 20, high: 55 },
-    AWARDS: { low: 18, high: 50 },
-    FUNDRAISER: { low: 15, high: 45 },
-    ASSOCIATION_MEETING: { low: 8, high: 24 },
-    CORPORATE: { low: 12, high: 35 },
-    MEDICAL: { low: 10, high: 28 },
-    OUTDOOR_RECEPTION: { low: 25, high: 65 },
-    HOSPITALITY: { low: 15, high: 40 },
-  },
   timing: {
     planningWindowStartDays: 365,
     outreachWindowStartDays: 210, // ~7 months out

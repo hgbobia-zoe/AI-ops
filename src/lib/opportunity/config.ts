@@ -23,10 +23,6 @@ export interface OpportunityConfig {
   sizeBands: { min: number; points: number; label: string }[];
   /** Relevance score → tier (evaluated high-to-low). */
   tierThresholds: { min: number; tier: "HIGH" | "MEDIUM" | "LOW" }[];
-  /** Indicative rental spend per attendee (dollars) for a coarse value RANGE — never a prediction. */
-  valuePerAttendee: { low: number; high: number };
-  /** Fallback value range (dollars) when attendance is unknown but Zoe categories were detected. */
-  categoryValueFloor: { low: number; high: number };
   /** Signal-maturity day windows (§5), relative to the event/project date. */
   maturityDays: { earlySignal: number; planning: number; procurement: number; operational: number; immediate: number };
   /** Alert thresholds (§18) — meaningful-only. */
@@ -59,8 +55,6 @@ export const DEFAULT_OPPORTUNITY_CONFIG: OpportunityConfig = {
     { min: 45, tier: "MEDIUM" },
     { min: 20, tier: "LOW" },
   ],
-  valuePerAttendee: { low: 10, high: 30 },
-  categoryValueFloor: { low: 3000, high: 12000 },
   maturityDays: { earlySignal: 365, planning: 270, procurement: 180, operational: 90, immediate: 30 },
   alerts: { minValueHigh: 25000, minOpportunityScore: 80 },
 };

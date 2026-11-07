@@ -44,9 +44,8 @@ describe("scoreOpportunity", () => {
     const keys = q.positives.map((p) => p.key);
     expect(keys).toEqual(expect.arrayContaining(["government", "categories", "contractor", "relationship", "deadline", "in_area"]));
   });
-  it("derives an indicative value from categories when attendance is unknown", () => {
-    expect(scoreOpportunity(base).estimatedValue).not.toBeNull();
-    expect(scoreOpportunity({ ...base, region: "OUT_OF_AREA" }).estimatedValue).toBeNull();
+  it("never invents a dollar value (real data only)", () => {
+    expect("estimatedValue" in scoreOpportunity(base)).toBe(false);
   });
 });
 

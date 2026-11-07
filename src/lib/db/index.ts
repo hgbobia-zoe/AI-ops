@@ -2402,6 +2402,10 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "radar_sources", column: "last_failure_at", type: "TEXT" }, // ISO of the last failed run
   { table: "opportunities", column: "expected_attendance", type: "INTEGER" }, // known/estimated size (drives the size score) — from a source or manual import
   { table: "opportunities", column: "attendance_confidence", type: "TEXT" }, // VERIFIED | INFERRED | UNKNOWN
+  { table: "opportunities", column: "intake_id", type: "TEXT" }, // sales_intake row created when a person converted it to Goodshuffle (intent confirmed)
+  { table: "opportunities", column: "conversion_intent", type: "TEXT" }, // JSON {kind, note} — the prospect intent the person confirmed
+  { table: "opportunities", column: "converted_by", type: "TEXT" },
+  { table: "opportunities", column: "converted_at", type: "TEXT" },
   { table: "prospect_enrollments", column: "sequencer_provider", type: "TEXT" }, // e.g. "smartlead" once the lead was handed to the sequencer
   { table: "prospect_enrollments", column: "sequencer_pushed_at", type: "TEXT" }, // ISO, when a person approved and the sequencer accepted the lead
   { table: "prospect_enrollments", column: "sequencer_pushed_by", type: "TEXT" }, // who approved the push

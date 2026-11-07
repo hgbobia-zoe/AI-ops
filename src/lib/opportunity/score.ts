@@ -88,7 +88,6 @@ export function scoreOpportunity(input: ScoreInput, config: OpportunityConfig = 
     positives: positives.sort((a, b) => b.weight - a.weight),
     negatives,
     unknowns,
-    estimatedValue: estimateValue(input, config),
   };
 }
 
@@ -97,14 +96,6 @@ export function tierFor(score: number, config: OpportunityConfig = DEFAULT_OPPOR
   return "UNQUALIFIED";
 }
 
-/** Indicative rental-spend range — attendance × per-attendee when size is known, else a category floor,
- *  else null. Coarse and clearly indicative; never a revenue prediction. */
-export function estimateValue(input: ScoreInput, config: OpportunityConfig = DEFAULT_OPPORTUNITY_CONFIG): { low: number; high: number } | null {
-  if (input.region === "OUT_OF_AREA" || input.fullyVirtual) return null;
-  const round = (n: number) => Math.round(n / 500) * 500;
-  if (input.expectedAttendance != null && input.attendanceConfidence !== "UNKNOWN") {
-    return { low: round(input.expectedAttendance * config.valuePerAttendee.low), high: round(input.expectedAttendance * config.valuePerAttendee.high) };
-  }
-  if (input.zoeCategories.length > 0) return { ...config.categoryValueFloor };
-  return null;
-}
+// No value estimate: owner rule (2026-11-07) "Value estimate should be real data, no guess. If we don't
+// have data just state it." A dollar value comes only from the source (stated value / award amount) —
+// see service.ts viewFor `value`.
