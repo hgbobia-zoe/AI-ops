@@ -64,6 +64,31 @@ Each lead also arrives with these variables: `{{opportunity}}`, `{{event_date}}`
 - **Replies:** Instantly stops the sequence. Handle the reply in Instantly's inbox (Unibox) for now. If
   the reply shows intent, convert the opportunity to Goodshuffle from Radar (intent only).
 
+## 6. Purchased lists (venues, planners, corporate, associations)
+
+Besides the contacts Radar finds, Zoe buys lists to cold email. In Zoe these live at **Radar → Lists**
+(owner and admin only).
+
+1. **Import:** export a CSV from the list seller (Apollo, ZoomInfo, a broker) and import it. Only an
+   email column is required; names, title, company, website, phone, city and state are picked up when
+   present. Enter what the list cost so Zoe can show cost per reply and cost per interested lead.
+2. **One campaign per segment:** in Instantly, create one campaign per type of buyer (for example
+   "Venues partner" and "Planners"), each with copy written for that audience. Put that campaign's id on
+   the list (Edit list). A list without its own campaign uses the default one.
+   Each lead arrives with `{{firstName}}`, `{{companyName}}`, `{{title}}`, `{{city}}`, `{{segment}}`
+   and `{{list}}`.
+3. **Screening:** each list shows who is Ready and who can't be sent, with the reason. The same rules apply
+   as for Radar: the do-not-contact list, Sales OS customers and open quotes, anyone already emailed from
+   another list or from Radar outreach, and Zoe's own addresses.
+4. **Send:** click **Review and send**, then **Approve and send**. Each push sends at most 500 contacts. Keep
+   **Verify emails in Instantly first** ticked: bought data has dead addresses, and bounces hurt the inboxes.
+   Start with a few hundred and keep the bounce rate under about 3% before sending more.
+5. **Replies:** log them on the contact (Log reply). Not interested, bounced and unsubscribed go on the
+   do-not-contact list automatically. **Interested** creates a Radar opportunity at stage Engaged, linked
+   to the contact. Convert it to Goodshuffle from there once they ask for a quote (intent only).
+6. **Deleting a list:** a list can be deleted only if nobody on it was emailed yet. Once anyone was sent,
+   the list is kept as the record of who was emailed.
+
 ## Not built yet
 
 - **Pulling replies back into Zoe automatically.** The webhook needs Instantly's Hypergrowth plan.

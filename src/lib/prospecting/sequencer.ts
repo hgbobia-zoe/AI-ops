@@ -136,6 +136,7 @@ export interface SmartleadLead {
   email: string;
   first_name?: string;
   last_name?: string;
+  phone_number?: string;
   company_name?: string;
   website?: string;
   location?: string;
@@ -146,6 +147,8 @@ export interface SmartleadLead {
 export interface OutreachLead {
   email: string;
   firstName?: string;
+  lastName?: string;
+  phone?: string;
   company?: string;
   website?: string;
   location?: string;
@@ -226,14 +229,15 @@ export async function probeSmartlead(fetchImpl?: FetchLike): Promise<{ ok: boole
 
 // ── Provider neutral ────────────────────────────────────────────────────────────────────────────────
 export function toSmartleadLead(l: OutreachLead): SmartleadLead {
-  return { email: l.email, first_name: l.firstName, company_name: l.company, website: l.website, location: l.location, custom_fields: l.vars };
+  return { email: l.email, first_name: l.firstName, last_name: l.lastName, phone_number: l.phone, company_name: l.company, website: l.website, location: l.location, custom_fields: l.vars };
 }
 
-/** Push to the given provider. Never throws; never returns the key. */
+/** Push to the given provider. Never throws; never returns the key. `verify` asks Instantly to verify
+ *  each email on import (uses Instantly credits; Smartlead ignores it). */
 export async function pushLeads(
   provider: SequencerProvider,
   leads: OutreachLead[],
-  opts: { key: string; campaignId: string; fetchImpl?: FetchLike },
+  opts: { key: string; campaignId: string; fetchImpl?: FetchLike; verify?: boolean },
 ): Promise<PushResult> {
   return provider === "instantly" ? pushLeadsToInstantly(leads, opts) : pushLeadsToSmartlead(leads.map(toSmartleadLead), opts);
 }
