@@ -20,6 +20,8 @@ import { viewerRole } from "@/lib/auth/getSession";
 import { canSeeFinancials } from "@/lib/auth/roles";
 import { todayInOpsTz } from "@/lib/dates";
 import { BladeAgents } from "@/components/aiorg/BladeAgents";
+import { OpportunityDetailView } from "@/components/radar/OpportunityDetailView";
+import { RadarQuickView } from "@/components/radar/RadarQuickView";
 
 export const dynamic = "force-dynamic";
 
@@ -62,7 +64,7 @@ const SORTS: { key: SortKey; label: string; defaultDir: "asc" | "desc" }[] = [
   { key: "name", label: "Name", defaultDir: "asc" },
 ];
 
-interface SP { view?: string; kind?: string; jurisdiction?: string; q?: string; stage?: string; lane?: string; past?: string; sort?: string; dir?: string }
+interface SP { view?: string; kind?: string; jurisdiction?: string; q?: string; stage?: string; lane?: string; past?: string; sort?: string; dir?: string; open?: string }
 
 function fmtMoney(v: { low: number; high: number } | null): string | null {
   if (!v) return null;
@@ -115,12 +117,12 @@ function sortRows(rows: OpportunityView[], key: SortKey, dir: "asc" | "desc"): O
   });
 }
 
-function Card({ v, money }: { v: OpportunityView; money: boolean }): React.JSX.Element {
+function Card({ v, money, href, active }: { v: OpportunityView; money: boolean; href: string; active: boolean }): React.JSX.Element {
   const e = v.opp;
   const when = e.estimatedDate ? fmtDate(e.estimatedDate) : e.deadline ? `due ${fmtDate(e.deadline)}` : "date unknown";
   const value = money ? fmtMoney(v.value) : null;
   return (
-    <Link href={`/radar/${e.id}`} className="block rounded border border-border bg-background p-2.5 transition-colors hover:bg-row-hover">
+    <Link href={href} scroll={false} aria-current={active ? "true" : undefined} className={`block rounded border bg-background p-2.5 transition-colors hover:bg-row-hover ${active ? "border-ring" : "border-border"}`}>
       <div className="flex items-start gap-2">
         <ScorePill score={v.score.opportunityScore} tier={v.score.tier} />
         <span className="min-w-0 flex-1 text-[12.5px] font-medium leading-snug text-foreground">{e.name}</span>
@@ -160,7 +162,7 @@ export default async function OpportunityRadarPage({ searchParams }: { searchPar
 
   const href = (patch: Partial<SP>) => {
     const p = new URLSearchParams();
-    const merged = { ...sp, ...patch };
+    const merged = { ...sp, open: undefined, ...patch }; // view/sort/filter links close the quick view
     for (const [k, val] of Object.entries(merged)) if (val) p.set(k, String(val));
     const s = p.toString();
     return s ? `/radar?${s}` : "/radar";
@@ -170,6 +172,10 @@ export default async function OpportunityRadarPage({ searchParams }: { searchPar
     const nextDir = sortKey === key ? (dir === "asc" ? "desc" : "asc") : def;
     return href({ sort: key, dir: nextDir });
   };
+  // Quick view: a clicked card opens in the side panel over the board (same overlay as Sales OS).
+  const openView = sp.open
+    ? (await OpportunityDetailView({ id: sp.open, compact: true, linkFor: (id) => href({ open: id }) })) ?? <p className="text-[13px] text-meta">This opportunity no longer exists.</p>
+    : null;
   const arrow = (key: SortKey) => (sortKey === key ? (dir === "asc" ? " ▲" : " ▼") : "");
   const selectCls = "rounded border border-input bg-transparent px-2 py-1 text-[12.5px] text-foreground";
 
@@ -246,7 +252,7 @@ export default async function OpportunityRadarPage({ searchParams }: { searchPar
                     <span>{c.label}</span><span className="tabular-nums text-meta">{items.length}</span>
                   </h2>
                   <div className="flex flex-col gap-2">
-                    {items.length === 0 ? <p className="px-1 py-2 text-[11.5px] text-meta">None</p> : items.map((v) => <Card key={v.opp.id} v={v} money={money} />)}
+                    {items.length === 0 ? <p className="px-1 py-2 text-[11.5px] text-meta">None</p> : items.map((v) => <Card key={v.opp.id} v={v} money={money} href={href({ open: v.opp.id })} active={sp.open === v.opp.id} />)}
                   </div>
                 </section>
               );
@@ -272,10 +278,10 @@ export default async function OpportunityRadarPage({ searchParams }: { searchPar
             </thead>
             <tbody>
               {rows.map((v) => (
-                <tr key={v.opp.id} className="border-t border-[var(--row-rule)] hover:bg-row-hover">
+                <tr key={v.opp.id} className={`border-t border-[var(--row-rule)] hover:bg-row-hover ${sp.open === v.opp.id ? "bg-row-hover" : ""}`}>
                   <td className="px-2.5 py-2"><ScorePill score={v.score.opportunityScore} tier={v.score.tier} /></td>
                   <td className="max-w-[300px] px-2.5 py-2">
-                    <Link href={`/radar/${v.opp.id}`} className="font-medium text-foreground hover:underline">{v.opp.name}</Link>
+                    <Link href={href({ open: v.opp.id })} scroll={false} className="font-medium text-foreground hover:underline">{v.opp.name}</Link>
                     <div className="flex items-center gap-1.5 truncate text-[11.5px] text-meta">{v.opp.organization ?? "organizer unknown"} <VerificationBadge status={v.opp.verificationStatus} size="sm" /></div>
                   </td>
                   <td className="px-2.5 py-2 text-[12px] text-tertiary-text">{KIND_LABEL[v.opp.kind]}</td>
@@ -297,6 +303,10 @@ export default async function OpportunityRadarPage({ searchParams }: { searchPar
         <span>Scores and timing are rule based. Values appear only when a source states one; otherwise &quot;No value data&quot;.</span>
         <Link href="/radar/sources" className="text-tertiary-text hover:text-foreground">Manage sources →</Link>
       </div>
+
+      {openView && sp.open && (
+        <RadarQuickView key={sp.open} id={sp.open} closeHref={href({ open: undefined })}>{openView}</RadarQuickView>
+      )}
     </BladeMain>
   );
 }
