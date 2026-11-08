@@ -332,7 +332,11 @@ function goodshuffleExtractionScript(key: string, truckId: string): string {
             custPhone: sv.e164PhoneNumber || renter.phone || tl.contactPhoneNumber || "",
             address: address,
             plannedWindow: w.scheduledArrivalTime || undefined,
-            eta: w.scheduledArrivalTime || undefined
+            eta: w.scheduledArrivalTime || undefined,
+            windowStart: w.earliestRequiredArrivalTime || undefined,
+            windowEnd: w.latestRequiredArrivalTime || undefined,
+            plannedOnSiteMin: (typeof w.scheduledLoiterMinutes === "number" ? w.scheduledLoiterMinutes : undefined),
+            plannedTransitMin: (w.transitMinutes && typeof w.transitMinutes.left === "number" ? w.transitMinutes.left : undefined)
           };
           if (doc) { s.dayOfName = doc.name || doc.fullName || undefined; s.dayOfPhone = doc.phoneNumber || doc.phone || undefined; }
           s._txID = w.transactionID || (tx && tx.id) || null;

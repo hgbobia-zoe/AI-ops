@@ -31,10 +31,21 @@ function buildStop(s: Partial<Stop>, ids: { stopId: string; customerId: string; 
     dayOfPhone: s.dayOfPhone,
     plannedWindow: s.plannedWindow,
     eta: s.eta,
+    // Customer window + planned minutes from the waypoint (the import fills a missing window from the
+    // Goodshuffle project afterwards). A pulled window is per waypoint, so it is a "route" window.
+    windowStart: s.windowStart || undefined,
+    windowEnd: s.windowEnd || undefined,
+    windowSource: s.windowStart ? "route" : undefined,
+    plannedOnSiteMin: numOrUndef(s.plannedOnSiteMin),
+    plannedTransitMin: numOrUndef(s.plannedTransitMin),
     items: Array.isArray(s.items) ? s.items : undefined,
     txId: s.txId ?? undefined,
     contactId: s.contactId ?? undefined,
   };
+}
+
+function numOrUndef(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
 /** Overlay an incoming stop's mutable customer/address fields onto an existing stop, preserving
@@ -53,6 +64,11 @@ function overlay(existingStop: Stop, incoming?: Partial<Stop>): Stop {
     dayOfPhone: incoming.dayOfPhone ?? existingStop.dayOfPhone,
     plannedWindow: incoming.plannedWindow ?? existingStop.plannedWindow,
     eta: incoming.eta ?? existingStop.eta,
+    ...(incoming.windowStart
+      ? { windowStart: incoming.windowStart, windowEnd: incoming.windowEnd || undefined, windowSource: "route" as const }
+      : {}),
+    plannedOnSiteMin: numOrUndef(incoming.plannedOnSiteMin) ?? existingStop.plannedOnSiteMin,
+    plannedTransitMin: numOrUndef(incoming.plannedTransitMin) ?? existingStop.plannedTransitMin,
     items: incoming.items ?? existingStop.items,
     txId: incoming.txId ?? existingStop.txId,
     contactId: incoming.contactId ?? existingStop.contactId,

@@ -10,6 +10,7 @@ import { detectLinenItems } from "@/lib/salesos/linen";
 import { slackNotify } from "@/lib/notify/slack";
 import { pickWorkableRoute, isVerifiedComplete } from "@/lib/dispatch/handoff";
 import { getHandoffConfig } from "@/lib/dispatch/handoffConfig";
+import { bookingWindowForStop } from "@/lib/dispatch/onTime";
 import type { Route, RouteStatus, Stop, StopState } from "@/lib/types";
 import type { CallRecap } from "@/lib/coach/recap";
 import { computeCallMetrics } from "@/lib/coach/metrics";
@@ -47,6 +48,15 @@ interface StopRow {
   tracking_token: string | null;
   photos_ref: string | null;
   signature_ref: string | null;
+  window_start?: string | null;
+  window_end?: string | null;
+  window_source?: string | null;
+  planned_on_site_min?: number | null;
+  planned_transit_min?: number | null;
+  close_resolution?: string | null;
+  close_reason?: string | null;
+  close_by?: string | null;
+  close_at?: string | null;
 }
 
 interface RouteRow {
@@ -87,6 +97,18 @@ function toStop(r: StopRow): Stop {
     trackingLinkId: r.tracking_token ?? undefined,
     photoIds: r.photos_ref ? (safeJson(r.photos_ref) as string[]) : undefined,
     signatureId: r.signature_ref ?? undefined,
+    windowStart: r.window_start ?? undefined,
+    windowEnd: r.window_end ?? undefined,
+    windowSource: r.window_source === "route" || r.window_source === "booking" ? r.window_source : undefined,
+    plannedOnSiteMin: r.planned_on_site_min ?? undefined,
+    plannedTransitMin: r.planned_transit_min ?? undefined,
+    closeResolution:
+      r.close_resolution === "marked_completed" || r.close_resolution === "reason" || r.close_resolution === "none"
+        ? r.close_resolution
+        : undefined,
+    closeReason: r.close_reason ?? undefined,
+    closeBy: r.close_by ?? undefined,
+    closeAt: r.close_at ?? undefined,
   };
 }
 
@@ -400,6 +422,8 @@ export interface IncompleteStop {
   sequence: number;
   custName: string;
   state: StopState;
+  /** The closer's recorded reason for leaving it open, when one was given. */
+  closeReason?: string;
 }
 
 const TERMINAL: StopState[] = ["Completed", "Returned"];
@@ -416,7 +440,7 @@ export function closeRoute(routeId: string): {
   const route = buildRoute(row);
   const incomplete: IncompleteStop[] = route.stops
     .filter((s) => !TERMINAL.includes(s.state))
-    .map((s) => ({ stopId: s.stopId, sequence: s.sequence, custName: s.custName, state: s.state }));
+    .map((s) => ({ stopId: s.stopId, sequence: s.sequence, custName: s.custName, state: s.state, closeReason: s.closeReason }));
   if (route.status === "done")
     return { ok: true, routeId, truckId: route.truckId, already: true, incomplete };
   setRouteStatus(routeId, "done");
@@ -789,6 +813,9 @@ export interface BookingRecord {
   location?: string | null; // city/state/zip/county string
   salesLead?: string | null; // Goodshuffle salesLeadName; undefined = the pull did not send it (keep the stored one)
   archived?: boolean; // Goodshuffle `archived` — project off the active board (Lost/Cancelled/closed)
+  /** Raw Goodshuffle logistics_start_from_time ("9:00 AM EDT"); null = TBD/blank; undefined = the pull did
+   *  not send it (an older pull build), so the stored value is kept. The delivery window start. */
+  windowStartTime?: string | null;
 }
 
 export interface BookingView {
@@ -968,6 +995,13 @@ export function markQuoteOpenAlerted(bookingId: string, openedAt: string): void 
 
 /** Upsert bookings (from a searchProjects pull), keyed by Goodshuffle project id. Logs a
  *  financial-plan change to Operational History when an existing booking's revenue changes. */
+/** Store the raw GS window time trimmed; "TBD"/blank → null (no window, never a guessed one). */
+function normalizeWindowTime(v: string | null | undefined): string | null {
+  const t = (v ?? "").trim();
+  if (!t || /^tbd$/i.test(t)) return null;
+  return t.slice(0, 40);
+}
+
 export function saveBookings(items: BookingRecord[]): void {
   const db = getDb();
   const now = new Date().toISOString();
@@ -1001,14 +1035,15 @@ export function saveBookings(items: BookingRecord[]): void {
   const up = db.prepare(
     `INSERT INTO bookings (booking_id, event_name, event_date, status_label, signed, contract_total,
        grand_total, amount_paid, amount_due, client_name, client_email, client_phone, quote_sent_date,
-       date_created, venue, location, sales_lead, archived, updated_at)
+       date_created, venue, location, sales_lead, archived, window_start_time, updated_at)
      VALUES (@bookingId,@eventName,@eventDate,@statusLabel,@signed,@contractTotal,@grandTotal,
-       @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@venue,@location,@salesLead,@archived,@now)
+       @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@venue,@location,@salesLead,@archived,@windowStartTime,@now)
      ON CONFLICT(booking_id) DO UPDATE SET event_name=@eventName, event_date=@eventDate,
        status_label=@statusLabel, signed=@signed, contract_total=@contractTotal, grand_total=@grandTotal,
        amount_paid=@amountPaid, amount_due=@amountDue, client_name=@clientName, client_email=@clientEmail,
        client_phone=@clientPhone, quote_sent_date=@quoteSentDate, date_created=@dateCreated,
-       venue=@venue, location=@location, sales_lead=COALESCE(@salesLead, sales_lead), archived=@archived, updated_at=@now`,
+       venue=@venue, location=@location, sales_lead=COALESCE(@salesLead, sales_lead), archived=@archived,
+       window_start_time=CASE WHEN @windowSent = 1 THEN @windowStartTime ELSE window_start_time END, updated_at=@now`,
   );
   const tx = db.transaction(() => {
     for (const i of items)
@@ -1031,6 +1066,8 @@ export function saveBookings(items: BookingRecord[]): void {
         location: i.location ?? null,
         salesLead: i.salesLead === undefined ? null : i.salesLead?.trim() || null,
         archived: i.archived ? 1 : 0,
+        windowSent: i.windowStartTime === undefined ? 0 : 1,
+        windowStartTime: normalizeWindowTime(i.windowStartTime),
         now,
       });
   });
@@ -2926,15 +2963,21 @@ export function writeRoute(route: Route): void {
     // preserving POD with COALESCE(excluded, existing) — incoming POD wins when present (reconcileStops
     // carries it on an acted-on stop), else the stored POD is kept. Every OTHER column is overwritten by
     // the incoming value exactly as the old INSERT did, so the final row set is otherwise identical.
+    // The customer window + planned minutes are overwritten too (not COALESCEd): stop ids are positional
+    // for an untouched route, so keeping a stale value could pin one customer's window on another. The
+    // import fills the booking window in memory BEFORE this write (applyBookingWindows), and the close
+    // resolution columns are deliberately absent from this statement, so a re-pull never clears them.
     const ins = db.prepare(
       `INSERT INTO stops (stop_id, route_id, customer_id, sequence, state, cust_name,
         cust_first_name, cust_last_name, kind, cust_phone, address, day_of_name, day_of_phone,
         planned_window, eta, items, tx_id, contact_id, arrived_at, completed_at, tracking_token,
-        photos_ref, signature_ref)
+        photos_ref, signature_ref, window_start, window_end, window_source, planned_on_site_min,
+        planned_transit_min)
        VALUES (@stopId, @routeId, @customerId, @sequence, @state, @custName,
         @custFirstName, @custLastName, @kind, @custPhone, @address, @dayOfName, @dayOfPhone,
         @plannedWindow, @eta, @items, @txId, @contactId, @arrivedAt, @completedAt, @trackingToken,
-        @photosRef, @signatureRef)
+        @photosRef, @signatureRef, @windowStart, @windowEnd, @windowSource, @plannedOnSiteMin,
+        @plannedTransitMin)
        ON CONFLICT(stop_id) DO UPDATE SET
         route_id=excluded.route_id, customer_id=excluded.customer_id, sequence=excluded.sequence,
         state=excluded.state, cust_name=excluded.cust_name, cust_first_name=excluded.cust_first_name,
@@ -2944,7 +2987,10 @@ export function writeRoute(route: Route): void {
         tx_id=excluded.tx_id, contact_id=excluded.contact_id, arrived_at=excluded.arrived_at,
         completed_at=excluded.completed_at, tracking_token=excluded.tracking_token,
         photos_ref=COALESCE(excluded.photos_ref, stops.photos_ref),
-        signature_ref=COALESCE(excluded.signature_ref, stops.signature_ref)`,
+        signature_ref=COALESCE(excluded.signature_ref, stops.signature_ref),
+        window_start=excluded.window_start, window_end=excluded.window_end,
+        window_source=excluded.window_source, planned_on_site_min=excluded.planned_on_site_min,
+        planned_transit_min=excluded.planned_transit_min`,
     );
     // Self-heal a corrupt route whose stored stops share a stop_id: two stops with the same id would
     // violate the UNIQUE(stop_id) constraint and abort the whole import (seen live — route 62232's
@@ -2983,6 +3029,11 @@ export function writeRoute(route: Route): void {
         trackingToken: s.trackingLinkId ?? null,
         photosRef: s.photoIds?.length ? JSON.stringify(s.photoIds) : null,
         signatureRef: s.signatureId ?? null,
+        windowStart: s.windowStart ?? null,
+        windowEnd: s.windowEnd ?? null,
+        windowSource: s.windowStart ? (s.windowSource ?? "route") : null,
+        plannedOnSiteMin: typeof s.plannedOnSiteMin === "number" ? Math.round(s.plannedOnSiteMin) : null,
+        plannedTransitMin: typeof s.plannedTransitMin === "number" ? Math.round(s.plannedTransitMin) : null,
       });
     }
     // Remove only the stops that are no longer part of this route (the old DELETE-all did this implicitly).
@@ -3178,6 +3229,98 @@ export function updateStopState(
     db.prepare("UPDATE stops SET arrived_at = ? WHERE stop_id = ?").run(opts.arrivedAt, stopId);
   if (opts.completedAt)
     db.prepare("UPDATE stops SET completed_at = ? WHERE stop_id = ?").run(opts.completedAt, stopId);
+}
+
+// ── Delivery on-time tracking: customer windows, GPS arrivals, close resolutions ─────────────────────
+
+/** The Goodshuffle project window inputs (logistics date + raw from-time) for these project ids. */
+export function getBookingWindows(txIds: string[]): Map<string, { eventDate: string | null; windowStartTime: string | null }> {
+  const out = new Map<string, { eventDate: string | null; windowStartTime: string | null }>();
+  const ids = [...new Set(txIds.filter(Boolean))];
+  if (ids.length === 0) return out;
+  const ph = ids.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(`SELECT booking_id, event_date, window_start_time FROM bookings WHERE booking_id IN (${ph})`)
+    .all(...ids) as Array<{ booking_id: string; event_date: string | null; window_start_time: string | null }>;
+  for (const r of rows) out.set(String(r.booking_id), { eventDate: r.event_date, windowStartTime: r.window_start_time });
+  return out;
+}
+
+/**
+ * Fill each stop's CUSTOMER window from its Goodshuffle project (matched by txId), in memory, before the
+ * route is written. A per-waypoint window from the pull (windowSource "route") always wins and is left
+ * alone. The project window is the delivery window, so pickups and other-day stops get none. A stop whose
+ * project has no time (TBD) ends with no window, never a guessed one.
+ */
+export function applyBookingWindows(stops: Stop[], routeDate: string): Stop[] {
+  const windows = getBookingWindows(stops.map((s) => s.txId ?? ""));
+  return stops.map((s) => {
+    if (s.windowStart && s.windowSource !== "booking") return s; // waypoint window from the pull
+    const b = s.txId ? windows.get(s.txId) : undefined;
+    const iso = b ? bookingWindowForStop({ kind: s.kind, routeDate, eventDate: b.eventDate, timeStr: b.windowStartTime }) : null;
+    if (!iso) {
+      // No project window: drop a stale booking window; a stop that never had one is unchanged.
+      return s.windowSource === "booking" ? { ...s, windowStart: undefined, windowEnd: undefined, windowSource: undefined } : s;
+    }
+    return { ...s, windowStart: iso, windowEnd: undefined, windowSource: "booking" };
+  });
+}
+
+/**
+ * After a bookings pull: refresh the booking-sourced window on stops already written, for routes on or
+ * after `sinceDate` (bookings and routes arrive in separate pulls, in either order). Only touches stops
+ * without a waypoint window. Returns how many stops changed.
+ */
+export function syncStopWindowsFromBookings(sinceDate: string): number {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT s.stop_id, s.kind, s.window_start, r.date AS route_date, b.event_date, b.window_start_time
+         FROM stops s
+         JOIN routes r ON r.route_id = s.route_id
+         JOIN bookings b ON b.booking_id = s.tx_id
+        WHERE r.date >= ? AND (s.window_source IS NULL OR s.window_source = 'booking')`,
+    )
+    .all(sinceDate) as Array<{ stop_id: string; kind: string | null; window_start: string | null; route_date: string; event_date: string | null; window_start_time: string | null }>;
+  const upd = db.prepare("UPDATE stops SET window_start = ?, window_end = NULL, window_source = ? WHERE stop_id = ?");
+  let changed = 0;
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      const iso = bookingWindowForStop({
+        kind: r.kind === "pickup" ? "pickup" : r.kind === "delivery" ? "delivery" : undefined,
+        routeDate: r.route_date,
+        eventDate: r.event_date,
+        timeStr: r.window_start_time,
+      });
+      if ((iso ?? null) === (r.window_start ?? null)) continue;
+      upd.run(iso, iso ? "booking" : null, r.stop_id);
+      changed++;
+    }
+  });
+  tx();
+  return changed;
+}
+
+/** First GPS on-site time per stop (visit_events source=gps), for these routes. */
+export function getGpsArrivals(routeIds: string[]): Map<string, { enterTs: string; confidence: string }> {
+  const out = new Map<string, { enterTs: string; confidence: string }>();
+  if (routeIds.length === 0) return out;
+  const ph = routeIds.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(`SELECT stop_id, enter_ts, confidence FROM visit_events WHERE source='gps' AND enter_ts IS NOT NULL AND route_id IN (${ph})`)
+    .all(...routeIds) as Array<{ stop_id: string; enter_ts: string; confidence: string }>;
+  for (const r of rows) out.set(r.stop_id, { enterTs: r.enter_ts, confidence: r.confidence });
+  return out;
+}
+
+/** Record what the closer chose for a stop left open when its route closed. Never touches stop state. */
+export function recordStopCloseResolution(
+  stopId: string,
+  r: { resolution: "marked_completed" | "reason" | "none"; reason?: string | null; by: string; at: string },
+): void {
+  getDb()
+    .prepare("UPDATE stops SET close_resolution = ?, close_reason = ?, close_by = ?, close_at = ? WHERE stop_id = ?")
+    .run(r.resolution, r.reason?.trim() ? r.reason.trim().slice(0, 500) : null, r.by, r.at, stopId);
 }
 
 /** Attach proof-of-delivery references (captured at completion) to a stop. */

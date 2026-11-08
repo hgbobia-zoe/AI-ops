@@ -101,6 +101,8 @@ export function RouteScreen({
               onMessageDispatch={(message) =>
                 m.sendSide("NOTIFY_DISPATCH", { message }, "Message sent to dispatch")
               }
+              routeId={m.route?.routeId}
+              routeStops={stops}
             />
 
             {stops.length > 0 && (

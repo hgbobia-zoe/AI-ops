@@ -37,6 +37,16 @@ describe("extension drainer ↔ bookmarklet parity (defect #3)", () => {
     }
   });
 
+  it("both pulls carry the delivery timing fields (customer window + planned minutes) for on-time tracking", () => {
+    for (const src of [extSrc, bookmarkletSrc]) {
+      expect(src).toContain("logisticsStartTime");
+      expect(src).toContain("logistics_start_from_time");
+      expect(src).toContain("earliestRequiredArrivalTime");
+      expect(src).toContain("scheduledLoiterMinutes");
+      expect(src).toContain("transitMinutes");
+    }
+  });
+
   it("the extension surfaces unhandled op types instead of silently ignoring them", () => {
     // create_project needs a popup from a real user gesture, which a timer-driven content script lacks,
     // so it stays bookmarklet/Playwright-only — but it must be COUNTED and reported, never dropped silently.
