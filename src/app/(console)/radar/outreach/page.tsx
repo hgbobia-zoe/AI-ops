@@ -13,7 +13,7 @@ import { seedRadarIfEmpty } from "@/lib/radar/seed";
 import { JURISDICTION_LABEL } from "@/lib/opportunity/types";
 import { apifyConfigured } from "@/lib/prospecting/enrich";
 import { todayInOpsTz } from "@/lib/dates";
-import { SmartleadSettings, SmartleadPushReview, DoNotContactList } from "@/components/ProspectingSmartlead";
+import { SequencerSettings, SequencerPushReview, DoNotContactList } from "@/components/ProspectingSequencer";
 import { viewerRole } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
 
@@ -62,7 +62,7 @@ export default async function OutreachWorklistPage(): Promise<React.JSX.Element>
   return (
     <main className="p-4 sm:p-6">
       <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
-        <div><h1 className="text-[22px] font-medium tracking-tight">Outreach worklist</h1><p className="text-[12.5px] text-meta">Cold outreach to new prospects. Tier A = call first, Tier B = Smartlead email sequence. Existing customers and open leads belong to Sales OS and never show up here.</p></div>
+        <div><h1 className="text-[22px] font-medium tracking-tight">Outreach worklist</h1><p className="text-[12.5px] text-meta">Cold outreach to new prospects. Tier A = call first, Tier B = cold email sequence. Existing customers and open leads belong to Sales OS and never show up here.</p></div>
         <div className="flex flex-wrap items-center gap-3"><FigureStrip figures={figures} />{manage && <ProspectExportButton />}</div>
       </header>
 
@@ -73,8 +73,8 @@ export default async function OutreachWorklistPage(): Promise<React.JSX.Element>
 
       {manage && (
         <>
-          <SmartleadSettings />
-          <div className="mb-6"><SmartleadPushReview /></div>
+          <SequencerSettings />
+          <div className="mb-6"><SequencerPushReview /></div>
         </>
       )}
 

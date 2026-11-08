@@ -11,7 +11,10 @@ import { draftOpportunityOutreach } from "@/lib/opportunity/outreach";
 import { tierFor } from "./tiering";
 import { defaultCadenceForTier } from "./cadences";
 import { enrichEntityContact } from "./enrich";
-import { toCsv, taskToRow, complianceFooter, pushLeadsToSmartlead, smartleadKey, smartleadCampaignId, unsupportedProvider, type SmartleadLead } from "./sequencer";
+import {
+  toCsv, taskToRow, complianceFooter, pushLeads, activeProvider, providerApiKey, providerCampaignId, unsupportedProvider, PROVIDER_LABEL,
+  type OutreachLead, type FetchLike,
+} from "./sequencer";
 import {
   getEnrollmentByOpportunity, insertEnrollment, updateEnrollment, getEnrollment, getAllEnrollments,
   insertTask, getTask, getTasksForEnrollment, getPendingTasks, completeTask as completeTaskRow, skipTask as skipTaskRow, markExported,
@@ -113,7 +116,7 @@ export function worklist(now: Date = new Date()): { today: string; overdue: Work
     if (!opp) continue;
     const enr = getEnrollment(t.enrollmentId);
     if (!enr || enr.status !== "active") continue;
-    if (t.channel === "email" && enr.sequencerPushedAt) continue; // Smartlead sends these steps
+    if (t.channel === "email" && enr.sequencerPushedAt) continue; // the cold email tool sends these steps
     const v = singleView(t.opportunityId, today);
     cards.push({ task: t, opportunity: opp, opportunityScore: v?.score.opportunityScore ?? 0, tier: enr.tier, entity: t.entityId ? getEntity(t.entityId) : null, overdue: t.dueAt < today });
   }
@@ -174,7 +177,7 @@ export function enrollmentFor(opportunityId: string): EnrollmentView | null {
 export interface ExportResult { csv: string; count: number; skippedOwned: number }
 
 /** Due email steps (on/before today) with a resolvable email, as a CSV for manual sending or another
- *  tool. Skips suppressed contacts, contacts Sales OS owns, and leads already handed to Smartlead. The
+ *  tool. Skips suppressed contacts, contacts Sales OS owns, and leads already handed to the sequencer. The
  *  exported steps are marked so they are not exported twice. */
 export async function exportEmailTasks(now: Date = new Date()): Promise<ExportResult> {
   const today = todayInOpsTz(now);
@@ -197,7 +200,7 @@ export async function exportEmailTasks(now: Date = new Date()): Promise<ExportRe
   return { csv: toCsv(rows), count: rows.length, skippedOwned };
 }
 
-// ── Smartlead push (human approved) ─────────────────────────────────────────────────────────────────
+// ── Sequencer push to Instantly or Smartlead (human approved) ───────────────────────────────────────
 export interface PushCandidate {
   enrollmentId: string;
   opportunityId: string;
@@ -211,7 +214,7 @@ export interface PushCandidate {
   blockers: string[];
 }
 
-/** Every active Tier B enrollment whose first email is due and that has not been handed to Smartlead,
+/** Every active Tier B enrollment whose first email is due and that has not been handed to the sequencer,
  *  with the deterministic reasons it can or cannot be pushed. Read only. */
 export function pushCandidates(now: Date = new Date()): PushCandidate[] {
   const today = todayInOpsTz(now);
@@ -251,6 +254,8 @@ export function pushCandidates(now: Date = new Date()): PushCandidate[] {
 
 export interface PushOutcome {
   ok: boolean;
+  /** Which tool the leads went to (Instantly or Smartlead), for the toast. */
+  provider: string;
   approved: number;
   added: number;
   skipped: { enrollmentId: string; reason: string }[];
@@ -258,19 +263,21 @@ export interface PushOutcome {
 }
 
 /** Push exactly the enrollments a person approved. Re-checks eligibility first (nothing stale goes out),
- *  records each accepted lead, and audits the approval. Leads Smartlead skipped or failed stay unpushed. */
+ *  records each accepted lead, and audits the approval. Leads the tool skipped or failed stay unpushed. */
 export async function pushApproved(
   enrollmentIds: string[],
   actor: string,
   now: Date = new Date(),
-  fetchImpl?: Parameters<typeof pushLeadsToSmartlead>[1]["fetchImpl"],
+  fetchImpl?: FetchLike,
 ): Promise<PushOutcome> {
-  const out: PushOutcome = { ok: true, approved: enrollmentIds.length, added: 0, skipped: [], errors: [] };
+  const provider = activeProvider();
+  const label = PROVIDER_LABEL[provider];
+  const out: PushOutcome = { ok: true, provider: label, approved: enrollmentIds.length, added: 0, skipped: [], errors: [] };
   const bad = unsupportedProvider();
-  const key = smartleadKey();
-  const campaignId = smartleadCampaignId();
-  if (bad) return { ...out, ok: false, errors: [`SEQUENCER_PROVIDER=${bad} is not supported; use Smartlead`] };
-  if (!key || !campaignId) return { ...out, ok: false, errors: ["Smartlead is not connected (API key and campaign id)"] };
+  const key = providerApiKey(provider);
+  const campaignId = providerCampaignId(provider);
+  if (bad) return { ...out, ok: false, errors: [`SEQUENCER_PROVIDER=${bad} is not supported; pick Instantly or Smartlead in the outreach settings`] };
+  if (!key || !campaignId) return { ...out, ok: false, errors: [`${label} is not connected (API key and campaign id)`] };
 
   const wanted = new Set(enrollmentIds);
   const candidates = pushCandidates(now).filter((c) => wanted.has(c.enrollmentId));
@@ -281,13 +288,13 @@ export async function pushApproved(
   });
   if (eligible.length === 0) return out;
 
-  const leads: SmartleadLead[] = eligible.map((c) => {
+  const leads: OutreachLead[] = eligible.map((c) => {
     const opp = getOpportunity(c.opportunityId);
     return {
       email: c.email!,
-      company_name: c.company,
+      company: c.company || undefined,
       location: [opp?.city, opp?.state].filter(Boolean).join(", ") || undefined,
-      custom_fields: {
+      vars: {
         intro_subject: c.subject,
         intro_body: c.body,
         opportunity: c.opportunityName,
@@ -296,21 +303,24 @@ export async function pushApproved(
       },
     };
   });
-  const res = await pushLeadsToSmartlead(leads, { key, campaignId, fetchImpl });
+  const res = await pushLeads(provider, leads, { key, campaignId, fetchImpl });
   out.ok = res.ok;
   out.errors.push(...res.errors);
   const skippedSet = new Set(res.skippedEmails);
   const failedSet = new Set(res.failedEmails);
+  const skipReason = provider === "instantly"
+    ? "Instantly skipped it (blocklist, invalid email, or already in your Instantly workspace)"
+    : "Smartlead skipped it (block, unsubscribe, bounce or duplicate list)";
   for (const c of eligible) {
     const e = c.email!.toLowerCase();
-    if (failedSet.has(e)) { out.skipped.push({ enrollmentId: c.enrollmentId, reason: "Smartlead call failed; try again" }); continue; }
-    if (skippedSet.has(e)) { out.skipped.push({ enrollmentId: c.enrollmentId, reason: "Smartlead skipped it (block, unsubscribe, bounce or duplicate list)" }); continue; }
-    markEnrollmentPushed(c.enrollmentId, "smartlead", actor, now);
+    if (failedSet.has(e)) { out.skipped.push({ enrollmentId: c.enrollmentId, reason: `${label} call failed; try again` }); continue; }
+    if (skippedSet.has(e)) { out.skipped.push({ enrollmentId: c.enrollmentId, reason: skipReason }); continue; }
+    markEnrollmentPushed(c.enrollmentId, provider, actor, now);
     const emailTaskIds = getTasksForEnrollment(c.enrollmentId).filter((t) => t.channel === "email").map((t) => t.id);
     if (emailTaskIds.length) markExported(emailTaskIds, now);
     out.added++;
     try {
-      insertAudit({ actor, action: "prospecting.smartlead_push", entity: "prospect_enrollment", entityId: c.enrollmentId, after: { opportunityId: c.opportunityId, email: c.email, campaignId } });
+      insertAudit({ actor, action: `prospecting.${provider}_push`, entity: "prospect_enrollment", entityId: c.enrollmentId, after: { opportunityId: c.opportunityId, email: c.email, campaignId, provider } });
     } catch { /* audit is observability only */ }
   }
   return out;
