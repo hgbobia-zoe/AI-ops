@@ -12,6 +12,10 @@ import { estimateHandlingTime, type ItemHandlingEstimate } from "./itemIntellige
 import { assembleInsightFacts, interpretInsights, type InsightsResult, type InsightProjectInput, type InsightRunInput } from "./insights";
 import { computeVariance, laborPctOfRevenue, contribution, contributionMargin, type Variance, type MoneyStatus } from "./calc";
 import type { Period } from "./periods";
+import { summarizeTeamPayroll, resolveTeam, pickupWindow, type TeamPayrollSummary } from "./teamPayroll";
+import { payrollReview } from "@/lib/payroll/review";
+import { listEmployees } from "@/lib/people/store";
+import { getInternalRoleCountsInRange } from "@/lib/scheduling/assignments";
 
 export interface FinanceSummary {
   period: Period;
@@ -203,12 +207,75 @@ export function projectHandlingEstimate(txId: string): ItemHandlingEstimate | nu
 }
 
 /**
+ * Whole team payroll vs revenue served for the period (teamPayroll.ts has the bases). Reuses Payroll Review's
+ * per-worker estimate (payrollReview → classifyWorker) for the SAME range, so a Mon to Sun range matches the
+ * Payroll Review "Est. gross" for that week. The Connecteam reads it makes (users, rates, actual hours for
+ * this range) are the same cached reads financeForPeriod already made, so it costs no extra API quota.
+ * Teams come from the People department, then the scheduled shift role, then the worker type. Returns an
+ * unavailable summary (never zeros) when anything upstream fails.
+ */
+export async function teamPayrollForPeriod(period: Period): Promise<TeamPayrollSummary> {
+  const { start, end } = period;
+  const ledger = getLaborLedgerSummary(start, end);
+  const delivery = getBookingsRevenueInRange(start, end).signed;
+  const pw = pickupWindow(start, end);
+  const pickup = getBookingsRevenueInRange(pw.start, pw.end).signed;
+  const base = { deliveryRevenue: delivery, pickupRevenue: pickup, attributedLabor: ledger.internalCost, tempLabor: ledger.tempCost };
+  try {
+    const review = await payrollReview({ start, end, label: period.label });
+    const employees = safeEmployees();
+    const deptByCt = new Map<number, string>();
+    const deptByRecord = new Map<string, string>();
+    const deptByGusto = new Map<string, string>();
+    for (const e of employees) {
+      if (!e.department) continue;
+      if (e.connecteamUserId != null) deptByCt.set(e.connecteamUserId, e.department);
+      if (e.hrWorkerId) deptByRecord.set(e.hrWorkerId, e.department);
+      if (e.gustoId) deptByGusto.set(e.gustoId, e.department);
+    }
+    const roles = safeRoleCounts(start, end);
+    const workers = review.workers.map((w) => {
+      const department =
+        (w.connecteamUserId != null ? deptByCt.get(w.connecteamUserId) : undefined) ??
+        (w.recordId ? deptByRecord.get(w.recordId) : undefined) ??
+        (w.gustoId ? deptByGusto.get(w.gustoId) : undefined) ??
+        null;
+      const t = resolveTeam({
+        department,
+        shiftRoles: w.connecteamUserId != null ? roles.get(w.connecteamUserId) ?? null : null,
+        workerType: w.workerType,
+        country: w.country ?? null,
+      });
+      return { key: w.key, name: w.name, hours: w.hours, estPay: w.estPay, team: t.team, teamSource: t.source };
+    });
+    return summarizeTeamPayroll({ ...base, connecteamOk: review.connecteamOk, workers });
+  } catch {
+    return summarizeTeamPayroll({ ...base, connecteamOk: false, workers: [] });
+  }
+}
+
+function safeEmployees(): ReturnType<typeof listEmployees> {
+  try {
+    return listEmployees();
+  } catch {
+    return [];
+  }
+}
+function safeRoleCounts(start: string, end: string): ReturnType<typeof getInternalRoleCountsInRange> {
+  try {
+    return getInternalRoleCountsInRange(start, end);
+  } catch {
+    return new Map();
+  }
+}
+
+/**
  * FI Stage 7c — historical learning / recommendations. Assembles DETERMINISTIC facts over the period's
  * project snapshots + reconciliation-run history, then runs the dormant-safe LLM interpretation pass (facts
  * computed here, the LLM only interprets them). Always returns the facts; the interpretation is null with an
  * honest note when no model is configured. `now` is injectable for staleness in the per-project snapshots.
  */
-export async function financeInsights(period: Period, now: Date = new Date()): Promise<InsightsResult> {
+export async function financeInsights(period: Period, now: Date = new Date(), teamPayroll: TeamPayrollSummary | null = null): Promise<InsightsResult> {
   const { start, end } = period;
   const itemCfg = itemIntelligenceConfig();
   const bookings = getBookingsInRange(start, end);
@@ -240,7 +307,11 @@ export async function financeInsights(period: Period, now: Date = new Date()): P
     lines: (r.variance?.lines ?? []).map((ln) => ({ reason: ln.reason, delta: ln.delta })),
   }));
 
-  const { facts, overview } = assembleInsightFacts({ periodLabel: period.label, projects, runs, config: insightsConfig() });
+  const tp = teamPayroll ?? (await teamPayrollForPeriod(period));
+  const { facts, overview } = assembleInsightFacts({
+    periodLabel: period.label, projects, runs, config: insightsConfig(),
+    teamPayroll: { payroll: tp.payroll, partial: tp.partial, revenueServed: tp.revenue.served, attributedLabor: tp.attributedLabor },
+  });
   const { interpretation, note, error } = await interpretInsights(facts, period.label);
   return {
     periodLabel: period.label,
