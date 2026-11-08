@@ -61,6 +61,9 @@ export interface PullState {
   bookingsImportOk?: boolean;
   bookingsFailingSince?: string;
   bookingsAlertedAt?: string;
+  // Blank-draft burst guard: date_created (YYYY-MM-DD) → ISO we Slack-alerted a runaway create loop for
+  // that day. One alert per day, however many pulls see the burst. Old days are pruned on write.
+  blankDraftAlerted?: Record<string, string>;
 }
 
 export function getPullState(): PullState {
@@ -356,6 +359,22 @@ export function recordBookingsImportFailure(ok: boolean, detail: string | null, 
   s.bookingsImportOk = ok;
   save(s);
   return { alert };
+}
+
+/** Claim the one blank-draft burst alert for `date` (a Goodshuffle date_created day). Returns true the
+ *  FIRST time it is called for that day (the caller then posts to Slack) and false on every later pull,
+ *  so an hourly full pull plus the 10 min active lane can never repeat the page. Entries older than 14
+ *  days are dropped so the state cannot grow. */
+export function claimBlankDraftBurstAlert(date: string, now: Date = new Date()): boolean {
+  const s = getPullState();
+  const seen = s.blankDraftAlerted ?? {};
+  if (seen[date]) return false;
+  const cutoff = now.getTime() - 14 * 86400000;
+  for (const [d, at] of Object.entries(seen)) if (Date.parse(at) < cutoff) delete seen[d];
+  seen[date] = now.toISOString();
+  s.blankDraftAlerted = seen;
+  save(s);
+  return true;
 }
 
 // ── Banner verdict (drives PullHealthBanner) ──────────────────────────────────
