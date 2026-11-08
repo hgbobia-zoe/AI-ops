@@ -235,17 +235,6 @@ export function cacheAutoStage(id: string, stage: LifecycleStage): void {
   getDb().prepare("UPDATE opportunities SET stage=?, updated_at=updated_at WHERE id=? AND stage_source='auto'").run(stage, id);
 }
 
-/** Sales OS handoff — the opportunity stays the source record; this marks the bridge. Idempotent. */
-export function createHandoff(id: string, opts: { bookingId?: string; nextAction?: string } = {}, now: Date = new Date()): StoredOpportunity | null {
-  const db = getDb();
-  const ts = now.toISOString();
-  const opp = db.prepare("SELECT id FROM opportunities WHERE id=?").get(id);
-  if (!opp) return null;
-  db.prepare("UPDATE opportunities SET sales_status=?, booking_id=COALESCE(?, booking_id), stage=CASE WHEN stage_source='manual' THEN stage ELSE 'OPPORTUNITY' END, next_action_date=COALESCE(?, next_action_date), updated_at=? WHERE id=?")
-    .run(opts.bookingId ? "LINKED" : "OPPORTUNITY_CREATED", opts.bookingId ?? null, opts.nextAction ?? null, ts, id);
-  return getOpportunity(id);
-}
-
 export function setCampaign(opportunityId: string, campaignId: string | null): void {
   getDb().prepare("UPDATE opportunities SET campaign_id=? WHERE id=?").run(campaignId, opportunityId);
 }

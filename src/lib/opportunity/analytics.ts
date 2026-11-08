@@ -1,6 +1,6 @@
 // Opportunity Radar — analytics (§19). Deterministic funnel + breakdowns over the derived board, so we
 // can eventually answer the one question that matters: OPPORTUNITY → REVENUE. All counts come from real
-// stored state; indicative value ranges are labelled as such (never presented as booked revenue).
+// stored state. Dollar values are only what a source stated or what Goodshuffle booked; never estimated.
 
 import { todayInOpsTz } from "@/lib/dates";
 import { opportunityBoard, type OpportunityView } from "./service";
@@ -23,8 +23,49 @@ export interface AnalyticsView {
     outreachDrafted: number;
     contacted: number;
     won: number;
-    indicativePipelineHigh: number; // sum of indicative/hard value highs for qualified, non-lost
+    statedValueTotal: number; // sum of values STATED BY SOURCES (qualified, not lost); no estimates
+    withValueData: number; // how many of those have a stated value at all
+    inGoodshuffle: number; // converted (intent confirmed) and linked to a Goodshuffle project
+    signedBookings: number; // linked projects with a signed contract
+    bookedRevenue: number; // SIGNED: contract totals of signed linked projects (dollars, from Goodshuffle)
+    realizedRevenue: number; // REALIZED: signed linked projects whose event date has passed
   };
+  /** Signed revenue per acquisition source. Each Goodshuffle project counts once, under the first
+   *  opportunity (by conversion) that links to it, so revenue is never double counted. */
+  revenueBySource: { key: string; label: string; projects: number; signed: number; bookedRevenue: number; realizedRevenue: number }[];
+}
+
+/** PURE. Signed and realized revenue per source, counting each booking once (first linked opportunity). */
+export function attributeRevenue(rows: Pick<OpportunityView, "opp" | "booking">[]): {
+  bySource: AnalyticsView["revenueBySource"];
+  totals: { inGoodshuffle: number; signedBookings: number; bookedRevenue: number; realizedRevenue: number };
+} {
+  const seen = new Set<string>();
+  const map = new Map<string, AnalyticsView["revenueBySource"][number]>();
+  const totals = { inGoodshuffle: 0, signedBookings: 0, bookedRevenue: 0, realizedRevenue: 0 };
+  const linked = rows.filter((v) => v.opp.bookingId).sort((a, b) => (a.opp.discoveredAt ?? "").localeCompare(b.opp.discoveredAt ?? ""));
+  for (const v of linked) {
+    const id = v.opp.bookingId!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const key = v.opp.sourceName ?? v.opp.sourceId ?? "unknown";
+    const s = map.get(key) ?? { key, label: key, projects: 0, signed: 0, bookedRevenue: 0, realizedRevenue: 0 };
+    s.projects++;
+    totals.inGoodshuffle++;
+    if (v.booking?.signed) {
+      const amt = v.booking.contractTotal ?? 0;
+      s.signed++;
+      s.bookedRevenue += amt;
+      totals.signedBookings++;
+      totals.bookedRevenue += amt;
+      if (v.booking.realized) {
+        s.realizedRevenue += amt;
+        totals.realizedRevenue += amt;
+      }
+    }
+    map.set(key, s);
+  }
+  return { bySource: [...map.values()].sort((a, b) => b.bookedRevenue - a.bookedRevenue || b.projects - a.projects), totals };
 }
 
 const STAGE_BUCKETS: { key: string; label: string; match: (v: OpportunityView) => boolean }[] = [
@@ -71,15 +112,18 @@ export function opportunityAnalytics(today: string = todayInOpsTz(), opts: { inc
     if (contactedSet.has(v.opp.id) || ["CONTACTED", "ENGAGED", "OPPORTUNITY", "QUOTED", "WON"].includes(v.stage)) contacted++;
   }
 
+  const revenue = attributeRevenue(rows);
   const totals = {
+    ...revenue.totals,
     discovered: rows.length,
     qualified: rows.filter((v) => v.score.tier !== "UNQUALIFIED").length,
     withTarget: rows.filter((v) => v.primaryTarget != null).length,
     outreachDrafted,
     contacted,
     won: rows.filter((v) => v.stage === "WON").length,
-    indicativePipelineHigh: rows.filter((v) => v.score.tier !== "UNQUALIFIED" && v.stage !== "LOST").reduce((s, v) => s + (v.value?.high ?? 0), 0),
+    statedValueTotal: rows.filter((v) => v.score.tier !== "UNQUALIFIED" && v.stage !== "LOST").reduce((s, v) => s + (v.value?.high ?? 0), 0),
+    withValueData: rows.filter((v) => v.score.tier !== "UNQUALIFIED" && v.stage !== "LOST" && v.value).length,
   };
 
-  return { today, funnel, bySource, byJurisdiction, byKind, totals };
+  return { today, funnel, bySource, byJurisdiction, byKind, totals, revenueBySource: revenue.bySource };
 }

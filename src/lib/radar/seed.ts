@@ -231,17 +231,17 @@ export function ensureSources(now: Date = new Date()): void {
   }
 }
 
-/** Seed the demo dataset if Event Radar is empty. Idempotent (upserts by dedupe_key), so a second call
- *  is a no-op. Returns whether it actually seeded. */
-export async function seedRadarIfEmpty(now: Date = new Date()): Promise<boolean> {
-  ensureSources(now);
-  if (getEventCount() > 0) return false;
-  await runSource(SEED_SOURCE, now);
-  return true;
+/** Demo data is OFF (owner, 2026-11-07: "Remove all mock data"). Kept as a no-op so existing call sites
+ *  stay valid; the demo dataset above is no longer loaded at runtime and legacy rows are purged by
+ *  src/lib/opportunity/demoPurge.ts. */
+export async function seedRadarIfEmpty(_now: Date = new Date()): Promise<boolean> {
+  void _now;
+  return false;
 }
 
-/** Force a (re-)seed regardless of current contents — for an explicit "load demo data" action. */
-export async function reseedRadar(now: Date = new Date()): Promise<void> {
+/** Explicit demo seeding for tests / local experiments only. Never called by the app. */
+export async function seedDemoRadarForTests(now: Date = new Date()): Promise<void> {
   ensureSources(now);
+  if (getEventCount() > 0) return;
   await runSource(SEED_SOURCE, now);
 }

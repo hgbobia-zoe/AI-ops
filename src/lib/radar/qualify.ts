@@ -101,7 +101,6 @@ export function qualify(input: QualifyInput, config: RadarConfig = DEFAULT_RADAR
     positives: positives.sort((a, b) => b.weight - a.weight),
     negatives,
     unknowns,
-    estimatedValue: estimateValue(input, config),
   };
 }
 
@@ -111,13 +110,4 @@ export function tierFor(score: number, config: RadarConfig = DEFAULT_RADAR_CONFI
   return "UNQUALIFIED";
 }
 
-/** Coarse indicative rental-spend range — ONLY when attendance is known and the category has a rate.
- *  Deliberately wide and clearly indicative; null otherwise. Never a revenue prediction. */
-export function estimateValue(input: QualifyInput, config: RadarConfig = DEFAULT_RADAR_CONFIG): { low: number; high: number } | null {
-  if (input.expectedAttendance == null || input.attendanceConfidence === "UNKNOWN") return null;
-  if (input.region === "OUT_OF_AREA") return null;
-  const rate = config.valuePerAttendee[input.category];
-  if (!rate) return null;
-  const round = (n: number) => Math.round(n / 500) * 500;
-  return { low: round(input.expectedAttendance * rate.low), high: round(input.expectedAttendance * rate.high) };
-}
+// No value estimate (owner rule 2026-11-07: real data only, no guesses).

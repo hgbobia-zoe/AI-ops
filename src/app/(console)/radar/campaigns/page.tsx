@@ -33,7 +33,7 @@ export default async function CampaignsPage(): Promise<React.JSX.Element> {
         <div className="overflow-x-auto border border-border">
           <table className={tableCls}>
             <colgroup><col /><col style={{ width: "80px" }} /><col style={{ width: "90px" }} /><col style={{ width: "90px" }} /><col style={{ width: "90px" }} /><col style={{ width: "110px" }} /></colgroup>
-            <thead className={theadCls}><tr><th className={thCls}>Campaign</th><th className={`${thCls} text-right`}>Opps</th><th className={`${thCls} text-right`}>Companies</th><th className={`${thCls} text-right`}>Contacted</th><th className={`${thCls} text-right`}>Conv.</th><th className={`${thCls} text-right`}>Indic. value</th></tr></thead>
+            <thead className={theadCls}><tr><th className={thCls}>Campaign</th><th className={`${thCls} text-right`}>Opps</th><th className={`${thCls} text-right`}>Companies</th><th className={`${thCls} text-right`}>Contacted</th><th className={`${thCls} text-right`}>Conv.</th><th className={`${thCls} text-right`}>Stated value</th></tr></thead>
             <tbody>
               {campaigns.map((c) => (
                 <tr key={c.campaign.id} className="border-t border-[var(--row-rule)] transition-colors hover:bg-[var(--row-hover)]">
@@ -42,7 +42,7 @@ export default async function CampaignsPage(): Promise<React.JSX.Element> {
                   <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{c.companies}</td>
                   <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{c.contacted}</td>
                   <td className="px-2.5 py-2.5 text-right tabular-nums text-meta">{c.conversionRate != null ? `${Math.round(c.conversionRate * 100)}%` : "—"}</td>
-                  <td className="px-2.5 py-2.5 text-right tabular-nums text-meta">{c.indicativeValueHigh ? fmtK(c.indicativeValueHigh) : "—"}</td>
+                  <td className="px-2.5 py-2.5 text-right tabular-nums text-meta">{c.indicativeValueHigh ? fmtK(c.indicativeValueHigh) : "No value data"}</td>
                 </tr>
               ))}
             </tbody>

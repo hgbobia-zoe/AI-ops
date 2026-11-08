@@ -48,4 +48,9 @@ describe("rowToRaw", () => {
   it("ignores an invalid date", () => {
     expect(rowToRaw({ name: "X", date: "May 2027" })!.estimatedDate).toBeNull();
   });
+  it("takes a stated value from the sheet and never invents one", () => {
+    expect(rowToRaw({ name: "X", value: "$12,500" })).toMatchObject({ valueLow: 12500, valueHigh: 12500 });
+    expect(rowToRaw({ name: "X", value_low: "5000", value_high: "9000" })).toMatchObject({ valueLow: 5000, valueHigh: 9000 });
+    expect(rowToRaw({ name: "X", attendance: "50000" })).toMatchObject({ valueLow: null, valueHigh: null });
+  });
 });

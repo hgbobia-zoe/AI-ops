@@ -10,6 +10,7 @@ import { enqueueGsOp, gsOpDedupeKeyExists } from "@/lib/db/repo";
 import { notify } from "@/lib/notify/channels";
 import { isWebLead, replyToLeadPostSoon } from "@/lib/intake/leadSlackReply";
 import { webIntakeAckEmailEnabled, webLeadEmailTemplateName, webLeadWelcomeApplies } from "@/lib/intake/webLead";
+import { linkOpportunityToProject } from "@/lib/opportunity/conversion";
 
 export const dynamic = "force-dynamic";
 
@@ -63,6 +64,12 @@ export async function POST(req: Request): Promise<NextResponse> {
       completedAt: now,
     });
     await logIntakeEvent("GS_SHELL_CREATED", id, { projectId: String(body.projectId) });
+    // A Radar conversion: link the new project back to its opportunity (attribution + booking truth).
+    try {
+      linkOpportunityToProject(id, String(body.projectId));
+    } catch {
+      /* never fail the callback on the link */
+    }
     // Web leads: Viktor replies under the lead's #new-leads post with the project link (once; no-op otherwise).
     replyToLeadPostSoon(id);
     // Web leads with an email: send the team's Goodshuffle welcome template ("New Webform Submission") from

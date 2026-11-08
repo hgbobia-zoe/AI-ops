@@ -18,7 +18,8 @@ export type IntakeAction =
   | "WEB_LEAD_QUEUED" // a web lead's create_project op was enqueued
   | "WEB_LEAD_WELCOME_QUEUED" // the Goodshuffle welcome-template email was queued for the new project
   | "WEB_LEAD_SMS_SENT" // the welcome text went out (Google leads)
-  | "WEB_LEAD_SMS_FAILED"; // the welcome text could not be sent
+  | "WEB_LEAD_SMS_FAILED" // the welcome text could not be sent
+  | "RADAR_CONVERSION_QUEUED"; // a person confirmed a Radar prospect's intent and queued the Goodshuffle project
 
 export async function logIntakeEvent(action: IntakeAction, intakeId: string, detail?: Record<string, unknown>): Promise<void> {
   try {

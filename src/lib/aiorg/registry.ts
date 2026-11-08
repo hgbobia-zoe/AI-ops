@@ -313,7 +313,8 @@ export const AI_EMPLOYEES: AIEmployee[] = [
     ],
     toolbox: [T.opportunities(), T.oppScore(), T.draftComms(), T.sendEmail(), T.recordAudit()],
     escalationRules: [{ when: "A high-score opportunity is near its deadline" }],
-    backing: "seed",
+    // Real records only since 2026-11-07 (demo data removed); live feeds wait on SAM_API_KEY / RADAR_ICS_FEEDS.
+    backing: "partial",
     capability: "ai", // deterministic opportunity scoring PLUS an LLM outreach-draft path
     valueMeasure: "Opportunities surfaced -> pursued, pipeline added",
   },

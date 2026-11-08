@@ -63,7 +63,7 @@ function metricsFor(campaign: StoredCampaign, members: OpportunityView[]): Campa
     outreachSent,
     contacted,
     won: members.filter((v) => v.stage === "WON").length,
-    indicativeValueHigh: members.reduce((s, v) => s + (v.value?.high ?? 0), 0),
+    indicativeValueHigh: members.reduce((s, v) => s + (v.value?.high ?? 0), 0), // stated values only (no estimates)
     conversionRate: members.length ? contacted / members.length : null,
   };
 }

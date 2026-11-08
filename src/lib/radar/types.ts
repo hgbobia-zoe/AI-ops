@@ -104,9 +104,6 @@ export interface Qualification {
   positives: ScoreSignal[];
   negatives: ScoreSignal[];
   unknowns: ScoreSignal[];
-  /** Indicative only — a coarse rental-spend range derived from attendance × category, shown only when
-   *  attendance is known. NEVER a revenue prediction. null when we can't responsibly estimate. */
-  estimatedValue: { low: number; high: number } | null;
 }
 
 // ── Recurrence (DERIVED) ────────────────────────────────────────────────────────────────────────

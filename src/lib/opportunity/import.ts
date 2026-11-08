@@ -59,6 +59,11 @@ const ROLE_MAP: Record<string, { kind: EntityKind; role: RelationshipRole }> = {
 };
 const CATEGORY_KEYS = Object.keys(ZOE_CATEGORY_LABEL) as ZoeCategory[];
 const ymd = (s: string | undefined): string | null => (s && /^\d{4}-\d{2}-\d{2}$/.test(s.trim()) ? s.trim() : null);
+/** A real dollar figure from the sheet ("$12,500" / "12500"); null when blank or not a number. */
+const money = (s: string | undefined): number | null => {
+  const n = Number((s ?? "").replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
 
 /** Map an import row to a RawOpportunity. Returns null when there's no usable name. */
 export function rowToRaw(row: Record<string, string>): RawOpportunity | null {
@@ -96,6 +101,9 @@ export function rowToRaw(row: Record<string, string>): RawOpportunity | null {
     verificationStatus: "INFERRED",
     zoeCategoriesHint: categories.length ? categories : undefined,
     entities: entities.length ? entities : undefined,
+    // Stated value, only when the sheet has one (value, or value_low / value_high, or budget). Never guessed.
+    valueLow: money(row.value_low) ?? money(row.value) ?? money(row.budget),
+    valueHigh: money(row.value_high) ?? money(row.value) ?? money(row.budget),
   };
 }
 

@@ -121,7 +121,6 @@ export interface OpportunityScore {
   positives: ScoreSignal[];
   negatives: ScoreSignal[];
   unknowns: ScoreSignal[];
-  estimatedValue: { low: number; high: number } | null;
 }
 
 export interface MaturityView {

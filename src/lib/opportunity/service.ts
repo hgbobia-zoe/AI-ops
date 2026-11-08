@@ -8,6 +8,7 @@ import { getEvent } from "@/lib/radar/store";
 import { scoreOpportunity, type ScoreInput } from "./score";
 import { deriveMaturity } from "./maturity";
 import { autoStage, effectiveStage, type LifecycleFacts } from "./lifecycle";
+import { bookingOutcome, type BookingOutcome } from "./conversion";
 import { targetRank } from "./classify";
 import { buildCustomerIndex, matchEntity, type RelationshipMemo } from "./relationship";
 import {
@@ -35,8 +36,12 @@ export interface OpportunityView {
   primaryTarget: PrimaryTarget | null;
   hasExistingRelationship: boolean;
   recommendedAction: string;
-  /** Effective value: the source's hard figure when present, else the derived indicative range. */
-  value: { low: number; high: number; indicative: boolean } | null;
+  /** Dollar value STATED BY THE SOURCE (a published budget, an award / contract amount, or an imported
+   *  figure). null = no value data. Never estimated (owner rule 2026-11-07: real data only). */
+  value: { low: number; high: number } | null;
+  /** The linked Goodshuffle booking's real outcome (signed / lost / quoted + contract total), when linked
+   *  and pulled. When present it decides the stage: booking truth beats any estimate or manual guess. */
+  booking?: BookingOutcome | null;
 }
 
 export interface ViewContext {
@@ -98,22 +103,24 @@ export function viewFor(opp: StoredOpportunity, ctx: ViewContext): OpportunityVi
     hasOutreachDraft: opp.stage === "OUTREACH_READY" && opp.stageSource === "manual",
   };
   const auto = autoStage(facts);
-  const stage = effectiveStage(auto, opp.stageSource === "manual" ? opp.stage : null);
+  const booking = opp.bookingId ? bookingOutcome(opp.bookingId, ctx.today) : null;
+  const manualStage = opp.stageSource === "manual" ? opp.stage : null;
+  // Booking truth wins (signed = won, lost = lost, else quoted), except a person archiving it.
+  const stage = booking && manualStage !== "ARCHIVED" ? booking.stage : effectiveStage(auto, manualStage);
 
   const recommendedAction = deriveRecommendedAction(opp, primaryTarget, edges.length, maturity);
 
   const value =
     opp.estValueLow != null || opp.estValueHigh != null
-      ? { low: opp.estValueLow ?? opp.estValueHigh ?? 0, high: opp.estValueHigh ?? opp.estValueLow ?? 0, indicative: false }
-      : score.estimatedValue
-        ? { ...score.estimatedValue, indicative: true }
-        : null;
+      ? { low: opp.estValueLow ?? opp.estValueHigh ?? 0, high: opp.estValueHigh ?? opp.estValueLow ?? 0 }
+      : null;
 
-  return { opp, score, maturity, stage, entities: edges, primaryTarget, hasExistingRelationship, recommendedAction, value };
+  return { opp, score, maturity, stage, entities: edges, primaryTarget, hasExistingRelationship, recommendedAction, value, booking };
 }
 
 function deriveRecommendedAction(opp: StoredOpportunity, primary: PrimaryTarget | null, entityCount: number, maturity: MaturityView): string {
-  if (opp.salesStatus !== "NONE") return "In Sales OS — continue the sales process";
+  if (opp.salesStatus === "LINKED") return "In Goodshuffle: continue in Sales OS";
+  if (opp.salesStatus !== "NONE") return "Goodshuffle project queued: it appears once the office session creates it";
   if (primary) {
     const verb = maturity.maturity === "IMMEDIATE" || maturity.maturity === "OPERATIONALLY_ACTIVE" ? "Contact now" : "Begin relationship outreach";
     return `${verb}: ${primary.edge.entity.name} (${primary.relationshipLabel})`;
