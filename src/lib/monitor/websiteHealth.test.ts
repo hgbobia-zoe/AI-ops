@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { statusText } from "@/lib/notify/status";
 import { getDb } from "@/lib/db";
 import { checkWebsiteHealth, recordWebsiteProbe, runWebsiteMonitor, type WebsiteCheck } from "./websiteHealth";
 
@@ -102,10 +103,12 @@ describe("recordWebsiteProbe (mirrors recordInstaworkProbe)", () => {
   it("pages ONCE when a sustained failure follows a known-good baseline", () => {
     recordWebsiteProbe(check({ ok: true }), t("2026-10-02T10:00:00Z")); // baseline
     const flip = recordWebsiteProbe(check({ ok: false, status: 500, error: "HTTP 500" }), t("2026-10-02T10:15:00Z"));
-    expect(flip.alert).toMatch(/is DOWN/i);
-    expect(flip.alert).toMatch(/HTTP 500/);
-    expect(flip.alert).toMatch(/zoeeventsdmv\.com/);
-    expect(flip.alert).toMatch(/Failing since/i);
+    const text = statusText(flip.alert!, t("2026-10-02T10:15:00Z").getTime());
+    expect(text).toMatch(/is down/i);
+    expect(text).toMatch(/HTTP 500/);
+    expect(text).toMatch(/zoeeventsdmv\.com/);
+    expect(text).toMatch(/Down since/i);
+    expect(flip.alert!.level).toBe("down");
   });
 
   it("dedups: a second failing observation inside the 2h cool-off does not re-alert", () => {
@@ -122,17 +125,18 @@ describe("recordWebsiteProbe (mirrors recordInstaworkProbe)", () => {
 
   it("reports unreachable (network) distinctly from an HTTP code in the alert", () => {
     recordWebsiteProbe(check({ ok: true }), t("2026-10-02T10:00:00Z"));
-    const a = recordWebsiteProbe(check({ ok: false, status: null, error: "unreachable" }), t("2026-10-02T10:15:00Z")).alert!;
-    // The failure REASON is the network-level "unreachable", not an HTTP status code like "(HTTP 500)".
-    expect(a).toContain("(unreachable)");
-    expect(a).not.toMatch(/\(HTTP \d/);
+    const a = statusText(recordWebsiteProbe(check({ ok: false, status: null, error: "unreachable" }), t("2026-10-02T10:15:00Z")).alert!);
+    // The failure REASON is the network-level "unreachable", not an HTTP status code like "HTTP 500".
+    expect(a).toContain("returned unreachable");
+    expect(a).not.toMatch(/returned HTTP \d/);
   });
 
   it("emits one recovery message after a failure was alerted", () => {
     recordWebsiteProbe(check({ ok: true }), t("2026-10-02T10:00:00Z"));
     recordWebsiteProbe(check({ ok: false, status: 500, error: "HTTP 500" }), t("2026-10-02T10:15:00Z")); // alerted down
     const rec = recordWebsiteProbe(check({ ok: true }), t("2026-10-02T10:30:00Z"));
-    expect(rec.alert).toMatch(/back up/i);
+    expect(statusText(rec.alert!)).toMatch(/back up/i);
+    expect(rec.alert!.level).toBe("recovered");
   });
 
   it("does not send a recovery message for a failure that never alerted (cold start then recovery)", () => {
@@ -147,14 +151,14 @@ describe("recordWebsiteProbe (mirrors recordInstaworkProbe)", () => {
     recordWebsiteProbe(check({ url: b, ok: true }), t("2026-10-02T10:00:00Z"));
     // a goes down (sustained) and pages for a only; b stays up and is silent.
     const aDown = recordWebsiteProbe(check({ url: a, ok: false, status: 503, error: "HTTP 503" }), t("2026-10-02T10:15:00Z")).alert;
-    expect(aDown).toMatch(/is DOWN/i);
-    expect(aDown).toContain(a);
+    expect(statusText(aDown!)).toMatch(/is down/i);
+    expect(statusText(aDown!)).toContain(a);
     expect(recordWebsiteProbe(check({ url: b, ok: true }), t("2026-10-02T10:15:00Z")).alert).toBeNull();
   });
 
   it("alert copy carries no dash or emoji (house comms style)", () => {
     recordWebsiteProbe(check({ ok: true }), t("2026-10-02T10:00:00Z"));
-    const a = recordWebsiteProbe(check({ ok: false, status: 500, error: "HTTP 500" }), t("2026-10-02T10:15:00Z")).alert!;
+    const a = statusText(recordWebsiteProbe(check({ ok: false, status: 500, error: "HTTP 500" }), t("2026-10-02T10:15:00Z")).alert!);
     expect(a).not.toMatch(/[—–]/); // no em/en dashes (ISO timestamps legitimately contain hyphens)
     expect(a).not.toMatch(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u); // no emoji
   });

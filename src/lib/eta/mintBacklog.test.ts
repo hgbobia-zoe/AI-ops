@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { statusText } from "@/lib/notify/status";
 import { getDb } from "@/lib/db";
 import { enqueueEtaLinkMint, recordEtaLinkResult } from "@/lib/db/repo";
 import {
@@ -8,6 +9,7 @@ import {
   isOpsAlertHour,
   stuckMintAlertText,
   MINT_BACKLOG_RECOVERED_TEXT,
+  MINT_BACKLOG_RECOVERED,
   type MintBacklog,
 } from "./mintBacklog";
 import { ignitionDotStatus } from "./ignitionStatus";
@@ -71,7 +73,7 @@ describe("decideMintBacklogAlert (pure)", () => {
 describe("alert text + ops hours", () => {
   it("names the count, age and trucks, with no dashes or emoji", () => {
     const t = stuckMintAlertText({ stuck: 4, oldestMin: 85, byTruck: { E450: 3, "NPR-1": 1 } });
-    expect(t).toContain("4 customer tracking links have been waiting");
+    expect(t).toContain("4 customer tracking links have been stuck in Ignition");
     expect(t).toContain("1h 25m");
     expect(t).toContain("E450: 3, NPR-1: 1");
     for (const s of [t, MINT_BACKLOG_RECOVERED_TEXT]) {
@@ -134,13 +136,13 @@ describe("checkMintBacklog (DB)", () => {
 
     const first = checkMintBacklog({ signedOutAlertCovers: false, now });
     expect(first.backlog.stuck).toBe(2);
-    expect(first.alert).toContain("2 customer tracking links");
+    expect(statusText(first.alert!)).toContain("2 customer tracking links");
 
     expect(checkMintBacklog({ signedOutAlertCovers: false, now }).alert).toBeNull(); // deduped
 
     recordEtaLinkResult(a.id, { code: "abc" });
     recordEtaLinkResult(b.id, { error: "mint_failed" }); // no longer pending → no longer stuck
-    expect(checkMintBacklog({ signedOutAlertCovers: false, now }).alert).toBe(MINT_BACKLOG_RECOVERED_TEXT);
+    expect(checkMintBacklog({ signedOutAlertCovers: false, now }).alert).toEqual(MINT_BACKLOG_RECOVERED);
     expect(checkMintBacklog({ signedOutAlertCovers: false, now }).alert).toBeNull();
   });
 

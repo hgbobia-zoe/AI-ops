@@ -1,20 +1,21 @@
 // The bookings ingest's runaway-create guard: more than N blank drafts created today/yesterday posts ONE
-// ops Slack per day, on either lane, and never repeats on later pulls. Real in-memory DB; Slack mocked.
+// status card per day, on either lane, and never repeats on later pulls. Real in-memory DB; status posts mocked.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-const slack = vi.hoisted(() => ({ notify: vi.fn(async () => ({ ok: true })) }));
-vi.mock("@/lib/notify/slack", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/lib/notify/slack")>()), slackNotify: slack.notify }));
+const status = vi.hoisted(() => ({ post: vi.fn(async () => ({ ok: true })) }));
+vi.mock("@/lib/notify/status", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/lib/notify/status")>()), postStatus: status.post }));
 
 import { getDb } from "@/lib/db";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { POST } from "./route";
+import { statusText, type StatusAlert } from "@/lib/notify/status";
 
 beforeEach(() => {
   const db = getDb();
   db.prepare("DELETE FROM bookings").run();
   db.prepare("DELETE FROM settings WHERE key IN ('pull_state','bookings_force_prune_once')").run();
-  slack.notify.mockClear();
+  status.post.mockClear();
   delete process.env.GS_BLANK_DRAFT_ALERT_THRESHOLD;
 });
 
@@ -38,27 +39,27 @@ describe("POST /api/gs/projects blank-draft guard", () => {
     const real = { bookingId: 1, eventName: "Smith Wedding", clientName: "Smith", statusLabel: "New Project", dateCreated: today };
     const r1 = await post([...blanks(6, today), real], "active");
     expect((await r1.json()).blankDraftAlerts).toBe(1);
-    expect(slack.notify).toHaveBeenCalledTimes(1);
-    const text = (slack.notify.mock.calls[0] as unknown as [string])[0];
+    expect(status.post).toHaveBeenCalledTimes(1);
+    const text = statusText((status.post.mock.calls[0] as unknown as [StatusAlert])[0]);
     expect(text).toContain("6 blank Unnamed Project drafts");
     expect(text).toContain("ids 900000000 to 900000005");
 
     // Same burst seen again by the full lane, and grown: deduped per day.
     const r2 = await post([...blanks(9, today), real]);
     expect((await r2.json()).blankDraftAlerts).toBe(0);
-    expect(slack.notify).toHaveBeenCalledTimes(1);
+    expect(status.post).toHaveBeenCalledTimes(1);
   });
 
   it("does not alert at the threshold, for real leads, or for old days like the archived 10/31 incident", async () => {
     const today = todayInOpsTz();
     const realLeads = Array.from({ length: 20 }, (_, i) => ({ bookingId: 100 + i, eventName: `Lead ${i}`, clientName: `C${i}`, dateCreated: today }));
     await post([...blanks(5, today), ...realLeads, ...blanks(66, "2026-10-31", 231976120)], "active");
-    expect(slack.notify).not.toHaveBeenCalled();
+    expect(status.post).not.toHaveBeenCalled();
   });
 
   it("counts yesterday too and honors the env threshold", async () => {
     process.env.GS_BLANK_DRAFT_ALERT_THRESHOLD = "2";
     await post(blanks(3, shiftYmd(todayInOpsTz(), -1)), "active");
-    expect(slack.notify).toHaveBeenCalledTimes(1);
+    expect(status.post).toHaveBeenCalledTimes(1);
   });
 });

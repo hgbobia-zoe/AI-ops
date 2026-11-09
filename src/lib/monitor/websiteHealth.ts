@@ -16,7 +16,7 @@
 // recovery message is sent when it comes back to 200 (only if a failure was alerted).
 
 import { getDb } from "@/lib/db";
-import { slackNotify } from "@/lib/notify/slack";
+import { postStatus, type StatusAlert } from "@/lib/notify/status";
 import { getSettings } from "@/lib/settings";
 
 /** The result of a single health check. `ok` is true only for a final HTTP 200. */
@@ -114,22 +114,39 @@ function reason(check: WebsiteCheck): string {
  *  - one recovery alert when it returns to 200 (only if we had alerted the failure).
  * House comms style: no dashes, no emoji. Returns the message to send, or null. Pure given `state`+`now`.
  */
-export function recordWebsiteProbe(check: WebsiteCheck, now: Date = new Date()): { alert: string | null } {
+export function recordWebsiteProbe(check: WebsiteCheck, now: Date = new Date()): { alert: StatusAlert | null } {
   const s = getMonitorState();
   s.urls = s.urls ?? {};
   const prev = s.urls[check.url] ?? {};
   const seenBefore = prev.ok !== undefined; // don't page on a cold-start first glance (no known-good baseline)
-  let alert: string | null = null;
+  let alert: StatusAlert | null = null;
+  const site = check.url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
   if (!check.ok) {
     if (!prev.failingSince) prev.failingSince = now.toISOString();
     const alertedAgo = prev.alertedAt ? now.getTime() - Date.parse(prev.alertedAt) : Infinity;
     if (seenBefore && alertedAgo > ALERT_COOLOFF_MS) {
-      alert = `Zoe website monitor: ${check.url} is DOWN (${reason(check)}). It is not returning HTTP 200. Failing since ${prev.failingSince}.`;
+      alert = {
+        system: "Website",
+        level: "down",
+        title: `${site} is down`,
+        impact: "Customers can't browse rentals or send the contact form, so new web leads stop.",
+        fix: "Check the site in a browser and the Kinsta dashboard. If it loads for you, it may be a short blip.",
+        since: prev.failingSince,
+        detail: `${check.url} returned ${reason(check)}, not HTTP 200`,
+      };
       prev.alertedAt = now.toISOString();
     }
   } else {
-    if (prev.alertedAt) alert = `Zoe website monitor: ${check.url} is back up (HTTP 200).`;
+    if (prev.alertedAt) {
+      alert = {
+        system: "Website",
+        level: "recovered",
+        title: `${site} is back up`,
+        impact: "The site is returning HTTP 200 again.",
+        since: prev.failingSince ?? null,
+      };
+    }
     prev.failingSince = undefined;
     prev.alertedAt = undefined;
   }
@@ -164,7 +181,7 @@ export async function runWebsiteMonitor(now: Date = new Date()): Promise<Monitor
     const { alert } = recordWebsiteProbe(check, now);
     if (alert) {
       alerted++;
-      void slackNotify(alert);
+      void postStatus(alert, now.getTime());
     }
   }
 

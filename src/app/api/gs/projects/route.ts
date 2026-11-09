@@ -20,10 +20,10 @@
 import { NextResponse } from "next/server";
 import { saveBookings, enqueueWarehouseTeamAdds, archiveBookingsNotIn, saveBookingRevenueComponents, syncStopWindowsFromBookings, type BookingRecord } from "@/lib/db/repo";
 import { recordPull, logImport, recordBookingsImportFailure, claimBlankDraftBurstAlert } from "@/lib/pull/state";
-import { findBlankDraftBursts, blankDraftBurstMessage, BLANK_DRAFT_BURST_THRESHOLD } from "@/lib/ingest/blankDraft";
+import { findBlankDraftBursts, blankDraftBurstAlert, BLANK_DRAFT_BURST_THRESHOLD } from "@/lib/ingest/blankDraft";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { consumeBookingsForcePrune } from "@/lib/ingest/forcePruneBookings";
-import { slackNotify } from "@/lib/notify/slack";
+import { postStatus } from "@/lib/notify/status";
 import { centsToDollars, type RevenueComponentsCents } from "@/lib/finance/revenueModel";
 
 /** How far back a bookings pull refreshes stop windows (covers the recent on-time review period). */
@@ -244,7 +244,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       : recordBookingsImportFailure(true, forced ? `${prune.archived} orphans archived (forced)` : `${prune.archived} orphans archived`);
     if (probe.alert) {
       try {
-        void slackNotify(probe.alert);
+        void postStatus(probe.alert);
       } catch {
         /* a Slack failure must never fail the ingest */
       }
@@ -272,7 +272,7 @@ function alertBlankDraftBursts(records: BookingRecord[]): number {
     for (const burst of findBlankDraftBursts(records, since, blankDraftThreshold())) {
       if (!claimBlankDraftBurstAlert(burst.date)) continue;
       sent++;
-      void slackNotify(blankDraftBurstMessage(burst)).catch(() => {});
+      void postStatus(blankDraftBurstAlert(burst));
     }
     return sent;
   } catch {

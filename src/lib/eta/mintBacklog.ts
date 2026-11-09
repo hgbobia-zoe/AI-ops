@@ -10,6 +10,7 @@
 // Pure decision helpers first (tested), then the small DB wrapper the pre-mint tick calls.
 
 import { getDb } from "@/lib/db";
+import { statusText, type StatusAlert } from "@/lib/notify/status";
 
 /** A pending mint request that still matters (made within 12h and its window hasn't ended). */
 export interface PendingMint {
@@ -62,21 +63,36 @@ function fmtAge(min: number): string {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
-/** The Slack text for a stuck queue. No dashes, no emoji (house comms style). Pure. */
-export function stuckMintAlertText(b: MintBacklog): string {
+/** The status card for a stuck queue. No dashes, no emoji (house comms style). Pure. */
+export function stuckMintAlert(b: MintBacklog, nowMs: number = Date.now()): StatusAlert {
   const n = b.stuck;
   const trucks = Object.entries(b.byTruck)
     .sort((a, z) => z[1] - a[1])
     .map(([t, c]) => `${t}: ${c}`)
     .join(", ");
-  return (
-    `Tracking links are stuck. ${n} customer tracking ${n === 1 ? "link has" : "links have"} been waiting in Ignition ` +
-    `for ${fmtAge(b.oldestMin ?? 0)} (${trucks}). Until they are made, on the way texts send the basic tracking page ` +
-    "instead of the live map. On the office machine, open the ignition.zonarsystems.com tab, reload it and keep it signed in."
-  );
+  return {
+    system: "Ignition",
+    level: "degraded",
+    title: `${n} customer tracking ${n === 1 ? "link has" : "links have"} been stuck in Ignition for ${fmtAge(b.oldestMin ?? 0)}`,
+    impact: "On the way texts send the basic tracking page instead of the live truck map until these are made.",
+    fix: "On the office computer, open the ignition.zonarsystems.com tab, reload it, and keep it signed in.",
+    since: b.oldestMin != null ? new Date(nowMs - b.oldestMin * 60_000).toISOString() : null,
+    detail: trucks ? `Waiting by truck: ${trucks}` : null,
+  };
 }
 
-export const MINT_BACKLOG_RECOVERED_TEXT = "Tracking links are being made again. Ignition caught up on the waiting links.";
+/** Kept for callers and tests that want the plain text. */
+export function stuckMintAlertText(b: MintBacklog): string {
+  return statusText(stuckMintAlert(b));
+}
+
+export const MINT_BACKLOG_RECOVERED: StatusAlert = {
+  system: "Ignition",
+  level: "recovered",
+  title: "Tracking links are being made again",
+  impact: "Ignition caught up on the waiting links. Customers get the live truck map again.",
+};
+export const MINT_BACKLOG_RECOVERED_TEXT = statusText(MINT_BACKLOG_RECOVERED);
 
 export interface BacklogAlertState {
   alertedAt?: string; // ISO we last alerted a stuck queue (cool-off dedup); cleared when the queue drains
@@ -147,8 +163,8 @@ function saveState(s: BacklogAlertState): void {
     .run(STATE_KEY, JSON.stringify(s), new Date().toISOString());
 }
 
-/** Check the queue, update the dedup state, and return the Slack text to post (or null). Never throws. */
-export function checkMintBacklog(opts: { signedOutAlertCovers: boolean; now?: Date }): { backlog: MintBacklog; alert: string | null } {
+/** Check the queue, update the dedup state, and return the status card to post (or null). Never throws. */
+export function checkMintBacklog(opts: { signedOutAlertCovers: boolean; now?: Date }): { backlog: MintBacklog; alert: StatusAlert | null } {
   const now = opts.now ?? new Date();
   try {
     const backlog = currentMintBacklog(now.getTime());
@@ -162,7 +178,7 @@ export function checkMintBacklog(opts: { signedOutAlertCovers: boolean; now?: Da
       cooloffMs: COOLOFF_MS,
     });
     if (next !== state) saveState(next);
-    const alert = post === "stuck" ? stuckMintAlertText(backlog) : post === "recovered" ? MINT_BACKLOG_RECOVERED_TEXT : null;
+    const alert = post === "stuck" ? stuckMintAlert(backlog, now.getTime()) : post === "recovered" ? MINT_BACKLOG_RECOVERED : null;
     return { backlog, alert };
   } catch {
     return { backlog: { stuck: 0, oldestMin: null, byTruck: {} }, alert: null };

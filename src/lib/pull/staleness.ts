@@ -3,7 +3,7 @@
 // on a timer (instrumentation.ts) so a lapse is caught even if no one is looking. Deduped per window.
 
 import { getPullState, markStaleAlerted } from "./state";
-import { slackNotify } from "@/lib/notify/slack";
+import { postStatus } from "@/lib/notify/status";
 
 // Before the first-ever pull of a source, measure from server start (durable once a pull lands).
 const SERVER_START = Date.now();
@@ -38,10 +38,14 @@ export function checkPullStaleness(now: number = Date.now()): { stale: boolean; 
   const lastAlertMs = st.lastStaleAlertAt ? Date.parse(st.lastStaleAlertAt) : 0;
   if ((now - lastAlertMs) / 3_600_000 < reAlertH) return { stale: true, alerted: false, parts };
 
-  void slackNotify(
-    `⚠️ Zoe Ops: stale Goodshuffle data — ${parts.join("; ")}. ` +
-      `Open a logged-in Goodshuffle tab and click *Pull Zoe Routes* so dispatch, risk, sales & finance stay current.`,
-  );
+  void postStatus({
+    system: "Goodshuffle data",
+    level: "degraded",
+    title: "Goodshuffle data is out of date",
+    impact: "Dispatch, risk, sales, and finance are working from an old copy of Goodshuffle.",
+    fix: "Open a signed-in Goodshuffle tab in the office browser so Auto-Pull can run, or click Pull Zoe Routes.",
+    detail: `Last pull: ${parts.join(", ")}`,
+  }, now);
   markStaleAlerted(new Date(now));
   return { stale: true, alerted: true, parts };
 }

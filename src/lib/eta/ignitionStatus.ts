@@ -8,6 +8,8 @@
 // the "signed out" alert/dot when it MATTERS — there are upcoming same-day deliveries that need a link.
 // Nothing to mint, or the feature was never used here → OFF / n-a, never a false alarm.
 
+import { statusText, type StatusAlert } from "@/lib/notify/status";
+
 // The Connections dot status union (kept inline to avoid a module cycle with connections.ts, which
 // imports this module's helpers). Matches ConnStatus there.
 type DotStatus = "ok" | "idle" | "attention" | "off";
@@ -32,15 +34,34 @@ export interface IgnitionDot {
 
 /** The sign-in prompt shown everywhere Ignition needs attention (status dot detail + Slack alert body). */
 export const IGNITION_SIGNIN_HINT =
-  "Sign in at ignition.zonarsystems.com on the office machine to restore live tracking.";
+  "Sign in at ignition.zonarsystems.com on the office computer to restore live tracking.";
 
-/** The Slack message when the office Ignition session has lapsed while deliveries still need a link. */
-export const IGNITION_STALE_ALERT =
-  "Ignition is signed out on the office machine — customer tracking links are falling back to the basic page. " +
-  IGNITION_SIGNIN_HINT;
+/** The status card when the office Ignition session has lapsed while deliveries still need a link. */
+export function ignitionStaleAlert(since: string | null): StatusAlert {
+  return {
+    system: "Ignition",
+    level: "down",
+    title: "Ignition is signed out on the office computer",
+    impact: "Customer tracking links fall back to the basic page instead of the live truck map.",
+    fix: IGNITION_SIGNIN_HINT,
+    since,
+  };
+}
 
-/** The Slack message when the session comes back (only sent if we had alerted the lapse). */
-export const IGNITION_RECOVERED_ALERT = "Ignition is signed back in on the office machine — live customer tracking restored.";
+/** The status card when the session comes back (only sent if we had alerted the lapse). */
+export function ignitionRecoveredAlert(since: string | null): StatusAlert {
+  return {
+    system: "Ignition",
+    level: "recovered",
+    title: "Ignition is signed back in",
+    impact: "Live customer tracking links are working again.",
+    since,
+  };
+}
+
+/** Plain text versions, kept for readers that want a string. */
+export const IGNITION_STALE_ALERT = statusText(ignitionStaleAlert(null));
+export const IGNITION_RECOVERED_ALERT = statusText(ignitionRecoveredAlert(null));
 
 /**
  * Map Ignition health + today's delivery demand into the Connections dot:

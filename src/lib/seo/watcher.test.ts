@@ -7,7 +7,11 @@ let dir: string;
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "aiops-seo-watch-"));
   process.env.DATABASE_PATH = join(dir, "test.db");
-  delete process.env.SLACK_ALERT_WEBHOOK_URL; // keep Slack unconfigured → honest skip, no network
+  // keep Slack unconfigured → honest skip, no network
+  delete process.env.SLACK_ALERT_WEBHOOK_URL;
+  delete process.env.SLACK_WEBHOOK_URL;
+  delete process.env.SLACK_STATUS_WEBHOOK_URL;
+  delete process.env.SLACK_BOT_TOKEN;
 });
 afterAll(() => {
   try {

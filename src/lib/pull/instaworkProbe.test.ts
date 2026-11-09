@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { statusText } from "@/lib/notify/status";
 import { getDb } from "@/lib/db";
 import { recordInstaworkProbe } from "./state";
 
@@ -19,8 +20,8 @@ describe("recordInstaworkProbe", () => {
   it("alerts once when it FLIPS from OK to failed", () => {
     recordInstaworkProbe(true, "3 shifts", t("2026-10-02T10:00:00Z"));
     const flip = recordInstaworkProbe(false, "HTTP 403", t("2026-10-02T10:10:00Z"));
-    expect(flip.alert).toMatch(/Instawork connection is down/i);
-    expect(flip.alert).toMatch(/HTTP 403/);
+    expect(statusText(flip.alert!)).toMatch(/Instawork connection is down/i);
+    expect(statusText(flip.alert!)).toMatch(/HTTP 403/);
   });
 
   it("dedups: a second failing probe inside the 2h cool-off does not re-alert", () => {
@@ -39,7 +40,8 @@ describe("recordInstaworkProbe", () => {
     recordInstaworkProbe(true, "ok", t("2026-10-02T10:00:00Z"));
     recordInstaworkProbe(false, "HTTP 403", t("2026-10-02T10:10:00Z")); // alerted down
     const rec = recordInstaworkProbe(true, "5 shifts", t("2026-10-02T10:20:00Z"));
-    expect(rec.alert).toMatch(/Instawork connection recovered/i);
+    expect(statusText(rec.alert!)).toMatch(/Instawork connection is back/i);
+    expect(rec.alert!.level).toBe("recovered");
   });
 
   it("does not send a recovery alert for a failure that never alerted", () => {

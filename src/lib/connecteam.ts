@@ -8,6 +8,9 @@
 //   GET /scheduler/v1/schedulers                               → schedulers (we use the Job Scheduler)
 //   GET /scheduler/v1/schedulers/{id}/shifts?startTime=&endTime= → shifts (Unix seconds)
 
+import { postStatus } from "@/lib/notify/status";
+import { getJson, setJson } from "@/lib/kv";
+
 const BASE = (process.env.CONNECTEAM_BASE_URL || "https://api.connecteam.com").replace(/\/$/, "");
 
 export function connecteamConfigured(): boolean {
@@ -26,7 +29,9 @@ export function connecteamConfigured(): boolean {
 // get a 429, we STOP calling until the reported reset: quiet degrade to last-good / ok:false. That both lets
 // the quota recover AND kills the stampede that exhausted it. Mirrors the proven GPS-TrackIt 429 backoff
 // (eta/zonar.ts). Stored on globalThis so the backoff survives Next's per-bundle module copies and is shared
-// across every call path (reads + writes). A rate limit is transient + self-healing, so we never page ops.
+// across every call path (reads + writes). A short (minute window) limit is transient and self-healing, so it
+// stays quiet. A long one (the DAY quota spent, scheduling dark until the reset) posts ONE status card per
+// window to the AI Ops status channel, so the team knows why Connecteam data stopped updating.
 const DEFAULT_RL_BACKOFF_MS = Number(process.env.CONNECTEAM_RATELIMIT_BACKOFF_SECONDS || 60) * 1000;
 const _rl = globalThis as unknown as { __connecteamRateLimitedUntil?: number };
 
@@ -68,13 +73,42 @@ function noteRateLimit(res: HeaderBag | null, is429: boolean, now: number = Date
     if (retryAfter > 0) until = Math.max(until, now + retryAfter * 1000);
   }
   if (is429 && until <= now) until = now + DEFAULT_RL_BACKOFF_MS; // 429 with no usable header → default backoff
-  if (until > now && until > connecteamRateLimitedUntil()) _rl.__connecteamRateLimitedUntil = until;
+  if (until > now && until > connecteamRateLimitedUntil()) {
+    _rl.__connecteamRateLimitedUntil = until;
+    maybeAlertRateLimit(until, now);
+  }
   if (res) {
     const dayRem = headerNum(res, "x-ratelimit-day-remaining");
     if (Number.isFinite(dayRem)) _usage.dayRemaining = dayRem;
     const dayLimit = headerNum(res, "x-ratelimit-day-limit");
     if (Number.isFinite(dayLimit)) _usage.dayLimit = dayLimit;
   }
+}
+
+/** Backoffs at least this long are worth a status card (a spent minute window is not). */
+const RL_ALERT_MIN_MS = 10 * 60_000;
+const RL_ALERT_KEY = "connecteam_rl_alerted_until";
+
+/** Post one "Connecteam is rate limited" card per long backoff window. Deduped in kv so every machine and
+ *  every call path that hits the same window stays quiet after the first. Never throws. */
+function maybeAlertRateLimit(until: number, now: number): void {
+  if (until - now < RL_ALERT_MIN_MS) return;
+  try {
+    if (getJson<number>(RL_ALERT_KEY, 0) > now) return; // already alerted for the current window
+    setJson(RL_ALERT_KEY, until);
+  } catch {
+    return; // no dedupe store, no alert (avoids a storm)
+  }
+  void postStatus({
+    system: "Connecteam",
+    level: "degraded",
+    title: "Connecteam API is rate limited",
+    impact: "Crew schedules, availability, and timesheets stop updating, and shift writes wait until the limit resets.",
+    fix: "Nothing to do now, it resets on its own. If this happens often, the app is calling Connecteam too much.",
+    since: new Date(now).toISOString(),
+    until: new Date(until).toISOString(),
+    detail: _usage.dayLimit ? `Daily quota of ${_usage.dayLimit} calls is spent` : "HTTP 429",
+  }, now);
 }
 
 // ── Daily quota budget (keeps the 10k/day cap from running out mid-afternoon) ───────────────────────

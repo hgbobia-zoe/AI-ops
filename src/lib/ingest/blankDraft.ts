@@ -120,3 +120,17 @@ export function blankDraftBurstMessage(b: BlankDraftBurst): string {
   const range = b.ids.length > 1 ? `ids ${b.ids[0]} to ${b.ids[b.ids.length - 1]}` : `id ${b.ids[0]}`;
   return `Goodshuffle got ${b.count} blank Unnamed Project drafts created on ${b.date} (${range}). That looks like a create loop in an Auto Pull extension. Check the gs outbox and the office browsers, then archive the blanks in Goodshuffle. They are left out of lead counts.`;
 }
+
+/** The status card for a blank-draft burst (an extension create loop is a system fault, not a sales event).
+ *  Structural StatusAlert shape, so this pure module needs no import. */
+export function blankDraftBurstAlert(b: BlankDraftBurst) {
+  const range = b.ids.length > 1 ? `ids ${b.ids[0]} to ${b.ids[b.ids.length - 1]}` : `id ${b.ids[0]}`;
+  return {
+    system: "Goodshuffle write-back",
+    level: "degraded" as const,
+    title: `Goodshuffle got ${b.count} blank Unnamed Project drafts on ${b.date}`,
+    impact: "That looks like a create loop in an Auto-Pull extension. The blanks clutter Goodshuffle but are left out of lead counts.",
+    fix: "Check the write-back outbox and the office browsers, then archive the blanks in Goodshuffle.",
+    detail: range,
+  };
+}

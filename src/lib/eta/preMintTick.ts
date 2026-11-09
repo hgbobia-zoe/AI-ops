@@ -21,7 +21,7 @@ import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate, enqueueEtaLinkMint, hasCurrentEtaLinkForStop } from "@/lib/db/repo";
 import { todayInOpsTz, shiftYmd, endOfOpsDayISO } from "@/lib/dates";
 import { ignitionHealth, recordIgnitionProbe } from "@/lib/pull/state";
-import { slackNotify } from "@/lib/notify/slack";
+import { postStatus } from "@/lib/notify/status";
 import { checkMintBacklog } from "./mintBacklog";
 import type { Route } from "@/lib/types";
 
@@ -64,13 +64,13 @@ export async function runEtaPreMintTick(now: Date = new Date()): Promise<PreMint
   const hasDeliveriesToday = hasUpcomingDeliveries(todayRoutes);
   const health = ignitionHealth(20, now.getTime());
   const { alert } = recordIgnitionProbe(health.ok, hasDeliveriesToday, health.configured, now);
-  if (alert) void slackNotify(alert);
+  if (alert) void postStatus(alert);
 
   // ── Stuck links: the heartbeat can look healthy while requests sit unmade for hours. Watch the queue
   // itself. Skipped when the "signed out" alert above already covers it (no double message).
   const signedOutAlertCovers = !health.ok && health.configured && hasDeliveriesToday;
   const backlogCheck = checkMintBacklog({ signedOutAlertCovers, now });
-  if (backlogCheck.alert) void slackNotify(backlogCheck.alert);
+  if (backlogCheck.alert) void postStatus(backlogCheck.alert);
 
   // ── Pre-mint the upcoming stops ──
   const plan = selectStopsToPreMint({ routes, now });

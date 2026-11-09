@@ -13,7 +13,8 @@ import { flagOn } from "@/lib/flags";
 import { getJson, setJson } from "@/lib/kv";
 import { todayInOpsTz } from "@/lib/dates";
 import { humanize } from "@/lib/salesos/outreach";
-import { slackBotConfigured, slackPostMessage, slackNotify } from "@/lib/notify/slack";
+import { slackBotConfigured, slackPostMessage } from "@/lib/notify/slack";
+import { failureAlert, postStatus } from "@/lib/notify/status";
 import { slackApproverIds } from "@/lib/settings";
 import {
   getSession,
@@ -102,8 +103,8 @@ function recordRun(r: ViktorRunResult): ViktorHealthRecord {
   return next;
 }
 
-/** One ops alert per cool-off window, so a burst of failures doesn't spam the channel. */
-function alertOnce(text: string): void {
+/** One status alert per cool-off window, so a burst of failures doesn't spam the channel. */
+function alertOnce(error: string): void {
   try {
     const last = getJson<number>(ALERT_KEY, 0);
     if (Date.now() - last < ALERT_COOLOFF_MS) return;
@@ -111,7 +112,12 @@ function alertOnce(text: string): void {
   } catch {
     /* if the dedupe store fails, still alert */
   }
-  void slackNotify(text).catch(() => {});
+  void postStatus(
+    failureAlert("Viktor (AI agent)", error, {
+      impact: "Viktor could not answer a Slack message or AI Command Center instruction. The person got a failure reply.",
+      fix: "Check ANTHROPIC_API_KEY and the Anthropic console for limits or billing, then retry from the AI Command Center.",
+    }),
+  );
 }
 
 // ── Instruction pickup ────────────────────────────────────────────────────────────────────────────────
@@ -234,7 +240,7 @@ export async function handleSessionInstruction(sessionId: string, opts: HandleOp
 
     appendEvent(sessionId, { kind: "error", actor: "Viktor", label: `Viktor could not answer: ${result.error ?? "unknown error"}`, changeKey: `fail:${sessionId}:${pending.ts}` });
     if (slack && slackBotConfigured()) void slackPostMessage(slack.channel, FAILURE_REPLY, slack.threadTs).catch(() => {});
-    alertOnce(`Viktor (in-app AI agent) failed to answer an instruction: ${result.error ?? "unknown error"}. Session ${sessionId}. Check ANTHROPIC_API_KEY and the AI Command Center.`);
+    alertOnce(result.error ?? "unknown error");
     return "failed";
   } catch {
     return "failed";

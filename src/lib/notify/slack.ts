@@ -12,13 +12,13 @@ export interface SlackResult {
   error?: string;
 }
 
-async function post(url: string | null | undefined, text: string): Promise<SlackResult> {
+async function post(url: string | null | undefined, text: string, extra?: Record<string, unknown>): Promise<SlackResult> {
   if (!url) return { ok: false, skipped: true };
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, ...(extra ?? {}) }),
     });
     return res.ok ? { ok: true } : { ok: false, error: `slack ${res.status}` };
   } catch (err) {
@@ -32,6 +32,12 @@ export function slackConfigured(): boolean {
 
 export async function slackNotify(text: string): Promise<SlackResult> {
   return post(process.env.SLACK_WEBHOOK_URL, text);
+}
+
+/** Post a rich message (Block Kit `blocks` or colored `attachments`) through an incoming webhook. `text` is
+ *  the notification and fallback line. Skipped when the url is unset. Never throws. */
+export async function slackWebhookRich(url: string | null | undefined, text: string, payload: { blocks?: unknown[]; attachments?: unknown[] }): Promise<SlackResult> {
+  return post(url, text, payload);
 }
 
 /** The customer-alerts webhook — a DIFFERENT channel from delivery. Admin secret first, env fallback.
@@ -237,7 +243,7 @@ export async function slackPostAs(
   channel: string,
   persona: BotPersona,
   text: string,
-  opts?: { blocks?: unknown[]; threadTs?: string | null },
+  opts?: { blocks?: unknown[]; attachments?: unknown[]; threadTs?: string | null },
 ): Promise<SlackResult> {
   if (!slackBotConfigured()) return { ok: false, skipped: true };
   const msg = text.trim();
@@ -246,6 +252,7 @@ export async function slackPostAs(
   const ch = (await resolveChannelId(channel)) ?? channel.trim();
   const body: Record<string, unknown> = { channel: ch, text: msg, username: persona.name, icon_emoji: persona.icon };
   if (opts?.blocks?.length) body.blocks = opts.blocks;
+  if (opts?.attachments?.length) body.attachments = opts.attachments;
   if (opts?.threadTs) body.thread_ts = opts.threadTs;
   let sent = await slackApi("chat.postMessage", body);
   // The bot isn't a member yet → self-join the (public) channel once and retry, so we don't need a manual
