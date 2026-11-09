@@ -214,7 +214,14 @@ describe("contact ownership (Sales OS wins)", () => {
   });
 });
 
-function seedEnrollment(email: string, company: string) {
+/** Save an email check result, as if the address was already verified. */
+function markChecked(email: string, result = "valid") {
+  getDb().prepare("INSERT OR REPLACE INTO email_verifications (email, result, detail, provider, credits_used, checked_at) VALUES (?,?,?,?,?,?)")
+    .run(email.toLowerCase(), result, null, "test", null, new Date().toISOString()); // real now: checks expire after 90 days
+}
+
+function seedEnrollment(email: string, company: string, checked = true) {
+  if (checked) markChecked(email);
   const opp = upsertOpportunity({ dedupeKey: `t:${email}`, kind: "EVENT", name: `${company} gala`, jurisdiction: "DC", region: "DC", city: "Washington", state: "DC", organization: company }, NOW);
   const ent = upsertEntity({ name: company, kind: "EVENT_PLANNER", website: null, email, phone: null, jurisdiction: null, verificationStatus: "VERIFIED", matchedCustomerKey: null, notes: null, isSeed: false }, NOW);
   const enr = insertEnrollment({ opportunityId: opp.id, entityId: ent.id, tier: "B", cadenceKey: "tier-b", channel: "email", status: "active", owner: "Rep", nextActionAt: TODAY }, NOW);
@@ -284,6 +291,55 @@ describe("approved Smartlead push", () => {
     expect(sent.leads.find((l: { email: string }) => l.email === "hello@instco.example").custom_variables.intro_subject).toBe("Rentals for your gala");
     expect(getEnrollment(good.id)).toMatchObject({ sequencerProvider: "instantly", sequencerPushedBy: "Owner" });
     expect(getEnrollment(dup.id)?.sequencerPushedAt).toBeFalsy(); // skipped leads stay unpushed
+  });
+
+  it("checks unchecked emails when the push is approved and sends only the good ones", async () => {
+    const good = seedEnrollment("ok@checkco.example", "CheckCo", false);
+    const bad = seedEnrollment("gone@checkco2.example", "CheckCo Two", false);
+    const dead = seedEnrollment("x@deaddomain.example", "Dead Co", false);
+    const failed = seedEnrollment("held@checkco3.example", "Held Co", false);
+    markChecked("held@checkco3.example", "invalid"); // an earlier check failed
+    const review = Object.fromEntries(pushCandidates(NOW).map((c) => [c.enrollmentId, c]));
+    expect(review[good.id]).toMatchObject({ eligible: true, check: "unchecked" }); // checked on approval
+    expect(review[failed.id].eligible).toBe(false);
+    expect(review[failed.id].blockers.join(" ")).toContain("would bounce");
+
+    setSecret("instantly.apiKey", "IK");
+    setSecret("instantly.campaignId", CAMPAIGN);
+    const f = vi.fn(async (url: string, init?: { body?: string }) => {
+      if (url.endsWith("/email-verification")) {
+        const { email } = JSON.parse(init!.body!);
+        return { ok: true, status: 200, json: async () => ({ email, verification_status: email.startsWith("ok@") ? "verified" : "invalid", catch_all: false, credits: 99, credits_used: 1 }) };
+      }
+      const leads = JSON.parse(init!.body!).leads as { email: string }[];
+      return { ok: true, status: 200, json: async () => ({ leads_uploaded: leads.length, created_leads: leads.map((l) => ({ email: l.email })) }) };
+    });
+    const mx = vi.fn(async (d: string) => (d === "deaddomain.example" ? Promise.reject(Object.assign(new Error("none"), { code: "ENOTFOUND" })) : [{ exchange: "mx.example", priority: 1 }]));
+    const res = await pushApproved([good.id, bad.id, dead.id, failed.id], "Owner", NOW, f, mx);
+    expect(res).toMatchObject({ ok: true, added: 1 });
+    const leadCall = f.mock.calls.find(([u]) => String(u).endsWith("/leads/add"))!;
+    expect(JSON.parse(leadCall[1]!.body!).leads.map((l: { email: string }) => l.email)).toEqual(["ok@checkco.example"]);
+    const reasons = Object.fromEntries(res.skipped.map((s) => [s.enrollmentId, s.reason]));
+    expect(reasons[bad.id]).toContain("would bounce");
+    expect(reasons[dead.id]).toContain("no mail server");
+    expect(reasons[failed.id]).toContain("would bounce");
+    // The dead domain never cost a credit, and the earlier failed check was not paid for again.
+    const checked = f.mock.calls.filter(([u]) => String(u).endsWith("/email-verification")).map(([, i]) => JSON.parse(i!.body!).email);
+    expect(checked.sort()).toEqual(["gone@checkco2.example", "ok@checkco.example"]);
+  });
+
+  it("does not push unchecked emails when the check can't run", async () => {
+    const enr = seedEnrollment("new@nokey.example", "NoKey Co", false);
+    setActiveProvider("smartlead");
+    setSecret("smartlead.apiKey", "K");
+    setSecret("smartlead.campaignId", "42");
+    const f = okFetch({ added_count: 1 });
+    const res = await pushApproved([enr.id], "Owner", NOW, f, async () => [{ exchange: "mx.example", priority: 1 }]);
+    expect(res.added).toBe(0);
+    expect(res.ok).toBe(false);
+    expect(res.errors[0]).toContain("Instantly API key");
+    expect(res.skipped[0].reason).toContain("not checked");
+    expect(f).not.toHaveBeenCalled();
   });
 
   it("a bounce or not interested outcome adds the email to the do-not-contact list", () => {

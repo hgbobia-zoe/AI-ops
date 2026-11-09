@@ -1286,6 +1286,18 @@ CREATE TABLE IF NOT EXISTS prospect_list_contacts (
 CREATE INDEX IF NOT EXISTS idx_list_contacts_list ON prospect_list_contacts(list_id, status);
 CREATE INDEX IF NOT EXISTS idx_list_contacts_email ON prospect_list_contacts(email);
 
+-- Email checks before anything goes into a cold email campaign (bounce protection). One row per address,
+-- shared by purchased lists and Radar outreach so an address is checked (and paid for) once. Free domain
+-- check first (no mail server = no_mail_server), then Instantly's verifier.
+CREATE TABLE IF NOT EXISTS email_verifications (
+  email         TEXT PRIMARY KEY,             -- lowercased
+  result        TEXT NOT NULL,                -- valid | catch_all | invalid | no_mail_server | pending
+  detail        TEXT,
+  provider      TEXT,                         -- dns | instantly
+  credits_used  REAL,
+  checked_at    TEXT NOT NULL
+);
+
 -- Marketing module — Zoe's demand-generation OS. The app is the operating dashboard over the tools the
 -- team already runs (Confluence for content planning, a social poster, ManyChat, Google Business); these
 -- tables hold what the team plans and tracks in-app. FACTS the team enters; no fabrication.
@@ -2554,6 +2566,8 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "history_changes", column: "actor", type: "TEXT" },
   // SEO publish via Website Studio: the job that publishes an approved page draft. Null = not sent yet.
   { table: "seo_page_drafts", column: "website_job_id", type: "TEXT" },
+  // Purchased lists: also send to catch-all addresses (the verifier can't confirm them). Default off.
+  { table: "prospect_lists", column: "include_catch_all", type: "INTEGER NOT NULL DEFAULT 0" },
 ];
 
 function migrate(db: DB): void {

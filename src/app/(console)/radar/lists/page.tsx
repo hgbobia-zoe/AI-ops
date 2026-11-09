@@ -74,7 +74,10 @@ export default async function PurchasedListsPage(): Promise<React.JSX.Element> {
                     <div className="text-[12px] text-meta">{[SEGMENT_LABEL[list.segment], list.vendor, list.purchasedAt].filter(Boolean).join(" · ")}</div>
                   </td>
                   <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{stats.total}</td>
-                  <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{stats.ready}</td>
+                  <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">
+                    {stats.ready}
+                    {stats.toCheck > 0 && <div className="text-[11px] text-attention">{stats.toCheck} to check</div>}
+                  </td>
                   <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{stats.pushed}</td>
                   <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{stats.replied}</td>
                   <td className="px-2.5 py-2.5 text-right tabular-nums text-tertiary-text">{stats.interested}</td>

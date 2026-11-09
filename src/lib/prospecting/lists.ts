@@ -8,7 +8,8 @@
 //      to the cold email tool from another list or from Radar outreach, and Zoe's own domain.
 //   3. A person approves a push. Only eligible contacts go to the active cold email tool (Instantly by
 //      default), into the list's own campaign (each segment gets its own copy) or the default campaign.
-//      Instantly can verify emails first, which matters for bought data.
+//      Every address must first pass the email check (verify.ts): free domain check, then Instantly's
+//      verifier. Unchecked, invalid and catch-all (unless the list opts in) addresses never go out.
 //   4. Replies are logged by a person. Not interested, bounced or unsubscribed lands on the do-not-contact
 //      list. Interested becomes a Radar opportunity (stage Engaged), from where the existing intent-only
 //      Convert to Goodshuffle takes over. Nothing here creates a Goodshuffle project.
@@ -29,6 +30,7 @@ import {
   activeProvider, providerApiKey, providerCampaignId, unsupportedProvider, validCampaignId, pushLeads, PROVIDER_LABEL,
   type FetchLike, type OutreachLead, type SequencerProvider,
 } from "./sequencer";
+import { allChecks, checkState, checkVerdict, needsCheck, verifyEmails, VERIFY_BATCH, type CheckState, type EmailCheck, type VerifyRun } from "./verify";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -73,6 +75,8 @@ export interface StoredList {
   purchasedAt: string | null;
   campaignId: string | null;
   notes: string | null;
+  /** Also send to catch-all addresses (the verifier can't confirm them). */
+  includeCatchAll: boolean;
   createdBy: string | null;
   createdAt: string;
 }
@@ -100,7 +104,7 @@ export interface ListContact {
 }
 
 function toList(r: any): StoredList {
-  return { id: r.id, name: r.name, segment: r.segment, vendor: r.vendor ?? null, cost: r.cost ?? null, purchasedAt: r.purchased_at ?? null, campaignId: r.campaign_id ?? null, notes: r.notes ?? null, createdBy: r.created_by ?? null, createdAt: r.created_at };
+  return { id: r.id, name: r.name, segment: r.segment, vendor: r.vendor ?? null, cost: r.cost ?? null, purchasedAt: r.purchased_at ?? null, campaignId: r.campaign_id ?? null, notes: r.notes ?? null, includeCatchAll: Boolean(r.include_catch_all), createdBy: r.created_by ?? null, createdAt: r.created_at };
 }
 function toContact(r: any): ListContact {
   return {
@@ -334,18 +338,19 @@ export function getList(id: string): StoredList | null {
 export function getLists(): StoredList[] {
   return (getDb().prepare("SELECT * FROM prospect_lists ORDER BY created_at DESC").all() as any[]).map(toList);
 }
-export function updateList(id: string, patch: Partial<Omit<ListInput, "segment">> & { segment?: ListSegment }, now: Date = new Date()): StoredList | null {
+export function updateList(id: string, patch: Partial<Omit<ListInput, "segment">> & { segment?: ListSegment; includeCatchAll?: boolean }, now: Date = new Date()): StoredList | null {
   const cur = getList(id);
   if (!cur) return null;
   const next = {
     name: patch.name ?? cur.name, segment: patch.segment ?? cur.segment, vendor: patch.vendor !== undefined ? patch.vendor : cur.vendor,
     cost: patch.cost !== undefined ? patch.cost : cur.cost, purchasedAt: patch.purchasedAt !== undefined ? patch.purchasedAt : cur.purchasedAt,
     campaignId: patch.campaignId !== undefined ? patch.campaignId : cur.campaignId, notes: patch.notes !== undefined ? patch.notes : cur.notes,
+    includeCatchAll: patch.includeCatchAll !== undefined ? Boolean(patch.includeCatchAll) : cur.includeCatchAll,
   };
   const err = validateListInput(next);
   if (err) throw new Error(err);
-  getDb().prepare("UPDATE prospect_lists SET name=?, segment=?, vendor=?, cost=?, purchased_at=?, campaign_id=?, notes=?, updated_at=? WHERE id=?")
-    .run(next.name.trim(), next.segment, next.vendor?.trim() || null, next.cost ?? null, next.purchasedAt || null, next.campaignId?.trim() || null, next.notes?.trim() || null, now.toISOString(), id);
+  getDb().prepare("UPDATE prospect_lists SET name=?, segment=?, vendor=?, cost=?, purchased_at=?, campaign_id=?, notes=?, include_catch_all=?, updated_at=? WHERE id=?")
+    .run(next.name.trim(), next.segment, next.vendor?.trim() || null, next.cost ?? null, next.purchasedAt || null, next.campaignId?.trim() || null, next.notes?.trim() || null, next.includeCatchAll ? 1 : 0, now.toISOString(), id);
   return getList(id);
 }
 /** Delete a list imported by mistake. Refused once any contact was handed to the cold email tool, so
@@ -377,11 +382,14 @@ export interface ScreenIndex {
   salesOs: { email: Set<string>; phone: Set<string> };
   /** email → where it was already handed to the cold email tool ("list <name>" / "Radar outreach"). */
   sentElsewhere: Map<string, { listId: string | null; label: string }>;
+  /** Saved email check results, by email. */
+  checks: Map<string, EmailCheck>;
+  now: Date;
 }
 
 const last10 = (p: string | null | undefined) => (p ?? "").replace(/\D/g, "").slice(-10);
 
-export function buildScreenIndex(today: string = todayInOpsTz()): ScreenIndex {
+export function buildScreenIndex(today: string = todayInOpsTz(), now: Date = new Date()): ScreenIndex {
   const db = getDb();
   const suppressed = { email: new Set<string>(), domain: new Set<string>(), company: new Set<string>(), phone: new Set<string>() };
   for (const r of db.prepare("SELECT kind, value FROM prospect_suppression").all() as { kind: string; value: string }[]) {
@@ -405,7 +413,7 @@ export function buildScreenIndex(today: string = todayInOpsTz()): ScreenIndex {
   for (const r of db.prepare("SELECT lower(trim(e.email)) AS email FROM prospect_enrollments p JOIN radar_entities e ON e.id = p.entity_id WHERE p.sequencer_pushed_at IS NOT NULL AND e.email IS NOT NULL").all() as { email: string }[]) {
     if (r.email && !sentElsewhere.has(r.email)) sentElsewhere.set(r.email, { listId: null, label: "Radar outreach" });
   }
-  return { suppressed, salesOs, sentElsewhere };
+  return { suppressed, salesOs, sentElsewhere, checks: allChecks(), now };
 }
 
 /** PURE given the index. Why a NEW contact can't be sent (empty = eligible). */
@@ -427,15 +435,26 @@ export function screenContact(c: Pick<ListContact, "email" | "company" | "phone"
 }
 
 export interface ScreenedContact extends ListContact {
+  /** Every reason it can't be sent now, the email check included. */
   blockers: string[];
   eligible: boolean;
+  /** Where its email check stands. */
+  check: CheckState;
+  /** Passes every other rule and only waits for its email check. */
+  toCheck: boolean;
 }
 
-/** Contacts of a list with their screen. Only status "new" can be eligible. */
+/** Contacts of a list with their screen. Only status "new" can be eligible, and only once its email
+ *  passed the check. */
 export function screenedContacts(listId: string, idx: ScreenIndex = buildScreenIndex()): ScreenedContact[] {
+  const includeCatchAll = getList(listId)?.includeCatchAll ?? false;
   return getListContacts(listId).map((c) => {
-    const blockers = c.status === "new" ? screenContact(c, idx) : [];
-    return { ...c, blockers, eligible: c.status === "new" && blockers.length === 0 };
+    const check = checkState(idx.checks.get(c.email.toLowerCase()), idx.now);
+    if (c.status !== "new") return { ...c, blockers: [], eligible: false, check, toCheck: false };
+    const hard = screenContact(c, idx);
+    const verdict = checkVerdict(check, includeCatchAll);
+    const blockers = verdict.reason ? [...hard, verdict.reason] : hard;
+    return { ...c, blockers, eligible: blockers.length === 0, check, toCheck: hard.length === 0 && needsCheck(check) };
   });
 }
 
@@ -443,6 +462,8 @@ export function screenedContacts(listId: string, idx: ScreenIndex = buildScreenI
 export interface ListStats {
   total: number;
   ready: number;
+  /** Waiting only for the email check. */
+  toCheck: number;
   blocked: number;
   pushed: number;
   skipped: number;
@@ -466,7 +487,8 @@ export function listStats(list: Pick<StoredList, "cost">, contacts: ScreenedCont
   return {
     total,
     ready: n((c) => c.eligible),
-    blocked: n((c) => c.status === "new" && !c.eligible),
+    toCheck: n((c) => c.toCheck),
+    blocked: n((c) => c.status === "new" && !c.eligible && !c.toCheck),
     pushed: n((c) => c.pushedAt != null),
     skipped: n((c) => c.status === "skipped"),
     replied,
@@ -492,6 +514,26 @@ export function listSummaries(): ListSummary[] {
   return getLists().map((list) => ({ list, stats: listStats(list, screenedContacts(list.id, idx), conv) }));
 }
 
+// ── Email check (human started; uses Instantly credits) ───────────────────────────────────────────
+/** Check the emails of a list that wait only for their check, VERIFY_BATCH per call (the page calls
+ *  again until done). Uses the Instantly key even when Smartlead is the active tool. */
+export async function verifyListContacts(
+  listId: string,
+  actor: string,
+  opts: { fetchImpl?: FetchLike; mxLookup?: Parameters<typeof verifyEmails>[1]["mxLookup"]; now?: () => Date } = {},
+): Promise<VerifyRun & { ok: boolean; error?: string }> {
+  const empty: VerifyRun = { checked: 0, counts: { valid: 0, catch_all: 0, invalid: 0, no_mail_server: 0, pending: 0 }, remaining: 0, stopped: null, errors: [], creditsLeft: null, creditsUsed: 0 };
+  if (!getList(listId)) return { ...empty, ok: false, error: "list not found" };
+  const emails = screenedContacts(listId).filter((c) => c.toCheck).map((c) => c.email);
+  const run = await verifyEmails(emails, { key: providerApiKey("instantly"), fetchImpl: opts.fetchImpl, mxLookup: opts.mxLookup, now: opts.now, max: VERIFY_BATCH });
+  if (run.checked > 0) {
+    try {
+      insertAudit({ actor, action: "prospecting.list_verify", entity: "prospect_list", entityId: listId, after: { checked: run.checked, counts: run.counts, creditsUsed: run.creditsUsed, stopped: run.stopped } });
+    } catch { /* audit is observability only */ }
+  }
+  return { ...run, ok: true };
+}
+
 // ── Push (human approved) ─────────────────────────────────────────────────────────────────────────
 export const MAX_PUSH = 500;
 
@@ -510,14 +552,14 @@ export function listCampaign(list: StoredList, provider: SequencerProvider = act
   return list.campaignId || providerCampaignId(provider);
 }
 
-/** Push the approved contacts of one list. Re-screens first so nothing stale goes out; at most
- *  MAX_PUSH per call. Accepted contacts are marked pushed; ones the tool skipped are marked skipped with
- *  the reason; failed calls leave them as they were. */
+/** Push the approved contacts of one list. Re-screens first so nothing stale goes out (an address that
+ *  hasn't passed the email check is never sent); at most MAX_PUSH per call. Accepted contacts are marked
+ *  pushed; ones the tool skipped are marked skipped with the reason; failed calls leave them as they were. */
 export async function pushListContacts(
   listId: string,
   contactIds: string[],
   actor: string,
-  opts: { verify?: boolean; fetchImpl?: FetchLike } = {},
+  opts: { fetchImpl?: FetchLike } = {},
   now: Date = new Date(),
 ): Promise<ListPushOutcome> {
   const provider = activeProvider();
@@ -553,7 +595,8 @@ export async function pushListContacts(
     location: [c.city, c.state].filter(Boolean).join(", ") || undefined,
     vars: { segment: SEGMENT_LABEL[list.segment], title: c.title ?? "", city: c.city ?? "", list: list.name },
   }));
-  const res = await pushLeads(provider, leads, { key, campaignId, fetchImpl: opts.fetchImpl, verify: opts.verify });
+  // Zoe already checked every address, so Instantly's import verification (more credits) stays off.
+  const res = await pushLeads(provider, leads, { key, campaignId, fetchImpl: opts.fetchImpl });
   out.ok = res.ok;
   out.errors.push(...res.errors);
   const skippedSet = new Set(res.skippedEmails);
@@ -572,7 +615,7 @@ export async function pushListContacts(
     }
   })();
   try {
-    insertAudit({ actor, action: "prospecting.list_push", entity: "prospect_list", entityId: listId, after: { provider, campaignId, approved: contactIds.length, added: out.added, skipped: out.skipped.length, verify: Boolean(opts.verify) } });
+    insertAudit({ actor, action: "prospecting.list_push", entity: "prospect_list", entityId: listId, after: { provider, campaignId, approved: contactIds.length, added: out.added, skipped: out.skipped.length } });
   } catch { /* audit is observability only */ }
   return out;
 }

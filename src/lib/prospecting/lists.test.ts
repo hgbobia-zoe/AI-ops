@@ -7,7 +7,7 @@ import { getOpportunity } from "@/lib/opportunity/store";
 import { addSuppression, isSuppressed } from "./store";
 import {
   mapColumns, parseListCsv, importList, screenedContacts, buildScreenIndex, pushListContacts, logListOutcome, listStats,
-  deleteList, getListContact, updateList, convertedOpportunityIds,
+  deleteList, getListContact, updateList, convertedOpportunityIds, verifyListContacts,
 } from "./lists";
 
 const NOW = new Date("2026-11-08T15:00:00Z");
@@ -18,6 +18,14 @@ afterEach(() => {
   setJson("prospecting.provider", null);
   for (const k of ["instantly.apiKey", "instantly.campaignId", "smartlead.apiKey", "smartlead.campaignId"]) setSecret(k, "");
 });
+
+/** Save an email check result, as if the address was already verified. */
+function markChecked(emails: string[], result = "valid") {
+  for (const e of emails) {
+    getDb().prepare("INSERT OR REPLACE INTO email_verifications (email, result, detail, provider, credits_used, checked_at) VALUES (?,?,?,?,?,?)")
+      .run(e.toLowerCase(), result, null, "test", null, new Date().toISOString()); // real now: checks expire after 90 days
+  }
+}
 
 const created = (emails: string[]) => vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ leads_uploaded: emails.length, created_leads: emails.map((email) => ({ email })) }) }));
 
@@ -89,6 +97,7 @@ describe("screening", () => {
     getDb()
       .prepare("INSERT INTO bookings (booking_id, event_name, event_date, status_label, signed, client_email, updated_at) VALUES (?,?,?,?,?,?,?)")
       .run("GS-L1", "Open quote", "2026-12-01", "Quote", 0, "customer@client.example", NOW.toISOString());
+    markChecked(["shared@plan.example", "ok@fresh.example"]);
     const first = importList({ name: "Planners A", segment: "planner" }, "email\nshared@plan.example", "Owner", NOW);
     setSecret("instantly.apiKey", "IK");
     setSecret("instantly.campaignId", CAMPAIGN);
@@ -111,18 +120,19 @@ describe("screening", () => {
 });
 
 describe("approved push", () => {
-  it("sends only eligible contacts to the list's campaign, with verification, and records the result", async () => {
+  it("sends only eligible, checked contacts to the list's campaign, and records the result", async () => {
     setSecret("instantly.apiKey", "IK");
     setSecret("instantly.campaignId", CAMPAIGN);
     addSuppression("email", "stop@corp.example", null, null, NOW);
+    markChecked(["yes@corp.example", "skip@corp.example", "stop@corp.example"]);
     const imp = importList({ name: "Office managers", segment: "corporate", campaignId: LIST_CAMPAIGN }, "email,first name,company,title\nyes@corp.example,Kim,Corp,Office Manager\nskip@corp.example,Lou,Corp,\nstop@corp.example,Max,Corp,", "Owner", NOW);
     const ids = screenedContacts(imp.list.id).map((c) => c.id);
     const f = created(["yes@corp.example"]); // Instantly skips skip@ (say it is already in the workspace)
-    const res = await pushListContacts(imp.list.id, ids, "Owner", { verify: true, fetchImpl: f }, NOW);
+    const res = await pushListContacts(imp.list.id, ids, "Owner", { fetchImpl: f }, NOW);
     expect(res).toMatchObject({ ok: true, provider: "Instantly", campaignId: LIST_CAMPAIGN, added: 1 });
     const sent = JSON.parse((f.mock.calls[0] as unknown as [string, { body: string }])[1].body);
     expect(sent.campaign_id).toBe(LIST_CAMPAIGN);
-    expect(sent.verify_leads_on_import).toBe(true);
+    expect(sent.verify_leads_on_import).toBe(false); // Zoe already checked; no second paid check
     expect(sent.leads.map((l: { email: string }) => l.email).sort()).toEqual(["skip@corp.example", "yes@corp.example"]); // stop@ never sent
     expect(sent.leads.find((l: { email: string }) => l.email === "yes@corp.example")).toMatchObject({ first_name: "Kim", company_name: "Corp", custom_variables: { segment: "Corporate / office managers", title: "Office Manager", list: "Office managers" } });
     const after = Object.fromEntries(screenedContacts(imp.list.id).map((c) => [c.email, c]));
@@ -149,6 +159,64 @@ describe("approved push", () => {
     updateList(imp.list.id, { campaignId: "12345" }, NOW);
     expect((await pushListContacts(imp.list.id, ids, "Owner", { fetchImpl: f }, NOW)).errors[0]).toContain("isn't a valid Instantly campaign id");
     expect(f).not.toHaveBeenCalled();
+  });
+
+  it("checks emails before anything can be sent: dead domains free, bad and catch-all held back", async () => {
+    setSecret("instantly.apiKey", "IK");
+    setSecret("instantly.campaignId", CAMPAIGN);
+    const imp = importList({ name: "Maps venues", segment: "venue" }, "email\ngood@hall.example\nbad@hall.example\nall@catch.example\ninfo@dead.example\nlater@slow.example", "Owner", NOW);
+    let before = Object.fromEntries(screenedContacts(imp.list.id).map((c) => [c.email, c]));
+    expect(Object.values(before).every((c) => c.toCheck && !c.eligible)).toBe(true);
+    // Nothing unchecked can be pushed.
+    const f0 = created([]);
+    const none = await pushListContacts(imp.list.id, Object.values(before).map((c) => c.id), "Owner", { fetchImpl: f0 }, NOW);
+    expect(none.added).toBe(0);
+    expect(none.skipped[0].reason).toContain("not checked");
+    expect(f0).not.toHaveBeenCalled();
+
+    const answers: Record<string, { verification_status: string; catch_all: boolean | string }> = {
+      "good@hall.example": { verification_status: "verified", catch_all: false },
+      "bad@hall.example": { verification_status: "invalid", catch_all: false },
+      "all@catch.example": { verification_status: "verified", catch_all: true },
+      "later@slow.example": { verification_status: "pending", catch_all: "pending" },
+    };
+    const f = vi.fn(async (url: string, init?: { body?: string }) => {
+      const email = init?.body ? JSON.parse(init.body).email : decodeURIComponent(url.split("/").pop()!);
+      const a = url.includes("later%40slow") ? { verification_status: "verified", catch_all: false } : answers[email];
+      return { ok: true, status: 200, json: async () => ({ email, ...a, credits: 50, credits_used: 1 }) };
+    });
+    const mx = vi.fn(async (d: string) => (d === "dead.example" ? Promise.reject(Object.assign(new Error("x"), { code: "ENODATA" })) : [{ exchange: "mx.example", priority: 1 }]));
+    const run = await verifyListContacts(imp.list.id, "Owner", { fetchImpl: f, mxLookup: mx });
+    expect(run).toMatchObject({ ok: true, checked: 5, remaining: 1, stopped: null, creditsLeft: 50 });
+    expect(run.counts).toMatchObject({ valid: 1, invalid: 1, catch_all: 1, no_mail_server: 1, pending: 1 });
+    expect(f).toHaveBeenCalledTimes(4); // the dead domain cost nothing
+
+    // The pending one is collected (GET) on the next run.
+    const again = await verifyListContacts(imp.list.id, "Owner", { fetchImpl: f, mxLookup: mx });
+    expect(again).toMatchObject({ checked: 1, remaining: 0 });
+    expect(String(f.mock.calls[4][0])).toContain("/email-verification/later%40slow.example");
+
+    before = Object.fromEntries(screenedContacts(imp.list.id).map((c) => [c.email, c]));
+    expect(before["good@hall.example"]).toMatchObject({ eligible: true, check: "valid" });
+    expect(before["later@slow.example"].eligible).toBe(true);
+    expect(before["bad@hall.example"].blockers.join(" ")).toContain("would bounce");
+    expect(before["info@dead.example"].blockers.join(" ")).toContain("no mail server");
+    expect(before["all@catch.example"].blockers.join(" ")).toContain("catch-all");
+    expect(listStats(imp.list, Object.values(before), new Set())).toMatchObject({ ready: 2, toCheck: 0, blocked: 3 });
+
+    // A list can opt in to catch-all addresses.
+    updateList(imp.list.id, { includeCatchAll: true }, NOW);
+    expect(screenedContacts(imp.list.id).find((c) => c.email === "all@catch.example")?.eligible).toBe(true);
+  });
+
+  it("stops checking when Instantly is out of credits", async () => {
+    setSecret("instantly.apiKey", "IK");
+    const imp = importList({ name: "Big list", segment: "planner" }, "email\na@p1.example\nb@p2.example", "Owner", NOW);
+    const f = vi.fn(async () => ({ ok: false, status: 402, json: async () => ({}) }));
+    const run = await verifyListContacts(imp.list.id, "Owner", { fetchImpl: f, mxLookup: async () => [{ exchange: "mx.example", priority: 1 }] });
+    expect(run.stopped).toContain("no verification credits");
+    expect(run.remaining).toBe(2);
+    expect(screenedContacts(imp.list.id).every((c) => c.toCheck)).toBe(true);
   });
 
   it("an unused list can be deleted", () => {

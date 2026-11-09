@@ -1,5 +1,5 @@
 // One purchased list. PATCH = edit its details (name, segment, vendor, cost, purchase date, campaign id,
-// notes). DELETE = remove a list imported by mistake (refused once anyone on it was emailed). Owner/admin.
+// notes, include catch-all addresses). DELETE = remove a list imported by mistake (refused once anyone on it was emailed). Owner/admin.
 
 import { NextResponse } from "next/server";
 import { updateList, deleteList, isListSegment } from "@/lib/prospecting/lists";
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   if (!canManageSettings(await viewerRole())) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const { id } = await params;
-  let b: { name?: string; segment?: string; vendor?: string | null; cost?: number | string | null; purchasedAt?: string | null; campaignId?: string | null; notes?: string | null };
+  let b: { name?: string; segment?: string; vendor?: string | null; cost?: number | string | null; purchasedAt?: string | null; campaignId?: string | null; notes?: string | null; includeCatchAll?: boolean };
   try {
     b = (await req.json()) as typeof b;
   } catch {
@@ -28,6 +28,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       ...(b.purchasedAt !== undefined ? { purchasedAt: b.purchasedAt || null } : {}),
       ...(b.campaignId !== undefined ? { campaignId: b.campaignId || null } : {}),
       ...(b.notes !== undefined ? { notes: b.notes } : {}),
+      ...(typeof b.includeCatchAll === "boolean" ? { includeCatchAll: b.includeCatchAll } : {}),
     });
     if (!list) return NextResponse.json({ error: "not found" }, { status: 404 });
     return NextResponse.json({ ok: true, list });

@@ -143,6 +143,8 @@ interface Candidate {
   dueAt: string;
   eligible: boolean;
   blockers: string[];
+  check?: string;
+  checkLabel?: string;
 }
 
 export function SequencerPushReview() {
@@ -213,6 +215,11 @@ export function SequencerPushReview() {
                       <span className="text-foreground">{c.company || "Unknown company"}</span>
                       <span className="text-meta"> · {c.email ?? "no email"} · {c.opportunityName}</span>
                       {!c.eligible && <span className="block text-[11.5px] text-critical">Can&apos;t send: {c.blockers.join("; ")}</span>}
+                      {c.eligible && c.check && (
+                        <span className={`block text-[11.5px] ${c.check === "valid" ? "text-positive" : "text-attention"}`}>
+                          {c.check === "valid" ? "Email verified" : "Email gets checked when you approve; only a good address is sent"}
+                        </span>
+                      )}
                     </span>
                   </label>
                   <details className="ml-6 mt-1 text-[12px] text-meta">
@@ -222,7 +229,7 @@ export function SequencerPushReview() {
                 </div>
               ))}
               <div className="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
-                <span className="text-[12px] text-meta">{picked.size} selected. {tool} sends from its campaign; you can pause it there.</span>
+                <span className="text-[12px] text-meta">{picked.size} selected. Each email is checked first (Instantly verifier); {tool} sends from its campaign and you can pause it there.</span>
                 <button className={`${btn} ml-auto`} disabled={busy || picked.size === 0 || !connected} onClick={approve}>{busy ? "Pushing…" : `Approve and push ${picked.size}`}</button>
               </div>
             </>

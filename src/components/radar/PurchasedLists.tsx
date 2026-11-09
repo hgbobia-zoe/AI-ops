@@ -127,11 +127,85 @@ export function ListImport({ template }: { template: string }) {
   );
 }
 
+interface VerifyResponse {
+  ok?: boolean; error?: string; checked?: number; remaining?: number; stopped?: string | null; errors?: string[];
+  counts?: { valid: number; catch_all: number; invalid: number; no_mail_server: number; pending: number };
+  creditsLeft?: number | null;
+}
+
+/** Check every waiting address before anything can be sent: free domain check, then Instantly's verifier.
+ *  Runs batch after batch until done, stopped (key, credits, rate limit) or only pending answers remain. */
+export function ListVerifyPanel({ listId, toCheck, hasKey }: { listId: string; toCheck: number; hasKey: boolean }) {
+  const router = useRouter();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
+
+  async function run() {
+    setBusy(true);
+    const tally = { checked: 0, valid: 0, catch_all: 0, bad: 0, pending: 0 };
+    let credits: number | null = null;
+    let waits = 0;
+    try {
+      for (let round = 0; round < 300; round++) {
+        const res = await fetch(`/api/radar/lists/${listId}/verify`, { method: "POST" });
+        const d = (await res.json()) as VerifyResponse;
+        if (!res.ok || d.error) throw new Error(d.error || "Check failed");
+        const c = d.counts ?? { valid: 0, catch_all: 0, invalid: 0, no_mail_server: 0, pending: 0 };
+        tally.checked += (d.checked ?? 0) - c.pending;
+        tally.valid += c.valid; tally.catch_all += c.catch_all; tally.bad += c.invalid + c.no_mail_server; tally.pending = c.pending;
+        if (d.creditsLeft != null) credits = d.creditsLeft;
+        setProgress(`Checked ${tally.checked} · ${tally.valid} good · ${tally.bad} would bounce · ${tally.catch_all} catch-all${d.remaining ? ` · ${d.remaining} to go` : ""}`);
+        if (d.stopped) { toast.error(`Stopped: ${d.stopped}`); break; }
+        if (!d.checked && d.errors?.length) { toast.error(d.errors[0]); break; }
+        if (!d.remaining) { toast.success(`Emails checked: ${tally.valid} good, ${tally.bad} would bounce, ${tally.catch_all} catch-all`); break; }
+        // No final answer this round: Instantly is still working on the pending ones. Wait, then collect.
+        if ((d.checked ?? 0) - c.pending <= 0) {
+          if (++waits > 10) { toast.message(`${d.remaining} still being checked by Instantly. Click again in a few minutes.`); break; }
+          await new Promise((r) => setTimeout(r, 8000));
+        }
+      }
+      if (credits != null) setProgress((p) => `${p} · ${credits} Instantly credits left`);
+      setConfirming(false);
+      router.refresh();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="mb-3 rounded border border-border p-3 text-[12.5px]">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-foreground">Check emails</span>
+        <span className="text-meta">
+          Nothing goes into a campaign until its email passed. A free check removes domains that can&apos;t get mail, then Instantly verifies the rest (1 credit each). Results are kept, so nobody is checked twice.
+        </span>
+      </div>
+      {!hasKey && <p className="mt-1 text-attention">Add the Instantly API key in Radar → Outreach → Cold email settings to verify. Without it only the free domain check runs.</p>}
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        {progress && <span className="text-tertiary-text">{progress}</span>}
+        {!confirming ? (
+          <button className={`${btn} ml-auto`} disabled={toCheck === 0 || busy} onClick={() => setConfirming(true)}>
+            {toCheck === 0 ? "All emails checked" : `Check ${toCheck} ${toCheck === 1 ? "email" : "emails"}`}
+          </button>
+        ) : (
+          <span className="ml-auto inline-flex flex-wrap items-center gap-2">
+            <span className="text-attention">Check {toCheck === 1 ? "1 email" : `${toCheck} emails`}? Uses up to {toCheck} Instantly verification {toCheck === 1 ? "credit" : "credits"}.</span>
+            <button className={btn} disabled={busy} onClick={run}>{busy ? "Checking…" : "Yes, check them"}</button>
+            <button className={btn} disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+          </span>
+        )}
+      </div>
+    </section>
+  );
+}
+
 interface PushResponse { provider?: string; added?: number; skipped?: { email: string; reason: string }[]; errors?: string[]; error?: string }
 
 export function ListPushPanel({ listId, ready, provider, connected, campaignLabel, maxPush }: { listId: string; ready: number; provider: string; connected: boolean; campaignLabel: string; maxPush: number }) {
   const router = useRouter();
-  const [verify, setVerify] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const count = Math.min(ready, maxPush);
@@ -139,7 +213,7 @@ export function ListPushPanel({ listId, ready, provider, connected, campaignLabe
   async function push() {
     setBusy(true);
     try {
-      const res = await fetch(`/api/radar/lists/${listId}/push`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ allReady: true, verify }) });
+      const res = await fetch(`/api/radar/lists/${listId}/push`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ allReady: true }) });
       const d = (await res.json()) as PushResponse;
       if (d.error) throw new Error(d.error);
       const skipped = d.skipped?.length ?? 0;
@@ -161,12 +235,7 @@ export function ListPushPanel({ listId, ready, provider, connected, campaignLabe
         <span className={connected ? "text-meta" : "text-attention"}>{connected ? campaignLabel : `${provider} is not connected yet. Set it up in Radar → Outreach → Cold email settings.`}</span>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-3">
-        {provider === "Instantly" && (
-          <label className="inline-flex items-center gap-1.5 text-tertiary-text">
-            <input type="checkbox" checked={verify} onChange={(e) => setVerify(e.target.checked)} />
-            Verify emails in Instantly first (recommended for bought lists; uses Instantly credits)
-          </label>
-        )}
+        <span className="text-tertiary-text">Only contacts whose email passed the check are sent.</span>
         {!confirming ? (
           <button className={`${btn} ml-auto`} disabled={!connected || count === 0} onClick={() => setConfirming(true)}>
             {count === 0 ? "Nobody ready to send" : `Review and send ${count}`}
@@ -185,19 +254,20 @@ export function ListPushPanel({ listId, ready, provider, connected, campaignLabe
   );
 }
 
-interface ListFields { id: string; name: string; segment: string; vendor: string | null; cost: number | null; purchasedAt: string | null; campaignId: string | null; notes: string | null }
+interface ListFields { id: string; name: string; segment: string; vendor: string | null; cost: number | null; purchasedAt: string | null; campaignId: string | null; notes: string | null; includeCatchAll: boolean }
 
 export function ListSettings({ list, canDelete }: { list: ListFields; canDelete: boolean }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [f, setF] = useState({ name: list.name, segment: list.segment, vendor: list.vendor ?? "", cost: list.cost == null ? "" : String(list.cost), purchasedAt: list.purchasedAt ?? "", campaignId: list.campaignId ?? "", notes: list.notes ?? "" });
+  const [catchAll, setCatchAll] = useState(list.includeCatchAll);
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setF((s) => ({ ...s, [k]: e.target.value }));
 
   async function save() {
     setBusy(true);
     try {
-      const res = await fetch(`/api/radar/lists/${list.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(f) });
+      const res = await fetch(`/api/radar/lists/${list.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...f, includeCatchAll: catchAll }) });
       const d = (await res.json()) as { error?: string };
       if (!res.ok) throw new Error(d.error || "Save failed");
       toast.success("Saved");
@@ -230,6 +300,10 @@ export function ListSettings({ list, canDelete }: { list: ListFields; canDelete:
       <label className={label}>Purchase date<input type="date" className={input} value={f.purchasedAt} onChange={set("purchasedAt")} /></label>
       <label className={label}>Campaign id (blank = the default campaign)<input className={input} value={f.campaignId} onChange={set("campaignId")} /></label>
       <label className={`${label} sm:col-span-2`}>Notes<textarea className={`${input} h-16`} value={f.notes} onChange={set("notes")} /></label>
+      <label className="inline-flex items-start gap-1.5 text-[12px] text-tertiary-text sm:col-span-2">
+        <input type="checkbox" className="mt-0.5" checked={catchAll} onChange={(e) => setCatchAll(e.target.checked)} />
+        Also send to catch-all addresses. Their domain accepts any address, so the check can&apos;t confirm the person exists; some will bounce. Leave off unless the list runs short.
+      </label>
       <div className="flex flex-wrap gap-2 sm:col-span-2">
         <button className={btn} disabled={busy} onClick={save}>{busy ? "Saving…" : "Save"}</button>
         <button className={btn} onClick={() => setOpen(false)}>Cancel</button>

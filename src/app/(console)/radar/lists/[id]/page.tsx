@@ -5,7 +5,8 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { FigureStrip, tableCls, theadCls, thCls, type Figure } from "@/components/console-primitives";
-import { ListPushPanel, ListSettings, ListContactOutcome } from "@/components/radar/PurchasedLists";
+import { ListPushPanel, ListSettings, ListContactOutcome, ListVerifyPanel } from "@/components/radar/PurchasedLists";
+import { CHECK_LABEL } from "@/lib/prospecting/verify";
 import {
   getList, screenedContacts, listStats, convertedOpportunityIds, listCampaign, SEGMENT_LABEL, CONTACT_STATUS_LABEL, MAX_PUSH,
   type ScreenedContact,
@@ -20,7 +21,8 @@ const PAGE = 100;
 const SHOW = {
   all: { label: "All", test: () => true },
   ready: { label: "Ready", test: (c: ScreenedContact) => c.eligible },
-  blocked: { label: "Can't send", test: (c: ScreenedContact) => c.status === "new" && !c.eligible },
+  check: { label: "To check", test: (c: ScreenedContact) => c.toCheck },
+  blocked: { label: "Can't send", test: (c: ScreenedContact) => c.status === "new" && !c.eligible && !c.toCheck },
   emailed: { label: "Emailed", test: (c: ScreenedContact) => c.pushedAt != null },
   replies: { label: "Replies", test: (c: ScreenedContact) => ["replied", "interested", "not_interested", "bounced", "unsubscribed"].includes(c.status) },
 } as const;
@@ -61,7 +63,8 @@ export default async function PurchasedListPage({ params, searchParams }: { para
 
   const figures: Figure[] = [
     { label: "Contacts", value: stats.total },
-    { label: "Ready", value: stats.ready, tone: stats.ready ? "attention" : "default" },
+    { label: "To check", value: stats.toCheck, tone: stats.toCheck ? "attention" : "default" },
+    { label: "Ready", value: stats.ready, tone: stats.ready ? "positive" : "default" },
     { label: "Can't send", value: stats.blocked },
     { label: "Emailed", value: stats.pushed, sep: true },
     { label: "Replied", value: stats.replied },
@@ -83,6 +86,7 @@ export default async function PurchasedListPage({ params, searchParams }: { para
         <FigureStrip figures={figures} />
       </header>
 
+      <ListVerifyPanel listId={id} toCheck={stats.toCheck} hasKey={Boolean(providerApiKey("instantly"))} />
       <ListPushPanel listId={id} ready={stats.ready} provider={tool} connected={Boolean(providerApiKey(provider) && campaign && !unsupportedProvider())} campaignLabel={campaignLabel} maxPush={MAX_PUSH} />
       <div className="mb-4"><ListSettings list={list} canDelete={stats.pushed === 0} /></div>
       {list.notes && <p className="mb-4 whitespace-pre-wrap text-[12.5px] text-tertiary-text">{list.notes}</p>}
@@ -116,7 +120,9 @@ export default async function PurchasedListPage({ params, searchParams }: { para
                   <td className="px-2.5 py-2 text-[12.5px] text-tertiary-text">{[c.city, c.state].filter(Boolean).join(", ") || "—"}</td>
                   <td className="px-2.5 py-2 text-[12.5px]">
                     {c.status === "new"
-                      ? c.eligible ? <span className="text-positive">Ready</span> : <span className="text-critical">Can&apos;t send: {c.blockers.join("; ")}</span>
+                      ? c.eligible ? <span className="text-positive">Ready · {CHECK_LABEL[c.check]}</span>
+                        : c.toCheck ? <span className="text-attention">To check{c.check === "pending" ? " (Instantly still working)" : ""}</span>
+                        : <span className="text-critical">Can&apos;t send: {c.blockers.join("; ")}</span>
                       : <span className="text-tertiary-text">{CONTACT_STATUS_LABEL[c.status]}{c.pushedAt ? ` · ${c.pushedAt.slice(0, 10)}` : ""}</span>}
                     {c.skipReason && <div className="text-[11.5px] text-meta">{c.skipReason}</div>}
                   </td>

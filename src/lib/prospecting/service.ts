@@ -21,6 +21,7 @@ import {
   isSuppressed, addSuppression, markEnrollmentPushed, type StoredEnrollment, type StoredTask,
 } from "./store";
 import { contactOwner } from "./contactOwnership";
+import { getCheck, checkState, checkVerdict, needsCheck, verifyEmails, CHECK_LABEL, type CheckState, type MxLookup } from "./verify";
 import { insertAudit } from "@/lib/db/repo";
 import type { TaskOutcome, Tier } from "./types";
 
@@ -212,6 +213,9 @@ export interface PushCandidate {
   dueAt: string;
   eligible: boolean;
   blockers: string[];
+  /** Where its email check stands. Unchecked addresses are checked when the push is approved. */
+  check: CheckState;
+  checkLabel: string;
 }
 
 /** Every active Tier B enrollment whose first email is due and that has not been handed to the sequencer,
@@ -236,6 +240,9 @@ export function pushCandidates(now: Date = new Date()): PushCandidate[] {
     const own = contactOwner({ email, phone: entity?.phone }, today);
     if (own.owner === "salesos") blockers.push(own.reason ?? "Sales OS owns this contact");
     if (emails.some((t) => t.exportedAt)) blockers.push("already exported to CSV");
+    const check = email ? checkState(getCheck(email), now) : "unchecked";
+    const verdict = checkVerdict(check);
+    if (email && verdict.reason && !needsCheck(check)) blockers.push(verdict.reason);
     out.push({
       enrollmentId: enr.id,
       opportunityId: opp.id,
@@ -247,6 +254,8 @@ export function pushCandidates(now: Date = new Date()): PushCandidate[] {
       dueAt: first.dueAt,
       eligible: blockers.length === 0,
       blockers,
+      check,
+      checkLabel: CHECK_LABEL[check],
     });
   }
   return out.sort((a, b) => a.dueAt.localeCompare(b.dueAt));
@@ -263,12 +272,14 @@ export interface PushOutcome {
 }
 
 /** Push exactly the enrollments a person approved. Re-checks eligibility first (nothing stale goes out),
- *  records each accepted lead, and audits the approval. Leads the tool skipped or failed stay unpushed. */
+ *  checks any address not checked yet (verify.ts) and sends only addresses that passed, records each
+ *  accepted lead, and audits the approval. Leads the tool skipped or failed stay unpushed. */
 export async function pushApproved(
   enrollmentIds: string[],
   actor: string,
   now: Date = new Date(),
   fetchImpl?: FetchLike,
+  mxLookup?: MxLookup,
 ): Promise<PushOutcome> {
   const provider = activeProvider();
   const label = PROVIDER_LABEL[provider];
@@ -280,13 +291,25 @@ export async function pushApproved(
   if (!key || !campaignId) return { ...out, ok: false, errors: [`${label} is not connected (API key and campaign id)`] };
 
   const wanted = new Set(enrollmentIds);
-  const candidates = pushCandidates(now).filter((c) => wanted.has(c.enrollmentId));
+  let candidates = pushCandidates(now).filter((c) => wanted.has(c.enrollmentId));
   for (const id of wanted) if (!candidates.some((c) => c.enrollmentId === id)) out.skipped.push({ enrollmentId: id, reason: "no longer due or already handed off" });
+  // Check the addresses not checked yet, then read the candidates again with the results.
+  const unchecked = candidates.filter((c) => c.eligible && c.email && needsCheck(c.check)).map((c) => c.email!);
+  if (unchecked.length) {
+    const run = await verifyEmails(unchecked, { key: providerApiKey("instantly"), fetchImpl, mxLookup, now: () => now, max: unchecked.length });
+    if (run.stopped) out.errors.push(`Email check: ${run.stopped}`);
+    candidates = pushCandidates(now).filter((c) => wanted.has(c.enrollmentId));
+  }
   const eligible = candidates.filter((c) => {
-    if (!c.eligible) out.skipped.push({ enrollmentId: c.enrollmentId, reason: c.blockers.join("; ") });
-    return c.eligible;
+    const verdict = checkVerdict(c.check);
+    if (!c.eligible || !verdict.sendable) {
+      const reasons = c.eligible && verdict.reason ? [verdict.reason] : c.blockers;
+      out.skipped.push({ enrollmentId: c.enrollmentId, reason: reasons.join("; ") });
+      return false;
+    }
+    return true;
   });
-  if (eligible.length === 0) return out;
+  if (eligible.length === 0) { if (out.errors.length) out.ok = false; return out; }
 
   const leads: OutreachLead[] = eligible.map((c) => {
     const opp = getOpportunity(c.opportunityId);
@@ -304,7 +327,7 @@ export async function pushApproved(
     };
   });
   const res = await pushLeads(provider, leads, { key, campaignId, fetchImpl });
-  out.ok = res.ok;
+  out.ok = res.ok && out.errors.length === 0;
   out.errors.push(...res.errors);
   const skippedSet = new Set(res.skippedEmails);
   const failedSet = new Set(res.failedEmails);

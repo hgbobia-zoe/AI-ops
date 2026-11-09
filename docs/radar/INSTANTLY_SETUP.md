@@ -46,19 +46,26 @@ Each lead also arrives with these variables: `{{opportunity}}`, `{{event_date}}`
 
 ## 4. Connect Zoe (owner pastes the key; never share it in chat)
 
-1. In Instantly, go to Settings → Integrations → API keys. Create a key with the **leads** and **campaigns**
-   scopes.
-2. In Zoe, go to Radar → Outreach → Cold email → Settings and pick **Instantly**.
-3. Paste the key.
-4. Paste the campaign id. It is the long id in the campaign URL, for example
+1. In Instantly, go to Settings → Integrations → API keys. Create a key with the **leads**, **campaigns**
+   and **email verifications** scopes (or "all").
+2. Buy email verification credits in Instantly. Zoe checks every address before it goes into a campaign,
+   and each check uses 1 credit.
+3. In Zoe, go to Radar → Outreach → Cold email → Settings and pick **Instantly**.
+4. Paste the key.
+5. Paste the campaign id. It is the long id in the campaign URL, for example
    `app.instantly.ai/app/campaign/1a2b3c4d-.../...`.
-5. Click **Save and test**. Zoe reads the campaign back and shows its name and status. "draft" or "paused"
+6. Click **Save and test**. Zoe reads the campaign back and shows its name and status. "draft" or "paused"
    is expected until warm-up ends.
 
 ## 5. Day to day
 
 - **Push a batch:** in Radar → Outreach, click **Review email push**. Untick anyone you don't want,
-  then click **Approve and push**. Only ticked, eligible leads go to Instantly.
+  then click **Approve and push**. Zoe checks each address first and sends only the ones that pass.
+- **Email check (bounce protection):** nothing goes into a campaign unless its address passed. First a
+  free check: a domain with no mail server is dropped without spending a credit. Then Instantly's verifier
+  (1 credit per address). Results are kept for 90 days and shared across lists and Radar, so nobody is
+  checked twice. Catch-all addresses (the domain accepts anything, so the person can't be confirmed) are
+  held back unless a list turns them on.
 - **Who never gets pushed:** anyone on the do-not-contact list, anyone Sales OS owns (an open quote or a
   recent customer), and anyone already in the Instantly workspace.
 - **Replies:** Instantly stops the sequence. Handle the reply in Instantly's inbox (Unibox) for now. If
@@ -80,18 +87,20 @@ Besides the contacts Radar finds, Zoe buys lists to cold email. In Zoe these liv
 3. **Screening:** each list shows who is Ready and who can't be sent, with the reason. The same rules apply
    as for Radar: the do-not-contact list, Sales OS customers and open quotes, anyone already emailed from
    another list or from Radar outreach, and Zoe's own addresses.
-4. **Send:** click **Review and send**, then **Approve and send**. Each push sends at most 500 contacts. Keep
-   **Verify emails in Instantly first** ticked: bought data has dead addresses, and bounces hurt the inboxes.
-   Start with a few hundred and keep the bounce rate under about 3% before sending more.
-5. **Replies:** log them on the contact (Log reply). Not interested, bounced and unsubscribed go on the
+4. **Check emails:** click **Check N emails**, then **Yes, check them**. Dead domains are removed for
+   free, then Instantly verifies the rest. Contacts move to Ready (passed) or Can't send (would bounce,
+   no mail server, catch-all). To send catch-all addresses too, tick it in Edit list.
+5. **Send:** click **Review and send**, then **Approve and send**. Only Ready contacts go, at most 500 per
+   push. Start with a few hundred and keep the bounce rate under about 3% before sending more.
+6. **Replies:** log them on the contact (Log reply). Not interested, bounced and unsubscribed go on the
    do-not-contact list automatically. **Interested** creates a Radar opportunity at stage Engaged, linked
    to the contact. Convert it to Goodshuffle from there once they ask for a quote (intent only).
-6. **Lists you scrape yourself (Apify Google Maps Scraper):** export the run as CSV and import it as is.
+7. **Lists you scrape yourself (Apify Google Maps Scraper):** export the run as CSV and import it as is.
    Zoe reads the place name as the company and takes the first good email per place. Emails exist only
    when the run had the **Company contacts enrichment** add-on on (it reads emails off each business
    website), so places without a website come in empty and are left out. These are mostly shared inboxes
    (events@, info@) with no person's name, so write the venue copy to read well without `{{firstName}}`.
-7. **Deleting a list:** a list can be deleted only if nobody on it was emailed yet. Once anyone was sent,
+8. **Deleting a list:** a list can be deleted only if nobody on it was emailed yet. Once anyone was sent,
    the list is kept as the record of who was emailed.
 
 ## Not built yet
@@ -102,6 +111,8 @@ Besides the contacts Radar finds, Zoe buys lists to cold email. In Zoe these liv
 
 ## Code
 
+- `src/lib/prospecting/verify.ts`: the email check (domain check, `POST /api/v2/email-verification`,
+  saved results in `email_verifications`), used by lists and Radar before any push.
 - `src/lib/prospecting/instantly.ts`: the API v2 calls (`POST /api/v2/leads/add`, `GET /api/v2/campaigns/{id}`).
 - `src/lib/prospecting/sequencer.ts`: chooses the tool, stores keys per tool, keeps the Smartlead path,
   and holds the compliance footer.
