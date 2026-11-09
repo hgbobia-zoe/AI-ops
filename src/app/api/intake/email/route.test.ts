@@ -93,7 +93,7 @@ describe("POST /api/intake/email", () => {
     vi.mocked(chat).mockResolvedValueOnce({ ok: true, text: '{"intent":"new_inquiry","confidence":0.92,"firstName":"Danielle","lastName":"Whitaker","eventType":"social","eventDate":"2027-06-14","guestCount":80,"summary":"Birthday party tent quote"}' });
     const sender = "danielle.w@gmail.com";
     const lead = await post(gmail({}, sender));
-    expect(lead.json).toMatchObject({ decision: "lead", by: "model", created: true });
+    expect(lead.json).toMatchObject({ decision: "lead", by: "model", created: true, firstName: "Danielle" });
     const op = creates().find((o) => (o.payload as { leadEmail?: string }).leadEmail === sender)!;
     expect(op.payload).toMatchObject({ eventName: "Whitaker - Social / Private", eventDateMDY: "6/14/2027" });
 

@@ -168,5 +168,6 @@ export async function POST(req: Request): Promise<NextResponse> {
     dedupeWindowMs: EVER_MS,
     notesExtra: "Came in by email to hello@. Read the original in the inbox before replying.",
   });
-  return answer({ ...base, decision, reason, by, intakeId: r.intakeId, created: r.created }, { eventName: r.eventName, queueReason: r.reason });
+  // firstName lets the Zap greet them in its in-thread reply ("Welcome, Christine.").
+  return answer({ ...base, decision, reason, by, intakeId: r.intakeId, created: r.created }, { eventName: r.eventName, queueReason: r.reason, firstName: lead.firstName });
 }
