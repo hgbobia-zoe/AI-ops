@@ -37,6 +37,8 @@ export function instantlyStatusLabel(s: unknown): string | undefined {
 export interface InstantlyLead {
   email: string;
   first_name?: string;
+  last_name?: string;
+  phone?: string;
   company_name?: string;
   website?: string;
   custom_variables?: Record<string, string>;
@@ -47,6 +49,8 @@ export function toInstantlyLead(l: OutreachLead): InstantlyLead {
   if (l.location) vars.location = l.location;
   const out: InstantlyLead = { email: l.email, custom_variables: vars };
   if (l.firstName) out.first_name = l.firstName;
+  if (l.lastName) out.last_name = l.lastName;
+  if (l.phone) out.phone = l.phone;
   if (l.company) out.company_name = l.company;
   if (l.website) out.website = l.website;
   return out;
@@ -75,7 +79,7 @@ async function errorMessage(res: { json(): Promise<unknown> }): Promise<string |
 /** PURE apart from the injected fetch. Push leads in batches; never throws. */
 export async function pushLeadsToInstantly(
   leads: OutreachLead[],
-  opts: { key: string; campaignId: string; fetchImpl?: FetchLike },
+  opts: { key: string; campaignId: string; fetchImpl?: FetchLike; verify?: boolean },
 ): Promise<PushResult> {
   const out: PushResult = { ok: true, provider: "instantly", added: 0, skipped: 0, skippedEmails: [], failedEmails: [], errors: [] };
   const f = opts.fetchImpl ?? (fetch as unknown as FetchLike);
@@ -90,7 +94,7 @@ export async function pushLeadsToInstantly(
           campaign_id: opts.campaignId,
           leads: batch.map(toInstantlyLead),
           skip_if_in_workspace: true,
-          verify_leads_on_import: false,
+          verify_leads_on_import: Boolean(opts.verify),
         }),
         signal: AbortSignal.timeout(30_000),
       });

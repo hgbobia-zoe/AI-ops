@@ -1243,6 +1243,49 @@ CREATE TABLE IF NOT EXISTS prospect_suppression (
   UNIQUE(kind, value)
 );
 
+-- Purchased contact lists (venues, planners, ...) for Radar cold email. One row per list bought; the
+-- contacts are screened (do-not-contact, Sales OS ownership, duplicates) and pushed to the cold email
+-- tool only after a person approves. cost is what Zoe paid, for cost-per-reply / ROI. FACTS only.
+CREATE TABLE IF NOT EXISTS prospect_lists (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  segment       TEXT NOT NULL,                -- venue | planner | corporate | association | other
+  vendor        TEXT,                         -- where it was bought
+  cost          REAL,                         -- dollars paid
+  purchased_at  TEXT,                         -- YYYY-MM-DD
+  campaign_id   TEXT,                         -- cold email campaign for this list (else the default one)
+  notes         TEXT,
+  created_by    TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS prospect_list_contacts (
+  id             TEXT PRIMARY KEY,
+  list_id        TEXT NOT NULL,
+  email          TEXT NOT NULL,               -- lowercased
+  first_name     TEXT,
+  last_name      TEXT,
+  title          TEXT,
+  company        TEXT,
+  website        TEXT,
+  phone          TEXT,
+  city           TEXT,
+  state          TEXT,
+  status         TEXT NOT NULL,               -- new | pushed | skipped | replied | interested | not_interested | bounced | unsubscribed
+  skip_reason    TEXT,                        -- why the cold email tool skipped it
+  provider       TEXT,                        -- instantly | smartlead once pushed
+  pushed_at      TEXT,
+  pushed_by      TEXT,
+  outcome_by     TEXT,
+  outcome_at     TEXT,
+  opportunity_id TEXT,                        -- Radar opportunity created from an interested reply
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  UNIQUE(list_id, email)
+);
+CREATE INDEX IF NOT EXISTS idx_list_contacts_list ON prospect_list_contacts(list_id, status);
+CREATE INDEX IF NOT EXISTS idx_list_contacts_email ON prospect_list_contacts(email);
+
 -- Marketing module — Zoe's demand-generation OS. The app is the operating dashboard over the tools the
 -- team already runs (Confluence for content planning, a social poster, ManyChat, Google Business); these
 -- tables hold what the team plans and tracks in-app. FACTS the team enters; no fabrication.

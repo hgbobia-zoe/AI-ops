@@ -69,6 +69,7 @@ export default async function OutreachWorklistPage(): Promise<React.JSX.Element>
       <div className="mb-4 flex flex-wrap gap-3 text-[11.5px] text-meta">
         <span>Contact enrichment (Apify): <span className={apifyConfigured() ? "text-positive" : "text-meta"}>{apifyConfigured() ? "connected" : "off"}</span></span>
         <span className="text-meta">Today: {todayInOpsTz()}</span>
+        {manage && <Link href="/radar/lists" className="text-tertiary-text hover:text-foreground">Purchased lists (venues, planners)</Link>}
       </div>
 
       {manage && (

@@ -97,6 +97,7 @@ export const NAV_GROUPS: NavGroup[] = [
     blades: [
       { href: "/radar", label: "Overview", icon: Gauge, exact: true },
       { href: "/radar/outreach", label: "Outreach", icon: Send },
+      { href: "/radar/lists", label: "Lists", icon: Contact, manage: true },
       { href: "/radar/campaigns", label: "Campaigns", icon: Target },
       { href: "/radar/companies", label: "Companies", icon: Building2 },
       { href: "/radar/analytics", label: "Analytics", icon: TrendingUp },
