@@ -91,3 +91,22 @@ describe("syncInstaworkAssignments (booked snapshot)", () => {
     expect(rows.find((a) => a.instaworkWorker === "Sam R")?.state).toBe("REPLACED");
   });
 });
+
+describe("getInternalRoleCountsInRange (finance team grouping)", () => {
+  it("counts each internal worker's shifts by role, inside the date range only", async () => {
+    const m = await mods();
+    const a = m.createShift({ date: "2026-12-01", role: "prep", headcount: 1, routeId: null });
+    const b = m.createShift({ date: "2026-12-02", role: "prep", headcount: 1, routeId: null });
+    const c = m.createShift({ date: "2026-12-03", role: "driver", headcount: 1, routeId: "R9" });
+    const outside = m.createShift({ date: "2026-12-20", role: "driver", headcount: 1, routeId: "R10" });
+    m.syncInternalAssignments(a, [901], nameOf);
+    m.syncInternalAssignments(b, [901], nameOf);
+    m.syncInternalAssignments(c, [901, 902], nameOf);
+    m.syncInternalAssignments(outside, [902], nameOf);
+
+    const counts = m.getInternalRoleCountsInRange("2026-12-01", "2026-12-07");
+    expect(counts.get(901)?.get("prep")).toBe(2);
+    expect(counts.get(901)?.get("driver")).toBe(1);
+    expect(counts.get(902)?.get("driver")).toBe(1); // the Dec 20 shift is outside the range
+  });
+});

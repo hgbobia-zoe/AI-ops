@@ -19,14 +19,15 @@
 
 import { NextResponse } from "next/server";
 import { saveBookings, enqueueWarehouseTeamAdds, archiveBookingsNotIn, saveBookingRevenueComponents, syncStopWindowsFromBookings, type BookingRecord } from "@/lib/db/repo";
-import { shiftYmd, todayInOpsTz } from "@/lib/dates";
-
-/** How far back a bookings pull refreshes stop windows (covers the recent on-time review period). */
-const WINDOW_BACKFILL_DAYS = 60;
-import { recordPull, logImport, recordBookingsImportFailure } from "@/lib/pull/state";
+import { recordPull, logImport, recordBookingsImportFailure, claimBlankDraftBurstAlert } from "@/lib/pull/state";
+import { findBlankDraftBursts, blankDraftBurstMessage, BLANK_DRAFT_BURST_THRESHOLD } from "@/lib/ingest/blankDraft";
+import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { consumeBookingsForcePrune } from "@/lib/ingest/forcePruneBookings";
 import { slackNotify } from "@/lib/notify/slack";
 import { centsToDollars, type RevenueComponentsCents } from "@/lib/finance/revenueModel";
+
+/** How far back a bookings pull refreshes stop windows (covers the recent on-time review period). */
+const WINDOW_BACKFILL_DAYS = 60;
 
 export const dynamic = "force-dynamic";
 
@@ -174,6 +175,11 @@ export async function POST(req: Request): Promise<NextResponse> {
     }
   }
 
+  // Runaway-create guard (both lanes): more than N blank drafts created today or yesterday means a create
+  // loop is minting empty projects (the 2026-10-31 incident made 68 before anyone noticed). One deduped
+  // ops Slack per day. Never fails the ingest.
+  const blankDraftAlerts = alertBlankDraftBursts(records);
+
   // ── FAST LANE (scope:"active") ────────────────────────────────────────────────────────────────
   // Upsert the active set and keep freshness green between hourly full pulls — then STOP. There is no
   // orphan concept on an active-only set (it never carries archived rows), so the prune, the one-shot
@@ -186,7 +192,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     // Warehouse-team adds are idempotent (add-once) and signed active projects appear in this set, so it
     // is safe + useful on the fast lane; it never prunes or deletes.
     const wdQueued = records.length > 0 ? enqueueWarehouseTeamAdds() : 0;
-    return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial: false, wdQueued, pruned: 0 }, { headers: CORS });
+    return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial: false, wdQueued, pruned: 0, blankDraftAlerts }, { headers: CORS });
   }
 
   // ── SLOW LANE (scope:"full", or absent) ─────────────────────────────────────────────────────────
@@ -249,5 +255,27 @@ export async function POST(req: Request): Promise<NextResponse> {
   // so the warehouse tablet/workstation sees signed work. The office extension drains these ops.
   const wdQueued = records.length > 0 ? enqueueWarehouseTeamAdds() : 0;
 
-  return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial, wdQueued, pruned }, { headers: CORS });
+  return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial, wdQueued, pruned, blankDraftAlerts }, { headers: CORS });
+}
+
+/** Threshold for the blank-draft guard. GS_BLANK_DRAFT_ALERT_THRESHOLD overrides the default of 5. */
+function blankDraftThreshold(): number {
+  const n = Number(process.env.GS_BLANK_DRAFT_ALERT_THRESHOLD);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : BLANK_DRAFT_BURST_THRESHOLD;
+}
+
+/** Post one ops Slack per day that crosses the blank-draft threshold. Returns how many alerts were sent. */
+function alertBlankDraftBursts(records: BookingRecord[]): number {
+  try {
+    const since = shiftYmd(todayInOpsTz(), -1);
+    let sent = 0;
+    for (const burst of findBlankDraftBursts(records, since, blankDraftThreshold())) {
+      if (!claimBlankDraftBurstAlert(burst.date)) continue;
+      sent++;
+      void slackNotify(blankDraftBurstMessage(burst)).catch(() => {});
+    }
+    return sent;
+  } catch {
+    return 0; // the guard must never break the ingest write
+  }
 }

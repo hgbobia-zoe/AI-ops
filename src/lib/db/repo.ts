@@ -8,6 +8,7 @@ import { getSettings } from "@/lib/settings";
 import { logChange } from "@/lib/history/store";
 import { detectLinenItems } from "@/lib/salesos/linen";
 import { slackNotify } from "@/lib/notify/slack";
+import { NOT_BLANK_DRAFT_SQL } from "@/lib/ingest/blankDraft";
 import { pickWorkableRoute, isVerifiedComplete } from "@/lib/dispatch/handoff";
 import { getHandoffConfig } from "@/lib/dispatch/handoffConfig";
 import { bookingWindowForStop } from "@/lib/dispatch/onTime";
@@ -1240,6 +1241,11 @@ function operatingYearStart(): string {
   return currentOperatingYearStart(new Date(), getSettings().operatingYearStart ?? null);
 }
 
+// BLANK DRAFTS: every lead/pipeline/revenue/trend reader below filters `${NOT_BLANK_DRAFT_SQL}` (the SQL
+// twin of isBlankDraft in src/lib/ingest/blankDraft.ts) so empty "Unnamed Project" shells, e.g. the 68
+// archived drafts from the 2026-10-31 create loop, never count as leads. Lookups by id/phone/email and the
+// orphan prune are deliberately NOT filtered (a blank has no contact, and the prune must see every row).
+
 /** Booked events on/after `startYmd`, soonest first (the forward pipeline). Dated only. Excludes
  *  cancelled/lost — those aren't pipeline. Each row carries `signed` so the UI can split committed
  *  contracts from open quotes. */
@@ -1251,6 +1257,7 @@ export function getUpcomingBookings(startYmd: string): BookingView[] {
          WHERE event_date IS NOT NULL AND event_date >= ?
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
+           AND ${NOT_BLANK_DRAFT_SQL}
          ORDER BY event_date ASC`,
       )
       .all(startYmd) as Record<string, unknown>[]
@@ -1271,6 +1278,7 @@ export function getPipelineBookingsInRange(start: string, end: string, opts?: { 
         `SELECT * FROM bookings
          WHERE event_date IS NOT NULL AND event_date >= ? AND event_date <= ?
            ${archClause}
+           AND ${NOT_BLANK_DRAFT_SQL}
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
          ORDER BY event_date ASC`,
@@ -1308,6 +1316,7 @@ export function getBookingYears(): number[] {
       `SELECT DISTINCT CAST(substr(event_date,1,4) AS INTEGER) AS yr
          FROM bookings
         WHERE event_date IS NOT NULL AND length(event_date) >= 4
+          AND ${NOT_BLANK_DRAFT_SQL}
           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
           AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
         ORDER BY yr ASC`,
@@ -1335,6 +1344,7 @@ export function getBookingsRevenueInRange(start: string, end: string): RevenueSp
          COUNT(CASE WHEN signed = 0 THEN grand_total END) AS pipeline_n
        FROM bookings
        WHERE event_date >= ? AND event_date <= ? AND grand_total IS NOT NULL
+         AND ${NOT_BLANK_DRAFT_SQL}
          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%dead%'
@@ -1373,6 +1383,7 @@ export function getPipelineBreakdown(today: string): PipelineBreakdown {
          COUNT(grand_total) AS priced
        FROM bookings
        WHERE event_date IS NOT NULL AND event_date >= ? AND COALESCE(archived,0) = 0
+         AND ${NOT_BLANK_DRAFT_SQL}
        GROUP BY cls`,
     )
     .all(today) as { cls: string; n: number; total: number | null; priced: number }[];
@@ -1433,6 +1444,7 @@ export function getQuoteStageSnapshot(): QuoteStageSnapshot {
     .prepare(
       `SELECT status_label, signed FROM bookings
        WHERE COALESCE(archived,0) = 0
+         AND ${NOT_BLANK_DRAFT_SQL}
          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
          AND (event_date IS NULL OR event_date >= ?)`,
@@ -1458,6 +1470,7 @@ export function getBookingsInRange(start: string, end: string): BookingView[] {
       .prepare(
         `SELECT * FROM bookings
          WHERE event_date >= ? AND event_date <= ?
+           AND ${NOT_BLANK_DRAFT_SQL}
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%dead%'
@@ -1488,7 +1501,7 @@ export function getBookingRevenueByIds(ids: string[]): Map<string, number | null
  *  on purpose — these are cross-year analytics, so this is NOT bounded to the operating year. Presented
  *  newest-first (the house default; every consumer re-aggregates, so order is not load-bearing). */
 export function getAllBookings(): BookingView[] {
-  return (getDb().prepare("SELECT * FROM bookings ORDER BY COALESCE(event_date,'') DESC").all() as Record<string, unknown>[]).map(toBookingView);
+  return (getDb().prepare(`SELECT * FROM bookings WHERE ${NOT_BLANK_DRAFT_SQL} ORDER BY COALESCE(event_date,'') DESC`).all() as Record<string, unknown>[]).map(toBookingView);
 }
 
 /** Most-recently-created projects first (for the delivery calculator's "prefill from a project" picker —
@@ -1496,7 +1509,7 @@ export function getAllBookings(): BookingView[] {
 export function getRecentBookings(limit = 40): BookingView[] {
   return (
     getDb()
-      .prepare("SELECT * FROM bookings ORDER BY COALESCE(date_created,'0000-00-00') DESC, updated_at DESC LIMIT ?")
+      .prepare(`SELECT * FROM bookings WHERE ${NOT_BLANK_DRAFT_SQL} ORDER BY COALESCE(date_created,'0000-00-00') DESC, updated_at DESC LIMIT ?`)
       .all(limit) as Record<string, unknown>[]
   ).map(toBookingView);
 }
@@ -1554,6 +1567,7 @@ export function getOpenLeads(todayYmd: string): BookingView[] {
       .prepare(
         `SELECT * FROM bookings
          WHERE signed = 0
+           AND ${NOT_BLANK_DRAFT_SQL}
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%dead%'
@@ -1576,6 +1590,7 @@ export function getPipelineLeads(todayYmd: string): BookingView[] {
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%dead%'
            AND (event_date IS NULL OR event_date >= ?)
+           AND ${NOT_BLANK_DRAFT_SQL}
          ORDER BY COALESCE(date_created, event_date, '') DESC`,
       )
       .all(todayYmd) as Record<string, unknown>[]
@@ -1588,9 +1603,10 @@ export function getLostQuotes(): BookingView[] {
     getDb()
       .prepare(
         `SELECT * FROM bookings
-         WHERE LOWER(COALESCE(status_label,'')) LIKE '%lost%'
+         WHERE (LOWER(COALESCE(status_label,'')) LIKE '%lost%'
             OR LOWER(COALESCE(status_label,'')) LIKE '%cancel%'
-            OR LOWER(COALESCE(status_label,'')) LIKE '%dead%'
+            OR LOWER(COALESCE(status_label,'')) LIKE '%dead%')
+           AND ${NOT_BLANK_DRAFT_SQL}
          ORDER BY COALESCE(event_date, date_created, '') DESC`,
       )
       .all() as Record<string, unknown>[]

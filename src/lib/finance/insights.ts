@@ -46,16 +46,28 @@ export interface InsightRunInput {
   lines: { reason: VarianceReason; delta: number }[];
 }
 
+/** The period's whole team payroll against the revenue it served (teamPayroll.ts). Optional: without it
+ *  the margin facts still carry their "driver and route labor only" scope. */
+export interface InsightTeamPayrollInput {
+  payroll: number | null;
+  /** True when some paid workers had no estimate, so payroll is a floor. */
+  partial: boolean;
+  revenueServed: number | null;
+  /** Internal labor attributed to routes and stops, the basis of the per-project margins. */
+  attributedLabor: number | null;
+}
+
 export interface InsightsInput {
   periodLabel: string;
   projects: InsightProjectInput[];
   runs: InsightRunInput[];
   config: InsightsConfig;
+  teamPayroll?: InsightTeamPayrollInput | null;
 }
 
 // ── Facts (the deterministic output; what the LLM is allowed to interpret) ───────────────────────────
 
-export type InsightCategory = "margin" | "labor_grain" | "category_margin" | "reconciliation_trend";
+export type InsightCategory = "margin" | "payroll" | "labor_grain" | "category_margin" | "reconciliation_trend";
 
 /** One deterministic fact. `text` is a human-free statement of the computed number(s); `metrics` carries
  *  the raw figures for the UI and for the prompt (the LLM sees only these). */
@@ -86,6 +98,12 @@ export interface InsightOverview {
   actualLaborCount: number;
   laborProjectCount: number;
   categories: CategoryMargin[];
+  /** Whole team payroll vs revenue served (null when not supplied or not computable). */
+  payroll: number | null;
+  payrollPartial: boolean;
+  revenueServed: number | null;
+  payrollPctOfServed: number | null;
+  marginAfterPayroll: number | null;
 }
 
 export interface InsightInterpretation {
@@ -128,17 +146,62 @@ export function assembleInsightFacts(input: InsightsInput): { facts: InsightFact
   const lowMargin = withMargin.filter((p) => p.marginPct <= lowMarginThreshold);
 
   if (withMargin.length > 0 && avgMargin != null) {
+    // The per-project margin only subtracts labor attributed to routes and stops (drivers and truck crew).
+    // Say so in the fact itself, so it can never read as true profit.
     facts.push({
       id: "margin.avg",
       category: "margin",
-      text: `Across ${withMargin.length} project(s) with a computable margin, the average contribution margin is ${pct(avgMargin)}.`,
-      metrics: { projectCount: withMargin.length, avgMarginPct: avgMargin },
+      text: `Across ${withMargin.length} project(s) with a computable margin, the average contribution margin is ${pct(avgMargin)}. That margin counts driver and route labor only, not the whole team's payroll.`,
+      metrics: { projectCount: withMargin.length, avgMarginPct: avgMargin, laborScope: "driver_route_only" },
     });
     facts.push({
       id: "margin.low",
       category: "margin",
       text: `${lowMargin.length} of ${withMargin.length} project(s) are at or below the ${pct(lowMarginThreshold)} low-margin threshold.`,
       metrics: { lowMarginCount: lowMargin.length, projectCount: withMargin.length, thresholdPct: lowMarginThreshold },
+    });
+  }
+
+  // Whole team payroll vs revenue served. This is the honest counterweight to the route-labor margin above:
+  // warehouse, prep, sales and back office payroll never reaches a project, so it is compared at period level.
+  const tp = input.teamPayroll ?? null;
+  const tpPayroll = tp?.payroll ?? null;
+  const tpServed = tp?.revenueServed ?? null;
+  const payrollPct = tpPayroll != null && tpServed != null && tpServed > 0 ? round(tpPayroll / tpServed, 4) : null;
+  const marginAfter = tpPayroll != null && tpServed != null && tpServed > 0 ? round((tpServed - tpPayroll) / tpServed, 4) : null;
+  const floorNote = tp?.partial ? " Some workers had no rate, so payroll is at least this much." : "";
+  if (tp && tpPayroll != null && payrollPct != null && tpServed != null) {
+    facts.push({
+      id: "payroll.vs_revenue",
+      category: "payroll",
+      text: `Whole team payroll was ${money(tpPayroll)}, ${pct(payrollPct)} of the ${money(tpServed)} in event revenue served this period.${floorNote}`,
+      metrics: { payroll: tpPayroll, revenueServed: tpServed, payrollPctOfServed: payrollPct, partial: tp.partial ? "yes" : "no" },
+    });
+    if (marginAfter != null) {
+      facts.push({
+        id: "payroll.margin_after",
+        category: "payroll",
+        text: marginAfter < 0
+          ? `Payroll was more than the revenue served this period. After the whole team's payroll the margin is ${pct(marginAfter)}.`
+          : `After the whole team's payroll, the margin on revenue served is ${pct(marginAfter)}, before vehicle, fuel and other costs.`,
+        metrics: { marginAfterPayroll: marginAfter, payroll: tpPayroll, revenueServed: tpServed },
+      });
+    }
+  } else if (tp && tpPayroll != null && (tpServed == null || tpServed <= 0)) {
+    facts.push({
+      id: "payroll.no_revenue",
+      category: "payroll",
+      text: `Whole team payroll was ${money(tpPayroll)} this period, with no signed event revenue served to set it against.${floorNote}`,
+      metrics: { payroll: tpPayroll, revenueServed: tpServed, partial: tp.partial ? "yes" : "no" },
+    });
+  }
+  if (tp && tpPayroll != null && tpPayroll > 0 && tp.attributedLabor != null) {
+    const share = round(tp.attributedLabor / tpPayroll, 4);
+    facts.push({
+      id: "payroll.attributed_share",
+      category: "payroll",
+      text: `The project margins see ${money(tp.attributedLabor)} of internal labor, ${pct(share)} of the ${money(tpPayroll)} whole team payroll.`,
+      metrics: { attributedLabor: tp.attributedLabor, payroll: tpPayroll, attributedShareOfPayroll: share },
     });
   }
 
@@ -183,7 +246,7 @@ export function assembleInsightFacts(input: InsightsInput): { facts: InsightFact
       facts.push({
         id: `category.${keyword}.thin`,
         category: "category_margin",
-        text: `Projects with "${keyword}" items average ${pct(avg)} margin, but on only ${margins.length} project(s) — too thin to call a trend yet.`,
+        text: `Projects with "${keyword}" items average ${pct(avg)} margin, but on only ${margins.length} project(s), too thin to call a trend yet.`,
         metrics: { keyword, count: margins.length, avgMarginPct: avg },
         thin: true,
       });
@@ -229,6 +292,11 @@ export function assembleInsightFacts(input: InsightsInput): { facts: InsightFact
     actualLaborCount: actual,
     laborProjectCount: withLabor.length,
     categories,
+    payroll: tpPayroll,
+    payrollPartial: tp?.partial ?? false,
+    revenueServed: tpServed,
+    payrollPctOfServed: payrollPct,
+    marginAfterPayroll: marginAfter,
   };
   return { facts, overview };
 }
@@ -281,17 +349,17 @@ function extractJson(text: string): unknown {
  */
 export async function interpretInsights(facts: InsightFact[], periodLabel: string): Promise<{ interpretation: InsightInterpretation | null; note: string; error?: string }> {
   if (facts.length === 0) {
-    return { interpretation: null, note: "No facts to interpret this period — nothing is inferred from an empty set." };
+    return { interpretation: null, note: "No facts to interpret this period. Nothing is inferred from an empty set." };
   }
   if (!llmConfigured()) {
     return {
       interpretation: null,
-      note: "AI interpretation unavailable — no language model is configured. The facts above are shown on their own and nothing is inferred.",
+      note: "AI interpretation unavailable. No language model is configured. The facts above are shown on their own and nothing is inferred.",
     };
   }
   const r = await chat(buildInsightPrompt(facts, periodLabel), { json: true, timeoutMs: 45000 });
   if (!r.ok || !r.text) {
-    return { interpretation: null, note: "AI interpretation unavailable — the model did not respond. The facts above stand on their own.", error: r.error };
+    return { interpretation: null, note: "AI interpretation unavailable. The model did not respond. The facts above stand on their own.", error: r.error };
   }
   try {
     const parsed = extractJson(r.text) as { summary?: unknown; recommendations?: unknown };
@@ -303,13 +371,13 @@ export async function interpretInsights(facts: InsightFact[], periodLabel: strin
       : [];
     const summary = humanize(typeof parsed.summary === "string" ? parsed.summary : "");
     if (!summary && recs.length === 0) {
-      return { interpretation: null, note: "AI interpretation unavailable — the model returned nothing usable. The facts above stand on their own." };
+      return { interpretation: null, note: "AI interpretation unavailable. The model returned nothing usable. The facts above stand on their own." };
     }
     return {
       interpretation: { summary, recommendations: recs, model: r.model },
       note: "Interpreted by a language model from the deterministic facts above. Treat it as interpretation, not a new fact.",
     };
   } catch {
-    return { interpretation: null, note: "AI interpretation unavailable — the model did not return valid output. The facts above stand on their own." };
+    return { interpretation: null, note: "AI interpretation unavailable. The model did not return valid output. The facts above stand on their own." };
   }
 }

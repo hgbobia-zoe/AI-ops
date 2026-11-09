@@ -102,6 +102,26 @@ export function getAssignmentsForDate(date: string): Map<string, ShiftAssignment
   return out;
 }
 
+/** Per internal worker, how many shifts they were assigned in each role across [start, end] (inclusive dates).
+ *  Read-only; used by Finance to group whole team payroll by team. */
+export function getInternalRoleCountsInRange(start: string, end: string): Map<number, Map<ShiftAssignment["role"], number>> {
+  const rows = getDb()
+    .prepare(
+      `SELECT a.connecteam_user_id AS uid, a.role AS role, COUNT(*) AS n
+       FROM shift_assignments a JOIN staff_shifts s ON s.id = a.shift_id
+       WHERE s.date >= ? AND s.date <= ? AND a.worker_kind = 'internal' AND a.connecteam_user_id IS NOT NULL
+       GROUP BY a.connecteam_user_id, a.role`,
+    )
+    .all(start, end) as { uid: number; role: string; n: number }[];
+  const out = new Map<number, Map<ShiftAssignment["role"], number>>();
+  for (const r of rows) {
+    const m = out.get(r.uid) ?? new Map<ShiftAssignment["role"], number>();
+    m.set(r.role as ShiftAssignment["role"], r.n);
+    out.set(r.uid, m);
+  }
+  return out;
+}
+
 export interface NewAssignment {
   shiftId: string;
   workerKind: WorkerKind;

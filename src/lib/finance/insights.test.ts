@@ -100,6 +100,76 @@ describe("assembleInsightFacts — deterministic facts (Stage 7c)", () => {
   });
 });
 
+describe("assembleInsightFacts — whole team payroll vs the route labor margin", () => {
+  // Week of Oct 26, 2026: project margins averaged ~91% on route labor alone, while Payroll Review was $3,724.44
+  // against $6,668.50 of revenue served (half of $2,833 this week + half of $10,504 the week before).
+  const highMargin: InsightProjectInput[] = [
+    p({ projectId: "a", marginPct: 0.9 }),
+    p({ projectId: "b", marginPct: 0.92 }),
+  ];
+  const teamPayroll = { payroll: 3724.44, partial: false, revenueServed: 6668.5, attributedLabor: 950 };
+
+  it("labels the project margin as driver and route labor only, so it never reads as profit", () => {
+    const { facts } = assembleInsightFacts({ periodLabel: "W", projects: highMargin, runs: [], config });
+    const avg = facts.find((f) => f.id === "margin.avg")!;
+    expect(avg.text).toMatch(/driver and route labor only/);
+    expect(avg.metrics.laborScope).toBe("driver_route_only");
+  });
+
+  it("states payroll as a share of revenue served and the margin after whole team payroll", () => {
+    const { facts, overview } = assembleInsightFacts({ periodLabel: "W", projects: highMargin, runs: [], config, teamPayroll });
+    const vs = facts.find((f) => f.id === "payroll.vs_revenue")!;
+    expect(vs.text).toBe("Whole team payroll was $3,724, 56% of the $6,669 in event revenue served this period.");
+    expect(vs.metrics.payrollPctOfServed).toBe(0.5585);
+    const after = facts.find((f) => f.id === "payroll.margin_after")!;
+    expect(after.metrics.marginAfterPayroll).toBe(0.4415);
+    expect(after.text).toMatch(/44%/);
+    const seen = facts.find((f) => f.id === "payroll.attributed_share")!;
+    expect(seen.text).toBe("The project margins see $950 of internal labor, 26% of the $3,724 whole team payroll.");
+    expect(overview.payroll).toBe(3724.44);
+    expect(overview.revenueServed).toBe(6668.5);
+    expect(overview.payrollPctOfServed).toBe(0.5585);
+    expect(overview.marginAfterPayroll).toBe(0.4415);
+    expect(overview.avgMarginPct).toBe(0.91); // still reported, but now beside the honest number
+  });
+
+  it("says plainly when payroll is more than the revenue served", () => {
+    const { facts } = assembleInsightFacts({
+      periodLabel: "W", projects: [], runs: [], config,
+      teamPayroll: { payroll: 3724.44, partial: false, revenueServed: 2833, attributedLabor: null },
+    });
+    expect(facts.find((f) => f.id === "payroll.vs_revenue")!.text).toMatch(/131% of the \$2,833/);
+    const after = facts.find((f) => f.id === "payroll.margin_after")!;
+    expect(after.text).toMatch(/^Payroll was more than the revenue served/);
+    expect(after.metrics.marginAfterPayroll).toBe(-0.3147);
+    expect(facts.find((f) => f.id === "payroll.attributed_share")).toBeUndefined();
+  });
+
+  it("flags a payroll floor when some workers had no rate, and handles no revenue without dividing", () => {
+    const { facts, overview } = assembleInsightFacts({
+      periodLabel: "W", projects: [], runs: [], config,
+      teamPayroll: { payroll: 1200, partial: true, revenueServed: null, attributedLabor: null },
+    });
+    const f = facts.find((x) => x.id === "payroll.no_revenue")!;
+    expect(f.text).toMatch(/at least this much/);
+    expect(overview.payrollPctOfServed).toBeNull();
+    expect(overview.payrollPartial).toBe(true);
+  });
+
+  it("adds no payroll facts when payroll is unknown", () => {
+    const { facts } = assembleInsightFacts({
+      periodLabel: "W", projects: [], runs: [], config,
+      teamPayroll: { payroll: null, partial: false, revenueServed: 6668.5, attributedLabor: 950 },
+    });
+    expect(facts.filter((f) => f.category === "payroll")).toEqual([]);
+  });
+
+  it("keeps every fact free of dashes (house style)", () => {
+    const { facts } = assembleInsightFacts({ periodLabel: "W", projects: highMargin, runs: [], config, teamPayroll });
+    for (const f of facts) expect(f.text).not.toMatch(/[—–]/);
+  });
+});
+
 describe("buildInsightPrompt — the LLM sees ONLY the computed facts (never asked to produce numbers)", () => {
   it("carries the facts verbatim and no other numeric content", () => {
     const { facts } = assembleInsightFacts({ periodLabel: "This week", projects, runs: [], config });
