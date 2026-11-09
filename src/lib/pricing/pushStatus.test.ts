@@ -17,10 +17,17 @@ describe("deliveryPushDisplay", () => {
   });
 
   it("surfaces a failure with the error and offers a retry", () => {
-    const d = deliveryPushDisplay({ status: "failed", waitedSec: 6, extReachable: true, error: "no_delivery_line" });
+    const d = deliveryPushDisplay({ status: "failed", waitedSec: 6, extReachable: true, error: "set_delivery_fee_http_500" });
     expect(d.kind).toBe("failed");
     expect(d.tone).toBe("error");
-    expect(d.text).toContain("no_delivery_line");
+    expect(d.text).toContain("set_delivery_fee_http_500");
+    expect(d.showPushNow).toBe(true);
+  });
+
+  it("tells the rep to add a Delivery fee line when the project has none", () => {
+    const d = deliveryPushDisplay({ status: "failed", waitedSec: 6, extReachable: true, error: "set_delivery_fee_no_delivery_line" });
+    expect(d.kind).toBe("failed");
+    expect(d.text).toBe("This project has no Delivery fee line in Goodshuffle yet. Add one there, then push again.");
     expect(d.showPushNow).toBe(true);
   });
 
