@@ -132,7 +132,8 @@ export async function POST(req: Request): Promise<NextResponse> {
     if (cls.intent === "new_inquiry" && cls.confidence >= LEAD_CONFIDENCE) {
       decision = "lead";
       reason = `new inquiry (${Math.round(cls.confidence * 100)}%): ${cls.summary}`;
-    } else if (cls.intent === "new_inquiry" || (cls.intent === "other" && rules.decision === "lead")) {
+    } else if (cls.intent === "new_inquiry" || rules.decision === "lead") {
+      // The free rules read it as a clear rental request: the model may hold it back, but never drop it.
       decision = "review";
       reason = `maybe an inquiry (${Math.round(cls.confidence * 100)}%): ${cls.summary}`;
     } else {
