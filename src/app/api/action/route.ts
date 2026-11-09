@@ -26,6 +26,7 @@ import {
   rescheduleAlertLine,
 } from "@/lib/dispatch/closeRoute";
 import { slackNotify } from "@/lib/notify/slack";
+import { syncGsStopStatus } from "@/lib/dispatch/gsStatusSync";
 import type { ActionRequest, ActionResponse, Stop } from "@/lib/types";
 
 export async function POST(req: Request): Promise<NextResponse<ActionResponse>> {
@@ -99,6 +100,8 @@ export async function POST(req: Request): Promise<NextResponse<ActionResponse>> 
     } else {
       updateStopState(body.stopId, toState);
     }
+    // Mirror the stop's new state onto the Goodshuffle route (queued; the extension replays it). Never throws.
+    syncGsStopStatus(body.stopId);
   }
 
   // Warehouse-arrival closeout = the driver finished the route. Close it server-side (same bookkeeping as

@@ -6,6 +6,7 @@
 
 import { NextResponse } from "next/server";
 import { reopenRoute } from "@/lib/db/repo";
+import { syncGsRouteStatus } from "@/lib/dispatch/gsStatusSync";
 
 export const dynamic = "force-dynamic";
 
@@ -23,5 +24,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (!result.ok) {
     return NextResponse.json({ error: "route not found" }, { status: 404 });
   }
+  // Undo our "complete" on the Goodshuffle route, but only if we had synced this route before.
+  syncGsRouteStatus(routeId, "IN_PROGRESS", { onlyIfSynced: true });
   return NextResponse.json(result);
 }

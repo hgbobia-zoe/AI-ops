@@ -8,6 +8,7 @@ import { recordEventOutcome, logChange } from "@/lib/history/store";
 import { scheduleScanSoon } from "@/lib/risk/scan";
 import type { CloseResolutionInput } from "@/lib/dispatch/onTime";
 import { isResolved } from "@/lib/dispatch/onTime";
+import { syncGsRouteStatus, syncGsStopStatus } from "@/lib/dispatch/gsStatusSync";
 
 export interface AppliedResolution {
   stopId: string;
@@ -41,6 +42,7 @@ export function applyCloseResolutions(
     const r = byId.get(s.stopId);
     if (r && isResolved(r) && r.action === "completed") {
       updateStopState(s.stopId, "Completed", { completedAt: now });
+      syncGsStopStatus(s.stopId); // mirror onto the Goodshuffle route (queued, never throws)
       recordStopCloseResolution(s.stopId, { resolution: "marked_completed", reason: r.reason ?? null, by, at: now });
       out.push({ stopId: s.stopId, sequence: s.sequence, custName: s.custName, resolution: "marked_completed" });
     } else if (r && isResolved(r)) {
@@ -111,6 +113,10 @@ export function closeOneRoute(routeId: string): CloseOneResult {
     // ARRIVED_WAREHOUSE closeout, which routes through here) is exactly when tomorrow's prep window may
     // open — the truck is now free. Debounced re-scan so the opportunity surfaces within seconds instead
     // of waiting for the next scheduled sweep. Best-effort; a scan failure never fails the close.
+    // Mark the Goodshuffle route complete (queued for the extension; never throws). Stops left open stay
+    // SCHEDULED there on purpose: the office reschedules them in Goodshuffle.
+    syncGsRouteStatus(routeId, "COMPLETE");
+
     try {
       scheduleScanSoon();
     } catch (e) {

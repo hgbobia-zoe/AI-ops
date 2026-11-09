@@ -100,6 +100,7 @@ const OP_TITLE: Record<string, string> = {
   revoke_user: "Goodshuffle user removed",
   create_project: "Goodshuffle project created from a lead",
   remove_waypoint: "Stop removed from the Goodshuffle route",
+  gs_status: "Route progress synced to Goodshuffle",
   disable_esignature: "Online signing turned off in Goodshuffle",
   mark_lost: "Project marked lost and archived in Goodshuffle",
 };
@@ -115,6 +116,7 @@ const OP_TASK: Record<string, string> = {
   revoke_user: "remove a user",
   create_project: "create a project from a lead",
   remove_waypoint: "remove a stop from the route",
+  gs_status: "update the route or stop status",
   disable_esignature: "turn off online signing",
   mark_lost: "mark the project lost and archive it",
 };
