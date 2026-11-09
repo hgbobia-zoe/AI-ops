@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Calculator, Check, FolderOpen, Loader2, MapPin, RefreshCw, Route as RouteIcon, Search, Send, Truck, Wrench } from "lucide-react";
-import { deliveryQuote, type LegMode, type LegBreakdown, type MileageTier, type DeliveryQuote } from "@/lib/pricing/delivery";
+import { deliveryQuote, pushPerLeg, type LegMode, type LegBreakdown, type MileageTier, type DeliveryQuote } from "@/lib/pricing/delivery";
 import { readinessTier } from "@/lib/pricing/eventReadiness";
 import { EXTENSION_ID } from "@/lib/extensionId";
 import { nudgeDrainNow } from "@/lib/extensionNudge";
@@ -42,7 +42,11 @@ interface ProjectOpt {
   clientName: string;
   subtotal: number | null;
   location: string | null;
+  /** The venue street address from the project's routed stop, when it is on a route. */
+  streetAddress?: string | null;
   eventDate: string | null;
+  /** The date of the project's routed pickup stop, when known. */
+  pickupDate?: string | null;
 }
 
 // Result of asking the Auto-Pull extension for the project's CURRENT pre-discount subtotal, live from a
@@ -108,28 +112,56 @@ function requestLiveSubtotal(projectId: string): Promise<LiveSubtotalResp> {
   });
 }
 
+type AnchorRef = { id: string; label: string; truckId: string | null; source: "route" | "booking"; timingVerified: boolean };
+
+/** One leg's route-aware result: each leg is anchored on its own day's routes. */
+interface LegResult {
+  leg: "dropOff" | "pickup";
+  date: string | null;
+  pricingMode: PricingMode;
+  warehouseMiles: number;
+  billableMiles: number;
+  incrementalMiles: number | null;
+  savingsMiles: number | null;
+  anchor: AnchorRef | null;
+  anchorsConsidered: number;
+  reasons: string[];
+  anchorNote: string | null;
+  fee: LegBreakdown;
+}
+
+type Formula = { baseFee: number; mileageTiers: MileageTier[]; pct: number; pctCap: number };
+
 interface RouteQuoteResp {
   ok: boolean;
   resolved: boolean;
   distanceSource: "geocoded" | "manual" | "unresolved";
+  addressPrecision?: "street" | "city" | null;
+  warnings?: string[];
+  legs?: { dropOff: LegResult | null; pickup: LegResult | null };
   note?: string;
   pricingMode?: PricingMode;
   warehouseMiles?: number;
   billableMiles?: number;
   incrementalMiles?: number | null;
   savingsMiles?: number | null;
-  anchor?: { id: string; label: string; truckId: string | null; source: "route" | "booking"; timingVerified: boolean } | null;
+  anchor?: AnchorRef | null;
   anchorsConsidered?: number;
   reasons?: string[];
   quote?: DeliveryQuote;
   perLeg?: number;
-  formula?: { baseFee: number; mileageTiers: MileageTier[]; pct: number; pctCap: number };
+  formula?: Formula;
 }
 
 export function DeliveryCalculator(): React.JSX.Element {
   const [address, setAddress] = useState("");
   const [miles, setMiles] = useState("");
   const [eventDate, setEventDate] = useState("");
+  const [pickupDate, setPickupDate] = useState(""); // blank = same day as the delivery
+  // True once the rep types the miles by hand: typed miles then win over the geocoded distance.
+  const [milesTyped, setMilesTyped] = useState(false);
+  // The live pricing formula (from the server), so the instant local fallback matches the real config.
+  const [liveFormula, setLiveFormula] = useState<Formula | null>(null);
   const [subtotal, setSubtotal] = useState("");
   const [mode, setMode] = useState<LegMode>("round_trip");
   const [readiness, setReadiness] = useState(false);
@@ -188,9 +220,16 @@ export function DeliveryCalculator(): React.JSX.Element {
   const pickProject = useCallback((p: ProjectOpt) => {
     setProjectId(p.id);
     setPush(null);
-    if (p.location) setAddress(p.location);
+    // Prefer the routed stop's street address; Goodshuffle's search only knows city + ZIP.
+    const addr = p.streetAddress || p.location;
+    if (addr) {
+      setAddress(addr);
+      setMiles("");
+      setMilesTyped(false);
+    }
     setSubtotal(p.subtotal != null ? String(p.subtotal) : "");
     if (p.eventDate) setEventDate(p.eventDate);
+    setPickupDate(p.pickupDate && p.pickupDate !== p.eventDate ? p.pickupDate : "");
     const label = p.name + (p.clientName && p.clientName !== p.name ? ` · ${p.clientName}` : "") + ` · #${p.id}`;
     pickedLabelRef.current = label;
     setQuery(label);
@@ -219,13 +258,32 @@ export function DeliveryCalculator(): React.JSX.Element {
 
   const subtotalNum = Number(subtotal) || 0;
 
-  // Local fallback quote (default formula) so the UI shows something instantly / if the route-quote errors.
-  const localQuote = useMemo(() => deliveryQuote(Number(miles) || 0, subtotalNum, mode), [miles, subtotalNum, mode]);
+  // Read the live pricing formula once (an empty quote request returns it), so the local fallback below
+  // uses the team's config, not the built-in defaults.
+  useEffect(() => {
+    let live = true;
+    fetch("/api/pricing/route-quote", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+      .then((r) => r.json())
+      .then((j: RouteQuoteResp) => {
+        if (live && j.formula) setLiveFormula(j.formula);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // Local fallback quote (live formula when known) so the UI shows something instantly / if the route-quote errors.
+  const localQuote = useMemo(
+    () => deliveryQuote(Number(miles) || 0, subtotalNum, mode, liveFormula ?? undefined),
+    [miles, subtotalNum, mode, liveFormula],
+  );
 
   // The authoritative quote: the server's config-correct, mode-aware result when available, else local.
   const q: DeliveryQuote = rq?.resolved && rq.quote ? rq.quote : localQuote;
-  const perLeg = rq?.resolved && rq.perLeg != null ? rq.perLeg : (localQuote.dropOff ?? localQuote.pickup)?.total ?? 0;
-  const pricingMode: PricingMode | null = rq?.resolved ? rq.pricingMode ?? null : null;
+  const perLeg = rq?.resolved && rq.perLeg != null ? rq.perLeg : pushPerLeg(localQuote);
+  const legs = rq?.resolved ? rq.legs ?? null : null;
+  const legsDiffer = !!(q.dropOff && q.pickup && q.dropOff.total !== q.pickup.total);
 
   // Recompute the route-aware quote whenever an input that affects it changes (debounced; OSRM is rate-limited).
   const reqId = useRef(0);
@@ -246,7 +304,9 @@ export function DeliveryCalculator(): React.JSX.Element {
         body: JSON.stringify({
           address: address.trim() || undefined,
           miles: hasMiles ? milesNum : undefined,
+          milesOverride: hasMiles && milesTyped ? true : undefined,
           eventDate: eventDate || undefined,
+          pickupDate: pickupDate || undefined,
           subtotal: subtotalNum,
           mode,
           projectId: projectId || undefined,
@@ -255,19 +315,24 @@ export function DeliveryCalculator(): React.JSX.Element {
       const j = (await r.json()) as RouteQuoteResp;
       if (id !== reqId.current) return; // a newer request superseded this one
       setRq(j);
+      if (j.formula) setLiveFormula(j.formula);
       if (!j.resolved) {
-        setDistNote(j.note ?? "Couldn't resolve the distance — type the miles in by hand.");
+        setDistNote(j.note ?? "Couldn't resolve the distance. Type the miles in by hand.");
       } else if (j.distanceSource === "geocoded" && j.warehouseMiles != null) {
         setDistNote(`${j.warehouseMiles} mi from the warehouse (driving)`);
       } else if (j.distanceSource === "manual") {
-        setDistNote(`Pricing on the ${j.warehouseMiles} mi you entered (couldn't geocode the address).`);
+        setDistNote(
+          hasMiles && milesTyped && hasAddress
+            ? `Pricing on the ${j.warehouseMiles} mi you typed. Clear the miles to price from the address.`
+            : `Pricing on the ${j.warehouseMiles} mi you entered (couldn't find the address).`,
+        );
       }
     } catch {
       if (id === reqId.current) setRq(null);
     } finally {
       if (id === reqId.current) setPricing(false);
     }
-  }, [address, miles, eventDate, subtotalNum, mode, projectId]);
+  }, [address, miles, milesTyped, eventDate, pickupDate, subtotalNum, mode, projectId]);
 
   useEffect(() => {
     const t = setTimeout(() => void runQuote(), 500);
@@ -284,6 +349,7 @@ export function DeliveryCalculator(): React.JSX.Element {
       const j = (await r.json()) as { miles: number | null };
       if (j.miles != null) {
         setMiles(String(j.miles));
+        setMilesTyped(false); // looked up from the address, not typed
         setDistNote(`${j.miles} mi from the warehouse (driving)`);
       } else {
         setDistNote("Couldn't find that address — type the miles in by hand.");
@@ -303,7 +369,7 @@ export function DeliveryCalculator(): React.JSX.Element {
       const r = await fetch("/api/pricing/push", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, amount: perLeg }),
+        body: JSON.stringify({ projectId, amount: perLeg, legs: { dropOff: q.dropOff?.total ?? null, pickup: q.pickup?.total ?? null } }),
       });
       const j = (await r.json()) as { ok?: boolean; error?: string; opId?: string };
       if (!j.ok || !j.opId) {
@@ -463,8 +529,8 @@ export function DeliveryCalculator(): React.JSX.Element {
             </div>
           )}
           <p className="text-xs text-muted-foreground">
-            Type a project number, event name, or customer. On select it pulls the project&apos;s subtotal, location and event date. Location
-            is city-level — refine the street address for exact miles.
+            Type a project number, event name, or customer. On select it pulls the project&apos;s subtotal, location and dates. A project
+            already on a route uses its street address; otherwise the location is city level, so add the street address for exact miles.
           </p>
         </div>
         <div className="space-y-1.5">
@@ -487,24 +553,50 @@ export function DeliveryCalculator(): React.JSX.Element {
             </button>
           </div>
           {distNote && <p className="text-xs text-muted-foreground">{distNote}</p>}
+          {rq?.resolved && (rq.warnings ?? []).map((w, i) => (
+            <p key={i} className="text-xs text-amber-300">{w}</p>
+          ))}
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
+          {mode !== "pickup" && (
+            <div className="space-y-1.5">
+              <label htmlFor="delivery-date" className="text-sm font-medium">Delivery date</label>
+              <input
+                id="delivery-date"
+                type="date"
+                value={eventDate}
+                onChange={(e) => setEventDate(e.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <p className="text-xs text-muted-foreground">The drop-off is checked against routes on this day.</p>
+            </div>
+          )}
+          {mode !== "drop_off" && (
+            <div className="space-y-1.5">
+              <label htmlFor="pickup-date" className="text-sm font-medium">Pickup date</label>
+              <input
+                id="pickup-date"
+                type="date"
+                value={mode === "pickup" ? pickupDate || eventDate : pickupDate}
+                onChange={(e) => setPickupDate(e.target.value)}
+                className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <p className="text-xs text-muted-foreground">
+                {mode === "pickup" ? "The pickup is checked against routes on this day." : "Leave blank for the same day as the delivery."}
+              </p>
+            </div>
+          )}
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Event date</label>
+            <label htmlFor="miles" className="text-sm font-medium">Miles (one way)</label>
             <input
-              type="date"
-              value={eventDate}
-              onChange={(e) => setEventDate(e.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-            <p className="text-xs text-muted-foreground">Used to find same-day signed jobs for route sharing.</p>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Miles (one way)</label>
-            <input
+              id="miles"
               value={miles}
-              onChange={(e) => setMiles(e.target.value.replace(/[^\d.]/g, ""))}
+              onChange={(e) => {
+                const v = e.target.value.replace(/[^\d.]/g, "");
+                setMiles(v);
+                setMilesTyped(v !== ""); // typed miles win over the address; clearing returns to the address
+              }}
               inputMode="decimal"
               placeholder="auto from address, or type by hand"
               className="w-full rounded-xl border border-white/10 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -561,18 +653,15 @@ export function DeliveryCalculator(): React.JSX.Element {
       <section className="surface mt-5 rounded-2xl border border-white/5 p-5">
         {ready ? (
           <div className="space-y-4">
-            {/* Pricing mode badge */}
-            {pricingMode && (
-              <div className="flex items-center justify-between gap-2">
-                <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${MODE_BADGE[pricingMode].cls}`}>
-                  <RouteIcon className="size-3.5" /> {MODE_BADGE[pricingMode].label}
-                </span>
-                {pricing && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+            {pricing && (
+              <div className="flex justify-end">
+                <Loader2 className="size-4 animate-spin text-muted-foreground" />
               </div>
             )}
 
-            {q.dropOff && <LegRow title="Drop-off" leg={q.dropOff} />}
-            {q.pickup && <LegRow title="Pickup" leg={q.pickup} />}
+            {/* Each leg is priced on its own day's routes, so each shows its own mode, miles and reasons. */}
+            {q.dropOff && <LegRow title="Drop-off" leg={q.dropOff} detail={legs?.dropOff ?? null} />}
+            {q.pickup && <LegRow title="Pickup" leg={q.pickup} detail={legs?.pickup ?? null} />}
             <div className="flex items-center justify-between border-t border-white/10 pt-4">
               <span className="flex items-center gap-2 font-semibold">
                 <Truck className="size-5 text-primary" /> Delivery {readiness ? "subtotal" : "total"}
@@ -580,37 +669,6 @@ export function DeliveryCalculator(): React.JSX.Element {
               <span className="text-xl font-bold tabular-nums">{money(q.total)}</span>
             </div>
 
-            {/* Route internals — REP ONLY. The customer sees only the final price above. Never any cost/margin. */}
-            {rq?.resolved && pricingMode === "ROUTE_OPTIMIZED" && rq.anchor && (
-              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] p-3 text-xs">
-                <div className="mb-1 font-semibold text-emerald-300">Route sharing (internal — not shown to the customer)</div>
-                <div className="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums text-muted-foreground">
-                  <span>Shares route with</span>
-                  <span className="text-right text-foreground">{rq.anchor.label}{rq.anchor.truckId ? ` · ${rq.anchor.truckId}` : ""}</span>
-                  <span>Standard (warehouse) distance</span>
-                  <span className="text-right">{rq.warehouseMiles} mi</span>
-                  <span>Incremental (route) distance</span>
-                  <span className="text-right text-foreground">{rq.incrementalMiles} mi</span>
-                  <span>Distance saved</span>
-                  <span className="text-right text-emerald-300">{rq.savingsMiles} mi</span>
-                </div>
-                {!rq.anchor.timingVerified && (
-                  <p className="mt-1.5 text-amber-300">Timing unverified — that job isn&apos;t on a route yet, so its time window is unknown.</p>
-                )}
-              </div>
-            )}
-
-            {/* Why this mode — the deterministic explanation. */}
-            {rq?.resolved && rq.reasons && rq.reasons.length > 0 && (
-              <ul className="space-y-1 text-xs text-muted-foreground">
-                {rq.reasons.map((r, i) => (
-                  <li key={i} className="flex gap-1.5">
-                    <span className="text-muted-foreground/60">•</span>
-                    <span>{r}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
 
             {readiness && (
               <>
@@ -654,7 +712,11 @@ export function DeliveryCalculator(): React.JSX.Element {
                     Push delivery fee to Goodshuffle
                   </button>
                   <p className="text-xs text-muted-foreground">
-                    Overrides the Standard Delivery price on the selected project with {money(perLeg)} per leg (the {pricingMode ? MODE_BADGE[pricingMode].label.toLowerCase() : "current"}-mode fee). Applied through the logged-in office browser, usually within seconds.
+                    Overrides the Standard Delivery price on the selected project with {money(perLeg)} per leg
+                    {legsDiffer
+                      ? `, the average of the drop-off (${money(q.dropOff!.total)}) and the pickup (${money(q.pickup!.total)}), so the round trip in Goodshuffle matches ${money(q.total)} to within a cent`
+                      : ""}
+                    . Applied through the logged-in office browser, usually within seconds.
                   </p>
                   {push?.phase === "error" && <p className="text-xs text-red-400">{push.text}</p>}
                   {display && (
@@ -685,18 +747,60 @@ export function DeliveryCalculator(): React.JSX.Element {
   );
 }
 
-function LegRow({ title, leg }: { title: string; leg: LegBreakdown }): React.JSX.Element {
+function LegRow({ title, leg, detail }: { title: string; leg: LegBreakdown; detail: LegResult | null }): React.JSX.Element {
+  const badge = detail ? MODE_BADGE[detail.pricingMode] : null;
   return (
-    <div>
-      <div className="flex items-center justify-between">
-        <span className="font-semibold">{title}</span>
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="font-semibold">{title}</span>
+          {badge && (
+            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${badge.cls}`}>
+              <RouteIcon className="size-3" /> {badge.label}
+            </span>
+          )}
+          {detail?.date && <span className="text-xs text-muted-foreground tabular-nums">{detail.date}</span>}
+        </span>
         <span className="font-semibold tabular-nums">{money(leg.total)}</span>
       </div>
-      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground tabular-nums">
+      <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground tabular-nums">
+        {detail && <span>{detail.billableMiles} mi</span>}
         <span>base {money(leg.base)}</span>
         <span>mileage {money(leg.mileage)}</span>
         <span>subtotal fee {money(leg.subtotalFee)}{leg.subtotalCapped ? " (capped)" : ""}</span>
       </div>
+
+      {/* Route internals, REP ONLY. The customer sees only the final price. Never any cost or margin. */}
+      {detail?.pricingMode === "ROUTE_OPTIMIZED" && detail.anchor && (
+        <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] p-3 text-xs">
+          <div className="mb-1 font-semibold text-emerald-300">Route sharing (internal, not shown to the customer)</div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums text-muted-foreground">
+            <span>Shares route with</span>
+            <span className="text-right text-foreground">{detail.anchor.label}{detail.anchor.truckId ? ` · ${detail.anchor.truckId}` : ""}</span>
+            <span>Standard (warehouse) distance</span>
+            <span className="text-right">{detail.warehouseMiles} mi</span>
+            <span>Incremental (route) distance</span>
+            <span className="text-right text-foreground">{detail.incrementalMiles} mi</span>
+            <span>Distance saved</span>
+            <span className="text-right text-emerald-300">{detail.savingsMiles} mi</span>
+          </div>
+          {!detail.anchor.timingVerified && (
+            <p className="mt-1.5 text-amber-300">Timing unverified: that job isn&apos;t on a route yet, so its time window is unknown.</p>
+          )}
+        </div>
+      )}
+
+      {/* Why this mode: the deterministic explanation. */}
+      {detail && detail.reasons.length > 0 && (
+        <ul className="space-y-1 text-xs text-muted-foreground">
+          {detail.reasons.map((r, i) => (
+            <li key={i} className="flex gap-1.5">
+              <span className="text-muted-foreground/60">•</span>
+              <span>{r}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

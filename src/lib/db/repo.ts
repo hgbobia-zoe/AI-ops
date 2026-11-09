@@ -291,15 +291,24 @@ export interface DatedStop {
   eta: string | null;
 }
 
-/** Every live-route stop scheduled on `date` (any truck), for route-aware delivery pricing. */
+/** Every live-route stop scheduled on `date` (any truck), for route-aware delivery pricing. A stop the truck
+ *  will not actually drive to is left out: a stop in state Exception, and a stop whose Goodshuffle project
+ *  is lost, cancelled, dead or archived (the same lost|cancel|dead predicate the pipeline uses). A stop with
+ *  no matching booking row is kept (we only drop what we know is off). */
 export function getStopsOnDate(date: string): DatedStop[] {
   const rows = getDb()
     .prepare(
       `SELECT s.stop_id, s.tx_id, s.route_id, r.truck_id, s.sequence, s.cust_name, s.address, s.kind,
               s.planned_window, s.eta
          FROM stops s JOIN routes r ON s.route_id = r.route_id
+         LEFT JOIN bookings b ON b.booking_id = s.tx_id
         WHERE r.date = ? AND LOWER(COALESCE(r.status,'')) != 'done'
-        ORDER BY r.truck_id, s.sequence`,
+          AND LOWER(COALESCE(s.state,'')) != 'exception'
+          AND COALESCE(b.archived, 0) = 0
+          AND LOWER(COALESCE(b.status_label,'')) NOT LIKE '%lost%'
+          AND LOWER(COALESCE(b.status_label,'')) NOT LIKE '%cancel%'
+          AND LOWER(COALESCE(b.status_label,'')) NOT LIKE '%dead%'
+        ORDER BY r.truck_id, r.route_id, s.sequence`,
     )
     .all(date) as Array<{
     stop_id: string;
@@ -325,6 +334,33 @@ export function getStopsOnDate(date: string): DatedStop[] {
     plannedWindow: r.planned_window,
     eta: r.eta,
   }));
+}
+
+/** What the routes already know about a set of projects, for the delivery calculator's picker: the street
+ *  address of its routed stop (Goodshuffle's project search only gives city + ZIP) and the dates of its
+ *  routed delivery and pickup stops. Latest route wins when a project was routed more than once. */
+export function getProjectRouteInfo(
+  txIds: string[],
+): Map<string, { address: string | null; deliveryDate: string | null; pickupDate: string | null }> {
+  const out = new Map<string, { address: string | null; deliveryDate: string | null; pickupDate: string | null }>();
+  const ids = [...new Set(txIds.filter(Boolean))];
+  if (ids.length === 0) return out;
+  const rows = getDb()
+    .prepare(
+      `SELECT s.tx_id, s.kind, s.address, r.date
+         FROM stops s JOIN routes r ON s.route_id = r.route_id
+        WHERE s.tx_id IN (${ids.map(() => "?").join(",")})
+        ORDER BY r.date ASC`,
+    )
+    .all(...ids) as Array<{ tx_id: string; kind: string | null; address: string | null; date: string | null }>;
+  for (const r of rows) {
+    const cur = out.get(r.tx_id) ?? { address: null, deliveryDate: null, pickupDate: null };
+    if (r.address?.trim()) cur.address = r.address.trim();
+    if (r.kind === "pickup") cur.pickupDate = r.date;
+    else if (r.kind === "delivery") cur.deliveryDate = r.date;
+    out.set(r.tx_id, cur);
+  }
+  return out;
 }
 
 /** Distinct route dates, newest first — for the dispatch history picker. */

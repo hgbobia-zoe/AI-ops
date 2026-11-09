@@ -31,6 +31,9 @@ export interface RouteAnchor {
   coords: LatLng;
   /** The truck already serving this job, when it's on a route; null/undefined for an unrouted booking. */
   truckId?: string | null;
+  /** The route this stop belongs to. A truck can run several routes in a day (back to the warehouse in
+   *  between), so a trip is one (truck, route), never the truck's whole day. */
+  routeId?: string | null;
   kind?: "delivery" | "pickup";
   /** Sequence within its truck's route, used to order the trip. Undefined sorts last. */
   order?: number;
@@ -56,6 +59,10 @@ export interface RouteOptimizeInput {
   routeRadiusMiles: number;
   timingToleranceMinutes: number;
   mode: LegMode;
+  /** Optional straight-line miles. When given, a gap whose real neighbours are ALL beyond the radius by air
+   *  is skipped without asking for a road distance (air is never longer than road, so this is safe). The
+   *  server passes haversine; tests with abstract coordinates leave it out. */
+  air?: (a: LatLng, b: LatLng) => number;
 }
 
 export interface RouteAnchorRef {
@@ -81,40 +88,92 @@ export interface RouteOptimizeResult {
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
-interface Trip {
+export interface Trip {
+  /** Grouping key: truck + route. */
+  key: string;
   truckId: string | null;
+  routeId: string | null;
   stops: RouteAnchor[];
 }
 
 /**
- * Group anchors into the trucks' planned trips: anchors sharing a truckId form one sequence (ordered by
- * `order`, then id); an unrouted anchor (no truckId) is its own one-stop trip. Trip order is sorted for
- * determinism. Exported so the server can collect exactly the point-pairs the engine will query.
+ * Group anchors into the trucks' planned trips: anchors sharing a (truckId, routeId) form one sequence
+ * (ordered by `order`, then id); an unrouted anchor (no truckId) is its own one-stop trip. Two routes on the
+ * same truck the same day are two trips (the truck returns to the warehouse in between), never one merged
+ * sequence. Trip order is sorted for determinism.
  */
 export function buildTrips(anchors: RouteAnchor[]): Trip[] {
-  const byTruck = new Map<string, RouteAnchor[]>();
+  const byKey = new Map<string, { truckId: string; routeId: string | null; stops: RouteAnchor[] }>();
   const singletons: RouteAnchor[] = [];
   for (const a of anchors) {
     if (a.truckId) {
-      const arr = byTruck.get(a.truckId) ?? [];
-      arr.push(a);
-      byTruck.set(a.truckId, arr);
+      const key = `${a.truckId}#${a.routeId ?? ""}`;
+      const t = byKey.get(key) ?? { truckId: a.truckId, routeId: a.routeId ?? null, stops: [] };
+      t.stops.push(a);
+      byKey.set(key, t);
     } else {
       singletons.push(a);
     }
   }
   const trips: Trip[] = [];
-  for (const [truckId, stops] of byTruck) {
-    stops.sort((x, y) => (x.order ?? Number.MAX_SAFE_INTEGER) - (y.order ?? Number.MAX_SAFE_INTEGER) || x.id.localeCompare(y.id));
-    trips.push({ truckId, stops });
+  for (const [key, t] of byKey) {
+    t.stops.sort((x, y) => (x.order ?? Number.MAX_SAFE_INTEGER) - (y.order ?? Number.MAX_SAFE_INTEGER) || x.id.localeCompare(y.id));
+    trips.push({ key, truckId: t.truckId, routeId: t.routeId, stops: t.stops });
   }
-  for (const s of singletons) trips.push({ truckId: null, stops: [s] });
-  trips.sort((a, b) => String(a.truckId ?? "~").localeCompare(String(b.truckId ?? "~")));
+  for (const s of singletons) trips.push({ key: `~${s.id}`, truckId: null, routeId: null, stops: [s] });
+  trips.sort((a, b) => a.key.localeCompare(b.key));
   return trips;
 }
 
-type Node = RouteAnchor | "WH";
-const isAnchor = (n: Node): n is RouteAnchor => n !== "WH";
+type GapNode = RouteAnchor | "WH";
+const isAnchor = (n: GapNode): n is RouteAnchor => n !== "WH";
+
+/** The gaps of a trip, warehouse at both ends: [WH, s1], [s1, s2], ..., [sN, WH]. */
+function tripGaps(trip: Trip): Array<[GapNode, GapNode]> {
+  const pad: GapNode[] = ["WH", ...trip.stops, "WH"];
+  const out: Array<[GapNode, GapNode]> = [];
+  for (let i = 0; i < pad.length - 1; i++) out.push([pad[i], pad[i + 1]]);
+  return out;
+}
+
+/** True when a gap can't pass the radius check: no real neighbour, or (with `air`) every real neighbour is
+ *  beyond the radius as the crow flies. */
+function gapOutOfReach(prev: GapNode, next: GapNode, venue: LatLng, radius: number, air?: (a: LatLng, b: LatLng) => number): boolean {
+  const neighbors = [prev, next].filter(isAnchor);
+  if (neighbors.length === 0) return true;
+  if (!air) return false;
+  return neighbors.every((n) => air(venue, n.coords) > radius);
+}
+
+/**
+ * Every point pair `routeOptimize` will ask `dist` for, given the same inputs. The server resolves exactly
+ * these (cached, bounded) instead of every pair among all points, so a long route costs a few lookups per
+ * nearby gap, not a full matrix.
+ */
+export function neededPairs(
+  input: Pick<RouteOptimizeInput, "venue" | "warehouse" | "anchors" | "routeRadiusMiles" | "air">,
+): Array<[LatLng, LatLng]> {
+  const { venue, warehouse, anchors, routeRadiusMiles, air } = input;
+  const at = (n: GapNode): LatLng => (isAnchor(n) ? n.coords : warehouse);
+  const out: Array<[LatLng, LatLng]> = [];
+  for (const trip of buildTrips(anchors)) {
+    for (const [prev, next] of tripGaps(trip)) {
+      if (gapOutOfReach(prev, next, venue, routeRadiusMiles, air)) continue;
+      out.push([at(prev), venue], [venue, at(next)], [at(prev), at(next)]);
+    }
+  }
+  return out;
+}
+
+/** Straight-line (haversine) miles. Pure; never longer than the driving distance. */
+export function haversineMiles(a: LatLng, b: LatLng): number {
+  const R = 3958.7613; // Earth radius, miles
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
 
 interface Candidate {
   inc: number;
@@ -126,12 +185,12 @@ interface Candidate {
 
 /** Classify the quote and compute its billable distance. Deterministic given its inputs. */
 export function routeOptimize(input: RouteOptimizeInput): RouteOptimizeResult {
-  const { venue, warehouse, warehouseMiles, anchors, dist, routeRadiusMiles, timingToleranceMinutes } = input;
+  const { venue, warehouse, warehouseMiles, anchors, dist, routeRadiusMiles, timingToleranceMinutes, air } = input;
   const reasons: string[] = [];
   const whMiles = round2(Math.max(0, warehouseMiles || 0));
 
   if (anchors.length === 0) {
-    reasons.push("No other signed jobs with a delivery component on this date — priced as a standalone trip from the warehouse.");
+    reasons.push("No other confirmed scheduled stops on this date, so it is priced as a standalone trip from the warehouse.");
     return { mode: "STANDARD", warehouseMiles: whMiles, billableMiles: whMiles, incrementalMiles: null, savingsMiles: null, anchor: null, anchorsConsidered: 0, reasons };
   }
 
@@ -141,10 +200,10 @@ export function routeOptimize(input: RouteOptimizeInput): RouteOptimizeResult {
   let anyWindowBlocked = false; // a share was blocked purely on timing (known window, over tolerance)
 
   for (const trip of trips) {
-    const pad: Node[] = ["WH", ...trip.stops, "WH"];
-    for (let i = 0; i < pad.length - 1; i++) {
-      const prev = pad[i];
-      const next = pad[i + 1];
+    for (const [prev, next] of tripGaps(trip)) {
+      // A gap bounded only by the warehouse can't anchor a share; with `air`, a gap whose neighbours are
+      // all beyond the radius is skipped before any road distance is asked for (mirrors neededPairs).
+      if (gapOutOfReach(prev, next, venue, routeRadiusMiles, air)) continue;
       const prevPt = isAnchor(prev) ? prev.coords : warehouse;
       const nextPt = isAnchor(next) ? next.coords : warehouse;
 
@@ -155,7 +214,6 @@ export function routeOptimize(input: RouteOptimizeInput): RouteOptimizeResult {
       const incMin = dPrevNew.minutes + dNewNext.minutes - dPrevNext.minutes;
 
       const neighbors = [prev, next].filter(isAnchor);
-      if (neighbors.length === 0) continue; // a gap bounded only by the warehouse can't anchor a share
       // Eligibility: the new stop must be within the radius of a real adjacent anchor (driving distance).
       let nearest = neighbors[0];
       for (const n of neighbors) if (dist(venue, n.coords).miles < dist(venue, nearest.coords).miles) nearest = n;
@@ -187,7 +245,7 @@ export function routeOptimize(input: RouteOptimizeInput): RouteOptimizeResult {
       `Shared with "${best.anchor.label}"${best.truckId ? ` on ${best.truckId}` : ""} on the same date: the new stop adds ${billable} mi to that trip vs ${whMiles} mi for a dedicated run (saves ${savings} mi).`,
     );
     if (!best.timingVerified) {
-      reasons.push("That job is a signed booking not yet on a route, so its time window is unknown — the timing of this share is ASSUMED, not verified.");
+      reasons.push("That job is a signed booking not yet on a route, so its time window is unknown. The timing of this share is ASSUMED, not verified.");
     }
     return {
       mode: "ROUTE_OPTIMIZED",
@@ -203,11 +261,11 @@ export function routeOptimize(input: RouteOptimizeInput): RouteOptimizeResult {
 
   // DEDICATED — other jobs exist, but none can beat a standalone trip. Say WHY so the rep sees it was checked.
   if (!anyWithinRadius) {
-    reasons.push(`${anchors.length} other signed job(s) that day, but none within ${routeRadiusMiles} mi of this venue — priced as a dedicated trip.`);
+    reasons.push(`${anchors.length} other scheduled stop(s) that day, but none within ${routeRadiusMiles} mi of this venue, so it is priced as a dedicated trip.`);
   } else if (anyWindowBlocked) {
-    reasons.push(`${anchors.length} other signed job(s) nearby that day, but inserting this stop would push a scheduled window past the ${timingToleranceMinutes}-min tolerance — priced as a dedicated trip.`);
+    reasons.push(`${anchors.length} other scheduled stop(s) that day are nearby, but adding this stop would push a scheduled window past the ${timingToleranceMinutes} min tolerance, so it is priced as a dedicated trip.`);
   } else {
-    reasons.push(`${anchors.length} other signed job(s) that day, but sharing a route would not shorten the drive vs a dedicated run — priced as a dedicated trip.`);
+    reasons.push(`${anchors.length} other scheduled stop(s) that day, but sharing a route would not shorten the drive vs a dedicated run, so it is priced as a dedicated trip.`);
   }
   return { mode: "DEDICATED", warehouseMiles: whMiles, billableMiles: whMiles, incrementalMiles: best ? best.inc : null, savingsMiles: null, anchor: null, anchorsConsidered: anchors.length, reasons };
 }

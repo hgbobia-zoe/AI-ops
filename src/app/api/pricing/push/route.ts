@@ -15,7 +15,10 @@ import { currentActor } from "@/lib/auth/getSession";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request): Promise<NextResponse> {
-  let body: { projectId?: string; amount?: number };
+  // `amount` is the ONE per-leg price the drainer writes on every delivery leg line. When the legs differ
+  // (each is anchored on its own day) the calculator sends their average, so the round trip total matches;
+  // `legs` records the real per-leg fees on the op for the audit trail (the drainer ignores it).
+  let body: { projectId?: string; amount?: number; legs?: { dropOff?: number | null; pickup?: number | null } };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -28,6 +31,11 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (!Number.isFinite(amount) || amount < 0) return NextResponse.json({ error: "bad_amount" }, { status: 400 });
 
   const rounded = Math.round(amount * 100) / 100;
+  const legFee = (n: unknown): number | null => (n != null && Number.isFinite(Number(n)) && Number(n) >= 0 ? Math.round(Number(n) * 100) / 100 : null);
+  const legs =
+    body.legs && (legFee(body.legs.dropOff) != null || legFee(body.legs.pickup) != null)
+      ? { dropOff: legFee(body.legs.dropOff), pickup: legFee(body.legs.pickup) }
+      : null;
 
   // Idempotency: a double-click / re-push / on-demand re-nudge of the SAME fee must not queue a second op
   // while the first is still pending. Reuse the existing pending op (return its id so the UI keeps polling).
@@ -44,7 +52,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     op: "set_delivery_fee",
     transactionId: projectId,
     label: `delivery fee $${rounded.toFixed(2)} → ${label}`,
-    payload: { amount: rounded, by: actor.label },
+    payload: { amount: rounded, by: actor.label, ...(legs ? { legs } : {}) },
   });
 
   return NextResponse.json({ ok: true, queued: true, opId: op.id });

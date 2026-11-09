@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   deliveryLegFee,
   deliveryQuote,
+  deliveryQuoteLegs,
+  pushPerLeg,
   distanceCharge,
   metersToMiles,
   DEFAULT_DELIVERY_FORMULA,
@@ -71,7 +73,7 @@ describe("deliveryLegFee = baseFee + tiered distance + min(pct×subtotal, cap)",
 });
 
 describe("deliveryQuote legs", () => {
-  it("round trip charges the formula on BOTH legs (priced independently)", () => {
+  it("round trip charges the formula on BOTH legs (same distance gives equal legs)", () => {
     const q = deliveryQuote(30, 2000, "round_trip");
     expect(q.dropOff?.total).toBe(202.3);
     expect(q.pickup?.total).toBe(202.3);
@@ -97,5 +99,24 @@ describe("metersToMiles", () => {
   it("converts driving meters to miles", () => {
     expect(metersToMiles(1609.344)).toBeCloseTo(1, 5);
     expect(Math.round(metersToMiles(16093.44))).toBe(10);
+  });
+});
+
+describe("deliveryQuoteLegs + pushPerLeg", () => {
+  it("prices each leg on its own miles", () => {
+    const q = deliveryQuoteLegs({ dropOff: 7.21, pickup: 30 }, 1000, "round_trip");
+    expect(q.dropOff?.total).toBe(96.56);
+    expect(q.pickup?.total).toBe(152.3);
+    expect(q.total).toBe(248.86);
+    expect(q.dropOffMiles).toBe(7.21);
+    expect(q.pickupMiles).toBe(30);
+    expect(pushPerLeg(q)).toBe(124.43); // the average, so 2 legs x 124.43 = 248.86
+  });
+
+  it("a single-leg run pushes that leg's fee", () => {
+    const q = deliveryQuoteLegs({ dropOff: 7.21, pickup: 30 }, 1000, "pickup");
+    expect(q.dropOff).toBeNull();
+    expect(q.dropOffMiles).toBeNull();
+    expect(pushPerLeg(q)).toBe(152.3);
   });
 });
