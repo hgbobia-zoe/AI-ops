@@ -11,13 +11,20 @@ import { isSideAction, resolveTransition } from "@/lib/stateMachine";
 import {
   advanceNextStop,
   enqueueGsOp,
+  getRouteById,
   getStop,
   insertEventIfNew,
   setStopProof,
   updateStopState,
 } from "@/lib/db/repo";
 import { runFanout } from "@/lib/notify/fanout";
-import { closeOneRoute, rescheduleAlertLine } from "@/lib/dispatch/closeRoute";
+import {
+  applyCloseResolutions,
+  closeOneRoute,
+  markedCompletedLine,
+  parseCloseResolutions,
+  rescheduleAlertLine,
+} from "@/lib/dispatch/closeRoute";
 import { slackNotify } from "@/lib/notify/slack";
 import type { ActionRequest, ActionResponse, Stop } from "@/lib/types";
 
@@ -99,12 +106,25 @@ export async function POST(req: Request): Promise<NextResponse<ActionResponse>> 
   // surfaces on the driver link. Idempotent: replays are dropped above (isNew) and closeOneRoute no-ops a
   // route that's already done.
   if (action === "ARRIVED_WAREHOUSE" && body.routeId) {
+    // Stops still not completed at closeout: the closeout dialog makes the driver pick, per stop, "mark
+    // completed now" or a reason. Record those choices BEFORE closing (an older tablet build or an offline
+    // replay sends none; those stops are recorded as closed with no reason, never blocked).
+    const rt = getRouteById(body.routeId);
+    const by = rt?.driverName ? `${rt.driverName} (driver)` : "the driver";
+    let applied: ReturnType<typeof applyCloseResolutions> = [];
+    try {
+      applied = applyCloseResolutions(body.routeId, parseCloseResolutions((body.payload as { stopResolutions?: unknown } | undefined)?.stopResolutions), by);
+    } catch (e) {
+      console.error("[action] applyCloseResolutions failed (close continues):", e);
+    }
     const closeResult = closeOneRoute(body.routeId);
     // If the driver closed the route with stops still unfinished, they need rescheduling — fire the SAME
     // Slack alert the office/bulk close paths send (previously this path closed silently, so a driver
     // ending the day with open stops left no "needs rescheduling" trail). First close only, guarded.
-    const line = rescheduleAlertLine(closeResult, "the driver");
+    const line = rescheduleAlertLine(closeResult, by);
     if (line) void slackNotify(line);
+    const marked = closeResult.already ? null : markedCompletedLine(applied, closeResult.truckId ?? body.truckId, by);
+    if (marked) void slackNotify(marked);
   }
 
   // Fan-out runs async; the response returns immediately.

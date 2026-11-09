@@ -29,6 +29,7 @@ import { stopStateTone, routeStatusView, staffingTone } from "@/lib/dispatch/boa
 import { STATE_VISUAL } from "@/lib/stateVisual";
 import { DISPLAY_TZ, formatClockTime } from "@/lib/dates";
 import type { StopState, RouteStatus } from "@/lib/types";
+import { formatDuration, onTimeBadge, type ArrivalMismatch, type OnTimeResult } from "@/lib/dispatch/onTime";
 import type { RouteStaffingState } from "@/lib/scheduling/routeStaffing";
 
 // ── Serializable view types (built on the server, passed down) ───────────────────────────────────────
@@ -50,6 +51,17 @@ export interface DispatchStopView {
   addrNote: string;
   finished: boolean;
   canPull: boolean;
+  /** Customer window start (ISO) and where it came from. */
+  windowStart: string | null;
+  windowSource: "route" | "booking" | null;
+  appArrivedAt: string | null;
+  gpsArrivedAt: string | null;
+  onTime: OnTimeResult;
+  mismatch: ArrivalMismatch | null;
+  stackWarning: string | null;
+  closeResolution: "marked_completed" | "reason" | "none" | null;
+  closeReason: string | null;
+  closeBy: string | null;
 }
 
 export interface DispatchRouteView {
@@ -65,6 +77,8 @@ export interface DispatchRouteView {
   executionExceptions: number;
   stops: DispatchStopView[];
   staffing: RouteStaffingState;
+  /** Stops not completed on a CLOSED route (0 when open or closed clean). */
+  closedIncomplete: number;
 }
 
 export interface NoRouteTruck {
@@ -223,6 +237,43 @@ function DispatchTimeline({
   );
 }
 
+// ── Stop timing: customer window, planned arrival, actual arrival + on-time, and review flags ───────────
+function StopTiming({ stop, routeDone }: { stop: DispatchStopView; routeDone: boolean }): React.JSX.Element {
+  const badge = onTimeBadge(stop.onTime);
+  const planned = stop.plannedWindow || stop.eta;
+  const parts: string[] = [];
+  parts.push(stop.windowStart ? `Window ${formatClockTime(stop.windowStart)}` : "No customer window");
+  if (planned) parts.push(`Planned ${formatClockTime(planned)}`);
+  if (stop.onTime.arrivalIso) parts.push(`Arrived ${formatClockTime(stop.onTime.arrivalIso)} (${stop.onTime.source === "gps" ? "GPS" : "app tap"})`);
+  const m = stop.mismatch;
+  return (
+    <div className="mt-1 space-y-0.5 pl-7 text-[11px]">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-meta">
+        <span title={stop.windowSource === "booking" ? "From the Goodshuffle project logistics time" : stop.windowSource === "route" ? "From the Goodshuffle route stop" : undefined}>
+          {parts.join(" · ")}
+        </span>
+        {badge && <StatusBadge tone={badge.tone} size="sm">{badge.label}</StatusBadge>}
+      </div>
+      {m && stop.appArrivedAt && stop.gpsArrivedAt && (
+        <div className="text-attention">
+          App arrival {formatClockTime(stop.appArrivedAt)}, GPS arrival {formatClockTime(stop.gpsArrivedAt)}. They differ by {formatDuration(Math.abs(m.deltaMin))}. Check which is right.
+        </div>
+      )}
+      {stop.stackWarning && <div className="text-attention">{stop.stackWarning}</div>}
+      {stop.closeResolution === "marked_completed" && (
+        <div className="text-attention">Marked completed at closeout{stop.closeBy ? ` by ${stop.closeBy}` : ""}. No driver tap.</div>
+      )}
+      {routeDone && !stop.finished && (
+        <div className="text-attention">
+          {stop.closeResolution
+            ? `Route closed with this stop open${stop.closeBy ? ` by ${stop.closeBy}` : ""}. ${stop.closeReason ? `Reason: ${stop.closeReason}` : "No reason given."}`
+            : "Route closed with this stop open. No reason recorded."}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Stop line (inside the expanded Route & stop progress section) ─────────────────────────────────────
 function StopLine({ stop, routeId, truckId, routeDone, canSupervise }: { stop: DispatchStopView; routeId: string; truckId: string; routeDone: boolean; canSupervise: boolean }): React.JSX.Element {
   const hasProof = stop.photoIds.length > 0 || Boolean(stop.signatureId);
@@ -243,6 +294,7 @@ function StopLine({ stop, routeId, truckId, routeDone, canSupervise }: { stop: D
         {stop.canPull && canSupervise && <RemoveStopButton routeId={routeId} stopId={stop.stopId} custName={stop.custName} gsLinked={false} />}
       </div>
       {stop.addrHoursRisk && <div className="mt-1 pl-7 text-[11px] text-critical">⚠ {stop.addrNote}</div>}
+      <StopTiming stop={stop} routeDone={routeDone} />
       {hasProof && (
         <div className="mt-2 flex flex-wrap items-center gap-2 pl-7">
           {stop.photoIds.map((id) => (
@@ -339,7 +391,14 @@ function RouteDetail({ route, canSupervise }: { route: DispatchRouteView; canSup
           <div className="flex flex-wrap items-center gap-2">
             {!routeDone && <ResyncRouteButton routeId={route.routeId} />}
             <RemoveRouteButton routeId={route.routeId} />
-            {routeDone ? <ReopenRouteButton routeId={route.routeId} /> : <CloseRouteButton routeId={route.routeId} />}
+            {routeDone ? (
+              <ReopenRouteButton routeId={route.routeId} />
+            ) : (
+              <CloseRouteButton
+                routeId={route.routeId}
+                incompleteStops={route.stops.filter((st) => !st.finished).map((st) => ({ stopId: st.stopId, sequence: st.sequence, custName: st.custName }))}
+              />
+            )}
           </div>
         </div>
       )}
@@ -382,11 +441,16 @@ function RouteRow({ route, expanded, onToggle, canSupervise, rowRef }: { route: 
 
         <StaffingCell s={route.staffing} />
 
-        <div className="text-[12px]">
+        <div className="flex flex-wrap items-center gap-1 text-[12px]">
+          {route.closedIncomplete > 0 && (
+            <StatusBadge tone="attention" size="sm">
+              Closed with {route.closedIncomplete} open stop{route.closedIncomplete === 1 ? "" : "s"}
+            </StatusBadge>
+          )}
           {exec > 0 ? (
             <StatusBadge tone="critical" size="sm">{exec} exception{exec === 1 ? "" : "s"}</StatusBadge>
-          ) : (
-            <span className="text-meta">On track</span>
+          ) : route.closedIncomplete > 0 ? null : (
+            <span className="text-meta">{routeDone ? "Closed" : "On track"}</span>
           )}
         </div>
 

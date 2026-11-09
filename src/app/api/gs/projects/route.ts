@@ -18,13 +18,16 @@
 //     full-lane concept and is ignored here.
 
 import { NextResponse } from "next/server";
-import { saveBookings, enqueueWarehouseTeamAdds, archiveBookingsNotIn, saveBookingRevenueComponents, type BookingRecord } from "@/lib/db/repo";
+import { saveBookings, enqueueWarehouseTeamAdds, archiveBookingsNotIn, saveBookingRevenueComponents, syncStopWindowsFromBookings, type BookingRecord } from "@/lib/db/repo";
 import { recordPull, logImport, recordBookingsImportFailure, claimBlankDraftBurstAlert } from "@/lib/pull/state";
 import { findBlankDraftBursts, blankDraftBurstMessage, BLANK_DRAFT_BURST_THRESHOLD } from "@/lib/ingest/blankDraft";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
 import { consumeBookingsForcePrune } from "@/lib/ingest/forcePruneBookings";
 import { slackNotify } from "@/lib/notify/slack";
 import { centsToDollars, type RevenueComponentsCents } from "@/lib/finance/revenueModel";
+
+/** How far back a bookings pull refreshes stop windows (covers the recent on-time review period). */
+const WINDOW_BACKFILL_DAYS = 60;
 
 export const dynamic = "force-dynamic";
 
@@ -58,6 +61,7 @@ interface InProject {
   location?: string | null;
   salesLead?: string | null; // Goodshuffle salesLeadName
   archived?: boolean;
+  logisticsStartTime?: string | null; // Goodshuffle logistics_start_from_time ("9:00 AM EDT" | "TBD"): delivery window start
 }
 
 const dollars = (cents: number | undefined): number | null =>
@@ -156,9 +160,20 @@ export async function POST(req: Request): Promise<NextResponse> {
       location: p.location?.trim() || null,
       salesLead: p.salesLead === undefined ? undefined : p.salesLead?.trim() || null,
       archived: Boolean(p.archived),
+      // undefined = an older pull build that does not send it (keep the stored window).
+      windowStartTime: p.logisticsStartTime === undefined ? undefined : typeof p.logisticsStartTime === "string" ? p.logisticsStartTime : null,
     });
   }
   if (records.length > 0) saveBookings(records);
+  // Bookings and routes arrive in separate pulls: refresh the customer window on stops already written
+  // (recent + upcoming routes) from the projects just saved. Best effort; never fails the ingest.
+  if (records.length > 0) {
+    try {
+      syncStopWindowsFromBookings(shiftYmd(todayInOpsTz(), -WINDOW_BACKFILL_DAYS));
+    } catch (e) {
+      console.error("[gs/projects] syncStopWindowsFromBookings failed (ignored)", e);
+    }
+  }
 
   // Runaway-create guard (both lanes): more than N blank drafts created today or yesterday means a create
   // loop is minting empty projects (the 2026-10-31 incident made 68 before anyone noticed). One deduped

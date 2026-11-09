@@ -19,7 +19,9 @@ import {
   getRecentMessages,
   getRoutesForDate,
   getNextRouteDate,
+  getGpsArrivals,
 } from "@/lib/db/repo";
+import { arrivalMismatch, routePlanStops, scoreOnTime, stackingWarnings } from "@/lib/dispatch/onTime";
 import { findRouteHealthIssues } from "@/lib/dispatch/routeHealth";
 import { ClosePastRoutesButton } from "@/components/ClosePastRoutesButton";
 import { PullRoutesButton } from "@/components/PullRoutesButton";
@@ -106,11 +108,30 @@ function OverdueRoutesBanner({ issues, canClose }: { issues: ReturnType<typeof f
 
 /** Build the serializable per-route view for the client execution list, computing address review + proof
  *  on the server (keeps the pure classifiers off the client). Staffing comes from the shared selector. */
-function toRouteView(route: Route, staffing: RouteStaffingState, exceptionsForRoute: number): DispatchRouteView {
+function toRouteView(
+  route: Route,
+  staffing: RouteStaffingState,
+  exceptionsForRoute: number,
+  gpsArrivals: Map<string, { enterTs: string; confidence: string }>,
+): DispatchRouteView {
+  // Pre-day sequencing check (also shown on history, where it explains a late arrival).
+  const stackByStop = new Map(stackingWarnings(routePlanStops(route)).map((w) => [w.stopId, w.message]));
   const stops: DispatchStopView[] = route.stops.map((s) => {
     const finished = s.state === "Completed" || s.state === "Returned";
     const addr = reviewStopAddress({ address: s.address, name: s.custName, whenIso: s.plannedWindow || s.eta });
+    const gps = gpsArrivals.get(s.stopId)?.enterTs ?? null;
+    const onTime = scoreOnTime({ windowStart: s.windowStart, appArrivedAt: s.arrivedAt, gpsArrivedAt: gps });
     return {
+      windowStart: s.windowStart ?? null,
+      windowSource: s.windowSource ?? null,
+      appArrivedAt: s.arrivedAt ?? null,
+      gpsArrivedAt: gps,
+      onTime,
+      mismatch: arrivalMismatch(s.arrivedAt, gps),
+      stackWarning: stackByStop.get(s.stopId) ?? null,
+      closeResolution: s.closeResolution ?? null,
+      closeReason: s.closeReason ?? null,
+      closeBy: s.closeBy ?? null,
       stopId: s.stopId,
       sequence: s.sequence,
       custName: s.custName,
@@ -132,6 +153,7 @@ function toRouteView(route: Route, staffing: RouteStaffingState, exceptionsForRo
   });
   const done = route.stops.filter((s) => s.state === "Completed" || s.state === "Returned").length;
   return {
+    closedIncomplete: route.status === "done" ? route.stops.length - done : 0,
     routeId: route.routeId,
     truckId: route.truckId,
     truckName: staffing.truckName,
@@ -196,8 +218,10 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
     return exceptions.filter((x) => (x.stopId && ids.has(x.stopId)) || (!x.stopId && x.truckId === route.truckId)).length;
   };
 
+  // GPS on-site arrivals (gps-visit job), for on-time scoring and the app-vs-GPS check.
+  const gpsArrivals = getGpsArrivals(fleet.flatMap((f) => (f.route ? [f.route.routeId] : [])));
   const viewFor = (route: Route): DispatchRouteView =>
-    toRouteView(route, staffingByRoute.get(route.routeId) ?? closedStaffing(route), exceptionsForRoute(route));
+    toRouteView(route, staffingByRoute.get(route.routeId) ?? closedStaffing(route), exceptionsForRoute(route), gpsArrivals);
 
   const routeViews = withRoute.map((f) => viewFor(f.route!));
   const supersededViews = supersededFleet.filter((f) => f.route).map((f) => viewFor(f.route!));

@@ -2511,6 +2511,20 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "history_changes", column: "actor", type: "TEXT" },
   // SEO publish via Website Studio: the job that publishes an approved page draft. Null = not sent yet.
   { table: "seo_page_drafts", column: "website_job_id", type: "TEXT" },
+  // Delivery on-time tracking (fix/dispatch-ontime-tracking). The CUSTOMER window per stop (distinct from
+  // planned_window, which is the dispatcher's planned arrival), Goodshuffle's planned on-site + drive minutes
+  // for the pre-day stacking check, and the closer's per-stop resolution when a route closes with a stop
+  // still open. All nullable: null = unknown, never a fabricated window or reason.
+  { table: "stops", column: "window_start", type: "TEXT" },          // ISO customer window start
+  { table: "stops", column: "window_end", type: "TEXT" },            // ISO customer window end (when known)
+  { table: "stops", column: "window_source", type: "TEXT" },         // 'route' (waypoint required arrival) | 'booking' (project logistics)
+  { table: "stops", column: "planned_on_site_min", type: "INTEGER" }, // GS waypoint scheduledLoiterMinutes
+  { table: "stops", column: "planned_transit_min", type: "INTEGER" }, // GS waypoint transitMinutes.left
+  { table: "stops", column: "close_resolution", type: "TEXT" },      // 'marked_completed' | 'reason' | 'none'
+  { table: "stops", column: "close_reason", type: "TEXT" },
+  { table: "stops", column: "close_by", type: "TEXT" },              // who closed the route with this stop open
+  { table: "stops", column: "close_at", type: "TEXT" },              // ISO
+  { table: "bookings", column: "window_start_time", type: "TEXT" },  // raw GS logistics_start_from_time, e.g. "9:00 AM EDT" (null = TBD/unknown)
 ];
 
 function migrate(db: DB): void {

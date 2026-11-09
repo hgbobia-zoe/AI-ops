@@ -149,8 +149,28 @@ export interface Stop {
   // "arrived" texts go to them as well as the customer.
   dayOfName?: string;
   dayOfPhone?: string;
+  /** Dispatcher's PLANNED arrival (Goodshuffle waypoint scheduledArrivalTime). Not the customer window. */
   plannedWindow?: string;
   eta?: string;
+  /** CUSTOMER window start (ISO): a per-waypoint required-arrival time when dispatch set one, else the
+   *  Goodshuffle project's logistics_start_from_time (delivery stops only). On-time is scored against this. */
+  windowStart?: string;
+  /** Customer window end (ISO), when known (per-waypoint latestRequiredArrivalTime). */
+  windowEnd?: string;
+  /** Where windowStart came from: "route" (waypoint required arrival) or "booking" (project logistics). */
+  windowSource?: "route" | "booking";
+  /** Planned minutes on site (Goodshuffle waypoint scheduledLoiterMinutes). */
+  plannedOnSiteMin?: number;
+  /** Planned drive minutes from the previous waypoint (Goodshuffle waypoint transitMinutes.left). */
+  plannedTransitMin?: number;
+  /** Set when the route was closed with this stop not completed: what the closer chose. "marked_completed"
+   *  = closer asserted it was done at close time (not a real driver tap); "reason" = left incomplete with a
+   *  reason; "none" = closed without a reason (an old tablet build, or the bulk close). */
+  closeResolution?: "marked_completed" | "reason" | "none";
+  closeReason?: string;
+  /** Who closed the route with this stop open (named, per the attribution rule). */
+  closeBy?: string;
+  closeAt?: string;
   /** Goodshuffle line items for this stop's event (name + qty, and a product photo URL when GS has one).
    *  Drives crew-size rules (tent → 2, 40x60 → 3), the driver load list, and LLM quote review. Optional. */
   items?: { name: string; quantity?: number; image?: string }[];

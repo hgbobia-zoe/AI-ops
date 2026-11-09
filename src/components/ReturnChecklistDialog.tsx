@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Camera, Fuel, PackageOpen, ClipboardList, Wrench, KeyRound, MessageSquareWarning, X } from "lucide-react";
 import {
   Dialog,
@@ -15,7 +15,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { downscaleImage, uploadPhotos } from "@/lib/media/photo";
-import type { CloseoutResult } from "@/lib/types";
+import type { CloseoutResult, Stop } from "@/lib/types";
+import { IncompleteStopsResolver, type IncompleteStopRef } from "@/components/IncompleteStopsResolver";
+import { unresolvedStops, type CloseResolutionInput } from "@/lib/dispatch/onTime";
 
 // The mandatory Driver Route Closeout. Fired on "Arrived at Warehouse": the driver walks each
 // item, anything unconfirmed needs a reason (flagged to the office), and a final "anything to
@@ -42,15 +44,49 @@ const EMPTY: Record<CloKey, boolean> = {
   notesSubmitted: false,
 };
 
+/** A stop the closeout must account for: anything not Completed / Returned. HeadingBack is the stop the
+ *  truck is bringing items back from; the warehouse arrival itself marks it Returned. */
+function isOpenStop(s: Pick<Stop, "state">): boolean {
+  return s.state !== "Completed" && s.state !== "Returned" && s.state !== "HeadingBack";
+}
+
 export function ReturnChecklistDialog({
   open,
   onOpenChange,
   onConfirm,
+  truckId,
+  routeId,
+  routeStops = [],
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onConfirm: (result: CloseoutResult, photoIds?: string[]) => void;
+  onConfirm: (result: CloseoutResult, photoIds?: string[], stopResolutions?: CloseResolutionInput[]) => void;
+  truckId?: string;
+  routeId?: string;
+  routeStops?: Stop[];
 }) {
+  // Stops not completed. The tablet's own view can be out of date (a tap that never reached the server, an
+  // office change), so on open we re-read the server's copy of this route and use it when it matches.
+  const [serverStops, setServerStops] = useState<Stop[] | null>(null);
+  useEffect(() => {
+    if (!open || !truckId || !routeId) return;
+    let cancelled = false;
+    void fetch(`/api/route?truckId=${encodeURIComponent(truckId)}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { route?: { routeId?: string; stops?: Stop[] } | null } | null) => {
+        if (!cancelled && j?.route?.routeId === routeId && Array.isArray(j.route.stops)) setServerStops(j.route.stops);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open, truckId, routeId]);
+  const openStops: IncompleteStopRef[] = (serverStops ?? routeStops)
+    .filter(isOpenStop)
+    .map((s) => ({ stopId: s.stopId, sequence: s.sequence, custName: s.custName, state: s.state }));
+  const [stopResolutions, setStopResolutions] = useState<CloseResolutionInput[]>([]);
+  const stopsMissing = unresolvedStops(openStops.map((s) => s.stopId), stopResolutions);
+
   const [checks, setChecks] = useState<Record<CloKey, boolean>>(EMPTY);
   const [reason, setReason] = useState("");
   const [hasIssue, setHasIssue] = useState<boolean | null>(null);
@@ -64,6 +100,7 @@ export function ReturnChecklistDialog({
   const needsReason = !allChecked;
   const canConfirm =
     !saving &&
+    stopsMissing.length === 0 && // every open stop: mark completed, or a reason
     hasIssue !== null && // must answer the final question
     (allChecked || reason.trim().length > 0) && // any unchecked item → reason
     (!hasIssue || issueNote.trim().length > 0); // reported an issue → note
@@ -86,6 +123,8 @@ export function ReturnChecklistDialog({
     setIssueNote("");
     setPhotos([]);
     setError(null);
+    setStopResolutions([]);
+    setServerStops(null);
   }
 
   async function handleConfirm() {
@@ -115,6 +154,7 @@ export function ReturnChecklistDialog({
         issueNote: hasIssue ? issueNote.trim() : undefined,
       },
       photoIds,
+      openStops.length > 0 ? stopResolutions.filter((r) => openStops.some((s) => s.stopId === r.stopId)) : undefined,
     );
     reset();
   }
@@ -131,6 +171,7 @@ export function ReturnChecklistDialog({
         </DialogHeader>
 
         <div className="space-y-3 py-2">
+          <IncompleteStopsResolver stops={openStops} value={stopResolutions} onChange={setStopResolutions} />
           {ITEMS.map((item) => {
             const Icon = item.icon;
             const on = checks[item.key];

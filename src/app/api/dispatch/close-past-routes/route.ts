@@ -6,7 +6,7 @@
 
 import { NextResponse } from "next/server";
 import { findRouteHealthIssues } from "@/lib/dispatch/routeHealth";
-import { closeOneRoute } from "@/lib/dispatch/closeRoute";
+import { applyCloseResolutions, closeOneRoute } from "@/lib/dispatch/closeRoute";
 import { slackNotify } from "@/lib/notify/slack";
 import { viewerRole, currentActor } from "@/lib/auth/getSession";
 import { canManageSettings } from "@/lib/auth/roles";
@@ -36,6 +36,9 @@ export async function POST(req: Request): Promise<NextResponse> {
   const byId = new Map(past.map((i) => [i.routeId, i]));
 
   for (const issue of past) {
+    // Bulk close has no per-stop prompt: record each open stop as closed by this bulk action, no reason,
+    // so the board still shows who closed it and that the stop was never completed.
+    applyCloseResolutions(issue.routeId, [], by, "Closed with the bulk close of past routes");
     const res = closeOneRoute(issue.routeId);
     if (!res.ok) continue;
     if (res.already) { already++; continue; }

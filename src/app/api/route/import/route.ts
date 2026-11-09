@@ -6,7 +6,7 @@
 //         dayOfPhone?, plannedWindow?, eta? }, ...] }
 
 import { NextResponse } from "next/server";
-import { getRouteById, writeRoute } from "@/lib/db/repo";
+import { applyBookingWindows, getRouteById, writeRoute } from "@/lib/db/repo";
 import { todayInOpsTz } from "@/lib/dates";
 import { alertRouteRisks } from "@/lib/notify/routeRisk";
 import { scheduleScanSoon } from "@/lib/risk/scan";
@@ -57,6 +57,27 @@ const CORS: Record<string, string> = {
   Vary: "Origin",
 };
 
+/** Keep only well-formed timing fields from the pull (an ISO window, non-negative minute counts). */
+function sanitizeTimingFields(s: Partial<Stop>): Partial<Stop> {
+  const iso = (v: unknown): string | undefined =>
+    typeof v === "string" && v.trim() && !Number.isNaN(Date.parse(v)) ? v.trim() : undefined;
+  const mins = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 && v < 24 * 60 ? Math.round(v) : undefined;
+  return {
+    ...s,
+    windowStart: iso(s.windowStart),
+    windowEnd: iso(s.windowEnd),
+    windowSource: undefined,
+    plannedOnSiteMin: mins(s.plannedOnSiteMin),
+    plannedTransitMin: mins(s.plannedTransitMin),
+    // Close resolutions are set by a closer, never by a pull.
+    closeResolution: undefined,
+    closeReason: undefined,
+    closeBy: undefined,
+    closeAt: undefined,
+  };
+}
+
 export function OPTIONS(): NextResponse {
   return new NextResponse(null, { status: 204, headers: CORS });
 }
@@ -90,10 +111,11 @@ export async function POST(req: Request): Promise<NextResponse> {
     }
 
     const truckId = body.truckId;
-    const stopsIn = body.stops;
-    if (!truckId || !Array.isArray(stopsIn) || stopsIn.length === 0) {
+    const rawStops = body.stops;
+    if (!truckId || !Array.isArray(rawStops) || rawStops.length === 0) {
       return json({ error: "truckId and non-empty stops[] required" }, 400);
     }
+    const stopsIn = rawStops.map(sanitizeTimingFields);
 
     const date = body.date || todayInOpsTz();
     // Identity is PER GOODSHUFFLE ROUTE: a truck can run more than one route a day (a day route and an
@@ -138,6 +160,13 @@ export async function POST(req: Request): Promise<NextResponse> {
     // Safety: a late re-pull must NOT resurrect a route the office/driver already closed. Keep a closed
     // route closed (reconcileStops still preserves its real stop states); only an open route stays "ready".
     const status = existing?.status === "done" ? "done" : "ready";
+    // Customer window per stop: a waypoint window from the pull wins; otherwise the Goodshuffle project's
+    // logistics window (bookings feed, matched by txId). Guarded: a lookup failure never fails the save.
+    try {
+      stops = applyBookingWindows(stops, date);
+    } catch (e) {
+      console.error("[route/import] applyBookingWindows failed (saving without windows)", routeId, e);
+    }
     writeRoute({ routeId, date, truckId, status, gsRouteId: body.gsRouteId, stops });
 
     // NOTE: revenue is NOT written here. The single source of truth is the `bookings` feed

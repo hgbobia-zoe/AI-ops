@@ -26,6 +26,7 @@ import { formatClockTime } from "@/lib/dates";
 import type { AvailableAction } from "@/lib/stateMachine";
 import type { ActionType, ChecklistResult, CloseoutResult, ExceptionType, Stop } from "@/lib/types";
 import type { RoutePhase, StopNotif } from "@/lib/useRouteMachine";
+import type { CloseResolutionInput } from "@/lib/dispatch/onTime";
 
 // Shared square-tile styles for the action grid.
 const TILE_CLASS =
@@ -43,6 +44,8 @@ export function CurrentStopView({
   onPerform,
   notif,
   onMessageDispatch,
+  routeId,
+  routeStops = [],
 }: {
   phase: RoutePhase;
   activeStop: Stop | null;
@@ -53,6 +56,9 @@ export function CurrentStopView({
   onPerform: (action: ActionType, payload?: Record<string, unknown>) => void;
   notif?: StopNotif;
   onMessageDispatch: (message: string) => void;
+  /** The route being run + its stops, so the closeout can list any stop not completed. */
+  routeId?: string;
+  routeStops?: Stop[];
 }) {
   const [checklistFor, setChecklistFor] = useState<AvailableAction | null>(null);
   const [closeoutOpen, setCloseoutOpen] = useState(false);
@@ -78,8 +84,8 @@ export function CurrentStopView({
     onPerform(action.action);
   }
 
-  function handleCloseoutConfirm(closeout: CloseoutResult, photoIds?: string[]) {
-    onPerform("ARRIVED_WAREHOUSE", { closeout, photoIds });
+  function handleCloseoutConfirm(closeout: CloseoutResult, photoIds?: string[], stopResolutions?: CloseResolutionInput[]) {
+    onPerform("ARRIVED_WAREHOUSE", { closeout, photoIds, stopResolutions });
     setCloseoutOpen(false);
   }
 
@@ -102,6 +108,9 @@ export function CurrentStopView({
           open={closeoutOpen}
           onOpenChange={setCloseoutOpen}
           onConfirm={handleCloseoutConfirm}
+          truckId={truckId}
+          routeId={routeId}
+          routeStops={routeStops}
         />
       </div>
     );
