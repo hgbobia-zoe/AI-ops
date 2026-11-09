@@ -93,14 +93,24 @@ describe("POST /api/intake/email", () => {
     vi.mocked(chat).mockResolvedValueOnce({ ok: true, text: '{"intent":"new_inquiry","confidence":0.92,"firstName":"Danielle","lastName":"Whitaker","eventType":"social","eventDate":"2027-06-14","guestCount":80,"summary":"Birthday party tent quote"}' });
     const sender = "danielle.w@gmail.com";
     const lead = await post(gmail({}, sender));
-    expect(lead.json).toMatchObject({ decision: "lead", by: "model", created: true });
+    expect(lead.json).toMatchObject({ decision: "lead", by: "model", created: true, firstName: "Danielle" });
     const op = creates().find((o) => (o.payload as { leadEmail?: string }).leadEmail === sender)!;
     expect(op.payload).toMatchObject({ eventName: "Whitaker - Social / Private", eventDateMDY: "6/14/2027" });
 
     vi.mocked(chat).mockResolvedValueOnce({ ok: true, text: '```json\n{"intent":"vendor_or_pitch","confidence":0.9,"summary":"A tent supplier offering wholesale prices"}\n```' });
-    const pitch = await post(gmail({ subject: "Tent quote for your rental business" }));
+    const pitch = await post(gmail({ subject: "Sidewalls for your business", body_plain: "Hi, we make sidewalls and liners. Happy to send our sheet if useful. Best, Sam" }));
     expect(pitch.json).toMatchObject({ decision: "skip", by: "model", created: false });
     expect(String(pitch.json.reason)).toMatch(/^not_a_lead \(vendor_or_pitch\)/);
+  });
+
+  it("a clear rental request the model calls a pitch is held for a person, never dropped (planner asking for a client)", async () => {
+    vi.mocked(llmConfigured).mockReturnValue(true);
+    const before = creates().length;
+    vi.mocked(chat).mockResolvedValueOnce({ ok: true, text: '{"intent":"vendor_or_pitch","confidence":0.8,"summary":"Event planner describing her business"}' });
+    const { json } = await post(gmail({ subject: "Turf rental for a client's reception", body_plain: "Hello, I am the founder of a planning firm coordinating a reception on November 14 at a private residence. We are interested in renting turf under a 40 x 80 tent. Please confirm availability and total pricing including delivery and setup." }), "?slack=1");
+    expect(json).toMatchObject({ decision: "review", by: "model", created: false });
+    expect(creates().length).toBe(before);
+    expect(vi.mocked(slackPostAs)).toHaveBeenCalled();
   });
 
   it("anything unclear is held for a person, never auto answered", async () => {

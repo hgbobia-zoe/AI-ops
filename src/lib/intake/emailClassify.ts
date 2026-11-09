@@ -27,8 +27,11 @@ function prompt(e: InboundEmail, today: string): string {
   return [
     "You triage email sent to hello@ at Zoe Events & Party Rentals, an event rental company near Washington DC",
     "(tents, tables, chairs, linens, lounge furniture, staging, delivered and set up).",
-    "Decide if this email is a NEW customer asking about renting for an event. Vendors pitching services,",
-    "job seekers, partnership or sponsorship requests, invoices, newsletters and automated mail are not.",
+    "Decide if this email is a NEW customer asking about renting for an event. Event planners, coordinators,",
+    "designers, venues and companies asking us to rent, quote or supply items for an event (their own or a",
+    "client's) ARE customers: new_inquiry, even when they describe their own business or ask for an item we",
+    "may not carry. vendor_or_pitch is ONLY someone trying to sell their own products or services TO us.",
+    "Job seekers, partnership or sponsorship requests, invoices, newsletters and automated mail are not customers.",
     "A client already in a conversation with us (talking about an existing order, a payment, a contract) is",
     `existing_conversation. Today is ${today}. Resolve relative dates ("next Saturday") to YYYY-MM-DD.`,
     "",
