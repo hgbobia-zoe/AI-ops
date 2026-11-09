@@ -129,15 +129,57 @@ const ALIASES: Record<Field, string[]> = {
 };
 const normHeader = (h: string) => h.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
+// Apify's Google Maps Scraper exports one row per place: "title" is the BUSINESS name (not a job title),
+// and emails only exist when its contacts add-on ran, as emails/0, emails/1, ... (people found by its
+// leads add-on come as leadsEnrichment/0/...). Recognised by its place columns.
+// Apify headers are camelCase and parseCsv lowercases them, so both spellings are listed.
+const GMAPS_MARKERS = [
+  "categoryname", "placeid", "totalscore", "reviewscount", "searchstring",
+  "category name", "place id", "total score", "reviews count", "search string", "categories 0", "cid", "fid",
+];
+const GMAPS_EMAILS = ["leadsenrichment 0 email", "emails 0", "emails 1", "emails 2", "emails"];
+const GMAPS_PERSON: Partial<Record<Field, string[]>> = {
+  first_name: ["leadsenrichment 0 firstname"],
+  last_name: ["leadsenrichment 0 lastname"],
+  full_name: ["leadsenrichment 0 fullname"],
+  title: ["leadsenrichment 0 jobtitle"],
+};
+
+/** PURE. True when the headers look like an Apify Google Maps Scraper export. */
+export function isGoogleMapsExport(headers: string[]): boolean {
+  const norm = new Set(headers.map(normHeader));
+  return GMAPS_MARKERS.filter((m) => norm.has(m)).length >= 2;
+}
+
+/** PURE. Every column that can hold the email, best first. A row uses the first one with a valid address. */
+export function emailColumns(headers: string[]): string[] {
+  const byNorm = new Map<string, string>();
+  for (const h of headers) if (!byNorm.has(normHeader(h))) byNorm.set(normHeader(h), h);
+  const order = isGoogleMapsExport(headers) ? [...GMAPS_EMAILS, ...ALIASES.email] : [...ALIASES.email, ...GMAPS_EMAILS];
+  const out: string[] = [];
+  for (const a of order) { const h = byNorm.get(a); if (h && !out.includes(h)) out.push(h); }
+  return out;
+}
+
 /** PURE. Which source column feeds each field. */
 export function mapColumns(headers: string[]): Partial<Record<Field, string>> {
   const byNorm = new Map<string, string>();
   for (const h of headers) if (!byNorm.has(normHeader(h))) byNorm.set(normHeader(h), h);
+  const gmaps = isGoogleMapsExport(headers);
   const out: Partial<Record<Field, string>> = {};
   for (const f of Object.keys(ALIASES) as Field[]) {
-    const hit = ALIASES[f].find((a) => byNorm.has(a));
+    let aliases = ALIASES[f];
+    if (gmaps) {
+      if (f === "title") aliases = GMAPS_PERSON.title!;
+      else if (f === "company") aliases = ["title", ...aliases];
+      else if (GMAPS_PERSON[f]) aliases = [...GMAPS_PERSON[f]!, ...aliases];
+      if (f === "full_name" || f === "website") aliases = aliases.filter((a) => a !== "name" && a !== "url"); // "url" is the Maps link
+    }
+    const hit = aliases.find((a) => byNorm.has(a));
     if (hit) out[f] = byNorm.get(hit);
   }
+  const emails = emailColumns(headers);
+  if (emails.length) out.email = emails[0];
   return out;
 }
 
@@ -167,20 +209,29 @@ export interface ParseResult {
   invalidEmail: number;
   duplicatesInFile: number;
   columns: Partial<Record<Field, string>>;
+  /** "google_maps" when the file is an Apify Google Maps Scraper export. */
+  source: "google_maps" | "generic";
 }
+
+/** First address in a cell. Handles "a@x.com; b@x.com", mailto:, and a JSON array cell. */
+const firstEmail = (cell: string | undefined): string =>
+  (cell ?? "").replace(/[[\]"']/g, " ").trim().replace(/^mailto:/i, "").split(/[;,\s]+/).find(Boolean)?.toLowerCase() ?? "";
 
 /** PURE. Parse a list CSV into contacts. Drops rows with no or invalid email, and repeats in the file. */
 export function parseListCsv(csv: string): ParseResult {
   const rows = parseCsv(csv);
-  const columns = rows.length ? mapColumns(Object.keys(rows[0])) : {};
-  const out: ParseResult = { contacts: [], rows: rows.length, missingEmail: 0, invalidEmail: 0, duplicatesInFile: 0, columns };
+  const headers = rows.length ? Object.keys(rows[0]) : [];
+  const columns = mapColumns(headers);
+  const source = isGoogleMapsExport(headers) ? "google_maps" : "generic";
+  const out: ParseResult = { contacts: [], rows: rows.length, missingEmail: 0, invalidEmail: 0, duplicatesInFile: 0, columns, source };
   if (!columns.email) return out;
   // parseCsv lowercases + trims headers; the mapped names come from those same keys.
   const get = (r: Record<string, string>, f: Field) => (columns[f] ? r[columns[f]!] : undefined);
+  const emailCols = emailColumns(headers);
   const seen = new Set<string>();
   for (const r of rows) {
-    const raw = (get(r, "email") ?? "").trim().replace(/^mailto:/i, "");
-    const email = raw.split(/[;,\s]+/)[0]?.toLowerCase() ?? "";
+    const candidates = emailCols.map((h) => firstEmail(r[h])).filter(Boolean);
+    const email = candidates.find((e) => EMAIL_RE.test(e)) ?? candidates[0] ?? "";
     if (!email) { out.missingEmail++; continue; }
     if (!EMAIL_RE.test(email)) { out.invalidEmail++; continue; }
     if (seen.has(email)) { out.duplicatesInFile++; continue; }
@@ -242,9 +293,16 @@ export function importList(input: ListInput, csv: string, actor: string | null, 
   if (err) throw new Error(err);
   const parsed = parseListCsv(csv);
   if (parsed.rows === 0) throw new Error("no rows found; paste a CSV with a header row");
+  if (!parsed.columns.email && parsed.source === "google_maps") {
+    throw new Error("this Google Maps export has no emails. In Apify, run the Google Maps Scraper again with the \"Company contacts enrichment\" add-on turned on, then export it as CSV");
+  }
   if (!parsed.columns.email) throw new Error("no email column found (looked for email, work email, email address, ...)");
   if (parsed.rows > MAX_LIST_ROWS) throw new Error(`list too big (${parsed.rows} rows); split it into files of ${MAX_LIST_ROWS} or fewer`);
-  if (parsed.contacts.length === 0) throw new Error("no usable emails in the file");
+  if (parsed.contacts.length === 0) {
+    throw new Error(parsed.source === "google_maps"
+      ? "none of these places has an email. The contacts add-on finds emails only on business websites, so places with no website stay empty"
+      : "no usable emails in the file");
+  }
 
   const db = getDb();
   const ts = now.toISOString();

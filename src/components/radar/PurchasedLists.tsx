@@ -27,6 +27,7 @@ interface ImportResponse {
   missingEmail?: number;
   invalidEmail?: number;
   duplicatesInFile?: number;
+  source?: "google_maps" | "generic";
 }
 
 export function ListImport({ template }: { template: string }) {
@@ -67,12 +68,13 @@ export function ListImport({ template }: { template: string }) {
       });
       const d = (await res.json()) as ImportResponse;
       if (!res.ok || !d.list) throw new Error(d.error || "Import failed");
+      const maps = d.source === "google_maps";
       const dropped = [
         d.duplicatesInFile ? `${d.duplicatesInFile} repeated` : "",
-        d.missingEmail ? `${d.missingEmail} with no email` : "",
+        d.missingEmail ? `${d.missingEmail} ${maps ? "places " : ""}with no email` : "",
         d.invalidEmail ? `${d.invalidEmail} with a bad email` : "",
       ].filter(Boolean).join(", ");
-      toast.success(`Imported ${d.imported} contacts${dropped ? ` (left out: ${dropped})` : ""}`);
+      toast.success(`Imported ${d.imported} contacts${maps ? " from the Google Maps export" : ""}${dropped ? ` (left out: ${dropped})` : ""}`);
       router.push(`/radar/lists/${d.list.id}`);
     } catch (e) {
       toast.error((e as Error).message);
@@ -90,7 +92,7 @@ export function ListImport({ template }: { template: string }) {
         <button className={btn} onClick={() => setOpen(false)}>Close</button>
       </div>
       <p className="mb-3 text-[11.5px] text-meta">
-        A CSV from Apollo, ZoomInfo or a list broker works as is. Only an email column is required; first and last name, title, company, website, phone, city and state are picked up when present. Nothing is emailed until you review and approve a push.
+        A CSV from Apollo, ZoomInfo, a list broker or Apify&apos;s Google Maps Scraper works as is. Only an email column is required; first and last name, title, company, website, phone, city and state are picked up when present. For Google Maps, run it with the &quot;Company contacts enrichment&quot; add-on so places come with emails. Nothing is emailed until you review and approve a push.
       </p>
       <div className="grid gap-2 sm:grid-cols-2">
         <label className={label}>List name
@@ -102,7 +104,7 @@ export function ListImport({ template }: { template: string }) {
           </select>
         </label>
         <label className={label}>Bought from (optional)
-          <input className={input} value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Apollo, ZoomInfo, a broker…" />
+          <input className={input} value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Apollo, Apify Google Maps, a broker…" />
         </label>
         <label className={label}>What it cost, in dollars (optional; used for cost per lead)
           <input className={input} inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="e.g. 249" />

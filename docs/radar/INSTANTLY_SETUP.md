@@ -86,7 +86,12 @@ Besides the contacts Radar finds, Zoe buys lists to cold email. In Zoe these liv
 5. **Replies:** log them on the contact (Log reply). Not interested, bounced and unsubscribed go on the
    do-not-contact list automatically. **Interested** creates a Radar opportunity at stage Engaged, linked
    to the contact. Convert it to Goodshuffle from there once they ask for a quote (intent only).
-6. **Deleting a list:** a list can be deleted only if nobody on it was emailed yet. Once anyone was sent,
+6. **Lists you scrape yourself (Apify Google Maps Scraper):** export the run as CSV and import it as is.
+   Zoe reads the place name as the company and takes the first good email per place. Emails exist only
+   when the run had the **Company contacts enrichment** add-on on (it reads emails off each business
+   website), so places without a website come in empty and are left out. These are mostly shared inboxes
+   (events@, info@) with no person's name, so write the venue copy to read well without `{{firstName}}`.
+7. **Deleting a list:** a list can be deleted only if nobody on it was emailed yet. Once anyone was sent,
    the list is kept as the record of who was emailed.
 
 ## Not built yet

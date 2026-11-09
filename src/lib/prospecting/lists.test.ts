@@ -44,6 +44,35 @@ describe("mapping list columns", () => {
   });
 });
 
+describe("Apify Google Maps exports", () => {
+  // Header shape of the Google Maps Scraper CSV export with the contacts add-on (made-up places).
+  const header = "title,categoryName,address,city,state,phone,website,url,totalScore,reviewsCount,placeId,emails/0,emails/1";
+  it("reads the business name as the company, not a job title, and takes the first good email", () => {
+    const csv = [
+      header,
+      'The Grand Hall,Wedding venue,"1 Main St, Rockville, MD",Rockville,Maryland,(301) 555-0101,https://grandhall.example,https://www.google.com/maps/place/x,4.7,212,ChIJaaa,events@grandhall.example,info@grandhall.example',
+      "Garden Loft,Event venue,,Bethesda,Maryland,,https://loft.example,https://www.google.com/maps/place/y,4.5,40,ChIJbbb,not-an-email,hello@loft.example",
+      "No Site Barn,Barn venue,,Frederick,Maryland,(301) 555-0199,,https://www.google.com/maps/place/z,4.9,15,ChIJccc,,",
+    ].join("\n");
+    const r = parseListCsv(csv);
+    expect(r.source).toBe("google_maps");
+    expect(r.contacts).toHaveLength(2);
+    expect(r.contacts[0]).toMatchObject({ email: "events@grandhall.example", company: "The Grand Hall", title: null, website: "https://grandhall.example", city: "Rockville", firstName: null });
+    expect(r.contacts[1]).toMatchObject({ email: "hello@loft.example", company: "Garden Loft" });
+    expect(r.missingEmail).toBe(1);
+  });
+
+  it("explains how to get emails when the export has none", () => {
+    const csv = "title,categoryName,city,phone,website,totalScore,placeId\nThe Grand Hall,Wedding venue,Rockville,(301) 555-0101,https://grandhall.example,4.7,ChIJaaa";
+    expect(() => importList({ name: "Maps", segment: "venue" }, csv, "Owner", NOW)).toThrow(/Company contacts enrichment/);
+  });
+
+  it("leaves Apollo style files alone", () => {
+    expect(parseListCsv("title,company,email\nEvents Director,The Hall,a@hall.example").contacts[0]).toMatchObject({ title: "Events Director", company: "The Hall" });
+    expect(parseListCsv("title,company,email\nEvents Director,The Hall,a@hall.example").source).toBe("generic");
+  });
+});
+
 describe("importing a list", () => {
   it("creates the list with its contacts and refuses a file with no email column", () => {
     const out = importList({ name: "DMV venues Q4", segment: "venue", vendor: "Apollo", cost: 150 }, "email,company\na@v1.example,V1\nb@v2.example,V2", "Owner", NOW);
