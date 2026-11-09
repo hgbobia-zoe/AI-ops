@@ -15,7 +15,8 @@
 
 import Link from "next/link";
 import { DollarSign } from "lucide-react";
-import { financeForPeriod, projectFinancials, projectHandlingEstimate, financeInsights } from "@/lib/finance/service";
+import { financeForPeriod, projectFinancials, projectHandlingEstimate, financeInsights, teamPayrollForPeriod } from "@/lib/finance/service";
+import { REVENUE_SERVED_NOTE, PAYROLL_BASIS_NOTE, UNASSIGNED_TEAM, type TeamPayrollSummary } from "@/lib/finance/teamPayroll";
 import type { ProjectSnapshot } from "@/lib/finance/projectSnapshot";
 import type { ItemHandlingEstimate } from "@/lib/finance/itemIntelligence";
 import type { InsightsResult, InsightFact } from "@/lib/finance/insights";
@@ -106,7 +107,10 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
   // Stage 6: the project's provisional item-level handling-time estimate (titles only, no money).
   const projectHandling = selectedProject ? projectHandlingEstimate(selectedProject) : null;
   // Stage 7c: deterministic insight facts (+ dormant-safe AI interpretation) for the Insights view.
-  const insights = !selectedProject && view === "insights" ? await financeInsights(period) : null;
+  // Whole team payroll vs revenue served (Payroll Review's estimate for the same range). Only on the views
+  // that show it; its Connecteam reads are the same cached ones financeForPeriod just made.
+  const team = !selectedProject && (isOverviewView(view) || view === "insights" || view === "labor") ? await teamPayrollForPeriod(period) : null;
+  const insights = !selectedProject && view === "insights" ? await financeInsights(period, undefined, team) : null;
   // $ redaction: the whole blade is owner/admin (proxy + nav gate on canSeeFinancials); this is the SAME
   // gate, re-checked here, that also governs who may add/edit/delete a manual cost. A non-financial role
   // never reaches this page, so every figure below is already behind the financial permission.
@@ -117,6 +121,7 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
 
   const figures: Figure[] = [
     { label: "Signed", value: s.revenue.signed == null ? "—" : money(s.revenue.signed) },
+    ...(team ? [{ label: "Team payroll", value: canSee ? money(team.payroll) : "Hidden" } satisfies Figure] : []),
     { label: "Labor (attrib.)", value: L.totalCost == null ? "—" : money(L.totalCost) },
     { label: "Temp %", value: tempHourShare == null ? "—" : pct(tempHourShare), sep: true },
     { label: "Premium", value: L.tempPremium == null ? "—" : money(L.tempPremium), tone: L.tempPremium && L.tempPremium > 0 ? "attention" : "default" },
@@ -196,15 +201,20 @@ export default async function FinancePage({ searchParams }: { searchParams: Prom
         <ProjectDetail snap={projectSnap} id={selectedProject} runs={projectRuns} handling={projectHandling} backHref={href({ view: "projects", project: undefined })} canEdit={canEditCost} />
       ) : (
         <>
-          {isOverviewView(view) && <Overview s={s} L={L} tempHourShare={tempHourShare} href={href} />}
+          {isOverviewView(view) && <Overview s={s} L={L} tempHourShare={tempHourShare} href={href} team={team} canSee={canSee} />}
           {view === "routes" && <Routes rows={getRouteLaborCosts(period.start, period.end)} href={href} />}
           {view === "projects" && <ProjectsTable events={s.events} href={href} />}
-          {view === "labor" && <LaborView L={L} s={s} tempHourShare={tempHourShare} />}
+          {view === "labor" && (
+            <>
+              {team && <TeamPayrollSection tp={team} canSee={canSee} />}
+              <LaborView L={L} s={s} tempHourShare={tempHourShare} />
+            </>
+          )}
           {view === "instawork" && <InstaworkView rows={getInstaworkLedger(period.start, period.end)} L={L} />}
           {view === "variance" && <VarianceView s={s} L={L} priorCost={priorLaborCost(period, cycle)} />}
           {view === "reconciliation" && <Reconciliation rows={getLaborReconciliation(period.start, period.end)} runs={getRecentReconciliationRuns(period.start, period.end)} href={href} />}
           {view === "visits" && <VisitReconciliationView rows={getVisitReconciliation(period.start, period.end)} />}
-          {view === "insights" && insights && <InsightsView insights={insights} href={href} />}
+          {view === "insights" && insights && <InsightsView insights={insights} href={href} canSee={canSee} />}
 
           {sp?.lineage && <Lineage eventId={sp.lineage} label={s.events.find((e) => e.eventId === sp.lineage)?.label ?? sp.lineage} />}
         </>
@@ -220,7 +230,7 @@ function priorLaborCost(period: Period, cycle: ReturnType<typeof opsCycleConfig>
 }
 
 // ── Overview ───────────────────────────────────────────────────────────────────────────────────────
-function Overview({ s, L, tempHourShare, href }: { s: Awaited<ReturnType<typeof financeForPeriod>>; L: Awaited<ReturnType<typeof financeForPeriod>>["laborLedger"]; tempHourShare: number | null; href: (p: Partial<{ view: string; lineage: string; project: string }>) => string }): React.JSX.Element {
+function Overview({ s, L, tempHourShare, href, team, canSee }: { s: Awaited<ReturnType<typeof financeForPeriod>>; L: Awaited<ReturnType<typeof financeForPeriod>>["laborLedger"]; tempHourShare: number | null; href: (p: Partial<{ view: string; lineage: string; project: string }>) => string; team: TeamPayrollSummary | null; canSee: boolean }): React.JSX.Element {
   const lh = laborHeadline(s.labor);
   const dateBasis = s.period.label;
   return (
@@ -269,6 +279,8 @@ function Overview({ s, L, tempHourShare, href }: { s: Awaited<ReturnType<typeof 
         </MetricCard>
       </section>
 
+      {team && <TeamPayrollSection tp={team} canSee={canSee} />}
+
       <AttributedLaborSection L={L} tempHourShare={tempHourShare} />
 
       <section className="mt-8">
@@ -281,6 +293,105 @@ function Overview({ s, L, tempHourShare, href }: { s: Awaited<ReturnType<typeof 
     </>
   );
 }
+
+// Whole team payroll = Payroll Review's per-worker estimate for this range (every Connecteam worker who
+// clocked hours: warehouse and prep, sales, drivers, back office), set against the revenue it served. This is
+// the period-level counterweight to the per-project margins, which only see driver and route labor.
+function TeamPayrollSection({ tp, canSee }: { tp: TeamPayrollSummary; canSee: boolean }): React.JSX.Element {
+  const m = (n: number | null): React.ReactNode => (canSee ? money(n) : <span className="text-meta">Hidden</span>);
+  const over = tp.payrollPctOfServed != null && tp.payrollPctOfServed > 1;
+  return (
+    <section className="mb-8">
+      <h2 className="mb-1 text-[13px] font-medium uppercase tracking-[0.1em] text-tertiary-text">Whole team payroll <span className="text-[11px] normal-case tracking-normal text-meta">every worker on Payroll Review, not just route labor</span></h2>
+      <p className="mb-2 text-[12px] text-meta">{PAYROLL_BASIS_NOTE} {REVENUE_SERVED_NOTE}</p>
+      {!tp.available ? (
+        <p className="text-[12.5px] text-meta">Payroll for this range is unavailable. Connecteam hours or pay rates could not be read. It is unknown, not zero.</p>
+      ) : (
+        <>
+          <section className="grid gap-px overflow-hidden border border-border bg-border md:grid-cols-3">
+            <Block title="Team payroll" tag={tp.partial ? "at least, some rates missing" : "payroll review estimate"} headline={m(tp.payroll)}>
+              <BRow label="Workers paid">{tp.workerCount}</BRow>
+              <BRow label="Hours">{hrs(tp.hours)}</BRow>
+              <BRow label="Instawork temps (attributed)">{m(tp.tempLabor)}</BRow>
+              {tp.partial && <BRow label="No rate"><span className="text-meta">{tp.missingEstimate.join(", ")}</span></BRow>}
+            </Block>
+            <Block title="Revenue served" tag="half delivery, half pickup" headline={m(tp.revenue.served)}>
+              <BRow label="Events dated in range">{m(tp.revenue.delivery)}</BRow>
+              <BRow label="Events dated a week earlier">{m(tp.revenue.pickup)}</BRow>
+            </Block>
+            <Block title="Payroll vs revenue" tag="whole team" headline={tp.payrollPctOfServed == null ? <Unavail /> : <span className={over ? "text-attention" : undefined}>{pct(tp.payrollPctOfServed)}</span>}>
+              <BRow label="Margin after payroll">{tp.marginAfterPayroll == null ? "—" : pct(tp.marginAfterPayroll)}</BRow>
+              <BRow label="Vs events dated in range only">{tp.payrollPctOfDelivery == null ? "—" : pct(tp.payrollPctOfDelivery)}</BRow>
+              <BRow label="Seen by project margins">{tp.attributedShareOfPayroll == null ? "—" : `${m(tp.attributedLabor)} · ${pct(tp.attributedShareOfPayroll)}`}</BRow>
+            </Block>
+          </section>
+          {over && <p className="mt-2 text-[12.5px] text-foreground">Payroll was more than the revenue served in this range.</p>}
+
+          <div className="mt-3 overflow-x-auto border border-border">
+            <table className={tableCls} style={{ minWidth: "520px" }}>
+              <thead className={theadCls}>
+                <tr>
+                  <th className={thCls}>Team</th>
+                  <th className={`${thCls} text-right`}>Workers</th>
+                  <th className={`${thCls} text-right`}>Hours</th>
+                  <th className={`${thCls} text-right`}>Payroll</th>
+                  <th className={`${thCls} text-right`}>Share</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tp.teams.map((t) => (
+                  <tr key={t.team} className="border-t border-[var(--row-rule)]">
+                    <td className="px-2.5 py-2">{t.team}</td>
+                    <td className="px-2.5 py-2 text-right tabular-nums text-tertiary-text">{t.workers}</td>
+                    <td className="px-2.5 py-2 text-right tabular-nums text-tertiary-text">{hrs(t.hours)}</td>
+                    <td className="px-2.5 py-2 text-right tabular-nums text-foreground">{m(t.cost)}</td>
+                    <td className="px-2.5 py-2 text-right tabular-nums text-tertiary-text">{pct(t.share)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <details className="mt-2 group text-[12px]" open={tp.unassignedCount > 0}>
+            <summary className="cursor-pointer list-none text-meta hover:text-foreground">
+              Per worker{tp.unassignedCount > 0 ? ` (${tp.unassignedCount} with no team on file)` : ""}
+            </summary>
+            <div className="mt-2 overflow-x-auto border border-border">
+              <table className={tableCls} style={{ minWidth: "520px" }}>
+                <thead className={theadCls}>
+                  <tr>
+                    <th className={thCls}>Worker</th>
+                    <th className={thCls}>Team</th>
+                    <th className={`${thCls} text-right`}>Hours</th>
+                    <th className={`${thCls} text-right`}>Payroll</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tp.workers.map((w) => (
+                    <tr key={w.key} className="border-t border-[var(--row-rule)]">
+                      <td className="px-2.5 py-2">{w.name}</td>
+                      <td className="px-2.5 py-2 text-tertiary-text">{w.team}{w.team !== UNASSIGNED_TEAM ? <span className="ml-1 text-[10px] uppercase tracking-[0.06em] text-meta">{TEAM_SOURCE_LABEL[w.teamSource]}</span> : null}</td>
+                      <td className="px-2.5 py-2 text-right tabular-nums text-tertiary-text">{hrs(w.hours)}</td>
+                      <td className="px-2.5 py-2 text-right tabular-nums text-foreground">{w.cost == null ? <span className="text-meta">no rate</span> : m(w.cost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-1.5 text-meta">Team comes from the People record first, then the shift role scheduled in this range. Set a department in People to place someone with no team.</p>
+          </details>
+        </>
+      )}
+    </section>
+  );
+}
+
+const TEAM_SOURCE_LABEL: Record<TeamPayrollSummary["workers"][number]["teamSource"], string> = {
+  people: "people",
+  schedule: "schedule",
+  worker_type: "worker type",
+  none: "",
+};
 
 // Attributed labor = what the deterministic worker→route→stop→project cascade REALIZED from the ledger.
 // Distinct from the Connecteam planned/actual scorecard above (that is the whole-period plan vs clock;
@@ -336,7 +447,7 @@ function ProjectsTable({ events, href }: { events: Awaited<ReturnType<typeof fin
               <th className={`${thCls} text-right`}>Labor</th>
               <th className={`${thCls} text-right`}>Int / Temp</th>
               <th className={thCls}>Method</th>
-              <th className={`${thCls} text-right`}>Contribution</th>
+              <th className={`${thCls} text-right`}>Contribution (route labor)</th>
             </tr>
           </thead>
           <tbody>
@@ -932,23 +1043,30 @@ function HandlingEstimatePanel({ h }: { h: ItemHandlingEstimate | null }): React
 
 // ── Insights (FI Stage 7c) — deterministic facts first, AI interpretation clearly secondary + labeled ──
 const INSIGHT_CATEGORY_LABEL: Record<InsightFact["category"], string> = {
-  margin: "Margin",
+  margin: "Route margin",
+  payroll: "Payroll",
   labor_grain: "Labor grain",
   category_margin: "Category",
   reconciliation_trend: "Reconciliation",
 };
 
-function InsightsView({ insights, href }: { insights: InsightsResult; href: (p: Partial<{ view: string; project: string }>) => string }): React.JSX.Element {
+function InsightsView({ insights, href, canSee }: { insights: InsightsResult; href: (p: Partial<{ view: string; project: string }>) => string; canSee: boolean }): React.JSX.Element {
   const o = insights.overview;
   return (
     <section className="space-y-6">
       <div className="rounded border border-border bg-panel px-4 py-3 text-[12.5px] text-meta">
         Historical learning for <span className="text-foreground">{insights.periodLabel}</span>. The facts below are computed deterministically from this period&apos;s project snapshots and reconciliation history. The AI interpretation, when present, only reads those facts, it never adds a number.
+        <span className="mt-1 block">Project margins subtract driver and route labor only. Whole team payroll is compared to revenue served instead. {REVENUE_SERVED_NOTE}</span>
       </div>
 
       {/* Deterministic overview tiles */}
-      <section className="grid gap-px overflow-hidden border border-border bg-border md:grid-cols-3">
-        <Block title="Margin" tag="computed" headline={o.avgMarginPct == null ? <Unavail /> : pct(o.avgMarginPct)}>
+      <section className="grid gap-px overflow-hidden border border-border bg-border md:grid-cols-2 lg:grid-cols-4">
+        <Block title="Payroll vs revenue" tag="whole team" headline={o.payrollPctOfServed == null ? <Unavail /> : <span className={o.payrollPctOfServed > 1 ? "text-attention" : undefined}>{pct(o.payrollPctOfServed)}</span>}>
+          <BRow label={o.payrollPartial ? "Team payroll (at least)" : "Team payroll"}>{canSee ? money(o.payroll) : <span className="text-meta">Hidden</span>}</BRow>
+          <BRow label="Revenue served">{canSee ? money(o.revenueServed) : <span className="text-meta">Hidden</span>}</BRow>
+          <BRow label="Margin after payroll">{pct(o.marginAfterPayroll)}</BRow>
+        </Block>
+        <Block title="Route labor margin" tag="driver and route labor only" headline={o.avgMarginPct == null ? <Unavail /> : pct(o.avgMarginPct)}>
           <BRow label="Projects with margin">{o.marginProjectCount || "—"}</BRow>
           <BRow label={`Low margin (≤ ${pct(o.lowMarginPct)})`}>{o.marginProjectCount ? <span className={o.lowMarginCount ? "text-foreground" : undefined}>{o.lowMarginCount}</span> : "—"}</BRow>
         </Block>
