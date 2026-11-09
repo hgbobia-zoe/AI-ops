@@ -8,6 +8,7 @@
 import { NextResponse } from "next/server";
 import { saveLeadNotes, type LeadNotesRecord } from "@/lib/db/repo";
 import { runQuoteOpenAlerts } from "@/lib/salesos/quoteOpenAlert";
+import { detectLossReasonNotes, lossReasonFlagsEnabled } from "@/lib/salesos/lossReasonFlag";
 import { logImport } from "@/lib/pull/state";
 
 export const dynamic = "force-dynamic";
@@ -78,6 +79,14 @@ export async function POST(req: Request): Promise<NextResponse> {
     });
   }
   const updated = records.length > 0 ? saveLeadNotes(records) : 0;
+  // A reason written in the GS notes of a recently lost quote clears its lost-reason flag. Best effort.
+  if (updated > 0 && lossReasonFlagsEnabled()) {
+    try {
+      detectLossReasonNotes();
+    } catch (e) {
+      console.error("[gs/notes] detectLossReasonNotes failed (ignored)", e);
+    }
+  }
   // Fire quote-opened Slack alerts for any newly-opened quotes (>1h after send), deduped. Best-effort.
   void runQuoteOpenAlerts().catch(() => {});
   logImport("lead_notes", true, { rowsIn: notes.length, rowsWritten: updated });

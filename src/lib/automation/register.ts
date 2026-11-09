@@ -27,6 +27,7 @@ const JOB_AREA: Record<string, JobArea> = {
   "openphone-message-sync": "Sales",
   "sales-action-items": "Sales",
   "morning-outreach": "Sales",
+  "loss-reason-flags": "Sales",
   "postevent-digest": "Sales", // Post-Event sits under Sales in the nav
   "opportunity-radar": "Sales", // business development discovery
   instawork: "Crew & scheduling",

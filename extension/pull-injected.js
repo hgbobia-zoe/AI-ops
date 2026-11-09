@@ -172,7 +172,9 @@ function zoePull(apiBase, tier) {
       if (FULL) {
         return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, partial: pErr, scope: "full" }) }).then((r) => r.json()).then((j) => pullWindows(windowIds(true)).catch(() => ({ windows: 0 })).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: pErr || !!(j && j.partial), notes: 0, windows: (wj && wj.windows) || 0 }))).catch(() => ({ saved: 0, partial: true }));
       }
-      return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, scope: "active" }) }).then((r) => r.json()).then((j) => pullNotes().then((nj) => activeWindows().catch(() => ({ windows: 0 })).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: false, notes: (nj && nj.updated) || 0, windows: (wj && wj.windows) || 0 })))).catch(() => ({ saved: 0, partial: false }));
+      // Lost-reason tracker: the server names recently lost quotes still missing a reason; re-read their
+      // notes too (they are off the open-lead set) so a reason written in Goodshuffle is seen.
+      return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, scope: "active" }) }).then((r) => r.json()).then((j) => { ((j && j.lossNoteIds) || []).forEach((id) => { id = String(id); if (!seenCap[id]) { seenCap[id] = 1; capIds.push(id); } }); return j; }).then((j) => pullNotes().then((nj) => activeWindows().catch(() => ({ windows: 0 })).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: false, notes: (nj && nj.updated) || 0, windows: (wj && wj.windows) || 0 })))).catch(() => ({ saved: 0, partial: false }));
     });
   }
 
@@ -476,9 +478,17 @@ function gsTemplateText(html) {
       // so it retries next cycle, mirroring the bookmarklet.
       const GS_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
       const gsDueStr = () => { const d = new Date(); return GS_MON[d.getMonth()] + " " + d.getDate() + " " + d.getFullYear(); };
-      taskOps.forEach((o) => { chain = chain.then(() => {
+      // Optional payload.dueDate (YYYY-MM-DD) and assignee, mirroring the bookmarklet: assigneeUserID wins;
+      // else assigneeName (the sales lead) matched to an ACTIVE initProjectSearch.salesEnabledUsers entry;
+      // no match → fallbackUserID; none → unassigned.
+      const gsDueFrom = (ymd) => { const y = String(ymd || ""); if (y.length === 10 && y.charAt(4) === "-" && y.charAt(7) === "-") { const mi = Number(y.slice(5, 7)) - 1, dd = Number(y.slice(8, 10)); if (mi >= 0 && mi < 12 && dd > 0) return GS_MON[mi] + " " + dd + " " + y.slice(0, 4); } return gsDueStr(); };
+      let gsSalesUsersP = null;
+      const gsSalesUsers = () => { if (!gsSalesUsersP) gsSalesUsersP = fetch("/app/project/initProjectSearch", { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" }).then((r) => (r.ok ? r.json() : null)).then((j) => (j && j.salesEnabledUsers) || []).catch(() => []); return gsSalesUsersP; };
+      const gsTaskAssignee = (p) => { if (p.assigneeUserID) return Promise.resolve(String(p.assigneeUserID)); if (!p.assigneeName && !p.fallbackUserID) return Promise.resolve("");
+        return gsSalesUsers().then((us) => { const want = gsNorm(p.assigneeName); const u = want ? us.find((x) => x && x.active && gsNorm(x.fullName) === want) : null; return u ? String(u.id) : (p.fallbackUserID ? String(p.fallbackUserID) : ""); }); };
+      taskOps.forEach((o) => { chain = chain.then(() => gsTaskAssignee(o.payload)).then((uid) => {
         let text = String(o.payload.title || ""); if (o.payload.note) text += " — " + String(o.payload.note);
-        const body = new URLSearchParams({ taskID: "", taskText: text, taskAssignedTransactionID: String(o.transactionId), taskAssignedUserID: "", taskDueDateStr: gsDueStr(), fromProjectView: "true" });
+        const body = new URLSearchParams({ taskID: "", taskText: text, taskAssignedTransactionID: String(o.transactionId), taskAssignedUserID: uid || "", taskDueDateStr: gsDueFrom(o.payload.dueDate), fromProjectView: "true" });
         return fetch("/app/task/createTask", { method: "POST", headers: { "x-requested-with": "XMLHttpRequest", "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, credentials: "include", body }).then((r) => r.ok).then((ok) => { if (ok) { tasks++; return ackOp(o.id, true); } /* leave PENDING on failure so it retries */ }).catch(() => { /* leave PENDING; never disrupt the rest of the drain */ });
       }); });
       // disable_esignature: turn OFF online signing on the project N business days before the event, so the

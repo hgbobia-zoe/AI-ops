@@ -258,7 +258,9 @@ ${GS_TEMPLATE_JS}
         if(FULL){
           return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr,scope:"full"})}).then(function(r){return r.json();}).then(function(j){ return pullWindows(windowIds(true)).catch(function(){ return {windows:0}; }).then(function(wj){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:0, windows:(wj&&wj.windows)||0 }; }); }).catch(function(){ return { saved:0, partial:true }; });
         }
-        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,scope:"active"})}).then(function(r){return r.json();}).then(function(j){ return pullNotes().then(function(nj){ return activeWindows().catch(function(){ return {windows:0}; }).then(function(wj){ return { saved:(j&&j.saved)||recs.length, partial:false, notes:(nj&&nj.updated)||0, windows:(wj&&wj.windows)||0 }; }); }); }).catch(function(){ return { saved:0, partial:false }; });
+        // Lost-reason tracker: the server names recently lost quotes still missing a reason; re-read their
+        // notes too (they are off the open-lead set) so a reason written in Goodshuffle is seen.
+        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,scope:"active"})}).then(function(r){return r.json();}).then(function(j){ ((j&&j.lossNoteIds)||[]).forEach(function(id){ id=String(id); if(!seenCap[id]){ seenCap[id]=1; captureIds.push(id); } }); return j; }).then(function(j){ return pullNotes().then(function(nj){ return activeWindows().catch(function(){ return {windows:0}; }).then(function(wj){ return { saved:(j&&j.saved)||recs.length, partial:false, notes:(nj&&nj.updated)||0, windows:(wj&&wj.windows)||0 }; }); }); }).catch(function(){ return { saved:0, partial:false }; });
       });
     }
 
@@ -560,9 +562,18 @@ ${GS_TEMPLATE_JS}
         // chain going and the Slack ask already went out independently.
         var GS_MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
         function gsDueStr(){ var d=new Date(); return GS_MON[d.getMonth()]+" "+d.getDate()+" "+d.getFullYear(); }
-        taskOps.forEach(function(o){ chain=chain.then(function(){
+        // Optional payload.dueDate (YYYY-MM-DD) → "MMM D YYYY"; absent → today (the linen safeguard's default).
+        function gsDueFrom(ymd){ var y=String(ymd||""); if(y.length===10&&y.charAt(4)==="-"&&y.charAt(7)==="-"){ var mi=Number(y.slice(5,7))-1, dd=Number(y.slice(8,10)); if(mi>=0&&mi<12&&dd>0) return GS_MON[mi]+" "+dd+" "+y.slice(0,4); } return gsDueStr(); }
+        // Optional assignee. payload.assigneeUserID wins; else payload.assigneeName (the sales lead) is matched
+        // to an ACTIVE sales user from initProjectSearch.salesEnabledUsers {id, fullName, active} (verified
+        // live 2026-11-09); no match (left the company, blank) → payload.fallbackUserID; none → unassigned.
+        var gsSalesUsersP=null;
+        function gsSalesUsers(){ if(!gsSalesUsersP) gsSalesUsersP=fetch("/app/project/initProjectSearch",{headers:{"x-requested-with":"XMLHttpRequest",accept:"application/json"},credentials:"include"}).then(function(r){ return r.ok?r.json():null; }).then(function(j){ return (j&&j.salesEnabledUsers)||[]; }).catch(function(){ return []; }); return gsSalesUsersP; }
+        function gsTaskAssignee(p){ if(p.assigneeUserID) return Promise.resolve(String(p.assigneeUserID)); if(!p.assigneeName&&!p.fallbackUserID) return Promise.resolve("");
+          return gsSalesUsers().then(function(us){ var want=gsNorm(p.assigneeName); var u=want?us.filter(function(x){ return x&&x.active&&gsNorm(x.fullName)===want; })[0]:null; return u?String(u.id):(p.fallbackUserID?String(p.fallbackUserID):""); }); }
+        taskOps.forEach(function(o){ chain=chain.then(function(){ return gsTaskAssignee(o.payload); }).then(function(uid){
           var text=String(o.payload.title||""); if(o.payload.note) text+=" — "+String(o.payload.note);
-          var body=new URLSearchParams({ taskID:"", taskText:text, taskAssignedTransactionID:String(o.transactionId), taskAssignedUserID:"", taskDueDateStr:gsDueStr(), fromProjectView:"true" });
+          var body=new URLSearchParams({ taskID:"", taskText:text, taskAssignedTransactionID:String(o.transactionId), taskAssignedUserID:uid||"", taskDueDateStr:gsDueFrom(o.payload.dueDate), fromProjectView:"true" });
           return fetch("/app/task/createTask",{method:"POST",headers:{"x-requested-with":"XMLHttpRequest","content-type":"application/x-www-form-urlencoded",accept:"application/json"},credentials:"include",body:body}).then(function(r){ return r.ok; }).then(function(ok){ if(ok){ tasks++; return ackOp(o.id,true); } /* leave PENDING on failure so it retries */ }).catch(function(){ /* leave PENDING; never disrupt the rest of the drain */ });
         }); });
         // set_delivery_fee: set the project's base delivery line(s) (both legs) to our computed per-leg fee.

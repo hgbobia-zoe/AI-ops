@@ -31,9 +31,11 @@ import {
   saveBookingRevenueComponents,
   saveBookingTimelineWindows,
   syncStopWindowsFromBookings,
+  lossNoteWatchIds,
   type BookingRecord,
   type BookingTimelineInput,
 } from "@/lib/db/repo";
+import { lossReasonFlagsEnabled } from "@/lib/salesos/lossReasonFlag";
 import type { RawTimelineEvent } from "@/lib/dispatch/onTime";
 import { recordPull, logImport, recordBookingsImportFailure, claimBlankDraftBurstAlert } from "@/lib/pull/state";
 import { findBlankDraftBursts, blankDraftBurstAlert, BLANK_DRAFT_BURST_THRESHOLD } from "@/lib/ingest/blankDraft";
@@ -44,6 +46,9 @@ import { centsToDollars, type RevenueComponentsCents } from "@/lib/finance/reven
 
 /** How far back a bookings pull refreshes stop windows (covers the recent on-time review period). */
 const WINDOW_BACKFILL_DAYS = 60;
+/** Re-read GS notes on a lost quote for this long after tracking began, at most this many per pull. */
+const LOSS_NOTE_WATCH_DAYS = 14;
+const LOSS_NOTE_WATCH_CAP = 25;
 
 export const dynamic = "force-dynamic";
 
@@ -269,7 +274,10 @@ export async function POST(req: Request): Promise<NextResponse> {
     // Warehouse-team adds are idempotent (add-once) and signed active projects appear in this set, so it
     // is safe + useful on the fast lane; it never prunes or deletes.
     const wdQueued = records.length > 0 ? enqueueWarehouseTeamAdds() : 0;
-    return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial: false, wdQueued, pruned: 0, blankDraftAlerts }, { headers: CORS });
+    // Lost-reason tracker: recently lost quotes still missing a reason. They are off the open-lead notes
+    // capture, so the pull re-reads their GS notes (a reason written there clears the flag).
+    const lossNoteIds = lossReasonFlagsEnabled() ? lossNoteWatchIds(new Date(Date.now() - LOSS_NOTE_WATCH_DAYS * 86_400_000).toISOString(), LOSS_NOTE_WATCH_CAP) : [];
+    return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial: false, wdQueued, pruned: 0, blankDraftAlerts, lossNoteIds }, { headers: CORS });
   }
 
   // ── SLOW LANE (scope:"full", or absent) ─────────────────────────────────────────────────────────

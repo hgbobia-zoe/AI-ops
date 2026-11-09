@@ -4,8 +4,9 @@
 // what the team records here.
 
 import Link from "next/link";
-import { ArrowLeft, TrendingDown, Percent, DollarSign, Trophy, Lightbulb, AlertTriangle, Info } from "lucide-react";
+import { ArrowLeft, TrendingDown, Percent, DollarSign, Trophy, Lightbulb, AlertTriangle, Info, Flag } from "lucide-react";
 import { lostQuotesOverview, LOSS_REASONS } from "@/lib/salesos/lostService";
+import type { LossFlagState } from "@/lib/salesos/lossReasonFlag";
 import { LossReasonSelect } from "@/components/LossReasonSelect";
 import { formatYmdLong } from "@/lib/dates";
 import { viewerRole } from "@/lib/auth/getSession";
@@ -146,6 +147,28 @@ export default async function LostQuotesPage(): Promise<React.JSX.Element> {
         )}
       </section>
 
+      {/* Lost-reason tracker: newly lost quotes we are asking about */}
+      <section className="mb-6">
+        <h2 className="mb-2 flex items-center gap-2 text-lg font-semibold"><Flag className="size-4" /> Reason tracking</h2>
+        <div className="border border-white/10 bg-white/[0.03] p-3 text-sm text-muted-foreground">
+          {o.tracking.enabled ? (
+            <>
+              When a quote is marked lost and no reason is recorded within 24 hours, Sales gets a Slack post and the sales lead gets a task in
+              Goodshuffle. A tag here or a Goodshuffle internal note written after the loss counts as the reason. Quotes lost before this
+              started are not flagged.
+            </>
+          ) : (
+            <>Reason flags are off (LOSS_REASON_FLAGS=false). Lost quotes are still tracked here.</>
+          )}
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+            <span><span className="font-semibold text-amber-200 tabular-nums">{o.tracking.flagged}</span> flagged, no reason yet</span>
+            <span><span className="font-semibold text-foreground tabular-nums">{o.tracking.waiting}</span> waiting (under 24h)</span>
+            <span><span className="font-semibold text-sky-200 tabular-nums">{o.tracking.noted}</span> reason in a GS note, needs a tag</span>
+            <span><span className="font-semibold text-emerald-200 tabular-nums">{o.tracking.tagged}</span> tagged</span>
+          </div>
+        </div>
+      </section>
+
       {/* The lost list — review & tag */}
       <section>
         <div className="mb-2 flex items-baseline justify-between">
@@ -165,7 +188,11 @@ export default async function LostQuotesPage(): Promise<React.JSX.Element> {
                   {l.statusLabel ? ` · ${l.statusLabel}` : ""}
                   {" · "}
                   <Link href={`/salesos/lost/${l.id}`} className="text-sky-300/80 hover:text-sky-200">autopsy →</Link>
+                  <FlagBadge flag={l.flag} />
                 </div>
+                {l.flag === "noted" && l.lossNoteText && (
+                  <div className="mt-0.5 line-clamp-2 text-[11px] text-sky-200/80" title={l.lossNoteText}>GS note: {l.lossNoteText}</div>
+                )}
               </div>
               {showMoney && <div className="w-20 shrink-0 text-right text-sm tabular-nums text-amber-200">{money(l.value)}</div>}
               <div className="shrink-0">
@@ -182,6 +209,19 @@ export default async function LostQuotesPage(): Promise<React.JSX.Element> {
       </p>
     </main>
   );
+}
+
+const FLAG_BADGE: Partial<Record<LossFlagState, { text: string; cls: string }>> = {
+  flagged: { text: "flagged, no reason", cls: "border-amber-500/40 text-amber-200" },
+  waiting: { text: "waiting for reason", cls: "border-white/15 text-muted-foreground" },
+  due: { text: "waiting for reason", cls: "border-white/15 text-muted-foreground" },
+  noted: { text: "reason in GS note", cls: "border-sky-500/40 text-sky-200" },
+};
+
+function FlagBadge({ flag }: { flag: LossFlagState }): React.JSX.Element | null {
+  const b = FLAG_BADGE[flag];
+  if (!b) return null;
+  return <span className={`ml-2 inline-block border px-1 py-px text-[10px] ${b.cls}`}>{b.text}</span>;
 }
 
 function Tile({
