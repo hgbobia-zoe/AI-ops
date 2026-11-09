@@ -5,6 +5,7 @@
 
 import { NextResponse } from "next/server";
 import { getStop, updateStopState } from "@/lib/db/repo";
+import { syncGsStopStatus } from "@/lib/dispatch/gsStatusSync";
 
 export const dynamic = "force-dynamic";
 
@@ -23,5 +24,6 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (stop.state === "Completed" || stop.state === "Returned") return NextResponse.json({ ok: true, already: true });
 
   updateStopState(stopId, "Completed", { completedAt: new Date().toISOString() });
+  syncGsStopStatus(stopId); // mirror onto the Goodshuffle route (queued, never throws)
   return NextResponse.json({ ok: true });
 }

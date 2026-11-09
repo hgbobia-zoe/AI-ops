@@ -150,6 +150,7 @@ const OP_LABEL: Record<string, string> = {
   revoke_user: "Goodshuffle user removed",
   create_project: "Project created from a lead",
   remove_waypoint: "Stop removed from a route",
+  gs_status: "Route progress synced to Goodshuffle",
   disable_esignature: "Online signing turned off",
   mark_lost: "Project marked lost and archived",
 };

@@ -273,15 +273,16 @@ function gsTemplateText(html) {
       const provOps = all.filter((o) => (o.op === "provision_user" || o.op === "revoke_user") && o.payload && o.payload.system);
       const esignOps = all.filter((o) => o.op === "disable_esignature" && o.transactionId);
       const lostOps = all.filter((o) => o.op === "mark_lost" && o.transactionId);
+      const routeOps = all.filter((o) => (o.op === "gs_status" || o.op === "remove_waypoint") && o.gsRouteId && (o.op === "remove_waypoint" || (o.payload && o.payload.status)));
       // Ops this content-script drainer can't action (e.g. create_project, which needs a popup created
       // from a real user gesture — a timer-driven content script has none, so the office bookmarklet or a
       // Playwright runner drains those). Surfaced in the result so they're VISIBLE, never silently
       // ignored forever. Keep this set in sync with the handlers below + gsPull.ts.
-      const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, email_template: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1, disable_esignature: 1, mark_lost: 1 };
+      const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, email_template: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1, disable_esignature: 1, mark_lost: 1, gs_status: 1, remove_waypoint: 1 };
       const unhandledOps = all.filter((o) => !HANDLED[o.op]);
       const emailSender = (j && j.emailSender) || null;
       let senderOk = !emailSender, emailsHeld = 0;
-      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, emails = 0, tasks = 0, provisioned = 0, esigns = 0, losts = 0;
+      let pushed = 0, failed = 0, notes = 0, team = 0, fees = 0, emails = 0, tasks = 0, provisioned = 0, esigns = 0, losts = 0, statuses = 0;
       let chain = (emailSender && (emailOps.length || tplOps.length)) ? gsSignedInAs(emailSender).then((ok) => { senderOk = ok; }) : Promise.resolve();
       // provision_user / revoke_user: People Lifecycle access provisioning via REPLAY. Mirrors
       // src/lib/gsPull.ts — gated on the captured endpoint (src/lib/people/provisioningEndpoints.ts). This
@@ -419,7 +420,34 @@ function gsTemplateText(html) {
           return post("/app/vendorTransaction/archiveProject").then((archOk) => (lostOk && archOk ? "" : !lostOk ? "lost_failed" : "archive_failed"));
         }).then((err) => { if (!err) losts++; else failed++; return ackOp(o.id, !err, "mark_lost_" + err); }).catch(() => { failed++; return ackOp(o.id, false, "mark_lost_error"); });
       }); });
-      return chain.then(() => ({ pushed, failed, notes, team, fees, emails, emailsHeld, emailSender, tasks, provisioned, esigns, losts, unhandled: unhandledOps.length }));
+      // gs_status + remove_waypoint: Dispatch progress and stop removals mirrored onto the Goodshuffle ROUTE
+      // (queued by src/lib/dispatch/gsStatusSync.ts and /api/route/stop/remove). Endpoints come from
+      // Goodshuffle's own routing app (2026-11-09): updateWaypointStatus {waypointID,status} (SCHEDULED |
+      // ARRIVED | COMPLETED), updateRoute {routeID,routeName,color,notes,status} (SCHEDULED | IN_PROGRESS |
+      // COMPLETE; name/color/notes echoed so nothing else changes), unscheduleWaypoint {waypointID}. Each route
+      // is read once per drain; the stop is matched by transactionID (+ DROP_OFF/PICK_UP when known). A write
+      // Goodshuffle already matches is acked without a call. A stop no longer on that route (the office moved
+      // it) is acked as done with nothing to write.
+      const GJ = { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json, text/plain, */*" }, credentials: "include" };
+      const postJson = (path, body) => fetch(path, { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "XMLHttpRequest", accept: "application/json, text/plain, */*" }, credentials: "include", body: JSON.stringify(body) }).then((r) => r.ok);
+      const routeCache = {};
+      const loadRoute = (id) => (routeCache[id] = routeCache[id] || fetch("/app/routing/getRoute?routeID=" + encodeURIComponent(id) + "&includeAttributes=true", GJ).then((r) => { if (!r.ok) throw "route_" + r.status; return r.json(); }));
+      const pickWp = (route, o) => { const want = o.payload && o.payload.waypointType; const c = ((route && route.waypoints) || []).filter((w) => !w.isOriginWarehouse && !w.isDestinationWarehouse && String(w.transactionID) === String(o.transactionId)); return (want && c.filter((w) => w.waypointType === want)[0]) || c[0] || null; };
+      routeOps.forEach((o) => { chain = chain.then(() => loadRoute(o.gsRouteId).then((route) => {
+        const p = o.payload || {};
+        if (o.op === "remove_waypoint") {
+          const w = pickWp(route, o); if (!w) return ""; // already off the route
+          return postJson("/app/routing/unscheduleWaypoint", { waypointID: w.id }).then((ok) => { if (ok) delete routeCache[o.gsRouteId]; return ok ? "" : "unschedule_failed"; });
+        }
+        if (p.target === "route") {
+          if (route.status === p.status) return "";
+          return postJson("/app/routing/updateRoute", { routeID: route.id, routeName: route.name, color: route.color, notes: route.notes, status: p.status }).then((ok) => { if (ok) route.status = p.status; return ok ? "" : "route_status_failed"; });
+        }
+        const w = pickWp(route, o); if (!w) return ""; // moved off this route in Goodshuffle: nothing to write
+        if (w.status === p.status) return "";
+        return postJson("/app/routing/updateWaypointStatus", { waypointID: w.id, status: p.status }).then((ok) => { if (ok) w.status = p.status; return ok ? "" : "waypoint_status_failed"; });
+      }).then((err) => { if (!err) statuses++; else failed++; return ackOp(o.id, !err, o.op + "_" + err); }).catch((e) => { failed++; return ackOp(o.id, false, o.op + "_" + (typeof e === "string" ? e : "error")); })); });
+      return chain.then(() => ({ pushed, failed, notes, team, fees, emails, emailsHeld, emailSender, tasks, provisioned, esigns, losts, statuses, unhandled: unhandledOps.length }));
     }).catch(() => ({ pushed: 0, failed: 0, notes: 0, team: 0, fees: 0, emails: 0, tasks: 0, provisioned: 0, esigns: 0, unhandled: 0 }));
   }
 
