@@ -432,7 +432,7 @@ export function DeliveryCalculator(): React.JSX.Element {
   const grandTotal = Math.round((q.total + (readiness ? rTier.fee : 0)) * 100) / 100;
   const ready = (rq?.resolved && !!rq.quote) || miles !== "" || subtotal !== "";
 
-  const f = rq?.formula;
+  const f = rq?.formula ?? liveFormula;
   const headerText = f
     ? `${money(f.baseFee)} base + tiered mileage (${f.mileageTiers.map((t) => `${money(t.ratePerMile)}/mi${t.uptoMile != null ? ` to ${t.uptoMile}` : "+"}`).join(", ")}) + ${Math.round(f.pct * 100)}% of the pre-discount subtotal (max ${money(f.pctCap)}), per leg.`
     : "Base + tiered mileage + a capped % of the pre-discount subtotal, per leg.";

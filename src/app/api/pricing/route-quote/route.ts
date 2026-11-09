@@ -149,9 +149,10 @@ export async function POST(req: Request): Promise<NextResponse> {
   const byDate = new Map<string, { optimize: RouteOptimizeResult; anchorNote: string | null }>();
   async function optimizeForDate(date: string): Promise<{ optimize: RouteOptimizeResult; anchorNote: string | null }> {
     if (!venue) {
-      const why = milesOverride
-        ? `Priced on the ${whMiles} mi you typed, as a standalone trip. Clear the miles to price from the address and check for a shared route.`
-        : "No venue location, so shared routes can't be checked. Priced as a standalone trip.";
+      const why =
+        milesOverride && address
+          ? `Priced on the ${whMiles} mi you typed, as a standalone trip. Clear the miles to price from the address and check for a shared route.`
+          : "No venue location, so shared routes can't be checked. Priced as a standalone trip.";
       return { optimize: standard([why]), anchorNote: null };
     }
     if (!date) {
