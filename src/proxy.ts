@@ -58,6 +58,7 @@ const PUBLIC: string[] = [
   "/api/gs/emails", // Auto-Pull captures the client email thread; own token (fail-open), CORS-locked — must not bounce to auth
   "/api/gs/outbox",
   "/api/gs/intake-result", // Auto-Pull reports the created project id back here; own token (fail-open), CORS-locked — must not bounce to auth
+  "/api/intake/email", // Email to hello@ → lead: a Gmail Zap POSTs each new email with no session; INTAKE_TOKEN is the gate (GET is fail-closed). EXACT path only.
   "/api/intake/lead", // Structured lead receiver — every source Zap POSTs here with no session; INTAKE_TOKEN (fail-open-until-set) is the gate. EXACT path only: the /api/intake wizard + /api/intake/[id]/create stay session-gated.
   "/api/payroll/wire-detected", // Mercury "wire out to Gusto" webhook — a Zapier workflow POSTs the matching transaction with no session; WIRE_WEBHOOK_TOKEN (fail-open-until-set) is the gate. EXACT path only, so it is NOT caught by the owner/admin /api/payroll gate; the rest of /api/payroll stays session + owner/admin gated.
   "/api/payroll/gusto-wire-received", // Gusto "we received your wire" email → payroll channel (the receive-side bookend to wire-detected). A Gmail→Zapier zap POSTs with no session; reuses WIRE_WEBHOOK_TOKEN (fail-open-until-set). EXACT path only — the rest of /api/payroll stays session + owner/admin gated.

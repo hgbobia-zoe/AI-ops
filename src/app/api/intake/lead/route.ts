@@ -12,27 +12,11 @@
 // no fixed origin); it is not a security control.
 
 import { NextResponse } from "next/server";
-import { createIntake, updateIntake } from "@/lib/intake/store";
-import { formatIntakeNotes, gsEventDetails, gsClientContact } from "@/lib/intake/format";
-import { mdyFromYmd } from "@/lib/intake/gsItems";
-import {
-  normalizeLead,
-  leadValidationError,
-  toIntakePatch,
-  webLeadEventName,
-  webIntakeEnabled,
-  webIntakeSalesPingEnabled,
-  type WebLeadInput,
-} from "@/lib/intake/webLead";
-import { enqueueGsOp, recentLeadCreateOpExists } from "@/lib/db/repo";
+import { normalizeLead, leadValidationError, webLeadEventName, type WebLeadInput } from "@/lib/intake/webLead";
 import { logImport } from "@/lib/pull/state";
-import { logIntakeEvent } from "@/lib/intake/audit";
-import { notify } from "@/lib/notify/channels";
 import { adaptLeadBody, newLeadSlackText } from "@/lib/intake/sourceAdapters";
 import { parseLeadBodyText } from "@/lib/intake/lenientBody";
-import { postNewLeadToSlack } from "@/lib/intake/leadSlackReply";
-import { sendSms } from "@/lib/notify/sms";
-import { webLeadSmsApplies, webLeadSmsEnabled, webLeadSmsText } from "@/lib/intake/webLead";
+import { queueLeadProject } from "@/lib/intake/queueLead";
 
 export const dynamic = "force-dynamic";
 
@@ -93,75 +77,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
   if (invalid) return fail(invalid, 400);
 
-  // ALWAYS record the lead first (so nothing is lost, even while disabled or on a duplicate). The raw
-  // source is stored on the row + echoed into the import ledger so the office can see volume per source.
-  const intake = createIntake({ source: lead.source, ...toIntakePatch(lead) });
-
-  // Post the lead to #new-leads first (before the project exists), so Viktor can reply under it with the
-  // project link once Goodshuffle confirms. Never blocks the lead on a Slack failure.
-  if (postToSlack) {
-    await postNewLeadToSlack(lead.source, newLeadSlackText(lead, yelp)).catch(() => {});
-  }
-
-  // Gated OFF by default: accept + record, but do not create a project or send anything.
-  if (!webIntakeEnabled()) {
-    logImport(`intake:${lead.source}`, true, { rowsIn: 1, rowsWritten: 0, detail: "accepted (intake disabled)" });
-    await logIntakeEvent("WEB_LEAD_DISABLED", intake.id, { source: lead.source });
-    return NextResponse.json({ ok: true, created: false, reason: "intake disabled", intakeId: intake.id }, { headers: CORS });
-  }
-
-  // Dedupe: a create for the same contact within the window (default 10 minutes) → do not make a second project.
-  if (recentLeadCreateOpExists(lead.emailKey, lead.phoneKey)) {
-    logImport(`intake:${lead.source}`, true, { rowsIn: 1, rowsWritten: 0, rowsSkipped: 1, detail: "duplicate (within 10 minutes)" });
-    await logIntakeEvent("WEB_LEAD_DUPLICATE", intake.id, { source: lead.source });
-    return NextResponse.json({ ok: true, created: false, reason: "duplicate", intakeId: intake.id }, { headers: CORS });
-  }
-
-  // Build the create_project op by REUSING the guided-intake pipeline. Web leads carry no address, so no
-  // location / logistics legs / line items (no inventory, no pricing on a raw lead); eventName uses the
-  // web convention "LastName - EventType". The source tag is appended to the stashed notes.
-  const eventName = webLeadEventName(lead);
-  const details = { ...gsEventDetails(intake), eventName };
-  const notes = `${formatIntakeNotes(intake)}\n\nLead source: ${lead.source} (web intake)`;
-  // The welcome email is decided later, by /api/gs/intake-result, once the project really exists.
-
-  enqueueGsOp({
-    op: "create_project",
-    label: `web lead (${lead.source}) ${eventName}`,
-    payload: {
-      intakeId: intake.id,
-      eventName,
-      notes,
-      details,
-      client: gsClientContact(intake), // create + attach the customer (web leads carry name/email/phone)
-      eventDateMDY: mdyFromYmd(lead.eventDate),
-      addItems: [],
-      windowUpgrade: null,
-      location: null,
-      logisticsLegs: [],
-      // Web-lead specifics (ignored by the drainer; read by our own code):
-      kind: "web_lead",
-      source: lead.source,
-      leadEmail: lead.emailKey,
-      leadPhone: lead.phoneKey,
-    },
-  });
-  updateIntake(intake.id, { status: "creating", gsStatus: "queued" });
-  logImport(`intake:${lead.source}`, true, { rowsIn: 1, rowsWritten: 1, detail: `queued create: ${eventName}` });
-  await logIntakeEvent("WEB_LEAD_QUEUED", intake.id, { source: lead.source, name: eventName });
-
-  // Welcome text for sources whose Zap does not text the customer (Google). Past the duplicate check, so
-  // once per lead. Never blocks the lead on a send failure.
-  if (webLeadSmsEnabled() && webLeadSmsApplies(lead.source) && lead.phone.trim()) {
-    const sms = await sendSms(lead.phone, webLeadSmsText(lead.firstName)).catch((e) => ({ ok: false, error: String(e) }));
-    await logIntakeEvent(sms.ok ? "WEB_LEAD_SMS_SENT" : "WEB_LEAD_SMS_FAILED", intake.id, { source: lead.source, error: sms.ok ? undefined : (sms as { error?: string }).error });
-  }
-
-  // Optional quiet sales-ai ping (default OFF). Honest wording: the project is QUEUED, not yet created
-  // (the office session creates it on its next pull) — never claim a project that does not exist yet.
-  if (webIntakeSalesPingEnabled()) {
-    void notify("sales", `New ${lead.source} lead received, project queued: ${eventName}`).catch(() => {});
-  }
-
-  return NextResponse.json({ ok: true, created: true, reason: "queued", intakeId: intake.id }, { headers: CORS });
+  // Record, post to #new-leads (?slack=1), dedupe and queue the Goodshuffle project: the shared lead tail.
+  const r = await queueLeadProject(lead, { slackText: postToSlack ? newLeadSlackText(lead, yelp) : null });
+  return NextResponse.json({ ok: r.ok, created: r.created, reason: r.reason, intakeId: r.intakeId }, { headers: CORS });
 }

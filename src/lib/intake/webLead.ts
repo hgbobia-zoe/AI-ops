@@ -161,7 +161,7 @@ export function webLeadEventName(n: NormalizedLead): string {
   const initialOnly = last.replace(/\./g, "").length === 1;
   const name = (initialOnly ? `${first} ${last}`.trim() : last || first) || "New web lead";
   // No event type (Yelp and Google leads never carry one): name the source so the project still says where it came from.
-  const label = eventTypeLabel(n) || (/yelp/i.test(n.source) ? "Yelp" : /google/i.test(n.source) ? "Google" : "");
+  const label = eventTypeLabel(n) || (/yelp/i.test(n.source) ? "Yelp" : /google/i.test(n.source) ? "Google" : /email/i.test(n.source) ? "Email" : "");
   return label ? `${name} - ${label}` : name;
 }
 

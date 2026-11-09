@@ -160,7 +160,7 @@ async function readLeadsChannel(): Promise<{ ok: boolean; messages: SlackMessage
  *  The text carries the lead's email/phone, so the later "project created" thread reply finds this post. */
 export async function postNewLeadToSlack(source: string, text: string): Promise<{ ok: boolean; error?: string }> {
   if (!slackBotConfigured()) return { ok: false, error: "no Slack bot token" };
-  const label = /yelp/i.test(source) ? "Yelp" : /google/i.test(source) ? "Google" : source || "Web";
+  const label = /yelp/i.test(source) ? "Yelp" : /google/i.test(source) ? "Google" : /email/i.test(source) ? "Email" : source || "Web";
   const r = await slackPostAs(newLeadsChannel(), { name: `New ${label} Lead`, icon: ":inbox_tray:" }, text);
   return { ok: r.ok, error: r.error };
 }
