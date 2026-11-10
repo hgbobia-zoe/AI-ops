@@ -4,7 +4,7 @@
 // not on the proxy's PUBLIC allowlist, so only a valid session reaches this handler.
 
 import { NextResponse } from "next/server";
-import { searchBookings, getProjectRouteInfo } from "@/lib/db/repo";
+import { searchBookings, getProjectRouteInfo, getBookingLogistics } from "@/lib/db/repo";
 
 export const dynamic = "force-dynamic";
 
@@ -15,18 +15,22 @@ export async function GET(req: Request): Promise<NextResponse> {
   const found = searchBookings(q, 25).filter((b) => b.eventName || b.clientName);
   // When the project is already on a route, its stop has the venue's street address and the real
   // delivery and pickup dates. Goodshuffle's search gives only city + ZIP and the logistics start date.
-  const routed = getProjectRouteInfo(found.map((b) => b.bookingId));
+  // Not routed yet: fall back to Goodshuffle's own venue street and timeline legs (captured by the pull).
+  const ids = found.map((b) => b.bookingId);
+  const routed = getProjectRouteInfo(ids);
+  const gs = getBookingLogistics(ids);
   const projects = found.map((b) => {
     const r = routed.get(b.bookingId);
+    const g = gs.get(b.bookingId);
     return {
       id: b.bookingId,
       name: b.eventName || b.clientName,
       clientName: b.clientName,
       subtotal: b.contractTotal, // Goodshuffle contract_subtotal (pre-discount, dollars), the stored value
       location: b.location,
-      streetAddress: r?.address ?? null,
-      eventDate: r?.deliveryDate ?? b.eventDate,
-      pickupDate: r?.pickupDate ?? null,
+      streetAddress: r?.address ?? g?.streetAddress ?? null,
+      eventDate: r?.deliveryDate ?? g?.deliveryDate ?? b.eventDate,
+      pickupDate: r?.pickupDate ?? g?.pickupDate ?? null,
     };
   });
 

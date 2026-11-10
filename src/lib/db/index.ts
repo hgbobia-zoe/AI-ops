@@ -2525,6 +2525,16 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "stops", column: "close_by", type: "TEXT" },              // who closed the route with this stop open
   { table: "stops", column: "close_at", type: "TEXT" },              // ISO
   { table: "bookings", column: "window_start_time", type: "TEXT" },  // raw GS logistics_start_from_time, e.g. "9:00 AM EDT" (null = TBD/unknown)
+  // Delivery pricing: the venue street (GS searchProjects streetLine1/2; `location` is city/state/ZIP) and the
+  // project's logistics legs from its GS timeline (lib/gs/logistics.ts). delivers: 1 = we drive at least one
+  // leg, 0 = in-store only, null = not captured. Lets a signed, unrouted project count as a stop on its day.
+  { table: "bookings", column: "street_address", type: "TEXT" },
+  { table: "bookings", column: "delivery_date", type: "TEXT" },
+  { table: "bookings", column: "delivery_window", type: "TEXT" },
+  { table: "bookings", column: "pickup_date", type: "TEXT" },
+  { table: "bookings", column: "pickup_window", type: "TEXT" },
+  { table: "bookings", column: "delivers", type: "INTEGER" },
+  { table: "bookings", column: "logistics_at", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {

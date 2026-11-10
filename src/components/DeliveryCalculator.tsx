@@ -784,8 +784,13 @@ function LegRow({ title, leg, detail }: { title: string; leg: LegBreakdown; deta
             <span>Distance saved</span>
             <span className="text-right text-emerald-300">{detail.savingsMiles} mi</span>
           </div>
-          {!detail.anchor.timingVerified && (
-            <p className="mt-1.5 text-amber-300">Timing unverified: that job isn&apos;t on a route yet, so its time window is unknown.</p>
+          {detail.anchor.source === "booking" ? (
+            <p className="mt-1.5 text-amber-300">
+              Not on a route yet: a signed job we deliver that day
+              {detail.anchor.timingVerified ? ", so the share assumes the same truck." : ", and its time window is unknown."}
+            </p>
+          ) : (
+            !detail.anchor.timingVerified && <p className="mt-1.5 text-amber-300">Timing unverified: that stop&apos;s time window is unknown.</p>
           )}
         </div>
       )}

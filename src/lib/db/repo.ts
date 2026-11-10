@@ -336,6 +336,98 @@ export function getStopsOnDate(date: string): DatedStop[] {
   }));
 }
 
+/** Store each project's logistics legs parsed from its Goodshuffle timeline (lib/gs/logistics.ts). Only
+ *  touches bookings we already have; returns how many rows were updated. */
+export function saveBookingLogistics(
+  items: Array<{ bookingId: string; deliveryDate: string | null; deliveryWindow: string | null; pickupDate: string | null; pickupWindow: string | null; delivers: boolean | null }>,
+): number {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const up = db.prepare(
+    `UPDATE bookings SET delivery_date=@deliveryDate, delivery_window=@deliveryWindow, pickup_date=@pickupDate,
+       pickup_window=@pickupWindow, delivers=@delivers, logistics_at=@now WHERE booking_id=@bookingId`,
+  );
+  let n = 0;
+  db.transaction(() => {
+    for (const i of items) {
+      n += up.run({ ...i, delivers: i.delivers == null ? null : i.delivers ? 1 : 0, now }).changes;
+    }
+  })();
+  return n;
+}
+
+/** A signed project we will drive to on `date` but that is not on a route yet: one of its logistics legs
+ *  (drop-off or pickup) falls on that date. Used by delivery pricing as a stop the truck is going to anyway. */
+export interface SignedLegOnDate {
+  bookingId: string;
+  label: string;
+  address: string; // street + city/state/ZIP
+  kind: "delivery" | "pickup";
+  window: string | null;
+}
+
+/** Signed, live projects with a leg we drive on `date` and a street address, EXCLUDING any project that
+ *  already has a stop on a route that day (the routed stop is the better record). In-store projects
+ *  (delivers = 0) and projects whose logistics were never captured are left out. */
+export function getSignedLegsOnDate(date: string): SignedLegOnDate[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT b.booking_id, b.event_name, b.client_name, b.street_address, b.location,
+              b.delivery_date, b.delivery_window, b.pickup_date, b.pickup_window
+         FROM bookings b
+        WHERE b.signed = 1 AND b.delivers = 1
+          AND COALESCE(b.archived, 0) = 0
+          AND LOWER(COALESCE(b.status_label,'')) NOT LIKE '%lost%'
+          AND LOWER(COALESCE(b.status_label,'')) NOT LIKE '%cancel%'
+          AND LOWER(COALESCE(b.status_label,'')) NOT LIKE '%dead%'
+          AND TRIM(COALESCE(b.street_address,'')) != ''
+          AND (b.delivery_date = @date OR b.pickup_date = @date)
+          AND NOT EXISTS (SELECT 1 FROM stops s JOIN routes r ON s.route_id = r.route_id
+                           WHERE s.tx_id = b.booking_id AND r.date = @date)
+        ORDER BY b.booking_id`,
+    )
+    .all({ date }) as Array<{
+    booking_id: string;
+    event_name: string | null;
+    client_name: string | null;
+    street_address: string;
+    location: string | null;
+    delivery_date: string | null;
+    delivery_window: string | null;
+    pickup_date: string | null;
+    pickup_window: string | null;
+  }>;
+  const out: SignedLegOnDate[] = [];
+  for (const r of rows) {
+    const address = [r.street_address.trim(), (r.location ?? "").trim()].filter(Boolean).join(", ");
+    const label = r.event_name || r.client_name || `#${r.booking_id}`;
+    if (r.delivery_date === date) out.push({ bookingId: String(r.booking_id), label, address, kind: "delivery", window: r.delivery_window });
+    if (r.pickup_date === date && r.pickup_date !== r.delivery_date) out.push({ bookingId: String(r.booking_id), label, address, kind: "pickup", window: r.pickup_window });
+  }
+  return out;
+}
+
+/** The stored Goodshuffle street address + logistics dates for a set of projects (calculator picker). */
+export function getBookingLogistics(
+  ids: string[],
+): Map<string, { streetAddress: string | null; deliveryDate: string | null; pickupDate: string | null }> {
+  const out = new Map<string, { streetAddress: string | null; deliveryDate: string | null; pickupDate: string | null }>();
+  const uniq = [...new Set(ids.filter(Boolean))];
+  if (uniq.length === 0) return out;
+  const rows = getDb()
+    .prepare(`SELECT booking_id, street_address, location, delivery_date, pickup_date FROM bookings WHERE booking_id IN (${uniq.map(() => "?").join(",")})`)
+    .all(...uniq) as Array<{ booking_id: string; street_address: string | null; location: string | null; delivery_date: string | null; pickup_date: string | null }>;
+  for (const r of rows) {
+    const street = (r.street_address ?? "").trim();
+    out.set(String(r.booking_id), {
+      streetAddress: street ? [street, (r.location ?? "").trim()].filter(Boolean).join(", ") : null,
+      deliveryDate: r.delivery_date,
+      pickupDate: r.pickup_date,
+    });
+  }
+  return out;
+}
+
 /** What the routes already know about a set of projects, for the delivery calculator's picker: the street
  *  address of its routed stop (Goodshuffle's project search only gives city + ZIP) and the dates of its
  *  routed delivery and pickup stops. Latest route wins when a project was routed more than once. */
@@ -853,6 +945,8 @@ export interface BookingRecord {
   /** Raw Goodshuffle logistics_start_from_time ("9:00 AM EDT"); null = TBD/blank; undefined = the pull did
    *  not send it (an older pull build), so the stored value is kept. The delivery window start. */
   windowStartTime?: string | null;
+  /** Venue street lines from searchProjects; undefined = the pull did not send it (keep the stored one). */
+  streetAddress?: string | null;
 }
 
 export interface BookingView {
@@ -1072,15 +1166,16 @@ export function saveBookings(items: BookingRecord[]): void {
   const up = db.prepare(
     `INSERT INTO bookings (booking_id, event_name, event_date, status_label, signed, contract_total,
        grand_total, amount_paid, amount_due, client_name, client_email, client_phone, quote_sent_date,
-       date_created, venue, location, sales_lead, archived, window_start_time, updated_at)
+       date_created, venue, location, sales_lead, archived, window_start_time, street_address, updated_at)
      VALUES (@bookingId,@eventName,@eventDate,@statusLabel,@signed,@contractTotal,@grandTotal,
-       @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@venue,@location,@salesLead,@archived,@windowStartTime,@now)
+       @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@venue,@location,@salesLead,@archived,@windowStartTime,@streetAddress,@now)
      ON CONFLICT(booking_id) DO UPDATE SET event_name=@eventName, event_date=@eventDate,
        status_label=@statusLabel, signed=@signed, contract_total=@contractTotal, grand_total=@grandTotal,
        amount_paid=@amountPaid, amount_due=@amountDue, client_name=@clientName, client_email=@clientEmail,
        client_phone=@clientPhone, quote_sent_date=@quoteSentDate, date_created=@dateCreated,
        venue=@venue, location=@location, sales_lead=COALESCE(@salesLead, sales_lead), archived=@archived,
-       window_start_time=CASE WHEN @windowSent = 1 THEN @windowStartTime ELSE window_start_time END, updated_at=@now`,
+       window_start_time=CASE WHEN @windowSent = 1 THEN @windowStartTime ELSE window_start_time END,
+       street_address=CASE WHEN @streetSent = 1 THEN @streetAddress ELSE street_address END, updated_at=@now`,
   );
   const tx = db.transaction(() => {
     for (const i of items)
@@ -1105,6 +1200,8 @@ export function saveBookings(items: BookingRecord[]): void {
         archived: i.archived ? 1 : 0,
         windowSent: i.windowStartTime === undefined ? 0 : 1,
         windowStartTime: normalizeWindowTime(i.windowStartTime),
+        streetSent: i.streetAddress === undefined ? 0 : 1,
+        streetAddress: i.streetAddress?.trim().slice(0, 200) || null,
         now,
       });
   });

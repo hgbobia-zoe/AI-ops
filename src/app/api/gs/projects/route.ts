@@ -62,6 +62,7 @@ interface InProject {
   salesLead?: string | null; // Goodshuffle salesLeadName
   archived?: boolean;
   logisticsStartTime?: string | null; // Goodshuffle logistics_start_from_time ("9:00 AM EDT" | "TBD"): delivery window start
+  streetAddress?: string | null; // Goodshuffle streetLine1 (+ streetLine2): the venue street, for delivery pricing
 }
 
 const dollars = (cents: number | undefined): number | null =>
@@ -162,6 +163,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       archived: Boolean(p.archived),
       // undefined = an older pull build that does not send it (keep the stored window).
       windowStartTime: p.logisticsStartTime === undefined ? undefined : typeof p.logisticsStartTime === "string" ? p.logisticsStartTime : null,
+      streetAddress: p.streetAddress === undefined ? undefined : typeof p.streetAddress === "string" ? p.streetAddress : null,
     });
   }
   if (records.length > 0) saveBookings(records);

@@ -3,9 +3,9 @@
 // subtotal + the leg mode, it:
 //   1. geocodes the venue and computes the one-way warehouse to venue driving distance (cached, bounded),
 //   2. for EACH leg, on that leg's own date (drop-off on the delivery date, pickup on the pickup date),
-//      gathers the CONFIRMED scheduled stops: ONLY jobs already on a route (real stops with a precise
-//      address + window + truck). A signed-but-unrouted booking is NEVER used: we do not assume a booking
-//      has a delivery (guessing wrong mis-prices a real quote and costs money),
+//      gathers the stops the truck is going to anyway: jobs already on a route, plus signed projects not
+//      routed yet whose Goodshuffle timeline has a leg WE drive that day (street address + window known).
+//      A project is never assumed to have a delivery: in-store and not-yet-captured projects are skipped,
 //   3. runs the DETERMINISTIC route optimizer (STANDARD / ROUTE_OPTIMIZED / DEDICATED) per leg to pick
 //      that leg's billable distance, and
 //   4. prices each leg on its own billable miles with the team-editable pricing config.
@@ -20,7 +20,7 @@ import { deliveryQuoteLegs, metersToMiles, pushPerLeg, type LegBreakdown, type L
 import { buildDistanceFn } from "@/lib/pricing/routeDistance";
 import { routeOptimize, neededPairs, haversineMiles, type RouteAnchor, type RouteOptimizeResult } from "@/lib/pricing/routeOptimize";
 import { looksCityLevel } from "@/lib/pricing/address";
-import { getStopsOnDate } from "@/lib/db/repo";
+import { getStopsOnDate, getSignedLegsOnDate } from "@/lib/db/repo";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +28,8 @@ const MODES: LegMode[] = ["round_trip", "drop_off", "pickup"];
 /** Bound geocodes + routing pairs per leg: at most this many routes (nearest first) are checked. Every stop
  *  of a checked route is kept, so its real sequence is priced, never a shortened one. */
 const ROUTE_CAP = 6;
+/** At most this many signed, not-yet-routed projects (nearest first) are checked per leg. */
+const SIGNED_CAP = 8;
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 
 interface Body {
@@ -252,10 +254,13 @@ export async function POST(req: Request): Promise<NextResponse> {
 
 /**
  * Gather one date's CONFIRMED scheduled stops as anchors: ONLY stops on a live route (precise address, a
- * known window, a truck). A signed-but-unrouted booking is NOT used: we never assume it has a delivery
- * (mis-pricing that costs real money). Stops the truck won't drive to (Exception, lost/cancelled/archived
- * projects) are already left out by getStopsOnDate, and the quote's own project is excluded so it never
- * anchors to itself.
+ * known window, a truck), PLUS signed projects not on a route yet whose Goodshuffle timeline says we
+ * drive a leg on that date (owner, 2026-11-10: "we have addresses and time for signed projects, so we know
+ * we are going to be there"). Those come from getSignedLegsOnDate: signed, live, a street address, and a
+ * logisticsDelivery leg that day; in-store projects and projects whose logistics were never captured are
+ * never used. Each is a one-stop trip (its truck is not known yet). Stops the truck won't drive to
+ * (Exception, lost/cancelled/archived projects) are left out, and the quote's own project is excluded so it
+ * never anchors to itself.
  *
  * Trips are built from WHOLE routes, so the optimizer sees the real sequence. A route is checked only if at
  * least one of its stops is within the radius by air (air is never longer than road, so a route with none
@@ -270,9 +275,25 @@ async function gatherAnchors(
 ): Promise<{ anchors: RouteAnchor[]; note: string | null }> {
   const self = (selfId ?? "").trim();
   const stops = getStopsOnDate(date);
-  if (stops.length === 0) {
-    return { anchors: [], note: `No routes are scheduled on ${date} yet, so it is priced as a standalone trip from the warehouse.` };
+  const signed = getSignedLegsOnDate(date).filter((b) => !(self && b.bookingId === self));
+  if (stops.length === 0 && signed.length === 0) {
+    return { anchors: [], note: `No routes or signed deliveries on ${date} yet, so it is priced as a standalone trip from the warehouse.` };
   }
+
+  // Signed, not-yet-routed legs that day: one-stop trips, nearest first, within the radius by air.
+  const signedNear: Array<{ a: RouteAnchor; air: number }> = [];
+  for (const b of signed) {
+    const coords = await geocode(b.address);
+    if (!coords) continue;
+    const air = haversineMiles(venue, coords);
+    if (air > radiusMiles) continue;
+    signedNear.push({
+      air,
+      a: { id: b.bookingId, label: b.label, coords, truckId: null, kind: b.kind, windowKnown: !!b.window, source: "booking" },
+    });
+  }
+  signedNear.sort((x, y) => x.air - y.air || x.a.id.localeCompare(y.a.id));
+  const bookingAnchors = signedNear.slice(0, SIGNED_CAP).map((x) => x.a);
 
   type RouteGroup = { routeId: string; anchors: RouteAnchor[]; minAir: number; unlocated: boolean };
   const routes = new Map<string, RouteGroup>();
@@ -304,10 +325,10 @@ async function gatherAnchors(
   const usable = nearby.filter((r) => !r.unlocated);
   usable.sort((a, b) => a.minAir - b.minAir || a.routeId.localeCompare(b.routeId));
   const kept = usable.slice(0, ROUTE_CAP);
-  const anchors = kept.flatMap((r) => r.anchors);
+  const anchors = [...kept.flatMap((r) => r.anchors), ...bookingAnchors];
 
   const notes: string[] = [];
-  if (kept.length < all.length) {
+  if (all.length > 0 && kept.length < all.length) {
     notes.push(`${all.length} route(s) on this date; ${kept.length} with a stop within ${radiusMiles} mi were checked.`);
   }
   const skipped = nearby.length - usable.length;
