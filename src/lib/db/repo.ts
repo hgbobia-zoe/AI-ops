@@ -3,7 +3,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "./index";
-import { todayInOpsTz, currentOperatingYearStart } from "@/lib/dates";
+import { todayInOpsTz, currentOperatingYearStart, shiftYmd } from "@/lib/dates";
 import { getSettings } from "@/lib/settings";
 import { logChange } from "@/lib/history/store";
 import { detectLinenItems } from "@/lib/salesos/linen";
@@ -885,6 +885,13 @@ export interface BookingView {
   lastSentDate: string | null;
   lineItems: string[] | null; // captured line-item titles (event-type signal); null = never captured
   archived: boolean; // Goodshuffle `archived` — off the active board (Lost/Cancelled/closed)
+  // Lost-reason tracker (null on every quote lost before tracking began).
+  lostAt?: string | null;
+  lossTrackAt?: string | null;
+  lossFlagAt?: string | null;
+  lossNoteAt?: string | null;
+  lossNoteText?: string | null;
+  lossReasonSource?: string | null; // app | gs_note | sales_bot
 }
 
 function parseLineItems(raw: unknown): string[] | null {
@@ -924,6 +931,12 @@ function toBookingView(r: Record<string, unknown>): BookingView {
     lastSentDate: (r.last_sent_date as string) ?? null,
     lineItems: parseLineItems(r.line_items),
     archived: Number(r.archived ?? 0) === 1,
+    lostAt: (r.lost_at as string) ?? null,
+    lossTrackAt: (r.loss_track_at as string) ?? null,
+    lossFlagAt: (r.loss_flag_at as string) ?? null,
+    lossNoteAt: (r.loss_note_at as string) ?? null,
+    lossNoteText: (r.loss_note_text as string) ?? null,
+    lossReasonSource: (r.loss_reason_source as string) ?? null,
   };
 }
 
@@ -1118,6 +1131,13 @@ export function saveBookings(items: BookingRecord[]): void {
   // The lost/cancelled predicate — the SAME one getLostQuotes/getPipelineBreakdown use (lost|cancel|dead).
   const isCancelled = (s: string): boolean => s.includes("cancel") || s.includes("lost") || s.includes("dead");
   const markSafeguard = db.prepare("UPDATE bookings SET cancel_safeguard_at = ? WHERE booking_id = ?");
+  // Snapshot the notes we had when tracking began, so a note written AFTER the loss can count as the reason.
+  const markLossTracked = db.prepare(
+    `UPDATE bookings SET lost_at = @now,
+       lost_notes_snapshot = CASE WHEN loss_track_at IS NULL THEN internal_notes ELSE lost_notes_snapshot END,
+       loss_track_at = COALESCE(loss_track_at, @now)
+     WHERE booking_id = @id`,
+  );
   for (const i of items) {
     const before = prior.get(i.bookingId);
     const after = i.grandTotal ?? null;
@@ -1166,8 +1186,20 @@ export function saveBookings(items: BookingRecord[]): void {
       markSafeguard,
       now,
     });
+    // Lost-reason tracker: start asking for a reason when a quote BECOMES lost. Goodshuffle has no lost
+    // date, so the moment our pull sees the flip is the lost date. Historical lost quotes never flip, so
+    // they are never tracked. A project we have never seen that arrives already lost counts only when it
+    // was created in the last few days (created and lost between two pulls).
+    const newRowJustLost =
+      !priorStatus.has(i.bookingId) && nowCancelled && !!i.dateCreated && i.dateCreated >= shiftYmd(todayInOpsTz(), -LOSS_NEW_ROW_DAYS);
+    if ((priorStatus.has(i.bookingId) && !wasCancelled && nowCancelled) || newRowJustLost) {
+      markLossTracked.run({ id: i.bookingId, now });
+    }
   }
 }
+
+/** A project first seen already lost is tracked only if GS created it within this many days. */
+const LOSS_NEW_ROW_DAYS = 3;
 
 interface CancelSafeguardCtx {
   bookingId: string;
@@ -1655,10 +1687,78 @@ export function getLostQuotes(): BookingView[] {
 
 /** Team-tag (or clear, with null) why a quote was lost. Goodshuffle stores no reason, so this is how
  *  the loss-reason dataset gets built. */
-export function setLossReason(id: string, reason: string | null): void {
+export function setLossReason(id: string, reason: string | null, source: "app" | "gs_note" | "sales_bot" = "app"): void {
+  const r = reason && reason.trim() ? reason.trim() : null;
   getDb()
-    .prepare("UPDATE bookings SET loss_reason = ?, loss_reason_at = ? WHERE booking_id = ?")
-    .run(reason && reason.trim() ? reason.trim() : null, reason && reason.trim() ? new Date().toISOString() : null, id);
+    .prepare("UPDATE bookings SET loss_reason = ?, loss_reason_at = ?, loss_reason_source = ? WHERE booking_id = ?")
+    .run(r, r ? new Date().toISOString() : null, r ? source : null, id);
+}
+
+/** Did the Sales Bot itself mark this quote lost (morning outreach: unsigned close to the event)? */
+export function salesBotMarkedLost(id: string): boolean {
+  return !!getDb()
+    .prepare("SELECT 1 FROM gs_outbox WHERE op = 'mark_lost' AND transaction_id = ? AND json_extract(payload, '$.by') = 'Sales Bot' LIMIT 1")
+    .get(id);
+}
+
+// ── Lost-reason tracker storage (logic lives in src/lib/salesos/lossReasonFlag.ts) ──────────────────────
+
+const LOST_STATUS_SQL = `(LOWER(COALESCE(status_label,'')) LIKE '%lost%'
+            OR LOWER(COALESCE(status_label,'')) LIKE '%cancel%'
+            OR LOWER(COALESCE(status_label,'')) LIKE '%dead%')`;
+
+/** Tracked quotes that are still lost (a reopened quote drops out on its own). */
+export function lossTrackedQuotes(): BookingView[] {
+  return (
+    getDb()
+      .prepare(`SELECT * FROM bookings WHERE loss_track_at IS NOT NULL AND ${LOST_STATUS_SQL} AND ${NOT_BLANK_DRAFT_SQL} ORDER BY loss_track_at`)
+      .all() as Record<string, unknown>[]
+  ).map(toBookingView);
+}
+
+/** The notes we had when tracking began (not on BookingView: only the note check needs it). */
+export function lossNotesSnapshot(id: string): string | null {
+  const r = getDb().prepare("SELECT lost_notes_snapshot FROM bookings WHERE booking_id = ?").get(id) as { lost_notes_snapshot: string | null } | undefined;
+  return r?.lost_notes_snapshot ?? null;
+}
+
+/** Lines Zoe itself appended to this project's GS notes (note_append ops) since `sinceIso` ("" = ever). These
+ *  are the app's own call/text logs, never a rep's loss reason, so the note check ignores them. */
+export function zoeNoteLinesSince(id: string, sinceIso: string): string[] {
+  return (
+    getDb()
+      .prepare("SELECT json_extract(payload, '$.line') AS line FROM gs_outbox WHERE op = 'note_append' AND transaction_id = ? AND created_at >= ?")
+      .all(id, sinceIso) as { line: string | null }[]
+  )
+    .map((r) => r.line ?? "")
+    .filter(Boolean);
+}
+
+/** Stamp the once-per-project flag. Returns false if it was already stamped (another run got there first). */
+export function markLossFlagged(id: string, now: string): boolean {
+  return getDb().prepare("UPDATE bookings SET loss_flag_at = ? WHERE booking_id = ? AND loss_flag_at IS NULL").run(now, id).changes === 1;
+}
+
+/** Record the GS note that holds the reason (clears the flag). */
+export function markLossNote(id: string, text: string, now: string): void {
+  getDb().prepare("UPDATE bookings SET loss_note_at = ?, loss_note_text = ? WHERE booking_id = ? AND loss_note_at IS NULL").run(now, text, id);
+}
+
+/** Project ids whose GS notes the office pull should re-read: tracked, still lost, no reason yet, and
+ *  tracking began on or after `sinceIso`. Lost projects drop out of the normal open-lead notes capture,
+ *  so without this a reason written in GS would never be seen. */
+export function lossNoteWatchIds(sinceIso: string, cap: number): string[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT booking_id FROM bookings
+          WHERE loss_track_at IS NOT NULL AND loss_track_at >= ?
+            AND loss_note_at IS NULL AND TRIM(COALESCE(loss_reason, '')) = ''
+            AND ${LOST_STATUS_SQL}
+          ORDER BY loss_track_at DESC LIMIT ?`,
+      )
+      .all(sinceIso, cap) as { booking_id: string }[]
+  ).map((r) => String(r.booking_id));
 }
 
 /** A single booking by Goodshuffle project id — for the Sales OS lead detail. */

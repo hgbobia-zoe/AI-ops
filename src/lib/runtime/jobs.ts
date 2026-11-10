@@ -43,6 +43,7 @@ import { runActionItemsJob, actionItemsConfigured } from "@/lib/salesos/actionIt
 import { openphoneApiKey } from "@/lib/comms/openphone";
 import { runEsignCutoffSweep, esignCutoffEnabled } from "@/lib/salesos/esignCutoff";
 import { runMorningOutreachTick, morningLiveEnabled } from "@/lib/salesos/morningLive";
+import { runLossReasonFlags, lossReasonFlagsEnabled } from "@/lib/salesos/lossReasonFlag";
 import { runWebsiteMonitor } from "@/lib/monitor/websiteHealth";
 import { runLeadSlackReplySweep } from "@/lib/intake/leadSlackReply";
 import { syncLeadLogFromSlack, LEAD_LOG_JOB_KEY } from "@/lib/marketing/leadLog";
@@ -453,6 +454,17 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     configured: morningLiveEnabled, // on by default; MORNING_OUTREACH_LIVE=false is the kill switch
     note: "Monday to Saturday. From 8:15 AM ET it plans every open quote (same gate, cadence by days to the event, and drafter as the dry run), then texts each one that is due at its own random second between 9:12 and 9:17 AM as the project's sales lead, through the sanctioned Sales OS sender (SMS_SEND_ENABLED, dedupe, timeline, audit) with a 'Sales Bot texted' Goodshuffle note. Quotes 3 days or less from an unsigned event are queued to be marked lost and archived. Once per lead per day, a recheck right before sending (a client who wrote back or a contract signed since the plan is skipped), a daily cap (MORNING_OUTREACH_MAX, default 25). Posts the recap to the Sales Bot channel when done.",
     run: async () => runMorningOutreachTick(),
+  },
+  {
+    key: "loss-reason-flags",
+    label: "Lost quote reason tracker",
+    bucket: "server",
+    configured: lossReasonFlagsEnabled, // on by default; LOSS_REASON_FLAGS=false is the kill switch
+    note: "Only quotes that were open when this shipped or are created later. When one goes lost, Zoe fills the reason itself if the Goodshuffle notes already say why (or the Sales Bot marked it lost); a reason tagged in Zoe is also written into the Goodshuffle note. With no reason anywhere after 24h (LOSS_REASON_GRACE_HOURS) it posts once in the Sales Bot channel and queues one Goodshuffle task for the sales lead (fallback Jessie). Once per project forever. Business hours only, at most 20 a run.",
+    run: async () => {
+      const r = await runLossReasonFlags();
+      return { ok: r.ok, detail: r.detail };
+    },
   },
   {
     key: "postevent-digest",
