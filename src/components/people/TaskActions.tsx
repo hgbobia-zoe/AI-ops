@@ -8,9 +8,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { runsInChrome } from "@/lib/people/provisioningEndpoints";
+import { runInChrome, useRefreshFor } from "./ChromeSetup";
 
 export interface TaskView {
   id: string;
+  employeeId: string;
   adapterId: string;
   externalRef: string | null;
   mode: "automated" | "partial" | "manual" | "future";
@@ -21,6 +24,7 @@ export interface TaskView {
 
 export function TaskActions({ task }: { task: TaskView }): React.JSX.Element {
   const router = useRouter();
+  const refreshFor = useRefreshFor();
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; tone: "ok" | "bad" } | null>(null);
 
@@ -41,6 +45,15 @@ export function TaskActions({ task }: { task: TaskView }): React.JSX.Element {
     } finally {
       setBusy(null);
     }
+  }
+
+  async function chrome(): Promise<void> {
+    setBusy("chrome");
+    setMsg(null);
+    const r = await runInChrome(task.employeeId, [task.id]);
+    setMsg({ text: r.text, tone: r.ok ? "ok" : "bad" });
+    setBusy(null);
+    if (r.ok) refreshFor(5 * 60_000);
   }
 
   const done = task.status === "completed" || task.status === "skipped";
@@ -77,13 +90,37 @@ export function TaskActions({ task }: { task: TaskView }): React.JSX.Element {
       </div>
     );
   }
+  const inChrome = task.kind === "provision" && runsInChrome(task.adapterId) && isAutomated;
+  if (inChrome && task.status === "in_progress" && task.externalRef?.startsWith("invited:")) {
+    return <span className="text-[11.5px] text-meta">Invite sent, closes when they join</span>;
+  }
+  if (inChrome && task.status === "in_progress") {
+    return (
+      <div className="flex flex-wrap items-center justify-end gap-1.5">
+        <span className="text-[11.5px] text-meta">Waiting for Chrome</span>
+        <Button variant="outline" size="xs" onClick={() => void chrome()} disabled={disabled}>
+          {busy === "chrome" ? "Starting…" : "Run again"}
+        </Button>
+        {msg && <span className={`text-[11px] ${msg.tone === "ok" ? "text-positive" : "text-critical"}`}>{msg.text}</span>}
+      </div>
+    );
+  }
   if (task.status === "in_progress") {
     return <span className="text-[11.5px] text-meta">Running, waits for the system to confirm</span>;
   }
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-1.5">
-      {isAutomated ? (
+      {inChrome ? (
+        <>
+          <Button size="xs" onClick={() => void chrome()} disabled={disabled}>
+            {busy === "chrome" ? "Starting…" : "Run in my Chrome"}
+          </Button>
+          <Button variant="outline" size="xs" onClick={() => run("mark_complete")} disabled={disabled}>
+            {busy === "mark_complete" ? "Saving…" : "Done by hand"}
+          </Button>
+        </>
+      ) : isAutomated ? (
         <Button size="xs" onClick={() => run("approve_execute")} disabled={disabled}>
           {busy === "approve_execute" ? "Running…" : `Approve & ${verb}`}
         </Button>

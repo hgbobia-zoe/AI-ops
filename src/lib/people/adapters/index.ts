@@ -18,7 +18,10 @@ import { appUrl } from "@/lib/notify/aiBots";
 import { getEmployee, listEmployees, setEmployeeConnecteamUserId } from "../store";
 import { normEmail, normPhone } from "../match";
 import { reconcileZoeLogin } from "../zoeLink";
-import { hasCapturedEndpoint, PROVISION_ENDPOINTS, type ReplaySystem } from "../provisioningEndpoints";
+import { hasCapturedEndpoint, PROVISION_ENDPOINTS, runsInChrome, type ReplaySystem } from "../provisioningEndpoints";
+
+/** externalRef of a step waiting for the onboarder's Chrome to run it. */
+export const CHROME_PENDING_REF = "chrome:waiting";
 import type { AdapterMode, Employee, ProvisioningResult } from "../types";
 
 export interface ProvisioningAdapter {
@@ -246,6 +249,11 @@ class ReplayAdapter implements ProvisioningAdapter {
   async automate(emp: Employee): Promise<ProvisioningResult> {
     if (!hasCapturedEndpoint(this.sys, "provision")) {
       return { ok: false, status: "manual_required", detail: this.captureReason("provision") };
+    }
+    // Run in the onboarder's own Chrome: nothing is queued for the office pull. The API hands the job to the
+    // extension (people/chromeJobs.ts) and the step closes on the extension's report.
+    if (runsInChrome(this.sys)) {
+      return { ok: true, status: "in_progress", externalRef: CHROME_PENDING_REF, detail: `Ready to run in your Chrome (Auto-Pull opens ${this.system} in a tab).` };
     }
     const op = enqueueProvisioningOp({ kind: "provision", system: this.sys, employeeId: emp.id, label: `invite ${emp.displayName} to ${this.system}`, data: this.empData(emp) });
     return { ok: true, status: "in_progress", externalRef: `gs_outbox:${op.id}`, detail: `Queued for the logged-in ${this.system} session to replay the invite; completes when the drainer acks.` };

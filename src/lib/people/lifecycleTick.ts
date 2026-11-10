@@ -16,6 +16,7 @@ import { getJson, setJson } from "@/lib/kv";
 import { reconcileAllZoeLogins } from "./zoeLink";
 import { runStaffMatching } from "./matchRun";
 import { connecteamScopeStatus, verifyConnecteamScope } from "./connecteamScope";
+import { confirmChromeInvites } from "./chromeJobs";
 
 /** Days a manual provision/revoke task may sit before it is escalated. */
 export const PEOPLE_ESCALATE_DAYS = 3;
@@ -75,6 +76,14 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
         if (r.ok && r.task?.status === "completed") autoProvisioned++;
       }
     }
+  }
+
+  // 1d) Slack / Quo invites sent from someone's Chrome close once the hire has actually joined.
+  let joined = 0;
+  try {
+    joined = await confirmChromeInvites(tasksByStatus("provision", ["in_progress"]), actor);
+  } catch {
+    /* a lookup outage leaves them open; next tick tries again */
   }
 
   // 2) Future-dated terminations — an OFFBOARD employee past their effective end date: auto-run the
@@ -149,6 +158,6 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
     matchNote = `matching failed: ${e instanceof Error ? e.message : "error"}`;
   }
 
-  const detail = `${checkins} check ins, ${onboarded} onboarded, ${autoProvisioned} Connecteam set up, ${revoked} auto-revoked, ${escalated} escalated, ${zoeLinked} Zoe logins linked, ${matchNote}`;
+  const detail = `${checkins} check ins, ${onboarded} onboarded, ${autoProvisioned} Connecteam set up, ${joined} invites accepted, ${revoked} auto-revoked, ${escalated} escalated, ${zoeLinked} Zoe logins linked, ${matchNote}`;
   return { ok: true, detail };
 }

@@ -64,6 +64,7 @@ const PUBLIC: string[] = [
   "/api/payroll/gusto-wire-received", // Gusto "we received your wire" email → payroll channel (the receive-side bookend to wire-detected). A Gmail→Zapier zap POSTs with no session; reuses WIRE_WEBHOOK_TOKEN (fail-open-until-set). EXACT path only — the rest of /api/payroll stays session + owner/admin gated.
   "/api/etalink", // Ignition etaLink mint pending/result; GS_INGEST_TOKEN (fail-open), CORS-locked to ignition.zonarsystems.com — the office-machine Ignition tab reads/posts here, NOT a session (distinct from the /api/eta GPS prefix)
   "/api/pull/heartbeat", // Auto-Pull extension status ping; own token (fail-open), CORS-open
+  "/api/provision/result", // Auto-Pull reports a Chrome-run account setup step; gated by the job's one-time key (hashed, 2h, single use), never a session
   "/api/runtime/tick", // Cloud runtime heartbeat; RUNTIME_TOKEN-gated (503 until set), hit by GitHub Actions (not a session)
   "/api/ai/announce-test", // Slack announce self-test; RUNTIME_TOKEN-gated OR internal localhost only; posts a harmless test card (not a session)
   "/api/openphone/webhook", // OpenPhone → us; authenticates by HMAC signature, not a session
