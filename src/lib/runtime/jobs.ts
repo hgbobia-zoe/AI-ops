@@ -277,7 +277,7 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     label: "People lifecycle (onboarding / offboarding)",
     bucket: "server",
     configured: () => true, // app-owned; a silent no-op when no employee needs onboarding/offboarding today
-    note: "Fires start-date onboarding, executes future-dated terminations (auto-revokes the Zoe login only), and escalates overdue manual access tasks to Slack. Never auto-completes a manual revoke — OFFBOARDED never implies access removed.",
+    note: "Fires start-date onboarding, checks Connecteam write access daily and runs the Connecteam setup step on its own (links a hand-made account, else creates), executes future-dated terminations (auto-revokes the Zoe login only), and escalates overdue manual access tasks to Slack. Never auto-completes a manual revoke — OFFBOARDED never implies access removed.",
     run: async () => {
       const r = await runPeopleLifecycleTick();
       return { ok: r.ok, detail: r.detail };
