@@ -458,7 +458,7 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     label: "Lost quote reason tracker",
     bucket: "server",
     configured: lossReasonFlagsEnabled, // on by default; LOSS_REASON_FLAGS=false is the kill switch
-    note: "When a quote becomes lost and nobody records why within 24h (LOSS_REASON_GRACE_HOURS), posts once in the Sales Bot channel and queues one Goodshuffle task on the project for its sales lead (fallback Jessie) to add the reason. A reason is a tag on /salesos/lost or a Goodshuffle internal note written after the loss. Once per project forever. Only quotes lost after this shipped plus a one time backfill of the 30 days before; older lost quotes are never flagged. Business hours only, at most 20 a run.",
+    note: "Only quotes that were open when this shipped or are created later. When one goes lost, Zoe fills the reason itself if the Goodshuffle notes already say why (or the Sales Bot marked it lost); a reason tagged in Zoe is also written into the Goodshuffle note. With no reason anywhere after 24h (LOSS_REASON_GRACE_HOURS) it posts once in the Sales Bot channel and queues one Goodshuffle task for the sales lead (fallback Jessie). Once per project forever. Business hours only, at most 20 a run.",
     run: async () => {
       const r = await runLossReasonFlags();
       return { ok: r.ok, detail: r.detail };

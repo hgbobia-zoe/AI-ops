@@ -23,13 +23,15 @@ import {
 import {
   runLossReasonFlags,
   lossFlagState,
-  noteReasonText,
+  noteLossReason,
   lossFlagMessage,
-  ensureLossBackfill,
-  detectLossReasonNotes,
+  fillKnownLossReasons,
+  queueLossReasonNote,
   LOSS_TASK_TITLE,
   DEFAULT_FALLBACK_GS_USER_ID,
 } from "./lossReasonFlag";
+import { classifyLossReason, LOSS_REASONS, SALES_BOT_LOSS_REASON } from "./lossReasons";
+import { queueMarkLost } from "./markLost";
 
 // Tue 2026-11-10, 11:00 ET: inside default business hours.
 const NOW = new Date("2026-11-10T16:00:00Z");
@@ -68,7 +70,6 @@ function lostQuote(id: string, notes: string | null = null, trackAgoH = 25): voi
 
 beforeEach(() => {
   for (const t of ["bookings", "gs_outbox", "history_changes"]) getDb().prepare(`DELETE FROM ${t}`).run();
-  getDb().prepare("DELETE FROM settings WHERE key = 'lossReason.backfillDone'").run();
   posts.length = 0;
   delete process.env.LOSS_REASON_FLAGS;
 });
@@ -100,27 +101,15 @@ describe("cutoff: which lost quotes get tracked", () => {
     expect(col("FAST", "loss_track_at")).not.toBeNull();
   });
 
-  it("one-time backfill covers the 30 days before ship, from change history or the created date", () => {
-    saveBookings([
-      booking("HIST10", "Lost"),
-      booking("HIST40", "Lost"),
-      booking("NEW5", "Lost", { dateCreated: shiftYmd(todayInOpsTz(NOW), -5) }),
-      booking("ANCIENT", "Lost"),
-      booking("OPEN", "Quote Sent", { dateCreated: shiftYmd(todayInOpsTz(NOW), -2) }),
-    ]);
-    const ins = getDb().prepare("INSERT INTO history_changes (id, ts, kind, entity_id, change_key) VALUES (?, ?, 'booking_cancelled', ?, ?)");
-    const tenDaysAgo = iso(NOW.getTime() - 10 * 24 * H);
-    ins.run("h1", tenDaysAgo, "HIST10", "cancelled|HIST10");
-    ins.run("h2", iso(NOW.getTime() - 40 * 24 * H), "HIST40", "cancelled|HIST40");
+  it("never tracks quotes already lost at launch, however recent (owner: ignore the past ones)", () => {
+    saveBookings([booking("RECENT", "Lost", { dateCreated: shiftYmd(todayInOpsTz(), -10) })]);
+    expect(col("RECENT", "loss_track_at")).toBeNull();
+  });
 
-    expect(ensureLossBackfill(NOW)).toBe(2);
-    expect(col("HIST10", "lost_at")).toBe(tenDaysAgo);
-    expect(col("HIST10", "loss_track_at")).toBe(NOW.toISOString());
-    expect(col("NEW5", "loss_track_at")).toBe(NOW.toISOString());
-    expect(col("HIST40", "loss_track_at")).toBeNull();
-    expect(col("ANCIENT", "loss_track_at")).toBeNull();
-    expect(col("OPEN", "loss_track_at")).toBeNull();
-    expect(ensureLossBackfill(NOW)).toBeNull(); // once only
+  it("keeps the captured notes through the move to lost and asks the pull to re-read them", () => {
+    lostQuote("KEEP", "11/2 sent quote, client comparing vendors", 1);
+    expect(getBookingById("KEEP")?.internalNotes).toBe("11/2 sent quote, client comparing vendors");
+    expect(lossNoteWatchIds(iso(NOW.getTime() - 14 * 24 * H), 25)).toContain("KEEP");
   });
 });
 
@@ -188,48 +177,91 @@ describe("detection + dedupe", () => {
 
   it("never flags a historical lost quote even when the job runs", async () => {
     saveBookings([booking("HIST", "Lost")]);
-    getDb().prepare("UPDATE settings SET value = 'true' WHERE key = 'lossReason.backfillDone'").run();
     await runLossReasonFlags(NOW);
     expect(taskOps()).toHaveLength(0);
   });
 });
 
-describe("clear rule: a tag or a GS note written after the loss", () => {
-  it("a tag in the app clears it", async () => {
+
+describe("where the reason lives: Zoe tag and GS note, both ways", () => {
+  it("a tag in the app clears the flag", async () => {
     lostQuote("TAG");
     setLossReason("TAG", "Price — too expensive");
     expect((await runLossReasonFlags(NOW)).flagged).toBe(0);
     expect(getBookingById("TAG")?.lossFlagAt).toBeNull();
+    expect(getBookingById("TAG")?.lossReasonSource).toBe("app");
   });
 
-  it("a new GS internal note line clears it and is kept as the reason text", async () => {
+  it("a tagged reason is queued into the GS note once, attributed, in the team's note format", () => {
+    expect(queueLossReasonNote("P1", "Price — too expensive", "Jessie Medalla", NOW)).toBe(true);
+    expect(queueLossReasonNote("P1", "Price — too expensive", "Jessie Medalla", NOW)).toBe(false); // same reason: no double write
+    const ops = listPendingGsOps(50).filter((o) => o.op === "note_append" && o.transactionId === "P1");
+    expect(ops).toHaveLength(1);
+    expect((ops[0].payload as { line: string }).line).toBe("JM(by SalesOS) - 11/10 - Lost reason: Price, too expensive");
+    expect(queueLossReasonNote("P1", "Budget cut", "Jessie Medalla", NOW)).toBe(true); // a changed reason is written
+  });
+
+  it("a note written after the loss fills the tag from the note, so nobody tags twice", async () => {
     lostQuote("NOTE", "3/2 sent quote");
-    saveLeadNotes([{ bookingId: "NOTE", internalNotes: "3/2 sent quote\nClient booked a cheaper vendor" }]);
+    saveLeadNotes([{ bookingId: "NOTE", internalNotes: "3/2 sent quote\nClient booked with another company" }]);
     const r = await runLossReasonFlags(NOW);
     expect(r.flagged).toBe(0);
-    expect(r.notesFound).toBe(1);
-    const b = getBookingById("NOTE");
-    expect(b?.lossNoteText).toBe("Client booked a cheaper vendor");
-    expect(lossFlagState(b!, NOW.getTime())).toBe("noted");
+    expect(r.filled).toBe(1);
+    const b = getBookingById("NOTE")!;
+    expect(b.lossReason).toBe("Went with a competitor");
+    expect(b.lossReasonSource).toBe("gs_note");
+    expect(b.lossNoteText).toBe("Client booked with another company");
+    expect(lossFlagState(b, NOW.getTime())).toBe("tagged");
+    // Filled from GS, so nothing is written back to GS.
+    expect(listPendingGsOps(50).filter((o) => o.op === "note_append")).toHaveLength(0);
+  });
+
+  it("a 'lost' line already in the notes before the flip counts too", async () => {
+    lostQuote("PRE", "JA - 11/8 - Lost, too far for delivery", 25);
+    await runLossReasonFlags(NOW);
+    expect(getBookingById("PRE")?.lossReason).toBe("Out of service area");
+    expect(taskOps("PRE")).toHaveLength(0);
+  });
+
+  it("an unrecognised reason in the note is kept as Other with the note text", async () => {
+    lostQuote("ODD", "old line");
+    saveLeadNotes([{ bookingId: "ODD", internalNotes: "old line\nFamily decided to do it themselves" }]);
+    await runLossReasonFlags(NOW);
+    const b = getBookingById("ODD")!;
+    expect(b.lossReason).toBe("Other");
+    expect(b.lossNoteText).toBe("Family decided to do it themselves");
   });
 
   it("lines Zoe appended itself (call and text logs) do not count as a reason", async () => {
     lostQuote("ZOE", "3/2 sent quote");
-    const line = "11/10 SB: Sales Bot texted the client a follow up";
+    const line = "HG(by SalesOS) - 11/10 - Sent text: following up on your quote";
     enqueueGsOp({ op: "note_append", transactionId: "ZOE", payload: { line } });
-    saveLeadNotes([{ bookingId: "ZOE", internalNotes: `3/2 sent quote\n\n${line}` }]);
-    expect(detectLossReasonNotes(NOW)).toBe(0);
+    saveLeadNotes([{ bookingId: "ZOE", internalNotes: `3/2 sent quote\n\n${line}\nSalesOS - 11/10 - Got voicemail, lost signal` }]);
+    expect(fillKnownLossReasons(NOW)).toBe(0);
     expect((await runLossReasonFlags(NOW)).flagged).toBe(1);
   });
 
-  it("a note added after the flag still clears it (and stops the notes re-read)", async () => {
+  it("a note added after the flag still fills the tag (and stops the notes re-read)", async () => {
     lostQuote("LATE", "old");
     await runLossReasonFlags(NOW);
     expect(lossNoteWatchIds(iso(NOW.getTime() - 14 * 24 * H), 25)).toContain("LATE");
     saveLeadNotes([{ bookingId: "LATE", internalNotes: "old\nThey postponed the event to next year" }]);
-    detectLossReasonNotes(NOW);
-    expect(lossFlagState(getBookingById("LATE")!, NOW.getTime())).toBe("noted");
+    fillKnownLossReasons(NOW);
+    expect(getBookingById("LATE")?.lossReason).toBe("Date/event changed or cancelled");
     expect(lossNoteWatchIds(iso(NOW.getTime() - 14 * 24 * H), 25)).not.toContain("LATE");
+  });
+
+  it("a quote the Sales Bot marked lost gets its reason filled and written to the GS note, no nag", async () => {
+    saveBookings([booking("BOT", "Quote Sent")]);
+    expect(queueMarkLost("BOT", "unsigned 3 days before the event").queued).toBe(true);
+    saveBookings([booking("BOT", "Lost")]);
+    setTrackAt("BOT", iso(NOW.getTime() - 25 * H));
+    expect((await runLossReasonFlags(NOW)).flagged).toBe(0);
+    const b = getBookingById("BOT")!;
+    expect(b.lossReason).toBe(SALES_BOT_LOSS_REASON);
+    expect(b.lossReasonSource).toBe("sales_bot");
+    const note = listPendingGsOps(50).find((o) => o.op === "note_append" && o.transactionId === "BOT");
+    expect((note?.payload as { line: string }).line).toBe("SalesOS - 11/10 - Lost reason: Not signed by the cutoff");
   });
 });
 
@@ -245,19 +277,34 @@ describe("pure helpers", () => {
     expect(lossFlagState({ ...base, lossTrackAt: iso(t - 30 * H), lossReason: "Budget cut" }, t)).toBe("tagged");
   });
 
-  it("noteReasonText ignores old lines, Zoe lines and noise", () => {
-    expect(noteReasonText("a line", "a line", [])).toBeNull();
-    expect(noteReasonText("a line", "a line\n.", [])).toBeNull();
-    expect(noteReasonText(null, "Went with another company", [])).toBe("Went with another company");
-    expect(noteReasonText("x", "x\nzoe log", ["zoe log"])).toBeNull();
+  it("noteLossReason ignores old lines, Zoe lines and noise", () => {
+    expect(noteLossReason("a line", "a line", [])).toBeNull();
+    expect(noteLossReason("a line", "a line\n.", [])).toBeNull();
+    expect(noteLossReason("x", "x\nzoe log here", ["zoe log here"])).toBeNull();
+    expect(noteLossReason(null, "Went with another company", [])).toEqual({ text: "Went with another company", reason: "Went with a competitor" });
   });
 
-  it("the Slack copy is short house style: no dashes, no emoji", () => {
+  it("classifyLossReason maps common rep wording onto the vocabulary", () => {
+    const cases: [string, string | null][] = [
+      ["Lost, went with a cheaper vendor", "Went with a competitor"],
+      ["too expensive for them", "Price — too expensive"],
+      ["their budget got cut", "Budget cut"],
+      ["we were sold out of chiavari chairs", "Availability — we couldn't fulfill"],
+      ["event cancelled", "Date/event changed or cancelled"],
+      ["never heard back after 3 follow ups", "No response — ghosted"],
+      ["out of our service area", "Out of service area"],
+      ["duplicate of another project", "Duplicate / test"],
+      ["family will do it themselves", null],
+    ];
+    for (const [text, want] of cases) expect(classifyLossReason(text)).toBe(want);
+    for (const [, want] of cases) if (want) expect(LOSS_REASONS).toContain(want);
+  });
+
+  it("the Slack copy and task text are short house style: no dashes, no emoji", () => {
     const b = { ...booking("S1", "Lost"), signed: false } as unknown as Parameters<typeof lossFlagMessage>[0][number];
-    for (const msg of [lossFlagMessage([b], "https://app/salesos/lost"), lossFlagMessage([b, b], null)]) {
+    for (const msg of [lossFlagMessage([b], "https://app/salesos/lost"), lossFlagMessage([b, b], null), LOSS_TASK_TITLE]) {
       expect(msg).not.toMatch(/[—–]| - /);
       expect(msg).not.toMatch(/\p{Extended_Pictographic}/u);
     }
-    expect(LOSS_TASK_TITLE).not.toMatch(/[—–]| - /);
   });
 });

@@ -891,6 +891,7 @@ export interface BookingView {
   lossFlagAt?: string | null;
   lossNoteAt?: string | null;
   lossNoteText?: string | null;
+  lossReasonSource?: string | null; // app | gs_note | sales_bot
 }
 
 function parseLineItems(raw: unknown): string[] | null {
@@ -935,6 +936,7 @@ function toBookingView(r: Record<string, unknown>): BookingView {
     lossFlagAt: (r.loss_flag_at as string) ?? null,
     lossNoteAt: (r.loss_note_at as string) ?? null,
     lossNoteText: (r.loss_note_text as string) ?? null,
+    lossReasonSource: (r.loss_reason_source as string) ?? null,
   };
 }
 
@@ -1685,10 +1687,18 @@ export function getLostQuotes(): BookingView[] {
 
 /** Team-tag (or clear, with null) why a quote was lost. Goodshuffle stores no reason, so this is how
  *  the loss-reason dataset gets built. */
-export function setLossReason(id: string, reason: string | null): void {
+export function setLossReason(id: string, reason: string | null, source: "app" | "gs_note" | "sales_bot" = "app"): void {
+  const r = reason && reason.trim() ? reason.trim() : null;
   getDb()
-    .prepare("UPDATE bookings SET loss_reason = ?, loss_reason_at = ? WHERE booking_id = ?")
-    .run(reason && reason.trim() ? reason.trim() : null, reason && reason.trim() ? new Date().toISOString() : null, id);
+    .prepare("UPDATE bookings SET loss_reason = ?, loss_reason_at = ?, loss_reason_source = ? WHERE booking_id = ?")
+    .run(r, r ? new Date().toISOString() : null, r ? source : null, id);
+}
+
+/** Did the Sales Bot itself mark this quote lost (morning outreach: unsigned close to the event)? */
+export function salesBotMarkedLost(id: string): boolean {
+  return !!getDb()
+    .prepare("SELECT 1 FROM gs_outbox WHERE op = 'mark_lost' AND transaction_id = ? AND json_extract(payload, '$.by') = 'Sales Bot' LIMIT 1")
+    .get(id);
 }
 
 // ── Lost-reason tracker storage (logic lives in src/lib/salesos/lossReasonFlag.ts) ──────────────────────
@@ -1696,31 +1706,6 @@ export function setLossReason(id: string, reason: string | null): void {
 const LOST_STATUS_SQL = `(LOWER(COALESCE(status_label,'')) LIKE '%lost%'
             OR LOWER(COALESCE(status_label,'')) LIKE '%cancel%'
             OR LOWER(COALESCE(status_label,'')) LIKE '%dead%')`;
-
-/** One-time backfill: start tracking quotes that went lost recently, before this tracker existed. The lost
- *  time comes from our own change history (the pull logged the flip) when we have it. A quote GS created on
- *  or after the cutoff date was necessarily lost after it too, so it counts even without a history entry.
- *  Everything older stays untracked. Returns how many quotes began tracking. */
-export function backfillLossTracking(sinceIso: string, sinceYmd: string, now: string): number {
-  const r = getDb()
-    .prepare(
-      `UPDATE bookings SET
-         lost_at = COALESCE(
-           (SELECT MIN(h.ts) FROM history_changes h WHERE h.kind = 'booking_cancelled' AND h.entity_id = bookings.booking_id),
-           date_created),
-         lost_notes_snapshot = internal_notes,
-         loss_track_at = @now
-       WHERE loss_track_at IS NULL
-         AND ${LOST_STATUS_SQL}
-         AND ${NOT_BLANK_DRAFT_SQL}
-         AND (
-           EXISTS (SELECT 1 FROM history_changes h WHERE h.kind = 'booking_cancelled' AND h.entity_id = bookings.booking_id AND h.ts >= @sinceIso)
-           OR COALESCE(date_created, '') >= @sinceYmd
-         )`,
-    )
-    .run({ sinceIso, sinceYmd, now });
-  return r.changes;
-}
 
 /** Tracked quotes that are still lost (a reopened quote drops out on its own). */
 export function lossTrackedQuotes(): BookingView[] {
@@ -1737,8 +1722,8 @@ export function lossNotesSnapshot(id: string): string | null {
   return r?.lost_notes_snapshot ?? null;
 }
 
-/** Lines Zoe itself appended to this project's GS notes (note_append ops) since `sinceIso`. These are the
- *  app's own call/text logs, never a rep's loss reason, so the note check ignores them. */
+/** Lines Zoe itself appended to this project's GS notes (note_append ops) since `sinceIso` ("" = ever). These
+ *  are the app's own call/text logs, never a rep's loss reason, so the note check ignores them. */
 export function zoeNoteLinesSince(id: string, sinceIso: string): string[] {
   return (
     getDb()

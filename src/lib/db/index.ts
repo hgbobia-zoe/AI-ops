@@ -2453,8 +2453,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "loss_track_at", type: "TEXT" }, // when we started asking for a reason (grace anchor); null = historical, never flagged
   { table: "bookings", column: "lost_notes_snapshot", type: "TEXT" }, // internal_notes when tracking began (a later note can hold the reason)
   { table: "bookings", column: "loss_flag_at", type: "TEXT" }, // when the no-reason Slack flag + GS task went out (once per project, forever)
-  { table: "bookings", column: "loss_note_at", type: "TEXT" }, // when a GS internal note written after the loss was seen (clears the flag)
-  { table: "bookings", column: "loss_note_text", type: "TEXT" }, // the new note lines (the reason as the rep wrote it)
+  { table: "bookings", column: "loss_note_at", type: "TEXT" }, // when a reason was found in the GS internal notes (clears the flag)
+  { table: "bookings", column: "loss_note_text", type: "TEXT" }, // the note text holding the reason, as the rep wrote it
+  { table: "bookings", column: "loss_reason_source", type: "TEXT" }, // who set loss_reason: app (a person) | gs_note (parsed from GS notes) | sales_bot
   // Goodshuffle `archived` flag (project removed from the active board — Lost/Cancelled/closed). The
   // authoritative off-pipeline signal; excluded from open-quote pipeline/upcoming (text status can lag).
   { table: "bookings", column: "archived", type: "INTEGER DEFAULT 0" },

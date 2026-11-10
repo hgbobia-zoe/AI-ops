@@ -153,9 +153,9 @@ export default async function LostQuotesPage(): Promise<React.JSX.Element> {
         <div className="border border-white/10 bg-white/[0.03] p-3 text-sm text-muted-foreground">
           {o.tracking.enabled ? (
             <>
-              When a quote is marked lost and no reason is recorded within 24 hours, Sales gets a Slack post and the sales lead gets a task in
-              Goodshuffle. A tag here or a Goodshuffle internal note written after the loss counts as the reason. Quotes lost before this
-              started are not flagged.
+              When a quote goes lost, Zoe reads the reason from the Goodshuffle notes and tags it here for you. A reason tagged here is also
+              written into the Goodshuffle note. If there is no reason anywhere after 24 hours, Sales gets a Slack post and the sales lead gets a
+              task in Goodshuffle. Only quotes that were open when this started, or created since, are tracked.
             </>
           ) : (
             <>Reason flags are off (LOSS_REASON_FLAGS=false). Lost quotes are still tracked here.</>
@@ -163,8 +163,8 @@ export default async function LostQuotesPage(): Promise<React.JSX.Element> {
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
             <span><span className="font-semibold text-amber-200 tabular-nums">{o.tracking.flagged}</span> flagged, no reason yet</span>
             <span><span className="font-semibold text-foreground tabular-nums">{o.tracking.waiting}</span> waiting (under 24h)</span>
-            <span><span className="font-semibold text-sky-200 tabular-nums">{o.tracking.noted}</span> reason in a GS note, needs a tag</span>
-            <span><span className="font-semibold text-emerald-200 tabular-nums">{o.tracking.tagged}</span> tagged</span>
+            <span><span className="font-semibold text-emerald-200 tabular-nums">{o.tracking.tagged}</span> with a reason</span>
+            {o.tracking.noted > 0 && <span><span className="font-semibold text-sky-200 tabular-nums">{o.tracking.noted}</span> reason in a GS note, needs a tag</span>}
           </div>
         </div>
       </section>
@@ -190,13 +190,16 @@ export default async function LostQuotesPage(): Promise<React.JSX.Element> {
                   <Link href={`/salesos/lost/${l.id}`} className="text-sky-300/80 hover:text-sky-200">autopsy →</Link>
                   <FlagBadge flag={l.flag} />
                 </div>
-                {l.flag === "noted" && l.lossNoteText && (
+                {l.lossNoteText && (
                   <div className="mt-0.5 line-clamp-2 text-[11px] text-sky-200/80" title={l.lossNoteText}>GS note: {l.lossNoteText}</div>
                 )}
               </div>
               {showMoney && <div className="w-20 shrink-0 text-right text-sm tabular-nums text-amber-200">{money(l.value)}</div>}
               <div className="shrink-0">
                 <LossReasonSelect id={l.id} reasons={LOSS_REASONS} initial={l.lossReason} />
+                {l.lossReason && l.lossReasonSource && l.lossReasonSource !== "app" && (
+                  <div className="mt-0.5 text-right text-[10px] text-muted-foreground">{l.lossReasonSource === "gs_note" ? "from the GS note" : "set by Sales Bot"}</div>
+                )}
               </div>
             </div>
           ))}

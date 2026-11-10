@@ -19,18 +19,7 @@ import {
   type Insight,
 } from "./lost";
 
-/** The reason vocabulary the team tags a lost quote with (event-rental / DMV market realities). */
-export const LOSS_REASONS: string[] = [
-  "Price — too expensive",
-  "Went with a competitor",
-  "Availability — we couldn't fulfill",
-  "Date/event changed or cancelled",
-  "Budget cut",
-  "No response — ghosted",
-  "Out of service area",
-  "Duplicate / test",
-  "Other",
-];
+export { LOSS_REASONS } from "./lossReasons";
 
 const toInput = (b: BookingView): LostInput => ({
   signed: b.signed,
@@ -58,6 +47,7 @@ export interface LostQuoteView {
   lossReason: string | null;
   flag: LossFlagState; // lost-reason tracker state ("untracked" = lost before tracking began)
   lossNoteText: string | null; // the reason as written in the GS notes, when that is how it was given
+  lossReasonSource: string | null; // app | gs_note | sales_bot
 }
 
 const toLostView = (b: BookingView, nowMs: number): LostQuoteView => ({
@@ -70,6 +60,7 @@ const toLostView = (b: BookingView, nowMs: number): LostQuoteView => ({
   lossReason: b.lossReason,
   flag: lossFlagState(b, nowMs),
   lossNoteText: b.lossNoteText ?? null,
+  lossReasonSource: b.lossReasonSource ?? null,
 });
 
 export interface LostQuotesOverview {
