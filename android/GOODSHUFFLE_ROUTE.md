@@ -134,17 +134,30 @@ and `Route.gsRouteId` — all three extractors now emit them (bookmarklet, kiosk
 web-eval, native `buildGoodshuffleScript`; APK v1.0.20). Routes pulled before v1.0.20 have
 no ids, so their stops remove locally only (the API reports `gsSkippedReason`).
 
-### Other next write: sync stop/route status BACK
-Goodshuffle models progress: `route.status` (`SCHEDULED` → `IN_PROGRESS` → …) and each
-waypoint's `status`. Our transitions (EnRoute / Arrived / Completed) can drive those,
-keeping Goodshuffle in sync with the tablet. This is **button-driven** (not autocomplete),
-so it's the easy bucket to capture + replay. SAFE re: double-texting — Zoe has
-Goodshuffle's stop-SMS option OFF, so status updates won't text customers (our branded
-Quo SMS stays the only one they get).
-To build: capture the `Start Route` / `mark stop` `POST /app/routing/…` mutation on a
-throwaway/test route, then call it from the kiosk bridge on ARRIVED / HEADING_NEXT /
-COMPLETE, matching waypoint by `transactionID`. Always test on TEST 1/2/3 first; add a
-confirm + idempotency (writes mutate real data).
+### Stop/route status sync (Dispatch → Goodshuffle) — WIRED + PROVEN LIVE (2026-11-10)
+Goodshuffle tracks progress per route and per waypoint. Before this, every route stayed `SCHEDULED`
+forever because drivers work in Zoe. `src/lib/dispatch/gsStatusSync.ts` queues a `gs_status` op on each
+change and the Auto-Pull extension (`extension/pull-injected.js`, 1.20.8+) replays it:
+```
+POST /app/routing/updateWaypointStatus   (JSON)  { "waypointID": <waypoint.id>, "status": "COMPLETED" }
+POST /app/routing/updateRoute            (JSON)  { "routeID": <id>, "routeName": <name>, "color": <color>,
+                                                    "notes": <notes>, "status": "COMPLETE" }
+```
+- Waypoint statuses: `UNSCHEDULED | SCHEDULED | ARRIVED | COMPLETED | SKIPPED`. Route statuses:
+  `SCHEDULED | IN_PROGRESS | COMPLETE`. Found in Goodshuffle's own routing app (`/ui/routing` bundle).
+- `updateRoute` overwrites name/color/notes too, so echo them from `getRoute`.
+- Key is the waypoint's own `id` (match by `transactionID`, plus `waypointType` DROP_OFF/PICK_UP when a
+  project has both legs on one route).
+- Mapping: first stop off Waiting → route IN_PROGRESS; Arrived → ARRIVED; Completed/Returned →
+  COMPLETED; route closed → COMPLETE; reopen → IN_PROGRESS / SCHEDULED (only if we synced before).
+  Stops left open at close stay SCHEDULED so the office reschedules them in Goodshuffle.
+- **Proven 2026-11-10 on a past finished route** (65579 "SUNDAY 11/1 AFTERNOON FORD JOB", pickup
+  waypoint 4457871, completed in Zoe): both calls 200; only the two statuses changed (times, order, crew,
+  name, color, warehouse legs untouched); no stop SMS (`smsSentDate` empty) and no client email.
+- Do NOT call `/app/routing/sendDriverEnRouteMessage` (it texts the customer).
+- Kill switch: `GS_STATUS_SYNC=false`.
+
+The extension also drains `remove_waypoint` now (previously only the retired kiosk did).
 
 ## Revenue + customer identity — CAPTURED & PROVEN (2026-09-03)
 

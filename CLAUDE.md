@@ -73,7 +73,8 @@ The working path is a **logged-in browser** replaying the endpoints and POSTing 
 - Ingest endpoints are CORS-locked to `https://pro.goodshuffle.com` and gated by the
   **unset-by-default** `GS_INGEST_TOKEN` (fail-open until set).
 
-Highest-value next write to build: **push dispatch progress → Goodshuffle stop/route
-status** (button-driven, so easy to replay). Safe re: double-texting — Zoe has
-Goodshuffle's stop-SMS off. Always test writes on TEST 1/2/3 first; add a confirm +
-idempotency (writes mutate real data). Full read/write contract: `android/GOODSHUFFLE_ROUTE.md`.
+Dispatch progress → Goodshuffle stop/route status is BUILT and proven live (2026-11-10):
+`gs_status` outbox op from `src/lib/dispatch/gsStatusSync.ts`, drained by the extension
+(`updateWaypointStatus` + `updateRoute`). Always test writes on TEST 1/2/3 (or a past finished
+route) first; add idempotency (writes mutate real data). Full read/write contract:
+`android/GOODSHUFFLE_ROUTE.md`.
