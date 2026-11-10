@@ -68,6 +68,9 @@ function sanitizeTimingFields(s: Partial<Stop>): Partial<Stop> {
     windowStart: iso(s.windowStart),
     windowEnd: iso(s.windowEnd),
     windowSource: undefined,
+    // Exact-time flag + line name come from the project timeline (server side), never from the route pull.
+    windowPinPoint: undefined,
+    windowLabel: undefined,
     plannedOnSiteMin: mins(s.plannedOnSiteMin),
     plannedTransitMin: mins(s.plannedTransitMin),
     // Close resolutions are set by a closer, never by a pull.

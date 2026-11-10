@@ -155,8 +155,13 @@ export interface Stop {
   /** CUSTOMER window start (ISO): a per-waypoint required-arrival time when dispatch set one, else the
    *  Goodshuffle project's logistics_start_from_time (delivery stops only). On-time is scored against this. */
   windowStart?: string;
-  /** Customer window end (ISO), when known (per-waypoint latestRequiredArrivalTime). */
+  /** Customer window end (ISO), when known: per-waypoint latestRequiredArrivalTime, or the end of the
+   *  Goodshuffle project timeline window ("[9:00 AM - 8:00 PM]"). Unset = only the start is known. */
   windowEnd?: string;
+  /** The window is a paid "PIN POINT EXACT TIME" window (project timeline). */
+  windowPinPoint?: boolean;
+  /** The Goodshuffle delivery line the window came from ("Delivery fee", "PIN POINT EXACT TIME"). */
+  windowLabel?: string;
   /** Where windowStart came from: "route" (waypoint required arrival) or "booking" (project logistics). */
   windowSource?: "route" | "booking";
   /** Planned minutes on site (Goodshuffle waypoint scheduledLoiterMinutes). */

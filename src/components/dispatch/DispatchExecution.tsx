@@ -29,7 +29,7 @@ import { stopStateTone, routeStatusView, staffingTone } from "@/lib/dispatch/boa
 import { STATE_VISUAL } from "@/lib/stateVisual";
 import { DISPLAY_TZ, formatClockTime } from "@/lib/dates";
 import type { StopState, RouteStatus } from "@/lib/types";
-import { formatDuration, onTimeBadge, type ArrivalMismatch, type OnTimeResult } from "@/lib/dispatch/onTime";
+import { formatDuration, formatWindow, onTimeBadge, type ArrivalMismatch, type OnTimeResult } from "@/lib/dispatch/onTime";
 import type { RouteStaffingState } from "@/lib/scheduling/routeStaffing";
 
 // ── Serializable view types (built on the server, passed down) ───────────────────────────────────────
@@ -53,6 +53,12 @@ export interface DispatchStopView {
   canPull: boolean;
   /** Customer window start (ISO) and where it came from. */
   windowStart: string | null;
+  /** Customer window end (ISO); null = only the start is known. */
+  windowEnd: string | null;
+  /** A paid "PIN POINT EXACT TIME" window. */
+  windowPinPoint: boolean;
+  /** The Goodshuffle delivery line the window came from. */
+  windowLabel: string | null;
   windowSource: "route" | "booking" | null;
   appArrivedAt: string | null;
   gpsArrivedAt: string | null;
@@ -242,18 +248,40 @@ function StopTiming({ stop, routeDone }: { stop: DispatchStopView; routeDone: bo
   const badge = onTimeBadge(stop.onTime);
   const planned = stop.plannedWindow || stop.eta;
   const parts: string[] = [];
-  parts.push(stop.windowStart ? `Window ${formatClockTime(stop.windowStart)}` : "No customer window");
+  const kindWord = stop.kind === "pickup" ? "Pickup window" : "Window";
+  parts.push(stop.windowStart ? `${kindWord} ${formatWindow(stop.windowStart, stop.windowEnd)}` : "No customer window");
   if (planned) parts.push(`Planned ${formatClockTime(planned)}`);
   if (stop.onTime.arrivalIso) parts.push(`Arrived ${formatClockTime(stop.onTime.arrivalIso)} (${stop.onTime.source === "gps" ? "GPS" : "app tap"})`);
+  const ot = stop.onTime;
+  const detail =
+    ot.status === "late" && typeof ot.minutesLate === "number"
+      ? `${formatDuration(ot.minutesLate)} after the ${stop.windowPinPoint ? "exact time window" : "window"} closed.`
+      : ot.status === "window_end_unknown" && typeof ot.minutesAfterStart === "number"
+        ? `Arrived ${formatDuration(ot.minutesAfterStart)} after the window opened. Goodshuffle has no window end for this stop, so it is not scored late.`
+        : ot.status === "on_time" && ot.early && ot.minutesEarly
+          ? `Arrived ${formatDuration(ot.minutesEarly)} before the window opened.`
+          : null;
+  const sourceTitle =
+    stop.windowSource === "booking"
+      ? `From the Goodshuffle project${stop.windowLabel ? `: ${stop.windowLabel}` : ""}`
+      : stop.windowSource === "route"
+        ? "From the Goodshuffle route stop"
+        : undefined;
   const m = stop.mismatch;
   return (
     <div className="mt-1 space-y-0.5 pl-7 text-[11px]">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-meta">
-        <span title={stop.windowSource === "booking" ? "From the Goodshuffle project logistics time" : stop.windowSource === "route" ? "From the Goodshuffle route stop" : undefined}>
+        <span title={sourceTitle}>
           {parts.join(" · ")}
         </span>
+        {stop.windowPinPoint && (
+          <StatusBadge tone="attention" size="sm">
+            Exact time
+          </StatusBadge>
+        )}
         {badge && <StatusBadge tone={badge.tone} size="sm">{badge.label}</StatusBadge>}
       </div>
+      {detail && <div className={ot.status === "late" ? "text-critical" : "text-meta"}>{detail}</div>}
       {m && stop.appArrivedAt && stop.gpsArrivedAt && (
         <div className="text-attention">
           App arrival {formatClockTime(stop.appArrivedAt)}, GPS arrival {formatClockTime(stop.gpsArrivedAt)}. They differ by {formatDuration(Math.abs(m.deltaMin))}. Check which is right.

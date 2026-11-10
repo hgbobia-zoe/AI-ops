@@ -65,7 +65,13 @@ function overlay(existingStop: Stop, incoming?: Partial<Stop>): Stop {
     plannedWindow: incoming.plannedWindow ?? existingStop.plannedWindow,
     eta: incoming.eta ?? existingStop.eta,
     ...(incoming.windowStart
-      ? { windowStart: incoming.windowStart, windowEnd: incoming.windowEnd || undefined, windowSource: "route" as const }
+      ? {
+          windowStart: incoming.windowStart,
+          windowEnd: incoming.windowEnd || undefined,
+          windowSource: "route" as const,
+          windowPinPoint: undefined,
+          windowLabel: undefined,
+        }
       : {}),
     plannedOnSiteMin: numOrUndef(incoming.plannedOnSiteMin) ?? existingStop.plannedOnSiteMin,
     plannedTransitMin: numOrUndef(incoming.plannedTransitMin) ?? existingStop.plannedTransitMin,

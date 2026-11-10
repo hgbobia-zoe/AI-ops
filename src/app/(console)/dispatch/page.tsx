@@ -120,9 +120,18 @@ function toRouteView(
     const finished = s.state === "Completed" || s.state === "Returned";
     const addr = reviewStopAddress({ address: s.address, name: s.custName, whenIso: s.plannedWindow || s.eta });
     const gps = gpsArrivals.get(s.stopId)?.enterTs ?? null;
-    const onTime = scoreOnTime({ windowStart: s.windowStart, appArrivedAt: s.arrivedAt, gpsArrivedAt: gps });
+    const onTime = scoreOnTime({
+      windowStart: s.windowStart,
+      windowEnd: s.windowEnd,
+      pinPoint: s.windowPinPoint,
+      appArrivedAt: s.arrivedAt,
+      gpsArrivedAt: gps,
+    });
     return {
       windowStart: s.windowStart ?? null,
+      windowEnd: s.windowEnd ?? null,
+      windowPinPoint: Boolean(s.windowPinPoint),
+      windowLabel: s.windowLabel ?? null,
       windowSource: s.windowSource ?? null,
       appArrivedAt: s.arrivedAt ?? null,
       gpsArrivedAt: gps,
