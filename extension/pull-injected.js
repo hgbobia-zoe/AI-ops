@@ -61,6 +61,48 @@ function zoePull(apiBase, tier) {
         if (p.signed) { if (d && d >= todayY && d <= horizonY) signedIds.push(id); return; }
         const s = (p.statusLabel || "").toLowerCase(); if (s.indexOf("lost") >= 0 || s.indexOf("cancel") >= 0 || s.indexOf("dead") >= 0) return;
         if (!d || d >= todayY) openIds.push(id); });
+      // Delivery window capture (project timeline ranges, "Saturday, 10/31 [9:00 AM - 8:00 PM]"). MIRRORS
+      // selectWindowCaptureIds() in src/lib/gsPull.ts: logistics date within -14..+14 days, not lost/cancelled/
+      // dead; the FULL lane takes only archived ones (the active lane cannot see them). Sequential, 250ms apart
+      // (Goodshuffle 429s parallel bursts), one retry after a 429. A failed fetch is left out (stored windows
+      // stay); an empty timeline is sent (clears). The server parses the labels.
+      const winFrom = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+      const winTo = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+      function windowIds(archivedOnly) {
+        const out = [];
+        Object.keys(all).forEach((id) => { const p = all[id]; const d = d2(p.logistics_start_date); if (!d || d < winFrom || d > winTo) return;
+          const s = (p.statusLabel || "").toLowerCase(); if (s.indexOf("lost") >= 0 || s.indexOf("cancel") >= 0 || s.indexOf("dead") >= 0) return; if (archivedOnly && !p.archived) return; out.push(id); });
+        return out.slice(0, 150);
+      }
+      function pullWindows(ids) {
+        const wins = [];
+        const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+        const getTl = (id, retry) => fetch("/app/vendorTransaction/initProjectTimeline?transactionID=" + id, H)
+          .then((r) => { if (r.status === 429 && !retry) return wait(2000).then(() => getTl(id, true)); return r.ok ? r.json() : null; })
+          .catch(() => null);
+        function one(i) {
+          if (i >= ids.length) return Promise.resolve();
+          const id = ids[i];
+          return getTl(id, false).then((j) => {
+            if (j && Array.isArray(j.events)) {
+              const ev = [];
+              j.events.forEach((e) => { if (e && e.type === "logisticsDelivery") ev.push({ marker: e.eventTimeLineMarker || null, name: e.name || null, dateLabel: e.dateLabel || null }); });
+              wins.push({ bookingId: String(id), events: ev });
+            }
+          }).then(() => (i + 1 < ids.length ? wait(250).then(() => one(i + 1)) : null));
+        }
+        return one(0).then(() => {
+          if (!wins.length) return { windows: 0 };
+          return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ windows: wins }) }).then((r) => r.json()).then((j) => ({ windows: (j && j.windows) || 0 })).catch(() => ({ windows: 0 }));
+        });
+      }
+      // Active lane: at most every 15 minutes (the fast lane repeats every few minutes).
+      function activeWindows() {
+        const last = (typeof window !== "undefined" && window.__zoeWinLast) || 0;
+        if (Date.now() - last < 15 * 60 * 1000) return Promise.resolve({ windows: 0 });
+        if (typeof window !== "undefined") window.__zoeWinLast = Date.now();
+        return pullWindows(windowIds(false));
+      }
       const seenCap = {}, captureIds = []; openIds.concat(signedIds).forEach((id) => { if (!seenCap[id]) { seenCap[id] = 1; captureIds.push(id); } }); const capIds = captureIds.slice(0, 100);
       function titlesFrom(lists) { const t = []; function w(o, d) { if (!o || typeof o !== "object" || d > 7) return; if (Object.prototype.toString.call(o) === "[object Array]") { for (let k = 0; k < o.length; k++) w(o[k], d + 1); return; } if (o.itemTitle) t.push(o.itemTitle); for (const kk in o) w(o[kk], d + 1); } (lists || []).forEach((gj) => { w(gj, 0); }); return t; }
       // Quote sent/opened from the client email thread (getMessagesForTransaction). sent = earliest
@@ -128,9 +170,9 @@ function zoePull(apiBase, tier) {
       // FULL lane: archive-inclusive POST (scope:"full" — the ONLY scope that prunes) carrying `partial`,
       // no notes (those ride the fast ACTIVE lane). ACTIVE lane: scope:"active" (never prunes) + notes.
       if (FULL) {
-        return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, partial: pErr, scope: "full" }) }).then((r) => r.json()).then((j) => ({ saved: (j && j.saved) || recs.length, partial: pErr || !!(j && j.partial), notes: 0 })).catch(() => ({ saved: 0, partial: true }));
+        return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, partial: pErr, scope: "full" }) }).then((r) => r.json()).then((j) => pullWindows(windowIds(true)).catch(() => ({ windows: 0 })).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: pErr || !!(j && j.partial), notes: 0, windows: (wj && wj.windows) || 0 }))).catch(() => ({ saved: 0, partial: true }));
       }
-      return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, scope: "active" }) }).then((r) => r.json()).then((j) => pullNotes().then((nj) => ({ saved: (j && j.saved) || recs.length, partial: false, notes: (nj && nj.updated) || 0 }))).catch(() => ({ saved: 0, partial: false }));
+      return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, scope: "active" }) }).then((r) => r.json()).then((j) => pullNotes().then((nj) => activeWindows().catch(() => ({ windows: 0 })).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: false, notes: (nj && nj.updated) || 0, windows: (wj && wj.windows) || 0 })))).catch(() => ({ saved: 0, partial: false }));
     });
   }
 

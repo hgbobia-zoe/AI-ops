@@ -47,6 +47,23 @@ describe("extension drainer ↔ bookmarklet parity (defect #3)", () => {
     }
   });
 
+  it("both pulls capture the project timeline delivery windows (ranges), one at a time, 250ms apart", () => {
+    for (const src of [extSrc, bookmarkletSrc]) {
+      expect(src).toContain("/app/vendorTransaction/initProjectTimeline?transactionID=");
+      expect(src).toContain('"logisticsDelivery"');
+      expect(src).toContain("eventTimeLineMarker");
+      expect(src).toContain("dateLabel");
+      expect(src).toContain("wait(250)"); // sequential gap: Goodshuffle 429s parallel bursts
+      expect(src).toMatch(/status ?=== ?429/); // one retry after a 429
+      expect(src).toMatch(/JSON\.stringify\(\{ ?windows: ?wins ?\}\)/);
+      // Active lane = non-archived in the horizon; the full lane takes only the archived ones.
+      expect(src).toMatch(/pullWindows\(windowIds\(true\)\)/);
+      expect(src).toMatch(/pullWindows\(windowIds\(false\)\)/);
+      // Never the contract view for this (it carries client notes, not windows).
+      expect(src).not.toMatch(/initProjectTimeline[^\n]*initContractView/);
+    }
+  });
+
   it("the extension surfaces unhandled op types instead of silently ignoring them", () => {
     // create_project needs a popup from a real user gesture, which a timer-driven content script lacks,
     // so it stays bookmarklet/Playwright-only — but it must be COUNTED and reported, never dropped silently.

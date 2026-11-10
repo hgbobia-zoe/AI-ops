@@ -20,10 +20,19 @@ const stackSeen = (g.__routeStackSeen ??= new Map<string, string>());
 /** The Slack body for a route's sequencing warnings. Plain sentences, no dashes or emoji (house style). */
 export function formatStackAlert(truck: string, date: string, warnings: StackWarning[]): string {
   const n = warnings.length;
+  const exact = warnings.filter((w) => w.pinPoint).length;
+  const closed = warnings.filter((w) => w.windowEndKnown).length;
+  const lead =
+    closed === n
+      ? `${n} stop${n === 1 ? " is" : "s are"} planned to arrive after the customer window closes.`
+      : closed === 0
+        ? `${n} stop${n === 1 ? " is" : "s are"} planned well after the customer window opens. Goodshuffle has no window end for ${n === 1 ? "it" : "them"}, so check with the customer.`
+        : `${n} stops are planned past the customer window (${closed} after it closes, ${n - closed} well after it opens with no window end in Goodshuffle).`;
   return [
     `*${truck} on ${date}: sequencing check*`,
-    `${n} stop${n === 1 ? " is" : "s are"} planned well past the customer window. Consider moving ${n === 1 ? "it" : "them"} earlier, or call the customer ahead.`,
-    ...warnings.map((w) => `• ${w.message}`),
+    `${lead} Consider moving ${n === 1 ? "it" : "them"} earlier, or call the customer ahead.`,
+    ...(exact > 0 ? [`${exact === 1 ? "One is a paid exact time window" : `${exact} are paid exact time windows`}. Fix ${exact === 1 ? "that one" : "those"} first.`] : []),
+    ...warnings.map((w) => `• ${w.pinPoint ? "Exact time. " : ""}${w.message}`),
   ].join("\n");
 }
 
