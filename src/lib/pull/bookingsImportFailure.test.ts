@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { statusText } from "@/lib/notify/status";
 import { getDb } from "@/lib/db";
 import { recordBookingsImportFailure } from "./state";
 
@@ -19,9 +20,10 @@ describe("recordBookingsImportFailure (mirrors recordInstaworkProbe)", () => {
   it("pages once when a sustained failure follows a known-good baseline", () => {
     recordBookingsImportFailure(true, "ok", t("2026-10-02T10:00:00Z")); // baseline
     const flip = recordBookingsImportFailure(false, "120 active projects missing from the pull", t("2026-10-02T10:10:00Z"));
-    expect(flip.alert).toMatch(/keeps skipping orphan cleanup/i);
-    expect(flip.alert).toMatch(/120 active projects missing/);
-    expect(flip.alert).toMatch(/arm Force-archive in \/admin/i);
+    const text = statusText(flip.alert!);
+    expect(text).toMatch(/keeps skipping orphan cleanup/i);
+    expect(text).toMatch(/120 active projects missing/);
+    expect(text).toMatch(/arm Force-archive in \/admin/i);
   });
 
   it("dedups: a second failing observation inside the 2h cool-off does not re-alert", () => {
@@ -40,7 +42,7 @@ describe("recordBookingsImportFailure (mirrors recordInstaworkProbe)", () => {
     recordBookingsImportFailure(true, "ok", t("2026-10-02T10:00:00Z"));
     recordBookingsImportFailure(false, "120 missing", t("2026-10-02T10:10:00Z")); // alerted down
     const rec = recordBookingsImportFailure(true, "30 orphans archived", t("2026-10-02T10:20:00Z"));
-    expect(rec.alert).toMatch(/bookings pull recovered/i);
+    expect(statusText(rec.alert!)).toMatch(/bookings pull recovered/i);
   });
 
   it("does not send a recovery alert for a failure that never alerted", () => {
@@ -51,7 +53,7 @@ describe("recordBookingsImportFailure (mirrors recordInstaworkProbe)", () => {
 
   it("alert copy carries no em-dash or emoji (house comms style)", () => {
     recordBookingsImportFailure(true, "ok", t("2026-10-02T10:00:00Z"));
-    const a = recordBookingsImportFailure(false, "120 missing", t("2026-10-02T10:10:00Z")).alert!;
+    const a = statusText(recordBookingsImportFailure(false, "120 missing", t("2026-10-02T10:10:00Z")).alert!);
     expect(a).not.toMatch(/[—–]/); // no em/en dashes
     // no emoji (surrogate-pair / pictographic range)
     expect(a).not.toMatch(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u);

@@ -6,6 +6,7 @@
 // Must be PUBLIC in the proxy (it's hit cross-origin by the Gusto tab, not an app session).
 
 import { NextResponse } from "next/server";
+import { trackStatus, type StatusAlert } from "@/lib/notify/status";
 import { parseGustoMembers, parseGustoPayPeriods, attachPayRates, saveGustoSnapshot } from "@/lib/payroll/gustoSnapshot";
 import { reconcileGustoFromSnapshot } from "@/lib/payroll/gustoMatch";
 import { recordPull, logImport } from "@/lib/pull/state";
@@ -43,10 +44,12 @@ export async function POST(req: Request): Promise<NextResponse> {
   // snapshot with an empty one (FACTS ONLY: empty ≠ "no workers").
   if (members.length === 0) {
     logImport("gusto", false, { detail: "0 members — likely signed out" });
+    await trackStatus("gusto-session", true, gustoSessionAlert, { cooloffMs: 6 * 3_600_000 });
     return NextResponse.json({ ok: false, members: 0, note: "no members parsed — not stored" }, { headers: CORS });
   }
 
   saveGustoSnapshot({ members, payPeriods, fetchedAt: new Date().toISOString() });
+  await trackStatus("gusto-session", false, gustoSessionAlert);
   let match: Awaited<ReturnType<typeof reconcileGustoFromSnapshot>> | null = null;
   try {
     match = await reconcileGustoFromSnapshot();
@@ -59,4 +62,19 @@ export async function POST(req: Request): Promise<NextResponse> {
   });
 
   return NextResponse.json({ ok: true, members: members.length, payPeriods: payPeriods.length, match }, { headers: CORS });
+}
+
+/** The status card for a signed-out Gusto tab (the import came back with no people). */
+function gustoSessionAlert(state: "down" | "recovered", since: string | null): StatusAlert {
+  return state === "down"
+    ? {
+        system: "Gusto",
+        level: "down",
+        title: "Gusto looks signed out",
+        impact: "Payroll people, pay rates, and draft payroll pushes can't sync from Gusto.",
+        fix: "Sign in to app.gusto.com in the office Chrome that runs the Auto-Pull extension.",
+        since,
+        detail: "The Gusto pull returned 0 people",
+      }
+    : { system: "Gusto", level: "recovered", title: "Gusto is signed in again", impact: "Payroll data is syncing from Gusto again.", since };
 }

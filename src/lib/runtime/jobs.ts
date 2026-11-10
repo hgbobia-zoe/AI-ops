@@ -14,6 +14,7 @@ import { planWaitingRuns } from "@/lib/ai/improvement/planner";
 import { INSTAWORK_STALE_MIN } from "@/lib/instawork/store";
 import { runInstaworkMonitor } from "@/lib/instawork/monitor";
 import { slackNotify, slackBotConfigured } from "@/lib/notify/slack";
+import { postStatus, trackStatus, failureAlert, classifyFailure } from "@/lib/notify/status";
 import { discover } from "@/lib/seo/discovery";
 import { configured as ubersuggestConfigured } from "@/lib/seo/ubersuggest";
 import { connecteamConfigured, refreshConnecteamHealth, warmConnecteamCaches, takeConnecteamUsage, formatConnecteamUsage } from "@/lib/connecteam";
@@ -87,7 +88,7 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
         : "no snapshot yet — log into Instawork in the office browser";
       // Slack once on a fresh→stale flip and once on recovery (2h-deduped in recordInstaworkProbe).
       const { alert } = recordInstaworkProbe(isFresh, detail);
-      if (alert) void slackNotify(alert);
+      if (alert) void postStatus(alert);
       if (!isFresh) return { ok: false, detail };
       // Monitor for no-shows / drop-offs: a booked worker disappearing near/after a gig's start →
       // Slack. (Instawork's API has no no-show field; a removed worker is the signal.)
@@ -483,21 +484,61 @@ export interface JobRunResult {
   ms: number;
 }
 
+/** Jobs that already post their own, more specific status card when their system goes down, so the
+ *  generic "keeps failing" card below would only repeat it. */
+export const SELF_ALERTING_JOBS = new Set<string>([
+  "instawork", // Instawork connection down / back
+  "etalink-premint", // Ignition signed out, tracking links stuck
+  "website-uptime", // website down / back
+  "outbox-health", // Goodshuffle write-backs not landing
+  "viktor-agent", // Viktor failed to answer
+  "ubersuggest", // Ubersuggest data limit
+  RADAR_JOB_KEY, // Opportunity Radar source failing (alertOps)
+]);
+
+/** A job has to keep failing this long (about three 15-minute ticks) before it pages, so one blip is quiet. */
+export const JOB_FAIL_SUSTAIN_MS = 30 * 60_000;
+
+/** Post a status card when a background job keeps failing, and one when it recovers. Never throws. */
+async function trackJobHealth(job: RuntimeJob, ok: boolean, detail: string): Promise<void> {
+  if (SELF_ALERTING_JOBS.has(job.key)) return;
+  // The Connecteam rate-limit breaker posts its own card; don't add one per Connecteam-backed job.
+  if (!ok && classifyFailure(detail) === "rate_limit" && /connecteam|payroll|route-sync|shift|scheduling/i.test(job.key)) return;
+  await trackStatus(
+    `job:${job.key}`,
+    !ok,
+    (state, since) =>
+      state === "down"
+        ? {
+            ...failureAlert(job.label, detail, {
+              impact: `The "${job.label}" background job has stopped working, so whatever it keeps up to date is going stale.`,
+              since,
+            }),
+            title: `${job.label} keeps failing`,
+          }
+        : { system: job.label, level: "recovered", title: `${job.label} is working again`, since },
+    { sustainMs: JOB_FAIL_SUSTAIN_MS },
+  );
+}
+
 /** Run every CONFIGURED server job once, recording each to the import ledger. Never throws. */
 export async function runServerJobs(): Promise<JobRunResult[]> {
   const out: JobRunResult[] = [];
   for (const job of RUNTIME_JOBS) {
     if (job.bucket !== "server" || !job.run || !job.configured()) continue;
     const t = Date.now();
+    let ok = false;
+    let detail = "error";
     try {
       const r = await job.run();
-      logImport(job.key, r.ok, { detail: r.detail });
-      out.push({ key: job.key, ok: r.ok, detail: r.detail, ms: Date.now() - t });
+      ok = r.ok;
+      detail = r.detail;
     } catch (e) {
-      const detail = e instanceof Error ? e.message : "error";
-      logImport(job.key, false, { detail });
-      out.push({ key: job.key, ok: false, detail, ms: Date.now() - t });
+      detail = e instanceof Error ? e.message : "error";
     }
+    logImport(job.key, ok, { detail });
+    out.push({ key: job.key, ok, detail, ms: Date.now() - t });
+    await trackJobHealth(job, ok, detail);
   }
   return out;
 }

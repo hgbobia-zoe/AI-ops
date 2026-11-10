@@ -7,7 +7,7 @@
 // HONESTY: nothing here fabricates data; it only reports counts + timestamps that real ingests produced.
 
 import { getJson, setJson } from "@/lib/kv";
-import { slackNotifyAlert } from "@/lib/notify/slack";
+import { postStatus } from "@/lib/notify/status";
 import { buildSeedKeywords } from "./discovery";
 import { allDedupeKeys, dedupeKey, latestSuccess, latestRateLimited, latestDiagnostic } from "./store";
 import { SEO_STALE_HOURS, type SeoHealth } from "./types";
@@ -105,8 +105,14 @@ export async function alertLimitHit(meta: { quota?: { resetAt?: string | null } 
   const now = Date.now();
   const last = getJson<number>(ALERT_KEY, 0);
   if (now - last < ALERT_COOLDOWN_MS) return { alerted: false, skipped: "cooldown" };
-  const resets = meta.quota?.resetAt ? ` Resets ${meta.quota.resetAt}.` : "";
-  const r = await slackNotifyAlert(`SEO data limit reached — keyword/SERP discovery is paused for now; it resumes on the next drip once the limit clears.${resets}`);
+  const r = await postStatus({
+    system: "Ubersuggest",
+    level: "degraded",
+    title: "Ubersuggest data limit reached",
+    impact: "SEO keyword and search result discovery is paused.",
+    fix: "Nothing to do. It resumes on its own once the limit resets.",
+    until: meta.quota?.resetAt ?? null,
+  }, now);
   if (r.ok) {
     setJson(ALERT_KEY, now);
     return { alerted: true };

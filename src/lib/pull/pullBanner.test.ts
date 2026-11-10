@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { statusText } from "@/lib/notify/status";
 import { getDb } from "@/lib/db";
 import { pullBannerState, recordAgentHeartbeat, recordPull } from "./state";
 
@@ -104,10 +105,11 @@ describe("recordAgentHeartbeat — fleet-down alerting", () => {
     expect(recordAgentHeartbeat("office-PC", "not_logged_in", null, null, new Date(t0)).alert).toBeNull();
     // Still down 20 min later (> 15m sustain) → one page.
     const down = recordAgentHeartbeat("office-PC", "not_logged_in", null, null, new Date(t0 + 20 * 60_000));
-    expect(down.alert).toMatch(/down/i);
-    expect(down.alert).toMatch(/signed out/i);
+    expect(down.alert!.level).toBe("down");
+    expect(statusText(down.alert!)).toMatch(/signed out/i);
     // A puller recovers → exactly one recovery message, bookkeeping cleared.
     const rec = recordAgentHeartbeat("office-PC", "ok", "5 stops", null, new Date(t0 + 25 * 60_000));
-    expect(rec.alert).toMatch(/recovered/i);
+    expect(rec.alert!.level).toBe("recovered");
+    expect(statusText(rec.alert!)).toMatch(/pulling again/i);
   });
 });

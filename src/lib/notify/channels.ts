@@ -11,7 +11,11 @@
 //   • customer → the CUSTOMER-ALERTS webhook (slackNotifyAlert). Reserved for FRUSTRATED-CALLER /
 //                call-sentiment alerts ONLY — the user was explicit these stay put. No-ops cleanly when the
 //                alerts webhook is unset.
-//   • ops      → the ops/dispatch webhook (slackNotify). Dispatch/system/integration failures.
+//   • ops      → the ops/dispatch webhook (slackNotify). Dispatch and operational heads-ups.
+//   • status   → SYSTEM AVAILABILITY lives in its own module, src/lib/notify/status.ts (postStatus), not here:
+//                broken connections, rate-limited or rejected API keys, Ignition / Goodshuffle / Instawork /
+//                Gusto signed out, Auto-Pull down, background jobs that keep failing, website down. All of it
+//                lands in the `ai-ops-status` channel (SLACK_CHANNEL_STATUS) as one clean card format.
 //
 // NOTE: this map covers the DOMAINS Part C routes. Operational-Opportunity / Radar alerts
 // (src/lib/opportunity/alerts.ts) deliberately still use slackNotifyAlert directly and are NOT routed here

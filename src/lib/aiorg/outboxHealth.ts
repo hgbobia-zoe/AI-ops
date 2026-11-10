@@ -10,7 +10,7 @@
 // queue is empty, never 0.
 
 import { getDb } from "@/lib/db";
-import { slackNotify } from "@/lib/notify/slack";
+import { postStatus } from "@/lib/notify/status";
 import { getJson, setJson } from "@/lib/kv";
 import { decideJobAlert, formatAge, type JobAlertRecord } from "@/lib/ai/responderHealth";
 
@@ -203,9 +203,21 @@ export async function runOutboxHealthTick(now: number = Date.now()): Promise<Out
   const { alert } = recordOutboxAlert(alarm.down, now);
 
   if (alert === "down") {
-    await slackNotify(`⚠️ Goodshuffle write-back outbox is unhealthy: ${alarm.reasons.join("; ")}. Approved actions queue here and only land when the office Auto-Pull drains them.`).catch(() => {});
+    await postStatus({
+      system: "Goodshuffle write-back",
+      level: "degraded",
+      title: "Goodshuffle write-backs are not landing",
+      impact: "Approved changes (photos, emails, tasks, status updates) wait in the queue until the office Auto-Pull drains them.",
+      fix: "Make sure an office computer has Goodshuffle open and signed in. Dead-lettered items need a person to look at them on the Automation page.",
+      detail: alarm.reasons.join("; "),
+    }, now);
   } else if (alert === "recovered") {
-    await slackNotify("✅ Goodshuffle write-back outbox recovered — the queue is draining again.").catch(() => {});
+    await postStatus({
+      system: "Goodshuffle write-back",
+      level: "recovered",
+      title: "Goodshuffle write-backs are landing again",
+      impact: "The queue is draining.",
+    }, now);
   }
 
   const detail = alarm.down

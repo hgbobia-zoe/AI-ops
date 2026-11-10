@@ -89,11 +89,9 @@ async function trackingLink(
       const { alert, summary } = etaLinkFallbackAlert(reason, pollerReady);
       console.log(`[fanout] etaLink fell back to /track for stop ${stop.stopId} (source=track, ${summary})`);
       if (alert) {
-        void alertOps(
-          "Ignition etaLink",
-          `Customer "on the way" link fell back to /track for ${stop.custName || stop.stopId} (${summary}). ` +
-            `Office Ignition session may be backgrounded or signed out — reopen ignition.zonarsystems.com on the office machine.`,
-        );
+        void alertOps("Ignition etaLink", `${stop.custName || stop.stopId} got the basic tracking page (${summary})`, {
+          impact: "A customer's on the way text used the basic tracking page instead of the live truck map. The office Ignition tab may be signed out or asleep.",
+        });
       }
     }
     return chosen.url;

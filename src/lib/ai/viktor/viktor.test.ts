@@ -15,6 +15,17 @@ vi.mock("@/lib/notify/slack", async (orig) => {
   };
 });
 
+vi.mock("@/lib/notify/status", async (orig) => {
+  const real = await orig<typeof import("@/lib/notify/status")>();
+  return {
+    ...real,
+    postStatus: vi.fn(async (a: import("@/lib/notify/status").StatusAlert) => {
+      notified.push(real.statusText(a));
+      return { ok: true };
+    }),
+  };
+});
+
 import type Anthropic from "@anthropic-ai/sdk";
 import { createSession, addInstruction, listSessionEvents, listSessionApprovalIds, getSession, appendEvent } from "@/lib/ai/sessions";
 import { getApproval } from "@/lib/aiorg/approvals";
@@ -183,7 +194,7 @@ describe("handleSessionInstruction", () => {
     };
     expect(await handleSessionInstruction(s.id, { client, ackAfterMs: 0 })).toBe("failed");
     expect(listSessionEvents(s.id).some((e) => e.kind === "error" && /boom/.test(e.label ?? ""))).toBe(true);
-    expect(notified.some((t) => /failed to answer/.test(t))).toBe(true);
+    expect(notified.some((t) => /could not answer/.test(t) && /boom/.test(t))).toBe(true);
     expect(viktorHealthNow().state === "degraded" || viktorHealthNow().state === "not_configured").toBe(true);
   });
 

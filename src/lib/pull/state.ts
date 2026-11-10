@@ -4,10 +4,11 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
+import type { StatusAlert } from "@/lib/notify/status";
 import {
   shouldAlertIgnitionStale,
-  IGNITION_STALE_ALERT,
-  IGNITION_RECOVERED_ALERT,
+  ignitionStaleAlert,
+  ignitionRecoveredAlert,
   type IgnitionHealth,
 } from "@/lib/eta/ignitionStatus";
 
@@ -149,20 +150,20 @@ export function recordIgnitionProbe(
   hasDeliveriesToday: boolean,
   configured: boolean,
   now: Date = new Date(),
-): { alert: string | null } {
+): { alert: StatusAlert | null } {
   const s = getPullState();
-  let alert: string | null = null;
+  let alert: StatusAlert | null = null;
 
   if (pollerFresh) {
     // Recovered: only announce if we had alerted a lapse; clear the bookkeeping.
-    if (s.ignitionAlertedAt) alert = IGNITION_RECOVERED_ALERT;
+    if (s.ignitionAlertedAt) alert = ignitionRecoveredAlert(s.ignitionStaleSince ?? null);
     s.ignitionStaleSince = undefined;
     s.ignitionAlertedAt = undefined;
   } else if (configured && hasDeliveriesToday) {
     if (!s.ignitionStaleSince) s.ignitionStaleSince = now.toISOString();
     const alertedAgoMs = s.ignitionAlertedAt ? now.getTime() - Date.parse(s.ignitionAlertedAt) : Infinity;
     if (shouldAlertIgnitionStale({ pollerFresh, hasDeliveriesToday, configured, alertedAgoMs, cooloffMs: ALERT_COOLOFF_MS })) {
-      alert = IGNITION_STALE_ALERT;
+      alert = ignitionStaleAlert(s.ignitionStaleSince);
       s.ignitionAlertedAt = now.toISOString();
     }
   }
@@ -256,7 +257,7 @@ function computeFleet(st: PullState, now: number, freshMin = AGENT_FRESH_MIN, da
  *  GSPRO tab, signed out) per operator. The returned `alert` (when non-null) is a message the caller should
  *  Slack: we page ONLY when the WHOLE fleet is down (no puller OK and data stale) for at least SUSTAIN_MS,
  *  deduped by a 2h cool-off, and once on recovery. One signed-out laptop with a healthy peer never pages. */
-export function recordAgentHeartbeat(agent: string, status: AgentStatus, detail: string | null, label: string | null = null, now: Date = new Date()): { alert: string | null } {
+export function recordAgentHeartbeat(agent: string, status: AgentStatus, detail: string | null, label: string | null = null, now: Date = new Date()): { alert: StatusAlert | null } {
   const s = getPullState();
   const beat: AgentHeartbeat = { agent, label: label ?? undefined, status, detail: detail ?? null, at: now.toISOString() };
 
@@ -271,10 +272,18 @@ export function recordAgentHeartbeat(agent: string, status: AgentStatus, detail:
 
   // Fleet verdict AFTER recording this beat — computed from the in-memory state (not yet saved).
   const fleet = computeFleet(s, now.getTime());
-  let alert: string | null = null;
+  let alert: StatusAlert | null = null;
 
   if (fleet.healthy) {
-    if (s.agentAlertedAt) alert = "Zoe Auto-Pull recovered — a puller is reporting in again.";
+    if (s.agentAlertedAt) {
+      alert = {
+        system: "Goodshuffle Auto-Pull",
+        level: "recovered",
+        title: "Goodshuffle Auto-Pull is pulling again",
+        impact: "Routes and bookings are syncing from Goodshuffle again.",
+        since: s.agentFailingSince ?? null,
+      };
+    }
     s.agentFailingSince = undefined;
     s.agentAlertedAt = undefined;
   } else {
@@ -283,16 +292,24 @@ export function recordAgentHeartbeat(agent: string, status: AgentStatus, detail:
     const alertedAgo = s.agentAlertedAt ? now.getTime() - Date.parse(s.agentAlertedAt) : Infinity;
     if (downForMs >= SUSTAIN_MS && alertedAgo > ALERT_COOLOFF_MS) {
       const n = fleet.total;
-      const fleetNote = n > 1 ? `all ${n} reporting pullers` : n === 1 ? "the reporting puller" : "no puller is reporting and";
-      const reason =
+      const where = n > 1 ? `all ${n} office computers running it` : n === 1 ? "the office computer running it" : "any office computer";
+      const pick =
         fleet.reason === "not_logged_in"
-          ? `Goodshuffle is signed out on ${fleetNote}. Sign in at pro.goodshuffle.com on an office machine.`
+          ? { title: "Goodshuffle is signed out, so Auto-Pull can't pull", fix: `Sign in at pro.goodshuffle.com on ${where}.` }
           : fleet.reason === "no_tab"
-            ? `No Goodshuffle tab is open on ${fleetNote}. Open pro.goodshuffle.com (signed in).`
+            ? { title: "No Goodshuffle tab is open, so Auto-Pull can't pull", fix: `Open pro.goodshuffle.com (signed in) on ${where}.` }
             : fleet.reason === "error"
-              ? `Auto-Pull is erroring on ${fleetNote} (${detail || "inject/pull failed"}). Check the extension's site access on pro.goodshuffle.com.`
-              : "no Auto-Pull install is reporting in. Start the extension on an office machine.";
-      alert = `Zoe Auto-Pull is down — ${reason} No puller has pulled in a while, so Goodshuffle data will go stale. Down since ${s.agentFailingSince}.`;
+              ? { title: "Goodshuffle Auto-Pull is erroring", fix: `Check the extension's site access on pro.goodshuffle.com on ${where}, then reload the tab.` }
+              : { title: "Goodshuffle Auto-Pull has gone quiet", fix: "Open Chrome with the Auto-Pull extension on an office computer and sign in to Goodshuffle." };
+      alert = {
+        system: "Goodshuffle Auto-Pull",
+        level: "down",
+        title: pick.title,
+        impact: "Routes, bookings, and approved write-backs stop syncing with Goodshuffle, so the app goes stale.",
+        fix: pick.fix,
+        since: s.agentFailingSince,
+        detail: fleet.reason === "error" ? detail || "inject or pull failed" : null,
+      };
       s.agentAlertedAt = now.toISOString();
     }
   }
@@ -306,20 +323,37 @@ export function recordAgentHeartbeat(agent: string, status: AgentStatus, detail:
  *  cookie is caught), deduped by a 2h cool-off that also caps a SUSTAINED outage at one page per 2h; and
  *  one alert on recovery (only if we had alerted the failure). Honest: a cold-start first-ever observation
  *  never pages, and a failed probe is never reported as OK. Returns `alert` = the message to send, or null. */
-export function recordInstaworkProbe(ok: boolean, detail: string | null, now: Date = new Date()): { alert: string | null } {
+export function recordInstaworkProbe(ok: boolean, detail: string | null, now: Date = new Date()): { alert: StatusAlert | null } {
   const s = getPullState();
   const seenBefore = s.instaworkOk !== undefined; // don't page on a cold-start first glance (no known-good baseline)
-  let alert: string | null = null;
+  let alert: StatusAlert | null = null;
 
   if (!ok) {
     if (!s.instaworkFailingSince) s.instaworkFailingSince = now.toISOString();
     const alertedAgo = s.instaworkAlertedAt ? now.getTime() - Date.parse(s.instaworkAlertedAt) : Infinity;
     if (seenBefore && alertedAgo > ALERT_COOLOFF_MS) {
-      alert = `Zoe Instawork connection is down (${detail || "unreachable"}). The session cookie has likely expired. Re-paste it in Settings so temp-labor reconciliation keeps working. Failing since ${s.instaworkFailingSince}.`;
+      alert = {
+        system: "Instawork",
+        level: "down",
+        title: "Instawork connection is down",
+        impact: "Temp worker shifts, drop alerts, and labor reconciliation stop updating.",
+        fix: "The session has likely expired. Log in to Instawork in the office browser, or re-paste the session cookie in Settings.",
+        since: s.instaworkFailingSince,
+        detail: detail || "unreachable",
+      };
       s.instaworkAlertedAt = now.toISOString();
     }
   } else {
-    if (s.instaworkAlertedAt) alert = `Zoe Instawork connection recovered (${detail || "ok"}).`;
+    if (s.instaworkAlertedAt) {
+      alert = {
+        system: "Instawork",
+        level: "recovered",
+        title: "Instawork connection is back",
+        impact: "Temp worker shifts are updating again.",
+        since: s.instaworkFailingSince ?? null,
+        detail: detail || null,
+      };
+    }
     s.instaworkFailingSince = undefined;
     s.instaworkAlertedAt = undefined;
   }
@@ -337,21 +371,38 @@ export function recordInstaworkProbe(ok: boolean, detail: string | null, now: Da
  *  on recovery (only if we had alerted). Honest: a cold-start first-ever observation never pages, and a
  *  failing prune is never reported as OK. `detail` carries the missing-orphan count for the alert copy.
  *  Returns `alert` = the message to send, or null. */
-export function recordBookingsImportFailure(ok: boolean, detail: string | null, now: Date = new Date()): { alert: string | null } {
+export function recordBookingsImportFailure(ok: boolean, detail: string | null, now: Date = new Date()): { alert: StatusAlert | null } {
   const s = getPullState();
   const seenBefore = s.bookingsImportOk !== undefined; // don't page on a cold-start first glance (no known baseline)
-  let alert: string | null = null;
+  let alert: StatusAlert | null = null;
 
   if (!ok) {
     if (!s.bookingsFailingSince) s.bookingsFailingSince = now.toISOString();
     const alertedAgo = s.bookingsAlertedAt ? now.getTime() - Date.parse(s.bookingsAlertedAt) : Infinity;
     if (seenBefore && alertedAgo > ALERT_COOLOFF_MS) {
       // House comms style: no em-dashes, no emoji, natural and short.
-      alert = `Zoe bookings pull keeps skipping orphan cleanup${detail ? ` (${detail})` : ""}. If you deliberately deleted a batch in Goodshuffle, arm Force-archive in /admin. Otherwise the pull may be truncated, so check the office browser. Failing since ${s.bookingsFailingSince}.`;
+      alert = {
+        system: "Goodshuffle bookings pull",
+        level: "degraded",
+        title: "The bookings pull keeps skipping orphan cleanup",
+        impact: "Projects deleted in Goodshuffle stay in the app, so counts and lists can be off.",
+        fix: "If you deliberately deleted a batch in Goodshuffle, arm Force-archive in /admin. Otherwise the pull may be cut short, so check the office browser.",
+        since: s.bookingsFailingSince,
+        detail,
+      };
       s.bookingsAlertedAt = now.toISOString();
     }
   } else {
-    if (s.bookingsAlertedAt) alert = `Zoe bookings pull recovered (${detail || "ok"}). Orphan cleanup is running again.`;
+    if (s.bookingsAlertedAt) {
+      alert = {
+        system: "Goodshuffle bookings pull",
+        level: "recovered",
+        title: "The bookings pull recovered",
+        impact: "Orphan cleanup is running again.",
+        since: s.bookingsFailingSince ?? null,
+        detail: detail || null,
+      };
+    }
     s.bookingsFailingSince = undefined;
     s.bookingsAlertedAt = undefined;
   }
