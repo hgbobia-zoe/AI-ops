@@ -263,7 +263,8 @@ describe("queueBulkOutreach — SMS (real live send through the gated sender)", 
     seedQuoteSent(); // SMS_SEND_ENABLED is ON by default in beforeEach
     const summary = await queueBulkOutreach([{ leadId: "QS1", sms: { body: "Hi Pat, it's Zoe Events." } }], "Owner");
     expect(sendSmsMock).toHaveBeenCalledTimes(1);
-    expect(sendSmsMock).toHaveBeenCalledWith("+13015551234", "Hi Pat, it's Zoe Events.", expect.anything());
+    // The sender adds the owner's thank-you line to every lead text.
+    expect(sendSmsMock).toHaveBeenCalledWith("+13015551234", "Hi Pat, it's Zoe Events. Thank you for considering us for your event.", expect.anything());
     expect(summary.sentSms).toBe(1);
     const ch = summary.rows[0].channels.find((c) => c.channel === "sms")!;
     expect(ch.status).toBe("sent");

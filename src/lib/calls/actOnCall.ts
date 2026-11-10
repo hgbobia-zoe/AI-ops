@@ -34,6 +34,7 @@ import {
 import { getEmployee } from "@/lib/aiorg/registry";
 import { botAnnounce, botForAgent, appUrl } from "@/lib/notify/aiBots";
 import { humanize } from "@/lib/salesos/outreach";
+import { withSmsSignoff } from "@/lib/comms/smsSignoff";
 import { DISPLAY_TZ } from "@/lib/dates";
 
 // The AI employee these proposals are attributed to. Maps to the Sales bot's Slack channel (aiBots.ts
@@ -207,7 +208,7 @@ export function buildCallProposals(call: CallEventView, recap: CallRecap, bookin
 
   // 4) FOLLOW-UP SMS — a short, house-style text distilled from the follow-up email. Held (delivers from the
   //    Sales panel), so this is a draft either way; only propose it when we have a number.
-  const sms = recap.followUpEmail.trim() ? smsFromEmail(recap.followUpEmail) : "";
+  const sms = recap.followUpEmail.trim() ? withSmsSignoff(smsFromEmail(recap.followUpEmail)) : "";
   if (sms && phone) {
     out.push(
       base("send_sms", {

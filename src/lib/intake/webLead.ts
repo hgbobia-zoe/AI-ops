@@ -8,6 +8,7 @@
 
 import type { IntakeEventType, IntakePatch } from "./types";
 import { flagOn } from "@/lib/flags";
+import { withSmsSignoff } from "@/lib/comms/smsSignoff";
 
 // ── Flags (ON by default, src/lib/flags.ts; set one to "false" to turn that piece off) ───────────────
 // Master switch. With WEB_INTAKE_ENABLED=false the endpoint still ACCEPTS + records a lead (nothing is
@@ -194,5 +195,5 @@ export function webLeadSmsText(firstName: string): string {
   const tpl =
     process.env.WEB_LEAD_SMS_TEXT?.trim() ||
     "Hi {firstName}, thanks for reaching out to Zoe Events & Party Rentals! We got your request and will follow up shortly. Feel free to reply here with your event date and what you have in mind.";
-  return tpl.replace(/\{firstName\}/g, firstName.trim() || "there");
+  return withSmsSignoff(tpl.replace(/\{firstName\}/g, firstName.trim() || "there"));
 }

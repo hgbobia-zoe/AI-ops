@@ -4,6 +4,7 @@
 // Nothing is ever sent automatically — this is a suggestion a human reviews and sends.
 
 import type { SalesStage } from "./calc";
+import { withSmsSignoff } from "@/lib/comms/smsSignoff";
 
 export interface CommsSummary {
   attempts: number; // dated log entries found in the notes
@@ -253,5 +254,5 @@ export function templateOutreach(lead: OutreachLead, comms: CommsSummary): Outre
       break;
   }
 
-  return { sms: humanize(sms), callStrategy: humanize(callStrategy), cadence: humanize(cadence), source: "template", caution: caution ? humanize(caution) : null };
+  return { sms: withSmsSignoff(humanize(sms)), callStrategy: humanize(callStrategy), cadence: humanize(cadence), source: "template", caution: caution ? humanize(caution) : null };
 }
