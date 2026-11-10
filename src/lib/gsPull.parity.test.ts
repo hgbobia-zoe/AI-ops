@@ -25,6 +25,20 @@ describe("extension drainer ↔ bookmarklet parity (defect #3)", () => {
     expect(extSrc).toContain("/app/task/createTask");
   });
 
+  it("both drainers assign create_gs_task to the sales lead (active GS user) with a fallback and a due date", () => {
+    for (const src of [extSrc, bookmarkletSrc]) {
+      expect(src).toContain("/app/project/initProjectSearch");
+      expect(src).toContain("salesEnabledUsers");
+      expect(src).toContain("assigneeName");
+      expect(src).toContain("fallbackUserID");
+      expect(src).toContain("gsDueFrom(o.payload.dueDate)");
+    }
+  });
+
+  it("both pulls re-read GS notes on the lost quotes the server names (lost-reason tracker)", () => {
+    for (const src of [extSrc, bookmarkletSrc]) expect(src).toContain("lossNoteIds");
+  });
+
   it("the bookmarklet already handled both (baseline the extension had to reach)", () => {
     expect(bookmarkletSrc).toContain('o.op==="email_send"');
     expect(bookmarkletSrc).toContain('o.op==="create_gs_task"');

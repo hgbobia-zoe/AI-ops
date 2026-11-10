@@ -23,8 +23,15 @@ function fakeEmp(over: Partial<Employee> = {}): Employee {
   };
 }
 
+/** The team list the Connecteam step reads before creating (someone else, so it never matches). */
+const ROSTER = { data: { users: [{ userId: 1, firstName: "Old", lastName: "Hand", phoneNumber: "+12025550000" }] } };
+
 function mockFetch(status: number, body: unknown): ReturnType<typeof vi.fn> {
-  const fn = vi.fn(async () => ({ ok: status >= 200 && status < 300, status, json: async () => body })) as unknown as ReturnType<typeof vi.fn>;
+  const fn = vi.fn(async (url?: string, init?: RequestInit) =>
+    String(url ?? "").includes("/users/v1/users") && (init?.method ?? "GET") === "GET"
+      ? { ok: true, status: 200, json: async () => ROSTER }
+      : { ok: status >= 200 && status < 300, status, json: async () => body },
+  ) as unknown as ReturnType<typeof vi.fn>;
   vi.stubGlobal("fetch", fn);
   return fn;
 }
@@ -41,20 +48,21 @@ afterEach(() => {
   PROVISION_ENDPOINTS.goodshuffle.revoke = null;
   vi.restoreAllMocks();
   delete process.env.CONNECTEAM_API_KEY;
+  resetConnecteamReadCaches();
 });
 
 describe("mode() honesty", () => {
-  it("only Zoe is automated by default; Connecteam + replay systems are manual; Gusto/Google are future", () => {
+  it("Zoe + the recorded Chrome-run systems are automated; Connecteam/Goodshuffle manual; Gusto/Google future", () => {
     expect(getAdapter("zoe_platform").mode()).toBe("automated");
     expect(getAdapter("connecteam").mode()).toBe("manual"); // no verified scope
-    expect(getAdapter("goodshuffle").mode()).toBe("manual"); // endpoint capture-pending
-    expect(getAdapter("quo").mode()).toBe("manual");
-    expect(getAdapter("slack").mode()).toBe("manual");
+    expect(getAdapter("goodshuffle").mode()).toBe("manual"); // endpoint capture-pending ($49 seat)
+    expect(getAdapter("quo").mode()).toBe("automated"); // recorded 2026-11-10, runs in the onboarder's Chrome
+    expect(getAdapter("slack").mode()).toBe("automated");
     expect(getAdapter("gusto").mode()).toBe("future");
     expect(getAdapter("google").mode()).toBe("future");
     // No adapter is secretly automated beyond the ones we expect.
-    const automated = allAdapters().filter((a) => a.mode() === "automated").map((a) => a.id);
-    expect(automated).toEqual(["zoe_platform"]);
+    const automated = allAdapters().filter((a) => a.mode() === "automated").map((a) => a.id).sort();
+    expect(automated).toEqual(["quo", "slack", "squarespace_email", "weddingpro", "yelp", "zoe_platform"]);
   });
 
   it("a mere Connecteam key does NOT promote the adapter — only a verified scope flips it to automated", () => {
@@ -97,6 +105,7 @@ describe("Connecteam adapter actions (real REST, mocked)", () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
       if (url.includes("/custom-fields")) return json(200, { data: { customFields: [{ id: 11, name: "Birthday", type: "date" }, { id: 12, name: "Hire Date", type: "date" }, { id: 13, name: "Title", type: "dropdown" }] } });
+      if (url.includes("/users/v1/users") && (init?.method ?? "GET") === "GET") return json(200, ROSTER);
       const body = JSON.parse(String(init?.body ?? "[]")) as Array<{ customFields?: unknown }>;
       creates.push(body[0]);
       return body[0].customFields ? json(400, { message: "bad custom field value" }) : json(200, { data: { results: [{ userId: 5151 }] } });

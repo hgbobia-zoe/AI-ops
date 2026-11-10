@@ -12,12 +12,16 @@
 import { getSecret } from "@/lib/secrets";
 import { createInvite } from "@/lib/auth/invites";
 import { getUser, setUserActive } from "@/lib/auth/users";
-import { archiveConnecteamUser, connecteamConfigured, createConnecteamUser, getConnecteamCustomFields, pickPersonFields } from "@/lib/connecteam";
+import { archiveConnecteamUser, connecteamConfigured, createConnecteamUser, getConnecteamCustomFields, getUsersList, pickPersonFields } from "@/lib/connecteam";
 import { enqueueProvisioningOp } from "@/lib/db/repo";
 import { appUrl } from "@/lib/notify/aiBots";
-import { getEmployee, setEmployeeConnecteamUserId } from "../store";
+import { getEmployee, listEmployees, setEmployeeConnecteamUserId } from "../store";
+import { normEmail, normPhone } from "../match";
 import { reconcileZoeLogin } from "../zoeLink";
-import { hasCapturedEndpoint, PROVISION_ENDPOINTS, type ReplaySystem } from "../provisioningEndpoints";
+import { hasCapturedEndpoint, PROVISION_ENDPOINTS, runsInChrome, type ReplaySystem } from "../provisioningEndpoints";
+
+/** externalRef of a step waiting for the onboarder's Chrome to run it. */
+export const CHROME_PENDING_REF = "chrome:waiting";
 import type { AdapterMode, Employee, ProvisioningResult } from "../types";
 
 export interface ProvisioningAdapter {
@@ -38,8 +42,8 @@ export interface ProvisioningAdapter {
 /**
  * Has the stored credential for this adapter been recorded as carrying the admin/user-write scope needed
  * to provision/deprovision? We store ONLY a scope assertion (never a third-party password) under
- * `<adapterId>.provisioningScope` = "verified". Nothing sets this today, so every external adapter is
- * honestly manual/future — gating mode() on a REAL scope record, not on "a key is present".
+ * `<adapterId>.provisioningScope` = "verified". Only a real probe sets it (connecteamScope.ts, run daily by the
+ * People tick), so mode() is gated on a REAL scope record, not on "a key is present".
  */
 export function hasVerifiedProvisioningScope(adapterId: string): boolean {
   return getSecret(`${adapterId}.provisioningScope`) === "verified";
@@ -111,6 +115,31 @@ function splitName(displayName: string): { firstName: string; lastName: string }
   return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
 }
 
+type ExistingCt =
+  | { kind: "none" }
+  | { kind: "unreadable" }
+  | { kind: "found"; userId: number; by: "phone" | "email" }
+  | { kind: "taken"; userId: number; holder: string };
+
+/** Is this person already a Connecteam user (by phone, then email)? An empty roster is treated as a failed
+ *  read: the real team is never empty, and creating blind is how duplicates happen. */
+async function findExistingConnecteamUser(emp: Employee): Promise<ExistingCt> {
+  const roster = await getUsersList().catch(() => []);
+  if (roster.length === 0) return { kind: "unreadable" };
+  const phone = normPhone(emp.phone);
+  const emails = [normEmail(emp.workEmail), normEmail(emp.personalEmail)].filter((v): v is string => !!v);
+  let hit: { userId: number; by: "phone" | "email" } | null = null;
+  const byPhone = phone ? roster.filter((u) => normPhone(u.phone) === phone) : [];
+  if (byPhone.length === 1) hit = { userId: byPhone[0].userId, by: "phone" };
+  else if (byPhone.length === 0 && emails.length) {
+    const byEmail = roster.filter((u) => { const e = normEmail(u.email); return !!e && emails.includes(e); });
+    if (byEmail.length === 1) hit = { userId: byEmail[0].userId, by: "email" };
+  }
+  if (!hit) return { kind: "none" };
+  const holder = listEmployees().find((e) => e.id !== emp.id && e.connecteamUserId === hit.userId);
+  return holder ? { kind: "taken", userId: hit.userId, holder: holder.displayName } : { kind: "found", ...hit };
+}
+
 // ── Connecteam (REAL automation — official users API) ──────────────────────────────────────────────────
 // Connecteam is the ONE external system with an official create/archive user API, so this adapter genuinely
 // automates when the key's `users.write` scope is VERIFIED (recorded as `connecteam.provisioningScope` =
@@ -134,6 +163,18 @@ class ConnecteamAdapter implements ProvisioningAdapter {
     }
     if (!emp.phone) {
       return { ok: false, status: "blocked", detail: "Phone required — add the hire's mobile (E.164) to the employee record to provision Connecteam." };
+    }
+    // Someone may have made the account by hand already. Look it up first so we link it, never create twice.
+    const existing = await findExistingConnecteamUser(emp);
+    if (existing.kind === "unreadable") {
+      return { ok: false, status: "failed", detail: "Could not read the Connecteam team to check for an existing account, so nothing was created. Try again." };
+    }
+    if (existing.kind === "taken") {
+      return { ok: false, status: "manual_required", detail: `Connecteam already has this person (#${existing.userId}), but that account is linked to ${existing.holder} in People. Fix the link, then Mark Complete.` };
+    }
+    if (existing.kind === "found") {
+      setEmployeeConnecteamUserId(emp.id, existing.userId);
+      return { ok: true, status: "completed", externalRef: `connecteam:${existing.userId}`, detail: `Already in Connecteam (#${existing.userId}, matched by ${existing.by}). Linked it; nothing created.` };
     }
     const { firstName, lastName } = splitName(emp.displayName);
     // Fill the account's birthday and start date fields when it has them (birth date comes from Gusto).
@@ -208,6 +249,11 @@ class ReplayAdapter implements ProvisioningAdapter {
   async automate(emp: Employee): Promise<ProvisioningResult> {
     if (!hasCapturedEndpoint(this.sys, "provision")) {
       return { ok: false, status: "manual_required", detail: this.captureReason("provision") };
+    }
+    // Run in the onboarder's own Chrome: nothing is queued for the office pull. The API hands the job to the
+    // extension (people/chromeJobs.ts) and the step closes on the extension's report.
+    if (runsInChrome(this.sys)) {
+      return { ok: true, status: "in_progress", externalRef: CHROME_PENDING_REF, detail: `Ready to run in your Chrome (Auto-Pull opens ${this.system} in a tab).` };
     }
     const op = enqueueProvisioningOp({ kind: "provision", system: this.sys, employeeId: emp.id, label: `invite ${emp.displayName} to ${this.system}`, data: this.empData(emp) });
     return { ok: true, status: "in_progress", externalRef: `gs_outbox:${op.id}`, detail: `Queued for the logged-in ${this.system} session to replay the invite; completes when the drainer acks.` };

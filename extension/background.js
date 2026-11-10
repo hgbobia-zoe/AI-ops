@@ -37,6 +37,9 @@
 // SW lifecycle: no long-lived in-memory state is relied upon across sleeps — everything needed
 // (config, lastRun, pendingCreate) lives in chrome.storage.local; alarms, not timers, drive work.
 
+// Account setup in the onboarder's own Chrome (People → "Set up in my Chrome"); see provision.js.
+importScripts("provision.js");
+
 const DEFAULTS = { apiBase: "https://zoe-dispatch.fly.dev", intervalMin: 10, enabled: true, createDrainEnabled: true };
 // TWO-TIER read-pull cadence (named here so they're easy to tune). The FAST lane refreshes routes +
 // ACTIVE projects + notes + outbox every ACTIVE_PULL_MIN; the SLOW lane walks the FULL archive history
@@ -1249,6 +1252,16 @@ chrome.runtime.onMessageExternal.addListener((msg, _sender, sendResponse) => {
       // Only nudge a login when we have a RECENT, authoritative signed-out reading — never on unknown.
       if (ls.status === "not_logged_in" && ls.ageMs < 60 * 60 * 1000) await openLoginTab();
       sendResponse({ ok: true, pull: r, last: ls });
+    })();
+    return true;
+  }
+
+  // People onboarding: set up the hire's accounts (Slack, Quo, work email, WeddingPro, Yelp) in visible tabs
+  // in THIS Chrome, one after another. Human-triggered from the People page only; see provision.js.
+  if (msg.type === "zoe-provision") {
+    (async () => {
+      const r = await startProvisionRun(msg.jobs).catch(() => ({ ok: false, reason: "error" }));
+      sendResponse(r);
     })();
     return true;
   }

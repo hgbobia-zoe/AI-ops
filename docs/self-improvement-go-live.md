@@ -1,5 +1,11 @@
 # Self-improvement — go-live checklist (office machine)
 
+> **Note (2026-11-10):** `scripts/responder/` (including `poll.mjs`) was removed with the office responder.
+> Viktor answers in-app, and runs are planned in-app. To drive an improvement run by hand, call the bridge and
+> report API directly (`GET /api/ai/bridge/pending`, `POST /api/ai/improvement/<id>/report`) with the
+> `x-bridge-token` header, as described in `docs/ai-bridge-responder.md`.
+
+
 Copy-paste runbook to turn the built self-improvement loop ON, **human-supervised**, on the office machine.
 The *why* behind each step is in [`self-improvement-setup.md`](./self-improvement-setup.md); the responder's
 job is in [`ai-bridge-responder.md`](./ai-bridge-responder.md). Do the steps in order.

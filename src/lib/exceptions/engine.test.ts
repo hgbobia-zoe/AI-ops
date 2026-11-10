@@ -234,6 +234,41 @@ describe("stale / disappeared source signal (disappearance is NOT resolution)", 
     expect(tick.ok).toBe(false); // unverifiable is NOT a healthy state
   });
 
+  it("closes on the source's own record: dismissed on the Risk board", async () => {
+    seedRiskRow();
+    await runExceptionResolutionTick(NOW);
+    getDb().prepare("UPDATE risk_items SET status = 'DISMISSED'").run();
+    await runExceptionResolutionTick(NOW);
+    const r = getException("risk:sig-del-1")!;
+    expect(r.status).toBe("disposed");
+    expect(r.disposedBy).toBe("Event Risk board");
+    expect(r.verificationEvidence).toMatchObject({ closedBy: "source", sourceStatus: "DISMISSED" });
+  });
+
+  it("closes as fixed when the risk engine re-checked and cleared it", async () => {
+    seedRiskRow();
+    await runExceptionResolutionTick(NOW);
+    getDb().prepare("UPDATE risk_items SET status = 'RESOLVED', resolved_at = ?").run(NOW.toISOString());
+    await runExceptionResolutionTick(NOW);
+    const r = getException("risk:sig-del-1")!;
+    expect(r.status).toBe("resolved");
+    expect(r.resolvedAt).toBe(NOW.toISOString());
+  });
+
+  it("an item already unverifiable is cleared once its source records how it ended", async () => {
+    seedRiskRow(); // undated, so the live queue (which hides past days) still shows it
+    await runExceptionResolutionTick(NOW);
+    getDb().prepare("DELETE FROM risk_items").run();
+    await runExceptionResolutionTick(NOW);
+    expect(getException("risk:sig-del-1")!.status).toBe("unverifiable");
+    // The row comes back, closed after its day passed.
+    seedRiskRow({ date: "2026-10-15", status: "RESOLVED", resolved_at: "2026-10-16T11:00:00.000Z" });
+    await runExceptionResolutionTick(NOW);
+    const r = getException("risk:sig-del-1")!;
+    expect(r.status).toBe("disposed");
+    expect(r.disposition).toMatch(/has passed/);
+  });
+
   it("the tick is idempotent — re-running with the same sources changes no counts", async () => {
     seedRiskRow();
     const a = await runExceptionResolutionTick(NOW);

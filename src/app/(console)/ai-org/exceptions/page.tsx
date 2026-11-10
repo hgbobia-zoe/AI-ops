@@ -9,6 +9,8 @@ import { canManageSettings, canSeeFinancials } from "@/lib/auth/roles";
 import { aiOrg } from "@/lib/aiorg/service";
 import { OrgTabs } from "@/components/aiorg/AiOrgBits";
 import { FigureStrip, type Figure } from "@/components/console-primitives";
+import { ExceptionFollowUps, type FollowUpRow } from "@/components/aiorg/ExceptionFollowUps";
+import { listOpenExceptions, listRecentlyClosedExceptions } from "@/lib/exceptions/store";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +22,20 @@ export default async function AiOrgExceptionsPage(): Promise<React.JSX.Element> 
   const role = await viewerRole();
   if (!canManageSettings(role)) redirect("/dashboard");
   const org = await aiOrg({ showMoney: canSeeFinancials(role) });
+  const followUps: FollowUpRow[] = listOpenExceptions().map((r) => ({
+    key: r.key,
+    source: r.source,
+    status: r.status,
+    severity: r.severity,
+    title: r.title,
+    detail: r.detail,
+    nextAction: r.nextAction,
+    assignedRole: r.assignedRole,
+    escalationTier: r.escalationTier,
+    firstDetectedAt: r.firstDetectedAt,
+    lastSeenAt: r.lastSeenAt,
+  }));
+  const closed = listRecentlyClosedExceptions(15);
 
   const counts = { P0: 0, P1: 0, P2: 0, P3: 0 };
   for (const x of org.exceptions) counts[x.pLabel]++;
@@ -58,6 +74,40 @@ export default async function AiOrgExceptionsPage(): Promise<React.JSX.Element> 
           ))}
         </div>
       )}
+
+      <section className="mt-8">
+        <div className="mb-2 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-[16px] font-medium tracking-tight">Follow-ups</h2>
+            <p className="text-[12.5px] text-meta">
+              What the exception engine is tracking: risks and failed write-backs it routed, escalated, or could not verify. Close one here
+              when you know how it ended.
+            </p>
+          </div>
+          <span className="text-[12px] text-meta tabular-nums">{followUps.length} open</span>
+        </div>
+        <ExceptionFollowUps rows={followUps} />
+
+        {closed.length > 0 ? (
+          <details className="mt-4">
+            <summary className="cursor-pointer text-[12.5px] text-muted-foreground">Recently closed ({closed.length})</summary>
+            <div className="mt-2 border border-border">
+              {closed.map((c) => (
+                <div key={c.key} className="flex items-start gap-3 border-t border-[var(--row-rule)] px-3 py-2 first:border-t-0">
+                  <span className="min-w-0 flex-1">
+                    <div className="text-[13px] text-foreground">{c.title}</div>
+                    <div className="text-[12px] text-meta">
+                      {c.status === "resolved" ? "Fixed" : "Set aside"}
+                      {c.disposedBy ? ` by ${c.disposedBy}` : ""}
+                      {c.disposition ? `: ${c.disposition}` : ""}
+                    </div>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </details>
+        ) : null}
+      </section>
     </main>
   );
 }

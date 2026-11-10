@@ -4,6 +4,7 @@
 
 import { todayInOpsTz } from "@/lib/dates";
 import { getAllBookings, getLostQuotes, type BookingView } from "@/lib/db/repo";
+import { lossFlagState, lossReasonFlagsEnabled, type LossFlagState } from "./lossReasonFlag";
 import {
   winLossStats,
   winRateBySize,
@@ -18,18 +19,7 @@ import {
   type Insight,
 } from "./lost";
 
-/** The reason vocabulary the team tags a lost quote with (event-rental / DMV market realities). */
-export const LOSS_REASONS: string[] = [
-  "Price — too expensive",
-  "Went with a competitor",
-  "Availability — we couldn't fulfill",
-  "Date/event changed or cancelled",
-  "Budget cut",
-  "No response — ghosted",
-  "Out of service area",
-  "Duplicate / test",
-  "Other",
-];
+export { LOSS_REASONS } from "./lossReasons";
 
 const toInput = (b: BookingView): LostInput => ({
   signed: b.signed,
@@ -39,6 +29,14 @@ const toInput = (b: BookingView): LostInput => ({
   lossReason: b.lossReason,
 });
 
+export interface LossTracking {
+  enabled: boolean;
+  waiting: number; // inside the grace period
+  flagged: number; // asked, still no reason
+  noted: number; // reason written in GS notes (not tagged yet)
+  tagged: number; // tracked and tagged in the app
+}
+
 export interface LostQuoteView {
   id: string;
   eventName: string;
@@ -47,9 +45,12 @@ export interface LostQuoteView {
   value: number | null;
   statusLabel: string;
   lossReason: string | null;
+  flag: LossFlagState; // lost-reason tracker state ("untracked" = lost before tracking began)
+  lossNoteText: string | null; // the reason as written in the GS notes, when that is how it was given
+  lossReasonSource: string | null; // app | gs_note | sales_bot
 }
 
-const toLostView = (b: BookingView): LostQuoteView => ({
+const toLostView = (b: BookingView, nowMs: number): LostQuoteView => ({
   id: b.bookingId,
   eventName: b.eventName,
   clientName: b.clientName,
@@ -57,6 +58,9 @@ const toLostView = (b: BookingView): LostQuoteView => ({
   value: b.grandTotal,
   statusLabel: b.statusLabel,
   lossReason: b.lossReason,
+  flag: lossFlagState(b, nowMs),
+  lossNoteText: b.lossNoteText ?? null,
+  lossReasonSource: b.lossReasonSource ?? null,
 });
 
 export interface LostQuotesOverview {
@@ -69,6 +73,7 @@ export interface LostQuotesOverview {
   lost: LostQuoteView[]; // recent lost quotes to review/tag (trimmed)
   lostTotal: number; // total lost quotes (list may be trimmed)
   listLimit: number;
+  tracking: LossTracking;
 }
 
 const LIST_LIMIT = 150;
@@ -84,6 +89,19 @@ export function lostQuotesOverview(): LostQuotesOverview {
   const reasons = reasonBreakdown(lostRows.map(toInput));
   const insights = lossInsights(stats, sizeBuckets, reasons);
 
+  // Tracked quotes (newly lost, waiting on a reason) first so they are never trimmed off the list.
+  const nowMs = Date.now();
+  const tracked = lostRows.filter((b) => b.lossTrackAt);
+  const listRows = [...tracked.sort((a, b) => (b.lossTrackAt ?? "").localeCompare(a.lossTrackAt ?? "")), ...lostRows.filter((b) => !b.lossTrackAt)];
+  const tracking: LossTracking = { enabled: lossReasonFlagsEnabled(), waiting: 0, flagged: 0, noted: 0, tagged: 0 };
+  for (const b of tracked) {
+    const st = lossFlagState(b, nowMs);
+    if (st === "waiting" || st === "due") tracking.waiting++;
+    else if (st === "flagged") tracking.flagged++;
+    else if (st === "noted") tracking.noted++;
+    else if (st === "tagged") tracking.tagged++;
+  }
+
   return {
     today,
     stats,
@@ -91,8 +109,9 @@ export function lostQuotesOverview(): LostQuotesOverview {
     byYear,
     reasons,
     insights,
-    lost: lostRows.slice(0, LIST_LIMIT).map(toLostView),
+    lost: listRows.slice(0, LIST_LIMIT).map((b) => toLostView(b, nowMs)),
     lostTotal: lostRows.length,
     listLimit: LIST_LIMIT,
+    tracking,
   };
 }

@@ -1,4 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// A backlog of exceptions waiting on a person (failed / unverifiable) must not read as a broken job.
+vi.mock("@/lib/exceptions/engine", () => ({
+  runExceptionResolutionTick: async () => ({ ok: false, detail: "escalated 15, unverifiable 89", summary: {} }),
+}));
 import { computeJobStatus, RUNTIME_STALE_HOURS, RUNTIME_JOBS, type RuntimeJob } from "./jobs";
 import type { ImportRow } from "@/lib/pull/state";
 
@@ -80,5 +85,14 @@ describe("sales-action-items job registration", () => {
     expect(typeof job!.run).toBe("function");
     // configured() is credential-driven; with neither key set in the test env it gates off (no false run).
     expect(typeof job!.configured()).toBe("boolean");
+  });
+});
+
+describe("exception-resolution job", () => {
+  it("is healthy when the tick runs, even with exceptions waiting on a person", async () => {
+    const job = RUNTIME_JOBS.find((j) => j.key === "exception-resolution")!;
+    const r = await job.run!();
+    expect(r.ok).toBe(true);
+    expect(r.detail).toContain("unverifiable 89");
   });
 });

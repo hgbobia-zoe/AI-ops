@@ -31,6 +31,9 @@ import type { Tone } from "@/lib/tone";
 import type { LifecycleState, LifecycleTask, TaskStatus, AdapterMode } from "@/lib/people/types";
 import { LifecycleActions } from "@/components/people/LifecycleActions";
 import { TaskActions } from "@/components/people/TaskActions";
+import { ChromeSetupButton } from "@/components/people/ChromeSetup";
+import { getAdapter } from "@/lib/people/adapters";
+import { runsInChrome } from "@/lib/people/provisioningEndpoints";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +57,13 @@ const ACCESS_TYPE: Record<AdapterMode, { label: string; hint: string }> = {
   manual: { label: "Manual step", hint: "A human does it in the external system, then marks it complete" },
   future: { label: "Future", hint: "No admin API yet — tracked as a manual step for now" },
 };
+
+/** A setup step the Auto-Pull extension can run in the onboarder's Chrome right now (live capability, so
+ *  steps made before the recording show the Chrome option too). */
+function chromeReady(t: LifecycleTask): boolean {
+  return t.kind === "provision" && runsInChrome(t.adapterId) && getAdapter(t.adapterId).mode() === "automated";
+}
+const CHROME_OPEN = new Set<TaskStatus>(["pending", "manual_required", "failed", "blocked"]);
 
 function relTime(iso: string | null): string {
   if (!iso) return "—";
@@ -155,6 +165,17 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
         title="Access checklist · onboarding"
         icon={<ListChecks className="size-4 text-meta" aria-hidden />}
         tasks={provision}
+        note={(() => {
+          const n = provision.filter((t) => chromeReady(t) && CHROME_OPEN.has(t.status)).length;
+          return n > 0 ? (
+            <Surface className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-[12.5px] text-secondary-text">
+                Auto-Pull can set up {n} account{n === 1 ? "" : "s"} from your Chrome. Each site opens in a tab; sign in if it asks. Paid seats wait for your OK.
+              </span>
+              <ChromeSetupButton employeeId={emp.id} count={n} />
+            </Surface>
+          ) : undefined;
+        })()}
         emptyLabel="No tasks — start onboarding to materialize the checklist from the policy."
       />
 
@@ -236,8 +257,10 @@ function ChecklistTable({ title, icon, tasks, note, emptyLabel }: {
             </thead>
             <tbody>
               {tasks.map((t) => {
+                const live = chromeReady(t);
                 const access = t.adapterId === "sop_ack"
                   ? { label: "Hire signs", hint: "Completes only when the hire signs their SOP link" }
+                  : live ? { label: "Runs in your Chrome", hint: "Auto-Pull opens the site and sets it up" }
                   : ACCESS_TYPE[t.mode];
                 return (
                   <tr key={t.id} className={compactRowCls}>
@@ -246,7 +269,7 @@ function ChecklistTable({ title, icon, tasks, note, emptyLabel }: {
                       <div className="text-[10.5px] uppercase tracking-[0.05em] text-meta">{t.required ? "required" : "optional"}</div>
                     </td>
                     <td className="px-3 py-2.5 align-top">
-                      <div className={t.mode === "automated" ? "font-medium text-foreground" : "text-secondary-text"}>{access.label}</div>
+                      <div className={t.mode === "automated" || live ? "font-medium text-foreground" : "text-secondary-text"}>{access.label}</div>
                       <div className="text-[10.5px] text-meta">{access.hint}</div>
                     </td>
                     <td className="px-3 py-2.5 align-top">
@@ -254,13 +277,17 @@ function ChecklistTable({ title, icon, tasks, note, emptyLabel }: {
                       {t.error && <div className="mt-0.5 text-[11px] text-critical">{t.error}</div>}
                     </td>
                     <td className="px-3 py-2.5 align-top text-[11.5px] text-meta">
-                      {t.externalRef && <div className="truncate text-positive" title={t.externalRef}>{t.externalRef}</div>}
+                      {t.externalRef && t.externalRef !== "chrome:waiting" && (
+                        <div className="truncate text-positive" title={t.externalRef}>
+                          {t.externalRef.startsWith("invited:") ? `Invited ${t.externalRef.slice("invited:".length)}` : t.externalRef}
+                        </div>
+                      )}
                       {t.status === "completed" && t.actor && <div>by {t.actor}{t.source === "automated" ? " · automated" : " · manual"}</div>}
                       {t.completedAt && <div>{relTime(t.completedAt)}</div>}
-                      {!t.externalRef && t.status !== "completed" && <span>—</span>}
+                      {(!t.externalRef || t.externalRef === "chrome:waiting") && t.status !== "completed" && <span>—</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right align-top">
-                      <TaskActions task={{ id: t.id, adapterId: t.adapterId, externalRef: t.externalRef, mode: t.mode, kind: t.kind, status: t.status, required: t.required }} />
+                      <TaskActions task={{ id: t.id, employeeId: t.employeeId, adapterId: t.adapterId, externalRef: t.externalRef, mode: live ? "automated" : t.mode, kind: t.kind, status: t.status, required: t.required }} />
                     </td>
                   </tr>
                 );
