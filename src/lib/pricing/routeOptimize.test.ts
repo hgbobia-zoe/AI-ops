@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { routeOptimize, buildTrips, type RouteAnchor, type LatLng, type DistanceFn } from "./routeOptimize";
+import { routeOptimize, buildTrips, neededPairs, type RouteAnchor, type LatLng, type DistanceFn } from "./routeOptimize";
 
 // Points are identified by a unique `lat` (lng always 0); distances come from an explicit symmetric matrix
 // keyed by the sorted lat pair. This keeps the engine's math fully deterministic and easy to reason about.
@@ -146,5 +146,40 @@ describe("buildTrips", () => {
     const t1 = trips.find((t) => t.truckId === "T1");
     expect(t1?.stops.map((s) => s.id)).toEqual(["s2", "s1"]); // ordered by `order`
     expect(trips.filter((t) => t.truckId === null)).toHaveLength(1);
+  });
+});
+
+describe("buildTrips by truck and route", () => {
+  it("one truck's two routes on the same day are two trips", () => {
+    const trips = buildTrips([
+      anchor(2, { id: "a1", truckId: "T1", routeId: "R-A", order: 1 }),
+      anchor(3, { id: "b1", truckId: "T1", routeId: "R-B", order: 1 }),
+      anchor(4, { id: "a2", truckId: "T1", routeId: "R-A", order: 2 }),
+    ]);
+    expect(trips).toHaveLength(2);
+    expect(trips.find((t) => t.routeId === "R-A")?.stops.map((s) => s.id)).toEqual(["a1", "a2"]);
+    expect(trips.every((t) => t.truckId === "T1")).toBe(true);
+  });
+});
+
+describe("neededPairs + air prefilter", () => {
+  it("skips gaps whose neighbours are all beyond the radius by air, and the engine never asks for them", () => {
+    // Air miles = |lat difference| here; A2 (lat 2) is near the venue (lat 1), A50 is far.
+    const air = (a: LatLng, b: LatLng) => Math.abs(a.lat - b.lat);
+    const anchors = [anchor(2, { id: "near", order: 1 }), anchor(50, { id: "far", order: 2 })];
+    const pairs = neededPairs({ venue: V, warehouse: WH, anchors, routeRadiusMiles: 15, air });
+    // Gaps: WH-near (kept), near-far (kept: near is in reach), far-WH (skipped).
+    expect(pairs).toHaveLength(6);
+    const asked = new Set<string>();
+    const k = (a: LatLng, b: LatLng) => [a.lat, b.lat].sort((x, y) => x - y).join("-");
+    const dist: DistanceFn = (a, b) => {
+      asked.add(k(a, b));
+      return { miles: Math.abs(a.lat - b.lat), minutes: Math.abs(a.lat - b.lat) };
+    };
+    routeOptimize({ venue: V, warehouse: WH, warehouseMiles: 10, anchors, dist, routeRadiusMiles: 15, timingToleranceMinutes: 45, mode: "round_trip", air });
+    const allowed = new Set(pairs.map(([a, b]) => k(a, b)));
+    for (const p of asked) expect(allowed.has(p)).toBe(true);
+    expect(asked.has("1-50")).toBe(true); // the near-far gap is checked
+    expect(asked.has("0-50")).toBe(false); // the far-WH gap is not
   });
 });

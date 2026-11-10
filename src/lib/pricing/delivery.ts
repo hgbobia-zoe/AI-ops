@@ -60,7 +60,10 @@ export interface LegBreakdown {
 }
 
 export interface DeliveryQuote {
-  miles: number; // the BILLABLE one-way distance the legs were priced on
+  miles: number; // the BILLABLE one-way distance of the first priced leg (drop-off, else pickup)
+  /** Billable miles per leg. The legs can differ: each is anchored on its own day's routes. */
+  dropOffMiles: number | null;
+  pickupMiles: number | null;
   subtotal: number;
   dropOff: LegBreakdown | null; // null on a pickup-only run
   pickup: LegBreakdown | null; // null on a drop-off-only run
@@ -116,18 +119,41 @@ export function deliveryLegFee(
 
 export type LegMode = "round_trip" | "drop_off" | "pickup";
 
-/** Price a run. round_trip = both legs (delivery + pickup); drop_off / pickup = a single one-way leg. */
+/** Price a run where both legs travel the same distance. round_trip = both legs (delivery + pickup);
+ *  drop_off / pickup = a single one-way leg. */
 export function deliveryQuote(
   miles: number,
   subtotal: number,
   mode: LegMode = "round_trip",
   cfg: DeliveryFormulaConfig = DEFAULT_DELIVERY_FORMULA,
 ): DeliveryQuote {
-  const leg = deliveryLegFee(miles, subtotal, cfg);
-  const dropOff = mode === "pickup" ? null : leg;
-  const pickup = mode === "drop_off" ? null : leg;
+  return deliveryQuoteLegs({ dropOff: miles, pickup: miles }, subtotal, mode, cfg);
+}
+
+/** Price a run with each leg on its OWN billable miles (the drop-off and the pickup are anchored on
+ *  different days, so one can share a route while the other is a standalone trip). */
+export function deliveryQuoteLegs(
+  miles: { dropOff: number; pickup: number },
+  subtotal: number,
+  mode: LegMode = "round_trip",
+  cfg: DeliveryFormulaConfig = DEFAULT_DELIVERY_FORMULA,
+): DeliveryQuote {
+  const clean = (m: number) => round2(Math.max(0, m || 0));
+  const dropOffMiles = mode === "pickup" ? null : clean(miles.dropOff);
+  const pickupMiles = mode === "drop_off" ? null : clean(miles.pickup);
+  const dropOff = dropOffMiles == null ? null : deliveryLegFee(miles.dropOff, subtotal, cfg);
+  const pickup = pickupMiles == null ? null : deliveryLegFee(miles.pickup, subtotal, cfg);
   const total = round2((dropOff?.total ?? 0) + (pickup?.total ?? 0));
-  return { miles: round2(Math.max(0, miles || 0)), subtotal: Math.max(0, subtotal || 0), dropOff, pickup, total };
+  return { miles: dropOffMiles ?? pickupMiles ?? 0, dropOffMiles, pickupMiles, subtotal: Math.max(0, subtotal || 0), dropOff, pickup, total };
+}
+
+/** The single per-leg amount the Goodshuffle push writes (its drainer sets ONE price on every delivery
+ *  leg line). With unequal legs it is the average, so the round trip total in Goodshuffle matches the
+ *  quote to within a cent. */
+export function pushPerLeg(q: Pick<DeliveryQuote, "dropOff" | "pickup">): number {
+  const legs = [q.dropOff, q.pickup].filter((l): l is LegBreakdown => l != null);
+  if (legs.length === 0) return 0;
+  return round2(legs.reduce((s, l) => s + l.total, 0) / legs.length);
 }
 
 export const metersToMiles = (meters: number): number => meters / 1609.344;
