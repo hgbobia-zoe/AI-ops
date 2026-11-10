@@ -410,8 +410,10 @@ function ConnecteamCard(): React.JSX.Element {
             {!st.configured
               ? "No Connecteam API key is set, so Connecteam steps stay manual."
               : st.verified
-                ? "Write access is verified. Approving a Connecteam step creates the user (no activation text) and offboarding archives them."
-                : "Check that the API key can create users. The check creates nobody. If it passes, Connecteam steps run from People after you approve them."}
+                ? "Runs on its own for everyone onboarding: links the account if someone already made it, otherwise creates the user (no activation text). Offboarding archives them."
+                : st.last && !st.last.ok
+                  ? "The API key cannot create users yet, so Connecteam steps stay manual. People checks again once a day, or press Check again after changing the key."
+                  : "People checks once a day that the API key can create users (the check creates nobody), then runs Connecteam steps on its own."}
           </p>
           {st.last && (
             <p className="mt-1 text-[11.5px] text-meta">

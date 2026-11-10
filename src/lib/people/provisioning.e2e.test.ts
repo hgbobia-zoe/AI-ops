@@ -10,9 +10,16 @@ import { setSecret } from "@/lib/secrets";
 import { executeAutomatedTask, startOnboarding } from "./lifecycle";
 import { createEmployee, getEmployee, listTasks } from "./store";
 import { PROVISION_ENDPOINTS } from "./provisioningEndpoints";
+import { resetConnecteamReadCaches } from "@/lib/connecteam";
 
 function mockFetch(status: number, body: unknown) {
-  vi.stubGlobal("fetch", vi.fn(async () => ({ ok: status >= 200 && status < 300, status, json: async () => body })));
+  // GET users is the team list the Connecteam step checks before creating (someone else, so no match).
+  const roster = { data: { users: [{ userId: 1, firstName: "Old", lastName: "Hand", phoneNumber: "+12025550000" }] } };
+  vi.stubGlobal("fetch", vi.fn(async (url?: string, init?: RequestInit) =>
+    String(url ?? "").includes("/users/v1/users") && (init?.method ?? "GET") === "GET"
+      ? { ok: true, status: 200, json: async () => roster }
+      : { ok: status >= 200 && status < 300, status, json: async () => body },
+  ));
 }
 function auditCount(action: string, entityId: string): number {
   return (getDb().prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = ? AND entity_id = ?").get(action, entityId) as { n: number }).n;
@@ -20,6 +27,7 @@ function auditCount(action: string, entityId: string): number {
 
 beforeEach(() => {
   process.env.CONNECTEAM_API_KEY = "test-key";
+  resetConnecteamReadCaches();
 });
 afterEach(() => {
   vi.restoreAllMocks();

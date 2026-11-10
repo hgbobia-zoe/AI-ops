@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { recordPull, logImport, getRecentImports } from "./state";
+import { recordPull, logImport, getRecentImports, getLatestImportBySource } from "./state";
 import { checkPullStaleness } from "./staleness";
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000);
@@ -27,5 +27,17 @@ describe("per-source staleness", () => {
     const rows = getRecentImports().filter((r) => r.source === "bookings");
     expect(rows.length).toBeGreaterThanOrEqual(2);
     expect(rows.some((r) => !r.ok && r.detail?.includes("partial"))).toBe(true);
+  });
+});
+
+describe("latest import per source", () => {
+  it("still finds a rarely run source after many newer rows from other sources", () => {
+    const old = new Date(Date.now() - 2 * 86_400_000);
+    logImport("rare-on-demand", true, { detail: "pulled once" }, old);
+    for (let i = 0; i < 600; i++) logImport("chatty", true, {}, new Date(Date.now() - i * 1000));
+    const latest = getLatestImportBySource();
+    expect(latest["rare-on-demand"]?.detail).toBe("pulled once");
+    expect(latest["chatty"]).toBeTruthy();
+    expect(Date.parse(latest["chatty"].ts)).toBeGreaterThan(Date.now() - 5_000);
   });
 });

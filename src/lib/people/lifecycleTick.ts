@@ -15,9 +15,28 @@ import { ensureSopLink } from "./sopAck";
 import { getJson, setJson } from "@/lib/kv";
 import { reconcileAllZoeLogins } from "./zoeLink";
 import { runStaffMatching } from "./matchRun";
+import { connecteamScopeStatus, verifyConnecteamScope } from "./connecteamScope";
 
 /** Days a manual provision/revoke task may sit before it is escalated. */
 export const PEOPLE_ESCALATE_DAYS = 3;
+
+/** Onboarding steps the tick runs on its own. The Zoe login is left to a person on purpose: it hands out
+ *  access to company data and produces an invite link someone has to send. */
+const AUTO_PROVISION = new Set(["connecteam"]);
+
+/** Hours between automatic Connecteam access checks while it is not verified. */
+const SCOPE_RECHECK_HOURS = 24;
+
+async function ensureConnecteamScopeChecked(now: Date, actor: string): Promise<void> {
+  const s = connecteamScopeStatus();
+  if (!s.configured || s.verified) return;
+  if (s.last && now.getTime() - Date.parse(s.last.checkedAt) < SCOPE_RECHECK_HOURS * 3_600_000) return;
+  try {
+    await verifyConnecteamScope(actor);
+  } catch {
+    /* unreachable: try again next window */
+  }
+}
 
 export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ ok: boolean; detail: string }> {
   const today = todayInOpsTz();
@@ -36,6 +55,24 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
         onboarded++;
         const cur = getEmployee(e.id) ?? e;
         announceOnboardingStarted(cur, listTasks(e.id, "provision"), ensureSopLink(cur));
+      }
+    }
+  }
+
+  // 1b) Connecteam write access: check it ourselves (the probe creates nobody) so the step is automated without
+  //     anyone pressing Verify. Rechecked at most once a day while unverified.
+  await ensureConnecteamScopeChecked(now, actor);
+
+  // 1c) Run the Connecteam setup step for everyone onboarding. It links an account someone already made by
+  //     hand (phone, then email) and only creates one when none exists. No activation text is sent.
+  let autoProvisioned = 0;
+  if (getAdapter("connecteam").mode() === "automated") {
+    for (const e of listEmployees()) {
+      if (e.lifecycleState !== "ONBOARD") continue;
+      for (const t of listTasks(e.id, "provision")) {
+        if (!AUTO_PROVISION.has(t.adapterId) || t.status !== "pending") continue;
+        const r = await executeAutomatedTask(t.id, actor);
+        if (r.ok && r.task?.status === "completed") autoProvisioned++;
       }
     }
   }
@@ -112,6 +149,6 @@ export async function runPeopleLifecycleTick(now: Date = new Date()): Promise<{ 
     matchNote = `matching failed: ${e instanceof Error ? e.message : "error"}`;
   }
 
-  const detail = `${checkins} check ins, ${onboarded} onboarded, ${revoked} auto-revoked, ${escalated} escalated, ${zoeLinked} Zoe logins linked, ${matchNote}`;
+  const detail = `${checkins} check ins, ${onboarded} onboarded, ${autoProvisioned} Connecteam set up, ${revoked} auto-revoked, ${escalated} escalated, ${zoeLinked} Zoe logins linked, ${matchNote}`;
   return { ok: true, detail };
 }
