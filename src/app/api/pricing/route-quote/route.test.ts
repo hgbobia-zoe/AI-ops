@@ -100,7 +100,7 @@ describe("each leg is anchored on its own day", () => {
     expect(j.legs.pickup.pricingMode).toBe("STANDARD");
     expect(j.quote.dropOff.total).toBe(standardLeg);
     expect(j.quote.pickup.total).toBe(standardLeg);
-    expect(j.legs.dropOff.reasons.join(" ")).toMatch(/No routes are scheduled on 2027-04-09/);
+    expect(j.legs.dropOff.reasons.join(" ")).toMatch(/No routes or signed deliveries on 2027-04-09/);
   });
 
   it("only the delivery day matches: drop-off shares a route, pickup stays standard", async () => {
@@ -293,5 +293,69 @@ describe("address precision", () => {
     expect(looksCityLevel("Leesburg, VA 20175 Loudoun")).toBe(true);
     expect(looksCityLevel("802 Childrens Center Rd SW, Leesburg, VA 20175")).toBe(false);
     expect(looksCityLevel("12B Main St, Bethesda, MD")).toBe(false);
+  });
+});
+
+describe("signed projects not on a route yet (far-out dates)", () => {
+  // A signed project we deliver on D, 3 mi east of the venue, never routed: the truck is going there anyway.
+  function signedProject(o: { id: string; dx: number; dy: number; delivery?: string | null; pickup?: string | null; delivers?: number | null; status?: string; archived?: number; window?: string | null }) {
+    const street = `${o.id.length}5 Signed Way`;
+    geo.addrBook.set(`${street}, Testville, VA 20000`, geo.pt(o.dx, o.dy));
+    getDb()
+      .prepare(
+        `INSERT INTO bookings (booking_id, event_name, event_date, status_label, signed, archived, location, street_address,
+           delivery_date, delivery_window, pickup_date, pickup_window, delivers, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(o.id, `Fixture ${o.id}`, D, o.status ?? "Contract Signed", 1, o.archived ?? 0, "Testville, VA 20000", street,
+        o.delivery === undefined ? D : o.delivery, o.window === undefined ? "9:00 AM - 12:00 PM" : o.window,
+        o.pickup === undefined ? P : o.pickup, "9:00 AM - 12:00 PM", o.delivers === undefined ? 1 : o.delivers, "x");
+  }
+
+  it("a signed delivery that day anchors the drop-off even with no route", async () => {
+    signedProject({ id: "S1", dx: -22, dy: 0, pickup: null });
+    const j = await quote({ ...base, eventDate: D, pickupDate: P });
+    expect(j.legs.dropOff.pricingMode).toBe("ROUTE_OPTIMIZED");
+    expect(j.legs.dropOff.anchor).toMatchObject({ id: "S1", source: "booking", truckId: null, timingVerified: true });
+    // One-stop trip WH, S1, WH: inserting the venue adds 7.21 mi, like the routed single-stop fixture.
+    expect(j.legs.dropOff.billableMiles).toBe(7.21);
+    expect(j.legs.dropOff.reasons.join(" ")).toMatch(/not on a route yet/);
+    expect(j.legs.pickup.pricingMode).toBe("STANDARD");
+  });
+
+  it("its pickup leg anchors the pickup day", async () => {
+    signedProject({ id: "S1", dx: -22, dy: 0, delivery: "2027-04-08", pickup: P });
+    const j = await quote({ ...base, eventDate: D, pickupDate: P });
+    expect(j.legs.dropOff.pricingMode).toBe("STANDARD");
+    expect(j.legs.pickup.anchor.id).toBe("S1");
+  });
+
+  it("in-store projects and projects with no captured logistics never anchor", async () => {
+    signedProject({ id: "INSTORE", dx: -22, dy: 0, delivers: 0 });
+    signedProject({ id: "UNKNOWN", dx: -23, dy: 0, delivers: null });
+    const j = await quote({ ...base, eventDate: D });
+    expect(j.legs.dropOff.pricingMode).toBe("STANDARD");
+  });
+
+  it("lost, cancelled and archived signed projects never anchor", async () => {
+    signedProject({ id: "LOST", dx: -22, dy: 0, status: "Lost" });
+    signedProject({ id: "ARCH", dx: -23, dy: 0, archived: 1 });
+    const j = await quote({ ...base, eventDate: D });
+    expect(j.legs.dropOff.pricingMode).toBe("STANDARD");
+  });
+
+  it("a project already routed that day is used as its routed stop, not twice", async () => {
+    signedProject({ id: "TX-d1", dx: -22, dy: 0 });
+    route("R-D", "NPR-1", D);
+    stop({ id: "d1", route: "R-D", seq: 1, dx: -22, dy: 0 });
+    const j = await quote({ ...base, eventDate: D });
+    expect(j.legs.dropOff.anchor).toMatchObject({ id: "TX-d1", source: "route", truckId: "NPR-1" });
+    expect(j.legs.dropOff.anchorsConsidered).toBe(1);
+  });
+
+  it("the quote's own signed project never anchors it", async () => {
+    signedProject({ id: "SELF", dx: -25, dy: 0.01 });
+    const j = await quote({ ...base, eventDate: D });
+    expect(j.legs.dropOff.pricingMode).toBe("STANDARD");
   });
 });

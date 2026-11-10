@@ -31,3 +31,16 @@ describe("GET /api/pricing/projects/search", () => {
     expect(picnic.location).toBe("Otherville, MD 20001");
   });
 });
+
+describe("picker fallback to Goodshuffle's own address and dates", () => {
+  it("uses the stored street and timeline dates when the project is not routed", async () => {
+    getDb()
+      .prepare(
+        "INSERT INTO bookings (booking_id, event_name, event_date, status_label, signed, location, street_address, delivery_date, pickup_date, delivers, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      )
+      .run("990003", "Fixture Wedding", "2027-06-05", "Contract Signed", 1, "Farville, VA 20002", "7 Orchard Ln", "2027-06-05", "2027-06-06", 1, "x");
+    const res = await GET(new Request("http://localhost/api/pricing/projects/search?q=Wedding"));
+    const { projects } = (await res.json()) as { projects: Array<Record<string, unknown>> };
+    expect(projects[0]).toMatchObject({ id: "990003", streetAddress: "7 Orchard Ln, Farville, VA 20002", eventDate: "2027-06-05", pickupDate: "2027-06-06" });
+  });
+});

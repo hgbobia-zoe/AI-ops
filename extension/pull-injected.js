@@ -48,7 +48,7 @@ function zoePull(apiBase, tier) {
     function loop(pg) { return fetchPage(pg).then((r) => { if (FULL && !pErr && r.count > 0 && pg < 60) return loop(pg + 1); return null; }); }
     return loop(0).then(() => {
       const recs = Object.keys(all).map((id) => { const p = all[id];
-        return { bookingId: String(p.id), eventName: p.eventName || "", eventDate: d2(p.logistics_start_date), statusLabel: p.statusLabel || "", signed: !!p.signed, archived: !!p.archived, grandTotalCents: p.grand_total, contractTotalCents: p.contract_subtotal, amountPaidCents: p.amount_paid, amountDueCents: p.amount_due, clientName: p.client_name || "", clientEmail: p.client_email || "", clientPhone: p.client_phone || "", quoteSentDate: d2(p.quote_sent_date), dateCreated: d2(p.date_created), venue: p.venueLabel || "", location: p.cityStateZipCounty || "", salesLead: p.salesLeadName || "", logisticsStartTime: (p.logistics_start_from_time == null ? null : String(p.logistics_start_from_time)) };
+        return { bookingId: String(p.id), eventName: p.eventName || "", eventDate: d2(p.logistics_start_date), statusLabel: p.statusLabel || "", signed: !!p.signed, archived: !!p.archived, grandTotalCents: p.grand_total, contractTotalCents: p.contract_subtotal, amountPaidCents: p.amount_paid, amountDueCents: p.amount_due, clientName: p.client_name || "", clientEmail: p.client_email || "", clientPhone: p.client_phone || "", quoteSentDate: d2(p.quote_sent_date), dateCreated: d2(p.date_created), venue: p.venueLabel || "", location: p.cityStateZipCounty || "", salesLead: p.salesLeadName || "", logisticsStartTime: (p.logistics_start_from_time == null ? null : String(p.logistics_start_from_time)), streetAddress: [p.streetLine1, p.streetLine2].filter(Boolean).join(", ") };
       });
       if (!recs.length) return { saved: 0, partial: pErr };
       // Capture comms for OPEN leads AND SIGNED near-term deliveries (within today..+3 days), so the driver
@@ -169,8 +169,27 @@ function zoePull(apiBase, tier) {
       }
       // FULL lane: archive-inclusive POST (scope:"full" — the ONLY scope that prunes) carrying `partial`,
       // no notes (those ride the fast ACTIVE lane). ACTIVE lane: scope:"active" (never prunes) + notes.
+      // Logistics legs for UPCOMING SIGNED projects (delivery pricing): each project timeline lists its
+      // drop-off / pickup legs ("logisticsDelivery" = we drive, "logisticsInStore" = customer collects) with
+      // date + window. Sent raw; the server parses (src/lib/gs/logistics.ts). Sequential, capped, hourly lane.
+      function pullLogistics() {
+        const lo = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+        const hi = new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10);
+        const ids = Object.keys(all).filter((id) => { const p = all[id]; const d = d2(p.logistics_start_date); const s = (p.statusLabel || "").toLowerCase();
+          return p.signed && !p.archived && d && d >= lo && d <= hi && s.indexOf("lost") < 0 && s.indexOf("cancel") < 0 && s.indexOf("dead") < 0; }).slice(0, 300);
+        const out = [];
+        function one(i) {
+          if (i >= ids.length) return Promise.resolve();
+          const id = ids[i];
+          return fetch("/app/vendorTransaction/initProjectTimeline?transactionID=" + id, H).then((r) => (r.ok ? r.json() : null)).then((t) => {
+            const ev = ((t && t.events) || []).map((e) => ({ type: e && e.type, dateLabel: e && e.dateLabel }));
+            if (ev.length) out.push({ bookingId: String(id), startDate: d2(all[id].logistics_start_date), events: ev });
+          }).catch(() => {}).then(() => one(i + 1));
+        }
+        return one(0).then(() => (out.length ? fetch(API + "/api/gs/logistics", { method: "POST", headers: POSTH, body: JSON.stringify({ logistics: out }) }).then((r) => r.json()).catch(() => ({ updated: 0 })) : { updated: 0 }));
+      }
       if (FULL) {
-        return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, partial: pErr, scope: "full" }) }).then((r) => r.json()).then((j) => pullWindows(windowIds(true)).catch(() => ({ windows: 0 })).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: pErr || !!(j && j.partial), notes: 0, windows: (wj && wj.windows) || 0 }))).catch(() => ({ saved: 0, partial: true }));
+        return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, partial: pErr, scope: "full" }) }).then((r) => r.json()).then((j) => pullLogistics().catch(() => null).then(() => pullWindows(windowIds(true)).catch(() => ({ windows: 0 }))).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: pErr || !!(j && j.partial), notes: 0, windows: (wj && wj.windows) || 0 }))).catch(() => ({ saved: 0, partial: true }));
       }
       // Lost-reason tracker: the server names recently lost quotes still missing a reason; re-read their
       // notes too (they are off the open-lead set) so a reason written in Goodshuffle is seen.

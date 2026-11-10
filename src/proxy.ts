@@ -55,6 +55,7 @@ const PUBLIC: string[] = [
   "/api/route/prune", // Auto-Pull sanitize: drop routes GS no longer has; own token (fail-open), CORS-locked
   "/api/gs/projects",
   "/api/gs/notes",
+  "/api/gs/logistics", // Auto-Pull posts each upcoming signed project's timeline legs (delivery pricing); own token (fail-open), CORS-locked
   "/api/gs/emails", // Auto-Pull captures the client email thread; own token (fail-open), CORS-locked — must not bounce to auth
   "/api/gs/outbox",
   "/api/gs/intake-result", // Auto-Pull reports the created project id back here; own token (fail-open), CORS-locked — must not bounce to auth

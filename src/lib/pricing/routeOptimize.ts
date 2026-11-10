@@ -244,8 +244,14 @@ export function routeOptimize(input: RouteOptimizeInput): RouteOptimizeResult {
     reasons.push(
       `Shared with "${best.anchor.label}"${best.truckId ? ` on ${best.truckId}` : ""} on the same date: the new stop adds ${billable} mi to that trip vs ${whMiles} mi for a dedicated run (saves ${savings} mi).`,
     );
-    if (!best.timingVerified) {
-      reasons.push("That job is a signed booking not yet on a route, so its time window is unknown. The timing of this share is ASSUMED, not verified.");
+    if (best.anchor.source === "booking") {
+      reasons.push(
+        best.timingVerified
+          ? "That job is signed and its delivery window is known, but it is not on a route yet, so the share assumes both go out on the same truck."
+          : "That job is a signed booking not yet on a route, so its time window is unknown. The timing of this share is ASSUMED, not verified.",
+      );
+    } else if (!best.timingVerified) {
+      reasons.push("The time window of that stop is unknown, so the timing of this share is ASSUMED, not verified.");
     }
     return {
       mode: "ROUTE_OPTIMIZED",

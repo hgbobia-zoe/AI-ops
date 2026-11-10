@@ -2558,6 +2558,16 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // timeline, which says whether it is a paid exact-time window and which delivery line set it.
   { table: "stops", column: "window_pin_point", type: "INTEGER" },   // 1 = "PIN POINT EXACT TIME" window
   { table: "stops", column: "window_label", type: "TEXT" },          // GS delivery line name for the window
+  // Delivery pricing: the venue street (GS searchProjects streetLine1/2; `location` is city/state/ZIP) and the
+  // project's logistics legs from its GS timeline (lib/gs/logistics.ts). delivers: 1 = we drive at least one
+  // leg, 0 = in-store only, null = not captured. Lets a signed, unrouted project count as a stop on its day.
+  { table: "bookings", column: "street_address", type: "TEXT" },
+  { table: "bookings", column: "delivery_date", type: "TEXT" },
+  { table: "bookings", column: "delivery_window", type: "TEXT" },
+  { table: "bookings", column: "pickup_date", type: "TEXT" },
+  { table: "bookings", column: "pickup_window", type: "TEXT" },
+  { table: "bookings", column: "delivers", type: "INTEGER" },
+  { table: "bookings", column: "logistics_at", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {
