@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { selectNoteCaptureIds, buildOfficePullScript, NOTE_CAPTURE_CAP, type PullProjectLite } from "./gsPull";
+import {
+  selectNoteCaptureIds,
+  selectWindowCaptureIds,
+  buildOfficePullScript,
+  NOTE_CAPTURE_CAP,
+  WINDOW_FETCH_GAP_MS,
+  WINDOW_FUTURE_DAYS,
+  WINDOW_PAST_DAYS,
+  type PullProjectLite,
+} from "./gsPull";
 
 // Part A: note/comms capture must now reach SIGNED near-term deliveries (so the pre-shift debrief can read
 // the customer-attention notes) WITHOUT dropping the existing open-lead capture. This tests the pure
@@ -66,5 +75,34 @@ describe("bookmarklet mirrors the widened selection inline", () => {
     expect(src).toContain(`slice(0,${NOTE_CAPTURE_CAP})`);
     // It no longer iterates the old signed-excluding openIds set directly for note capture.
     expect(src).toContain("i>=captureIds.length");
+  });
+});
+
+describe("selectWindowCaptureIds (delivery window capture horizon)", () => {
+  const FROM = "2026-10-27"; // today minus WINDOW_PAST_DAYS
+  const TO = "2026-11-24"; // today plus WINDOW_FUTURE_DAYS
+  const projects = {
+    PAST_SIGNED: { signed: true, statusLabel: "Contract Signed", logistics_start_date: AT("2026-10-31") },
+    NEXT_QUOTE: { signed: false, statusLabel: "Quote Sent", logistics_start_date: AT("2026-11-14") },
+    TOO_OLD: { signed: true, statusLabel: "Contract Signed", logistics_start_date: AT("2026-10-20") },
+    TOO_FAR: { signed: false, statusLabel: "Quote Sent", logistics_start_date: AT("2026-12-20") },
+    LOST: { signed: false, statusLabel: "Lost", logistics_start_date: AT("2026-11-07") },
+    UNDATED: { signed: false, statusLabel: "New", logistics_start_date: null },
+    ARCHIVED_DONE: { signed: true, statusLabel: "Completed", archived: true, logistics_start_date: AT("2026-11-01") },
+  };
+  it("active lane: signed or quote stage with logistics in the horizon, lost and undated skipped", () => {
+    expect(selectWindowCaptureIds(projects, FROM, TO, false).sort()).toEqual(["ARCHIVED_DONE", "NEXT_QUOTE", "PAST_SIGNED"]);
+  });
+  it("full lane: only the archived ones (the active lane cannot see them)", () => {
+    expect(selectWindowCaptureIds(projects, FROM, TO, true)).toEqual(["ARCHIVED_DONE"]);
+  });
+  it("is capped", () => {
+    expect(selectWindowCaptureIds(projects, FROM, TO, false, 1)).toHaveLength(1);
+  });
+  it("the bookmarklet mirrors the horizon and gap constants", () => {
+    const src = buildOfficePullScript("https://zoe-dispatch.fly.dev");
+    expect(src).toContain(`Date.now()-${WINDOW_PAST_DAYS}*86400000`);
+    expect(src).toContain(`Date.now()+${WINDOW_FUTURE_DAYS}*86400000`);
+    expect(src).toContain(`wait(${WINDOW_FETCH_GAP_MS})`);
   });
 });

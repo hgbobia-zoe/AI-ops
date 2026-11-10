@@ -5,7 +5,13 @@
 //
 // Body: { projects: [{ bookingId, eventName?, eventDate?(YYYY-MM-DD|null), statusLabel?, signed?,
 //   grandTotalCents?, contractTotalCents?, amountPaidCents?, amountDueCents?, clientName?, clientEmail? }],
-//   scope?: "active" | "full", partial?: boolean }
+//   scope?: "active" | "full", partial?: boolean,
+//   windows?: [{ bookingId, events: [{ marker: "DROP_OFF"|"PICK_UP", name, dateLabel }] }] }
+//
+// `windows` = the project timeline delivery windows (initProjectTimeline logisticsDelivery entries) the
+// pulls fetch for projects with logistics in a short horizon. Sent in its own POST (no projects[]), like
+// `components`. A booking listed here had its timeline fetched: its stored windows are replaced (an empty
+// events[] clears them). Parsing happens server side (onTime.parseTimelineWindows).
 //
 // TWO-TIER PULL (scope):
 //   • "full" (DEFAULT when scope is absent — so the bookmarklet and any existing caller keep working):
@@ -18,7 +24,17 @@
 //     full-lane concept and is ignored here.
 
 import { NextResponse } from "next/server";
-import { saveBookings, enqueueWarehouseTeamAdds, archiveBookingsNotIn, saveBookingRevenueComponents, syncStopWindowsFromBookings, type BookingRecord } from "@/lib/db/repo";
+import {
+  saveBookings,
+  enqueueWarehouseTeamAdds,
+  archiveBookingsNotIn,
+  saveBookingRevenueComponents,
+  saveBookingTimelineWindows,
+  syncStopWindowsFromBookings,
+  type BookingRecord,
+  type BookingTimelineInput,
+} from "@/lib/db/repo";
+import type { RawTimelineEvent } from "@/lib/dispatch/onTime";
 import { recordPull, logImport, recordBookingsImportFailure, claimBlankDraftBurstAlert } from "@/lib/pull/state";
 import { findBlankDraftBursts, blankDraftBurstAlert, BLANK_DRAFT_BURST_THRESHOLD } from "@/lib/ingest/blankDraft";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
@@ -109,12 +125,55 @@ function persistComponents(components: InRevenueComponents[]): number {
 
 const ymd = (s: string | null | undefined): string | null => (s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null);
 
+/** Keep only well-formed timeline entries (strings, bounded) from the pull. */
+interface InWindows {
+  bookingId?: string | number;
+  events?: unknown;
+}
+function sanitizeWindows(raw: InWindows[]): BookingTimelineInput[] {
+  const str = (v: unknown, max: number): string | null => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+  const out: BookingTimelineInput[] = [];
+  for (const w of raw.slice(0, 500)) {
+    const bookingId = w?.bookingId != null ? String(w.bookingId).trim() : "";
+    if (!bookingId || !Array.isArray(w.events)) continue; // no events[] = the fetch failed: keep what is stored
+    const events: RawTimelineEvent[] = (w.events as Array<Record<string, unknown>>).slice(0, 40).map((e) => ({
+      marker: str(e?.marker, 20),
+      name: str(e?.name, 120),
+      dateLabel: str(e?.dateLabel, 120),
+    }));
+    out.push({ bookingId, events });
+  }
+  return out;
+}
+
+/** Store fetched project timeline windows and refresh the windows on stops already written. */
+function persistWindows(raw: InWindows[]): { bookings: number; windows: number; stopsUpdated: number } {
+  const items = sanitizeWindows(raw);
+  if (items.length === 0) return { bookings: 0, windows: 0, stopsUpdated: 0 };
+  const today = todayInOpsTz();
+  const windows = saveBookingTimelineWindows(items, today);
+  let stopsUpdated = 0;
+  try {
+    stopsUpdated = syncStopWindowsFromBookings(shiftYmd(today, -WINDOW_BACKFILL_DAYS));
+  } catch (e) {
+    console.error("[gs/projects] syncStopWindowsFromBookings after windows failed (ignored)", e);
+  }
+  return { bookings: items.length, windows, stopsUpdated };
+}
+
 export async function POST(req: Request): Promise<NextResponse> {
   const publishToken = process.env.GS_INGEST_TOKEN;
   if (publishToken && req.headers.get("x-publish-token") !== publishToken) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401, headers: CORS });
   }
-  let body: { projects?: InProject[]; components?: InRevenueComponents[]; partial?: boolean; totalReported?: number; scope?: string };
+  let body: {
+    projects?: InProject[];
+    components?: InRevenueComponents[];
+    windows?: InWindows[];
+    partial?: boolean;
+    totalReported?: number;
+    scope?: string;
+  };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -124,8 +183,16 @@ export async function POST(req: Request): Promise<NextResponse> {
   const scope: "active" | "full" = body.scope === "active" ? "active" : "full";
   const projects = Array.isArray(body.projects) ? body.projects : [];
   const components = Array.isArray(body.components) ? body.components : [];
+  const windowsIn = Array.isArray(body.windows) ? body.windows : [];
+  if (projects.length === 0 && components.length === 0 && windowsIn.length === 0) {
+    return NextResponse.json({ error: "projects[], components[] or windows[] required" }, { status: 400, headers: CORS });
+  }
+
+  // Timeline-windows-only POST: the pull fetches each near-term project's timeline after the bookings
+  // POST and sends the windows on their own. None of the upsert / prune / freshness logic applies.
   if (projects.length === 0 && components.length === 0) {
-    return NextResponse.json({ error: "projects[] or components[] required" }, { status: 400, headers: CORS });
+    const w = persistWindows(windowsIn);
+    return NextResponse.json({ ok: true, scope, saved: 0, pruned: 0, windowBookings: w.bookings, windows: w.windows, stopsUpdated: w.stopsUpdated }, { headers: CORS });
   }
 
   // Revenue-components-only POST (Stage 3): the office pull sends the per-tx breakdown in its own call,
@@ -133,7 +200,8 @@ export async function POST(req: Request): Promise<NextResponse> {
   // freshness logic applies (this is additive revenue detail, not a pipeline refresh).
   if (projects.length === 0) {
     const savedComponents = persistComponents(components);
-    return NextResponse.json({ ok: true, savedComponents, scope, saved: 0, pruned: 0 }, { headers: CORS });
+    const w = windowsIn.length > 0 ? persistWindows(windowsIn) : null;
+    return NextResponse.json({ ok: true, savedComponents, scope, saved: 0, pruned: 0, ...(w ? { windows: w.windows } : {}) }, { headers: CORS });
   }
   // Components may also ride alongside a projects pull (harmless) — persist them first.
   const savedComponents = components.length > 0 ? persistComponents(components) : 0;
@@ -167,9 +235,18 @@ export async function POST(req: Request): Promise<NextResponse> {
     });
   }
   if (records.length > 0) saveBookings(records);
+  // Timeline windows may also ride alongside a projects pull: store them after the bookings rows exist
+  // (their year is read from the booking's logistics date). The stop refresh below covers them.
+  if (windowsIn.length > 0) {
+    try {
+      saveBookingTimelineWindows(sanitizeWindows(windowsIn), todayInOpsTz());
+    } catch (e) {
+      console.error("[gs/projects] saveBookingTimelineWindows failed (ignored)", e);
+    }
+  }
   // Bookings and routes arrive in separate pulls: refresh the customer window on stops already written
   // (recent + upcoming routes) from the projects just saved. Best effort; never fails the ingest.
-  if (records.length > 0) {
+  if (records.length > 0 || windowsIn.length > 0) {
     try {
       syncStopWindowsFromBookings(shiftYmd(todayInOpsTz(), -WINDOW_BACKFILL_DAYS));
     } catch (e) {

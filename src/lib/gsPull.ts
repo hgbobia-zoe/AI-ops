@@ -79,6 +79,45 @@ export function selectNoteCaptureIds(
   return out.slice(0, cap);
 }
 
+// ── Delivery window capture id-selection (PURE, shared contract) ─────────────────────────────────────────
+// Goodshuffle delivery windows are RANGES that only the project timeline carries
+// (GET /app/vendorTransaction/initProjectTimeline → events[] type "logisticsDelivery", dateLabel
+// "Saturday, 10/31 [9:00 AM - 8:00 PM]"). searchProjects has only the start. The pulls fetch the timeline
+// for projects whose logistics date is within the past WINDOW_PAST_DAYS to the next WINDOW_FUTURE_DAYS
+// (signed or quote stage; lost/cancelled/dead skipped), ONE AT A TIME, WINDOW_FETCH_GAP_MS apart
+// (Goodshuffle answers parallel bursts with 429), and POST the raw entries as { windows } to
+// /api/gs/projects, which parses them. The ACTIVE lane covers the non-archived projects (at most every
+// WINDOW_REFRESH_MS); the FULL lane covers only the ARCHIVED ones in the horizon, which the active lane
+// cannot see (a project archived right after its event). The bookmarklet string and the extension's
+// pull-injected.js mirror this inline.
+export const WINDOW_PAST_DAYS = 14;
+export const WINDOW_FUTURE_DAYS = 14;
+export const WINDOW_FETCH_GAP_MS = 250;
+export const WINDOW_CAPTURE_CAP = 150;
+export const WINDOW_REFRESH_MS = 15 * 60 * 1000;
+
+/** PURE: the project ids whose timeline windows a lane fetches. `fromY`/`toY` are YYYY-MM-DD bounds
+ *  (today minus WINDOW_PAST_DAYS, today plus WINDOW_FUTURE_DAYS). `archivedOnly` = the FULL lane. */
+export function selectWindowCaptureIds(
+  projects: Record<string, PullProjectLite & { archived?: boolean }>,
+  fromY: string,
+  toY: string,
+  archivedOnly: boolean,
+  cap: number = WINDOW_CAPTURE_CAP,
+): string[] {
+  const out: string[] = [];
+  for (const id of Object.keys(projects)) {
+    const p = projects[id];
+    const d = pullYmd(p.logistics_start_date);
+    if (!d || d < fromY || d > toY) continue;
+    const s = (p.statusLabel || "").toLowerCase();
+    if (s.indexOf("lost") >= 0 || s.indexOf("cancel") >= 0 || s.indexOf("dead") >= 0) continue;
+    if (archivedOnly && !p.archived) continue;
+    out.push(id);
+  }
+  return out.slice(0, cap);
+}
+
 /** Build the office pull IIFE. `apiBase` is the absolute Zoe Ops origin (e.g. https://zoe-dispatch.fly.dev).
  *  `publishToken` (when the KIOSK_PUBLISH_TOKEN secret is set) is sent as x-publish-token so the
  *  now-gated ingest endpoints accept the write — only logged-in users can see /admin/pull, so the
@@ -142,6 +181,26 @@ ${GS_TEMPLATE_JS}
           if(p.signed){ if(d&&d>=todayY&&d<=horizonY) signedIds.push(id); return; }
           var s=(p.statusLabel||"").toLowerCase(); if(s.indexOf("lost")>=0||s.indexOf("cancel")>=0||s.indexOf("dead")>=0) return;
           if(!d||d>=todayY) openIds.push(id); });
+        // Delivery window capture (project timeline ranges). MIRRORS selectWindowCaptureIds() above: logistics
+        // date within -WINDOW_PAST_DAYS..+WINDOW_FUTURE_DAYS, not lost/cancelled/dead; the FULL lane takes only
+        // archived ones. Sequential, WINDOW_FETCH_GAP_MS apart (Goodshuffle 429s parallel bursts); one retry
+        // after a 429. A failed fetch is left out (the stored windows stay); an empty timeline is sent (clears).
+        var winFrom=new Date(Date.now()-${WINDOW_PAST_DAYS}*86400000).toISOString().slice(0,10);
+        var winTo=new Date(Date.now()+${WINDOW_FUTURE_DAYS}*86400000).toISOString().slice(0,10);
+        function windowIds(archivedOnly){ var out=[]; Object.keys(all).forEach(function(id){ var p=all[id]; var d=d2(p.logistics_start_date); if(!d||d<winFrom||d>winTo) return;
+          var s=(p.statusLabel||"").toLowerCase(); if(s.indexOf("lost")>=0||s.indexOf("cancel")>=0||s.indexOf("dead")>=0) return; if(archivedOnly&&!p.archived) return; out.push(id); }); return out.slice(0,${WINDOW_CAPTURE_CAP}); }
+        function pullWindows(ids){ var wins=[];
+          function wait(ms){ return new Promise(function(res){ setTimeout(res,ms); }); }
+          function getTl(id,retry){ return fetch("/app/vendorTransaction/initProjectTimeline?transactionID="+id,H).then(function(r){ if(r.status===429&&!retry) return wait(2000).then(function(){ return getTl(id,true); }); return r.ok?r.json():null; }).catch(function(){ return null; }); }
+          function one(i){ if(i>=ids.length) return Promise.resolve(); var id=ids[i];
+            return getTl(id,false).then(function(j){ if(j&&Object.prototype.toString.call(j.events)==="[object Array]"){ var ev=[];
+                j.events.forEach(function(e){ if(e&&e.type==="logisticsDelivery") ev.push({ marker:e.eventTimeLineMarker||null, name:e.name||null, dateLabel:e.dateLabel||null }); });
+                wins.push({ bookingId:String(id), events:ev }); } })
+              .then(function(){ return i+1<ids.length ? wait(${WINDOW_FETCH_GAP_MS}).then(function(){ return one(i+1); }) : null; }); }
+          return one(0).then(function(){ if(!wins.length) return {windows:0};
+            return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({windows:wins})}).then(function(r){return r.json();}).then(function(j){ return {windows:(j&&j.windows)||0}; }).catch(function(){ return {windows:0}; }); }); }
+        // Active lane: at most every WINDOW_REFRESH_MS (the fast lane repeats every few minutes).
+        function activeWindows(){ var last=window.__zoeWinLast||0; if(Date.now()-last<${WINDOW_REFRESH_MS}) return Promise.resolve({windows:0}); window.__zoeWinLast=Date.now(); return pullWindows(windowIds(false)); }
         var seenCap={}, captureIds=[]; openIds.concat(signedIds).forEach(function(id){ if(!seenCap[id]){seenCap[id]=1;captureIds.push(id);} }); captureIds=captureIds.slice(0,${NOTE_CAPTURE_CAP});
         function pullNotes(){
           var notes=[]; var emails=[];
@@ -197,9 +256,9 @@ ${GS_TEMPLATE_JS}
         // partial flag. No notes/emails here (those ride the fast ACTIVE lane). ACTIVE lane:
         // scope:"active" (never prunes) + the open-lead notes/emails capture.
         if(FULL){
-          return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr,scope:"full"})}).then(function(r){return r.json();}).then(function(j){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:0 }; }).catch(function(){ return { saved:0, partial:true }; });
+          return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr,scope:"full"})}).then(function(r){return r.json();}).then(function(j){ return pullWindows(windowIds(true)).catch(function(){ return {windows:0}; }).then(function(wj){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:0, windows:(wj&&wj.windows)||0 }; }); }).catch(function(){ return { saved:0, partial:true }; });
         }
-        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,scope:"active"})}).then(function(r){return r.json();}).then(function(j){ return pullNotes().then(function(nj){ return { saved:(j&&j.saved)||recs.length, partial:false, notes:(nj&&nj.updated)||0 }; }); }).catch(function(){ return { saved:0, partial:false }; });
+        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,scope:"active"})}).then(function(r){return r.json();}).then(function(j){ return pullNotes().then(function(nj){ return activeWindows().catch(function(){ return {windows:0}; }).then(function(wj){ return { saved:(j&&j.saved)||recs.length, partial:false, notes:(nj&&nj.updated)||0, windows:(wj&&wj.windows)||0 }; }); }); }).catch(function(){ return { saved:0, partial:false }; });
       });
     }
 

@@ -11,7 +11,7 @@ import { slackNotify } from "@/lib/notify/slack";
 import { NOT_BLANK_DRAFT_SQL } from "@/lib/ingest/blankDraft";
 import { pickWorkableRoute, isVerifiedComplete } from "@/lib/dispatch/handoff";
 import { getHandoffConfig } from "@/lib/dispatch/handoffConfig";
-import { bookingWindowForStop } from "@/lib/dispatch/onTime";
+import { parseTimelineWindows, resolveStopWindow, type RawTimelineEvent, type TimelineWindow, type WindowKind } from "@/lib/dispatch/onTime";
 import type { Route, RouteStatus, Stop, StopState } from "@/lib/types";
 import type { CallRecap } from "@/lib/coach/recap";
 import { computeCallMetrics } from "@/lib/coach/metrics";
@@ -52,6 +52,8 @@ interface StopRow {
   window_start?: string | null;
   window_end?: string | null;
   window_source?: string | null;
+  window_pin_point?: number | null;
+  window_label?: string | null;
   planned_on_site_min?: number | null;
   planned_transit_min?: number | null;
   close_resolution?: string | null;
@@ -101,6 +103,8 @@ function toStop(r: StopRow): Stop {
     windowStart: r.window_start ?? undefined,
     windowEnd: r.window_end ?? undefined,
     windowSource: r.window_source === "route" || r.window_source === "booking" ? r.window_source : undefined,
+    windowPinPoint: r.window_pin_point ? true : undefined,
+    windowLabel: r.window_label ?? undefined,
     plannedOnSiteMin: r.planned_on_site_min ?? undefined,
     plannedTransitMin: r.planned_transit_min ?? undefined,
     closeResolution:
@@ -3120,13 +3124,13 @@ export function writeRoute(route: Route): void {
       `INSERT INTO stops (stop_id, route_id, customer_id, sequence, state, cust_name,
         cust_first_name, cust_last_name, kind, cust_phone, address, day_of_name, day_of_phone,
         planned_window, eta, items, tx_id, contact_id, arrived_at, completed_at, tracking_token,
-        photos_ref, signature_ref, window_start, window_end, window_source, planned_on_site_min,
-        planned_transit_min)
+        photos_ref, signature_ref, window_start, window_end, window_source, window_pin_point,
+        window_label, planned_on_site_min, planned_transit_min)
        VALUES (@stopId, @routeId, @customerId, @sequence, @state, @custName,
         @custFirstName, @custLastName, @kind, @custPhone, @address, @dayOfName, @dayOfPhone,
         @plannedWindow, @eta, @items, @txId, @contactId, @arrivedAt, @completedAt, @trackingToken,
-        @photosRef, @signatureRef, @windowStart, @windowEnd, @windowSource, @plannedOnSiteMin,
-        @plannedTransitMin)
+        @photosRef, @signatureRef, @windowStart, @windowEnd, @windowSource, @windowPinPoint,
+        @windowLabel, @plannedOnSiteMin, @plannedTransitMin)
        ON CONFLICT(stop_id) DO UPDATE SET
         route_id=excluded.route_id, customer_id=excluded.customer_id, sequence=excluded.sequence,
         state=excluded.state, cust_name=excluded.cust_name, cust_first_name=excluded.cust_first_name,
@@ -3138,7 +3142,8 @@ export function writeRoute(route: Route): void {
         photos_ref=COALESCE(excluded.photos_ref, stops.photos_ref),
         signature_ref=COALESCE(excluded.signature_ref, stops.signature_ref),
         window_start=excluded.window_start, window_end=excluded.window_end,
-        window_source=excluded.window_source, planned_on_site_min=excluded.planned_on_site_min,
+        window_source=excluded.window_source, window_pin_point=excluded.window_pin_point,
+        window_label=excluded.window_label, planned_on_site_min=excluded.planned_on_site_min,
         planned_transit_min=excluded.planned_transit_min`,
     );
     // Self-heal a corrupt route whose stored stops share a stop_id: two stops with the same id would
@@ -3181,6 +3186,8 @@ export function writeRoute(route: Route): void {
         windowStart: s.windowStart ?? null,
         windowEnd: s.windowEnd ?? null,
         windowSource: s.windowStart ? (s.windowSource ?? "route") : null,
+        windowPinPoint: s.windowStart && s.windowPinPoint ? 1 : null,
+        windowLabel: s.windowStart ? (s.windowLabel ?? null) : null,
         plannedOnSiteMin: typeof s.plannedOnSiteMin === "number" ? Math.round(s.plannedOnSiteMin) : null,
         plannedTransitMin: typeof s.plannedTransitMin === "number" ? Math.round(s.plannedTransitMin) : null,
       });
@@ -3382,67 +3389,231 @@ export function updateStopState(
 
 // ── Delivery on-time tracking: customer windows, GPS arrivals, close resolutions ─────────────────────
 
-/** The Goodshuffle project window inputs (logistics date + raw from-time) for these project ids. */
-export function getBookingWindows(txIds: string[]): Map<string, { eventDate: string | null; windowStartTime: string | null }> {
-  const out = new Map<string, { eventDate: string | null; windowStartTime: string | null }>();
+// Project timeline windows (booking_windows).
+
+/** One booking's timeline as a pull fetched it. `events` = its logisticsDelivery entries (empty when the
+ *  project has no logistics, e.g. a customer pickup). */
+export interface BookingTimelineInput {
+  bookingId: string;
+  events: RawTimelineEvent[];
+}
+
+/**
+ * Store the customer windows parsed from each fetched project timeline. A fetched timeline is the
+ * authority for that booking, so its rows are replaced whole (an empty one clears them). The year missing
+ * from "10/31" is taken from the booking's logistics date when known, else from `todayYmd`. Returns how
+ * many windows were stored. Touches only booking_windows: stop POD and close reasons are never involved.
+ */
+export function saveBookingTimelineWindows(items: BookingTimelineInput[], todayYmd: string): number {
+  const db = getDb();
+  const ids = [...new Set(items.map((i) => String(i.bookingId ?? "")).filter(Boolean))];
+  if (ids.length === 0) return 0;
+  const ph = ids.map(() => "?").join(",");
+  const refs = new Map(
+    (
+      db.prepare(`SELECT booking_id, event_date FROM bookings WHERE booking_id IN (${ph})`).all(...ids) as Array<{
+        booking_id: string;
+        event_date: string | null;
+      }>
+    ).map((r) => [String(r.booking_id), r.event_date]),
+  );
+  const del = db.prepare("DELETE FROM booking_windows WHERE booking_id = ?");
+  const ins = db.prepare(
+    `INSERT INTO booking_windows (booking_id, kind, seq, date, start_time, end_time, start_iso, end_iso, pin_point, name, updated_at)
+     VALUES (@bookingId, @kind, @seq, @date, @startTime, @endTime, @startIso, @endIso, @pinPoint, @name, @now)`,
+  );
+  const now = new Date().toISOString();
+  let stored = 0;
+  db.transaction(() => {
+    for (const it of items) {
+      const bookingId = String(it.bookingId ?? "");
+      if (!bookingId) continue;
+      const ref = refs.get(bookingId);
+      const refYmd = ref && /^\d{4}-\d{2}-\d{2}$/.test(ref) ? ref : todayYmd;
+      const windows = parseTimelineWindows(Array.isArray(it.events) ? it.events : [], refYmd);
+      del.run(bookingId);
+      const seqByKind: Record<WindowKind, number> = { drop_off: 0, pick_up: 0 };
+      for (const w of windows) {
+        ins.run({
+          bookingId,
+          kind: w.kind,
+          seq: seqByKind[w.kind]++,
+          date: w.date,
+          startTime: w.startTime,
+          endTime: w.endTime,
+          startIso: w.startIso,
+          endIso: w.endIso,
+          pinPoint: w.pinPoint ? 1 : 0,
+          name: w.name || null,
+          now,
+        });
+        stored++;
+      }
+    }
+  })();
+  return stored;
+}
+
+/** The stored timeline windows for these bookings. */
+export function getBookingTimelineWindows(txIds: string[]): Map<string, TimelineWindow[]> {
+  const out = new Map<string, TimelineWindow[]>();
+  const ids = [...new Set(txIds.filter(Boolean))];
+  if (ids.length === 0) return out;
+  const ph = ids.map(() => "?").join(",");
+  const rows = getDb()
+    .prepare(`SELECT * FROM booking_windows WHERE booking_id IN (${ph}) ORDER BY booking_id, kind, seq`)
+    .all(...ids) as Array<{
+    booking_id: string;
+    kind: string;
+    date: string;
+    start_time: string;
+    end_time: string;
+    start_iso: string;
+    end_iso: string;
+    pin_point: number;
+    name: string | null;
+  }>;
+  for (const r of rows) {
+    if (r.kind !== "drop_off" && r.kind !== "pick_up") continue;
+    const id = String(r.booking_id);
+    const list = out.get(id) ?? [];
+    list.push({
+      kind: r.kind,
+      date: r.date,
+      startTime: r.start_time,
+      endTime: r.end_time,
+      startIso: r.start_iso,
+      endIso: r.end_iso,
+      pinPoint: r.pin_point === 1,
+      name: r.name ?? "",
+    });
+    out.set(id, list);
+  }
+  return out;
+}
+
+export interface BookingWindowInputs {
+  eventDate: string | null;
+  windowStartTime: string | null;
+  timeline: TimelineWindow[];
+}
+
+/** The Goodshuffle project window inputs (logistics date, raw from-time, timeline windows) for these ids. */
+export function getBookingWindows(txIds: string[]): Map<string, BookingWindowInputs> {
+  const out = new Map<string, BookingWindowInputs>();
   const ids = [...new Set(txIds.filter(Boolean))];
   if (ids.length === 0) return out;
   const ph = ids.map(() => "?").join(",");
   const rows = getDb()
     .prepare(`SELECT booking_id, event_date, window_start_time FROM bookings WHERE booking_id IN (${ph})`)
     .all(...ids) as Array<{ booking_id: string; event_date: string | null; window_start_time: string | null }>;
-  for (const r of rows) out.set(String(r.booking_id), { eventDate: r.event_date, windowStartTime: r.window_start_time });
+  const timelines = getBookingTimelineWindows(ids);
+  for (const r of rows) {
+    const id = String(r.booking_id);
+    out.set(id, { eventDate: r.event_date, windowStartTime: r.window_start_time, timeline: timelines.get(id) ?? [] });
+  }
+  // A timeline can be stored before its bookings row exists (separate POSTs): still usable.
+  for (const [id, tl] of timelines) if (!out.has(id)) out.set(id, { eventDate: null, windowStartTime: null, timeline: tl });
   return out;
 }
 
 /**
  * Fill each stop's CUSTOMER window from its Goodshuffle project (matched by txId), in memory, before the
- * route is written. A per-waypoint window from the pull (windowSource "route") always wins and is left
- * alone. The project window is the delivery window, so pickups and other-day stops get none. A stop whose
- * project has no time (TBD) ends with no window, never a guessed one.
+ * route is written: the project timeline window of the stop's kind on the route day (DROP_OFF for a
+ * delivery, PICK_UP for a pickup, with its end and exact-time flag), else the start-only searchProjects
+ * time for a same-day delivery. A per-waypoint RANGE from the pull always wins; a start-only waypoint
+ * window is kept unless the project timeline has a range. No project window = no window, never a guess.
  */
 export function applyBookingWindows(stops: Stop[], routeDate: string): Stop[] {
   const windows = getBookingWindows(stops.map((s) => s.txId ?? ""));
   return stops.map((s) => {
-    if (s.windowStart && s.windowSource !== "booking") return s; // waypoint window from the pull
+    const fromRoute = Boolean(s.windowStart && s.windowSource !== "booking");
+    if (fromRoute && s.windowEnd) return s; // waypoint range from the pull
     const b = s.txId ? windows.get(s.txId) : undefined;
-    const iso = b ? bookingWindowForStop({ kind: s.kind, routeDate, eventDate: b.eventDate, timeStr: b.windowStartTime }) : null;
-    if (!iso) {
+    const w = b
+      ? resolveStopWindow({ kind: s.kind, routeDate, timeline: b.timeline, eventDate: b.eventDate, timeStr: b.windowStartTime })
+      : null;
+    if (fromRoute && !w?.windowEnd) return s; // the waypoint's own start beats a start-only project time
+    if (!w) {
       // No project window: drop a stale booking window; a stop that never had one is unchanged.
-      return s.windowSource === "booking" ? { ...s, windowStart: undefined, windowEnd: undefined, windowSource: undefined } : s;
+      return s.windowSource === "booking"
+        ? { ...s, windowStart: undefined, windowEnd: undefined, windowSource: undefined, windowPinPoint: undefined, windowLabel: undefined }
+        : s;
     }
-    return { ...s, windowStart: iso, windowEnd: undefined, windowSource: "booking" };
+    return {
+      ...s,
+      windowStart: w.windowStart,
+      windowEnd: w.windowEnd,
+      windowSource: "booking",
+      windowPinPoint: w.pinPoint || undefined,
+      windowLabel: w.label,
+    };
   });
 }
 
 /**
- * After a bookings pull: refresh the booking-sourced window on stops already written, for routes on or
- * after `sinceDate` (bookings and routes arrive in separate pulls, in either order). Only touches stops
- * without a waypoint window. Returns how many stops changed.
+ * After a bookings pull or a timeline capture: refresh the project-sourced window on stops already
+ * written, for routes on or after `sinceDate` (bookings, timelines and routes arrive in separate pulls,
+ * in either order). Leaves a waypoint range alone. Only the window columns change, so POD and close
+ * reasons are never touched. Returns how many stops changed.
  */
 export function syncStopWindowsFromBookings(sinceDate: string): number {
   const db = getDb();
   const rows = db
     .prepare(
-      `SELECT s.stop_id, s.kind, s.window_start, r.date AS route_date, b.event_date, b.window_start_time
+      `SELECT s.stop_id, s.kind, s.tx_id, s.window_start, s.window_end, s.window_source, s.window_pin_point,
+              s.window_label, r.date AS route_date
          FROM stops s
          JOIN routes r ON r.route_id = s.route_id
-         JOIN bookings b ON b.booking_id = s.tx_id
-        WHERE r.date >= ? AND (s.window_source IS NULL OR s.window_source = 'booking')`,
+        WHERE r.date >= ? AND s.tx_id IS NOT NULL AND s.tx_id != ''
+          AND (s.window_source IS NULL OR s.window_source = 'booking' OR s.window_end IS NULL)`,
     )
-    .all(sinceDate) as Array<{ stop_id: string; kind: string | null; window_start: string | null; route_date: string; event_date: string | null; window_start_time: string | null }>;
-  const upd = db.prepare("UPDATE stops SET window_start = ?, window_end = NULL, window_source = ? WHERE stop_id = ?");
+    .all(sinceDate) as Array<{
+    stop_id: string;
+    kind: string | null;
+    tx_id: string;
+    window_start: string | null;
+    window_end: string | null;
+    window_source: string | null;
+    window_pin_point: number | null;
+    window_label: string | null;
+    route_date: string;
+  }>;
+  if (rows.length === 0) return 0;
+  const windows = getBookingWindows(rows.map((r) => String(r.tx_id)));
+  const upd = db.prepare(
+    "UPDATE stops SET window_start = ?, window_end = ?, window_source = ?, window_pin_point = ?, window_label = ? WHERE stop_id = ?",
+  );
   let changed = 0;
   const tx = db.transaction(() => {
     for (const r of rows) {
-      const iso = bookingWindowForStop({
+      const b = windows.get(String(r.tx_id));
+      if (!b) continue; // no project data at all: leave the stop as it is
+      const w = resolveStopWindow({
         kind: r.kind === "pickup" ? "pickup" : r.kind === "delivery" ? "delivery" : undefined,
         routeDate: r.route_date,
-        eventDate: r.event_date,
-        timeStr: r.window_start_time,
+        timeline: b.timeline,
+        eventDate: b.eventDate,
+        timeStr: b.windowStartTime,
       });
-      if ((iso ?? null) === (r.window_start ?? null)) continue;
-      upd.run(iso, iso ? "booking" : null, r.stop_id);
+      const fromRoute = Boolean(r.window_start) && r.window_source !== null && r.window_source !== "booking";
+      if (fromRoute && !w?.windowEnd) continue; // keep the waypoint's own start
+      const next = {
+        start: w?.windowStart ?? null,
+        end: w?.windowEnd ?? null,
+        source: w ? "booking" : null,
+        pin: w?.pinPoint ? 1 : null,
+        label: w?.label ?? null,
+      };
+      if (
+        next.start === (r.window_start ?? null) &&
+        next.end === (r.window_end ?? null) &&
+        next.source === (r.window_source ?? null) &&
+        next.pin === (r.window_pin_point ? 1 : null) &&
+        next.label === (r.window_label ?? null)
+      )
+        continue;
+      upd.run(next.start, next.end, next.source, next.pin, next.label, r.stop_id);
       changed++;
     }
   });

@@ -2346,6 +2346,27 @@ CREATE TABLE IF NOT EXISTS booking_revenue_components (
   goodshuffle_fees        REAL,               -- Σ paymentEvents[].goodshuffleFeeAmount
   updated_at              TEXT NOT NULL
 );
+
+-- Customer delivery windows from the Goodshuffle project timeline (initProjectTimeline logisticsDelivery
+-- entries), captured by the browser pulls for projects whose logistics fall in a short horizon. RANGES:
+-- "Saturday, 10/31 [9:00 AM - 8:00 PM]" (a single time "[10:15 AM]" has start = end). One row per entry,
+-- keyed by booking + kind + position; a pull that fetched the timeline replaces the booking's rows whole
+-- (an empty timeline, e.g. a customer pickup project, clears them). Not the stop record: stops copy the
+-- chosen window (window_start/window_end/window_pin_point), so POD and close reasons are never touched.
+CREATE TABLE IF NOT EXISTS booking_windows (
+  booking_id  TEXT NOT NULL,              -- Goodshuffle project id (= bookings.booking_id = stops.tx_id)
+  kind        TEXT NOT NULL,              -- 'drop_off' | 'pick_up' (eventTimeLineMarker)
+  seq         INTEGER NOT NULL,           -- position within the booking's entries of this kind
+  date        TEXT NOT NULL,              -- YYYY-MM-DD
+  start_time  TEXT NOT NULL,              -- wall time as Goodshuffle wrote it, e.g. "9:00 AM"
+  end_time    TEXT NOT NULL,              -- = start_time for a single time
+  start_iso   TEXT NOT NULL,
+  end_iso     TEXT NOT NULL,
+  pin_point   INTEGER NOT NULL DEFAULT 0, -- 1 = paid "PIN POINT EXACT TIME" window
+  name        TEXT,                       -- the delivery line name ("Delivery fee", "PIN POINT EXACT TIME")
+  updated_at  TEXT NOT NULL,
+  PRIMARY KEY (booking_id, kind, seq)
+);
 `;
 
 type DB = InstanceType<typeof Database>;
@@ -2525,6 +2546,10 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "stops", column: "close_by", type: "TEXT" },              // who closed the route with this stop open
   { table: "stops", column: "close_at", type: "TEXT" },              // ISO
   { table: "bookings", column: "window_start_time", type: "TEXT" },  // raw GS logistics_start_from_time, e.g. "9:00 AM EDT" (null = TBD/unknown)
+  // Delivery windows are ranges (fix/ontime-window-range): the stop's window can come from the project
+  // timeline, which says whether it is a paid exact-time window and which delivery line set it.
+  { table: "stops", column: "window_pin_point", type: "INTEGER" },   // 1 = "PIN POINT EXACT TIME" window
+  { table: "stops", column: "window_label", type: "TEXT" },          // GS delivery line name for the window
   // Delivery pricing: the venue street (GS searchProjects streetLine1/2; `location` is city/state/ZIP) and the
   // project's logistics legs from its GS timeline (lib/gs/logistics.ts). delivers: 1 = we drive at least one
   // leg, 0 = in-store only, null = not captured. Lets a signed, unrouted project count as a stop on its day.
