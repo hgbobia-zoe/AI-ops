@@ -30,6 +30,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { createSession, addInstruction, listSessionEvents, listSessionApprovalIds, getSession, appendEvent } from "@/lib/ai/sessions";
 import { getApproval } from "@/lib/aiorg/approvals";
 import { listRequests } from "@/lib/ai/requests";
+import { saveBookings, insertCallEventIfNew, saveCoachingAnalysis } from "@/lib/db/repo";
 import { historyToMessages, buildUserTurn, runViktorAgent, type ViktorClient } from "./agent";
 import { redactMoney, parseCard, VIKTOR_TOOLS } from "./tools";
 import { deriveViktorHealth, handleSessionInstruction, pendingInstructionOf, viktorHealthNow, STALE_CLAIM_MS, WORKING_LABEL } from "./worker";
@@ -99,6 +100,7 @@ describe("pure helpers", () => {
 
   it("tool list is stable and every schema closes additional properties", () => {
     expect(VIKTOR_TOOLS.map((t) => t.name)).toContain("propose_action");
+    expect(VIKTOR_TOOLS.map((t) => t.name)).toContain("act_on_call");
     for (const t of VIKTOR_TOOLS) expect((t.input_schema as { additionalProperties?: boolean }).additionalProperties).toBe(false);
   });
 
@@ -133,6 +135,70 @@ describe("runViktorAgent", () => {
     // Caching + fallback are on every request.
     expect(client.calls[0].cache_control).toEqual({ type: "ephemeral" });
     expect(client.calls[0].fallbacks).toBe("default");
+  });
+
+  it("acts on a finished call: raises linked approval cards once, and a re-run duplicates nothing", async () => {
+    saveBookings([
+      { bookingId: "GS-777", eventName: "Smith Wedding", eventDate: "2027-06-12", statusLabel: "Quote Sent", signed: false, grandTotal: 4200, clientName: "Dana Smith", clientEmail: "dana@example.com", clientPhone: "(301) 555-0199" },
+    ]);
+    const callId = insertCallEventIfNew({
+      providerId: "op-act-1",
+      direction: "inbound",
+      fromPhone: "+13015550199",
+      toPhone: "+13012915296",
+      contactName: "Dana Smith",
+      durationSec: 300,
+      transcript: "Dana: we need three generators for the wedding. Rep: I will send delivery windows today.",
+      occurredAt: "2026-11-10T15:00:00.000Z",
+    })!;
+    saveCoachingAnalysis(callId, {
+      executive: "Dana wants three generators for the June wedding.",
+      keyPoints: ["three generators"],
+      actionItems: ["Send delivery window options"],
+      customerConcerns: [],
+      objections: [],
+      followUpEmail: "Subject: Your generators\n\nHi Dana,\n\nI will send the delivery windows today.\n\nBest,\nZoe",
+      coachingNotes: [],
+      nextStep: "Send delivery windows",
+      model: "test",
+    } as unknown as Parameters<typeof saveCoachingAnalysis>[1]);
+
+    const run = async (key: string) => {
+      const s = newSession(key);
+      const r = await runViktorAgent(
+        {
+          instruction: "act on my last call with Dana",
+          history: [],
+          surface: "slack",
+          today: "2026-11-10",
+          ctx: { sessionId: s.id, instructionTs: key, askedBy: "U0123ABCD", instruction: "act on my last call with Dana", showMoney: false, blade: null },
+        },
+        scripted(toolCall("act_on_call", { contact: "Dana" }), text("Done.")),
+      );
+      return { s, r };
+    };
+
+    const first = await run("act-call-1");
+    expect(first.r.ok).toBe(true);
+    // email + note + 1 task + held text; no quote card because pricing never came up.
+    expect(first.r.writes.map((w) => w.title)).toEqual([
+      "Follow-up email to Dana Smith",
+      "Log a call note on Dana Smith's project",
+      "Task: Send delivery window options",
+      "Follow-up text to Dana Smith",
+    ]);
+    const ids = listSessionApprovalIds(first.s.id);
+    expect(ids).toHaveLength(4);
+    const email = ids.map((id) => getApproval(id)!).find((a) => a.actionType === "send_email")!;
+    expect(email.status).toBe("pending");
+    expect(email.agentId).toBe("sales-coach");
+    expect(email.owner).toBe("Jessie");
+    expect(email.actionPayload).toMatchObject({ transactionId: "GS-777", subject: "Your generators" });
+
+    // Asking again finds the same cards: no new writes, nothing duplicated.
+    const second = await run("act-call-2");
+    expect(second.r.ok).toBe(true);
+    expect(second.r.writes).toHaveLength(0);
   });
 
   it("returns an error (not a throw) when the tool loop never finishes", async () => {
