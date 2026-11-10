@@ -80,15 +80,13 @@ box or migrated to a proper always-on server later. Each component has its own R
   `ANTHROPIC_API_KEY`, and `gh` auth for PRs. App origins via `WEBSITE_PROD_URL` / `WEBSITE_LOCAL_URL`.
 - **README:** [`tools/website-studio-runner/README.md`](../tools/website-studio-runner/README.md) · [`docs/self-improving-app-pattern.md`](self-improving-app-pattern.md)
 
-### 5. AI Bridge responder — Claude Code session
-- **Does:** the external agent the app can't be — reads the AI-bridge work queue, works in an isolated git
-  worktree, writes code, runs tests, and opens PRs; a human merges. Also handles human instructions
-  (question/operational/feature) and "act on a call" triggers.
-- **Lives:** `scripts/responder/` (helper `poll.mjs`, `start.ps1`); deploy notes in `deploy/responder/`.
-- **Token:** `AI_BRIDGE_TOKEN` (same value as the app's Fly secret). **Keep autonomy switches OFF until the
-  scoped, non-admin machine identity + sandbox exist** — the gates are advisory against an owner/admin-credentialed
-  agent.
-- **README:** [`scripts/responder/README.md`](../scripts/responder/README.md) · contract: [`docs/ai-bridge-responder.md`](ai-bridge-responder.md) · setup: [`docs/self-improvement-setup.md`](self-improvement-setup.md)
+### 5. AI Bridge responder (RETIRED 2026-11-10)
+Nothing runs on the office machine for this any more. Viktor and AI Command Center instructions are answered
+by the in-app agent on Fly (`src/lib/ai/viktor/`, uses the `ANTHROPIC_API_KEY` Fly secret, kill switch
+`VIKTOR_AGENT=false`). The `ZoeResponder` scheduled task, the `Zoe-Responder.cmd` startup script and
+`%USERPROFILE%\.zoe-responder\` were removed, and `scripts/responder/` + `deploy/responder/` were deleted
+from the repo. Improvement runs are planned in-app (`src/lib/ai/improvement/planner.ts`); coding them is still
+a human (or a Claude Code session they start) following [`docs/ai-bridge-responder.md`](ai-bridge-responder.md).
 
 ## Cloud migration target (not on the office machine yet)
 - **Goodshuffle cloud puller** — `deploy/gs-puller/`: the office pull re-run as unattended headless Chromium on
@@ -103,4 +101,4 @@ box or migrated to a proper always-on server later. Each component has its own R
 | zoe-pull runner | `%USERPROFILE%\ZoePull\pull.log` advancing; /admin/pull fresh |
 | Gusto runner | `(Get-ScheduledTask -TaskName ZoeGustoRunner).State` = `Running`, `LastTaskResult` = `0` |
 | Website Studio runner | a queued job reaches `preview` with screenshots |
-| AI Bridge responder | the app shows the responder "live" (heartbeat from `poll.mjs`) |
+| Viktor (in-app, not on this machine) | `/ai-command` shows "Viktor ready" |

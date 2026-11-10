@@ -278,7 +278,7 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     label: "People lifecycle (onboarding / offboarding)",
     bucket: "server",
     configured: () => true, // app-owned; a silent no-op when no employee needs onboarding/offboarding today
-    note: "Fires start-date onboarding, executes future-dated terminations (auto-revokes the Zoe login only), and escalates overdue manual access tasks to Slack. Never auto-completes a manual revoke — OFFBOARDED never implies access removed.",
+    note: "Fires start-date onboarding, checks Connecteam write access daily and runs the Connecteam setup step on its own (links a hand-made account, else creates), executes future-dated terminations (auto-revokes the Zoe login only), and escalates overdue manual access tasks to Slack. Never auto-completes a manual revoke — OFFBOARDED never implies access removed.",
     run: async () => {
       const r = await runPeopleLifecycleTick();
       return { ok: r.ok, detail: r.detail };
@@ -404,7 +404,9 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     note: "Victor's coordination layer over the EXISTING exception surfaces (Event Risk Engine risk_items + the write-back dead-letter backlog). Each tick it dedupes every detected exception into one record, routes a DETERMINISTIC resolution — propose a human-gated Goodshuffle task via the shared approval→outbox path, delegate to the owning team role, or escalate — then VERIFIES any in-flight resolution via WS03's getApprovalLifecycle: a confirmed landing marks it resolved (with evidence), a dead-letter marks it failed, and failed/overdue/repeatedly-failing/high-impact items escalate (team channel first, owner only on defined criteria), all 2h-deduped. It NEVER executes money/schedule/hiring actions (those delegate), never silently marks-done (resolved needs a verified landing or a human disposition), and treats a disappeared signal as unverifiable, not resolved.",
     run: async () => {
       const r = await runExceptionResolutionTick();
-      return { ok: r.ok, detail: r.detail };
+      // The tick ran, so the job is healthy. Failed or unverifiable exceptions are work waiting on a person,
+      // not an outage, so they must not trip the "keeps failing" status card. A crash still throws and pages.
+      return { ok: true, detail: r.detail };
     },
   },
   {

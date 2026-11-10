@@ -5,7 +5,8 @@
 // Governing law: RULES CALCULATE, AI INTERPRETS. Every read tool returns facts the app already computed.
 // The only writes are (1) proposeFromSession, which creates a PENDING approval a human must decide (the
 // forbidden categories money / pricing / schedule / hiring / Instawork never execute, even after approval),
-// and (2) createRequest, which files a backlog row. Nothing here sends, schedules, or changes operational
+// either one card (propose_action) or the follow ups from a finished call (act_on_call), and
+// (2) createRequest, which files a backlog row. Nothing here sends, schedules, or changes operational
 // data. Money fields are stripped unless the person asking may see financials.
 
 import type Anthropic from "@anthropic-ai/sdk";
@@ -21,6 +22,7 @@ import { proposeFromSession } from "@/lib/ai/propose";
 import { createRequest } from "@/lib/ai/requests";
 import { classifyIntentAgent } from "@/lib/ai/intentRouting";
 import { recordToolRun } from "@/lib/ai/sessions";
+import { actOnCall } from "@/lib/calls/actOnCall";
 
 /** Who is asking and where, so tools can attribute writes and redact money. */
 export interface ViktorToolContext {
@@ -148,6 +150,22 @@ export const VIKTOR_TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "act_on_call",
+    description:
+      "Act on a finished phone call (Quo). Reads the call transcript, links it to the client's Goodshuffle project by phone, and raises approval cards for the follow ups: an email to the client, a call note on the project, tasks for the commitments made, a drafted text, and a quote update proposal when pricing came up. Use this instead of propose_action when the person asks you to act on, follow up on, or handle a call. Nothing sends until a human approves. Re-running the same call finds the cards already raised instead of duplicating them.",
+    input_schema: {
+      type: "object",
+      properties: {
+        contact: {
+          type: "string",
+          description: "Client name or phone digits the call was with. Omit to use the most recent call that has a transcript.",
+        },
+        callId: { type: "string", description: "Exact call id, only if the person gave one." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "file_feature_request",
     description:
       "File a change to the PRODUCT itself (the app or a blade should do something new or differently) into the Requests backlog. Not for business actions; use propose_action for those.",
@@ -164,12 +182,16 @@ export const VIKTOR_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+export type ToolWrite = { kind: "approval"; id: string; title: string; forbidden: boolean } | { kind: "request"; id: string; title: string };
+
 /** What happened when a tool ran: the text handed back to the model plus any governed write it made. */
 export interface ToolOutcome {
   content: string;
   isError: boolean;
   /** Set when the tool raised an approval or filed a request, so the worker can report it. */
-  write?: { kind: "approval"; id: string; title: string; forbidden: boolean } | { kind: "request"; id: string; title: string };
+  write?: ToolWrite;
+  /** For a tool that raises several approvals in one call (act_on_call). */
+  writes?: ToolWrite[];
 }
 
 function ok(data: unknown): ToolOutcome {
@@ -330,6 +352,35 @@ async function runTool(name: string, input: Record<string, unknown>, ctx: Viktor
         write: { kind: "approval", id: approval.id, title, forbidden },
       };
     }
+    case "act_on_call": {
+      const result = await actOnCall({
+        callId: str(input.callId) || undefined,
+        contactQuery: str(input.contact) || undefined,
+        requestedBy: ctx.askedBy,
+        // Link every card to this Viktor session, so it shows on the session timeline like propose_action.
+        raise: (approval) => proposeFromSession(ctx.sessionId, approval, "Viktor"),
+      });
+      if (!result.ok) return fail(result.error ?? "could not act on the call");
+      const writes: ToolWrite[] = result.created
+        .filter((c) => c.isNew)
+        .map((c) => ({ kind: "approval", id: c.id, title: c.title, forbidden: isForbiddenActionType(c.actionType as ApprovalActionType) }));
+      return {
+        content: JSON.stringify({
+          ok: true,
+          callId: result.callId,
+          contact: result.contact ?? null,
+          cards: result.created.map((c) => ({
+            title: c.title,
+            actionType: c.actionType,
+            status: c.isNew ? "raised now, waiting for approval" : "already waiting for approval",
+            executesAfterApproval: !isForbiddenActionType(c.actionType as ApprovalActionType),
+          })),
+          skipped: result.skipped,
+        }),
+        isError: false,
+        writes,
+      };
+    }
     case "file_feature_request": {
       const title = str(input.title);
       const body = str(input.body);
@@ -350,6 +401,9 @@ async function runTool(name: string, input: Record<string, unknown>, ctx: Viktor
   }
 }
 
+/** The tools that make a governed write (everything else only reads). */
+const WRITE_TOOLS = new Set(["propose_action", "act_on_call", "file_feature_request"]);
+
 /** Run one tool call, record it on the session timeline, and never throw. */
 export async function executeViktorTool(name: string, input: unknown, ctx: ViktorToolContext): Promise<ToolOutcome> {
   const args = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
@@ -362,10 +416,14 @@ export async function executeViktorTool(name: string, input: unknown, ctx: Vikto
   try {
     recordToolRun(ctx.sessionId, {
       toolId: name,
-      category: name === "propose_action" || name === "file_feature_request" ? "write" : "read",
-      perm: name === "propose_action" ? "approval" : "read",
+      category: WRITE_TOOLS.has(name) ? "write" : "read",
+      perm: name === "propose_action" || name === "act_on_call" ? "approval" : "read",
       args,
-      result: { size: outcome.content.length, ...(outcome.write ? { write: outcome.write } : {}) },
+      result: {
+        size: outcome.content.length,
+        ...(outcome.write ? { write: outcome.write } : {}),
+        ...(outcome.writes?.length ? { writes: outcome.writes } : {}),
+      },
       status: outcome.isError ? "error" : "ok",
       error: outcome.isError ? outcome.content.slice(0, 300) : undefined,
     });

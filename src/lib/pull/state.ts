@@ -499,8 +499,8 @@ export interface ImportRow {
   detail: string | null;
 }
 
-export function getRecentImports(limit = 100): ImportRow[] {
-  return (getDb().prepare("SELECT * FROM import_log ORDER BY ts DESC LIMIT ?").all(limit) as Record<string, unknown>[]).map((r) => ({
+function toImportRow(r: Record<string, unknown>): ImportRow {
+  return {
     id: String(r.id),
     ts: String(r.ts),
     source: String(r.source),
@@ -509,13 +509,26 @@ export function getRecentImports(limit = 100): ImportRow[] {
     rowsWritten: r.rows_written == null ? null : Number(r.rows_written),
     rowsSkipped: r.rows_skipped == null ? null : Number(r.rows_skipped),
     detail: (r.detail as string) ?? null,
-  }));
+  };
 }
 
-/** Latest import row per source (for the health view). */
+export function getRecentImports(limit = 100): ImportRow[] {
+  return (getDb().prepare("SELECT * FROM import_log ORDER BY ts DESC LIMIT ?").all(limit) as Record<string, unknown>[]).map(toImportRow);
+}
+
+/** Latest import row per source, however long ago it ran. Reads each source's newest row directly
+ *  (idx_import_log_source) rather than a recent window, so a source that runs rarely (an on demand pull)
+ *  is not shown as "never" once the frequent syncs push its row out of the window. */
 export function getLatestImportBySource(): Record<string, ImportRow> {
-  const rows = getRecentImports(500);
+  const rows = getDb()
+    .prepare(
+      `SELECT l.* FROM import_log l
+         JOIN (SELECT source, MAX(ts) AS ts FROM import_log GROUP BY source) m
+           ON m.source = l.source AND m.ts = l.ts
+        ORDER BY l.ts DESC`,
+    )
+    .all() as Record<string, unknown>[];
   const out: Record<string, ImportRow> = {};
-  for (const r of rows) if (!out[r.source]) out[r.source] = r;
+  for (const r of rows.map(toImportRow)) if (!out[r.source]) out[r.source] = r;
   return out;
 }

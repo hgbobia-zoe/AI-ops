@@ -5,6 +5,8 @@
 > `propose_action` and `file_feature_request`). Nothing needs to run on the office machine, and there is no
 > heartbeat or CLI login to keep alive. The bridge endpoints below still exist for compatibility and for
 > the self-improvement report API, but no responder is required. Kill switch: `VIKTOR_AGENT=false`.
+> The helper scripts (`scripts/responder/`, `deploy/responder/`) were removed on 2026-11-10; the curl
+> examples below still describe the HTTP contract.
 
 
 This is the operating spec for the **responder**: the Claude agent that answers the instructions people
