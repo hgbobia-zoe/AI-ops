@@ -30,6 +30,11 @@ export interface SystemReplayEndpoints {
   revoke: ReplayEndpoint | null;
   /** What we already know about this system's flow (seat/billing, read endpoints). Shown in the docs/UI. */
   notes?: string;
+  /** "extension": replayed in the ONBOARDER's own Chrome by the Auto-Pull extension, in a visible tab they can
+   *  sign in on (extension/provision.js holds the per-system steps). Absent: the office Goodshuffle pull. */
+  runner?: "extension";
+  /** Why the run stops for the onboarder's OK first: a paid seat (the live price is shown) or a broad role. */
+  approval?: "paid" | "owner_role";
 }
 
 export type ReplaySystem = "goodshuffle" | "quo" | "slack" | "squarespace_email" | "weddingpro" | "yelp";
@@ -52,44 +57,56 @@ export const PROVISION_ENDPOINTS: Record<ReplaySystem, SystemReplayEndpoints> = 
     notes: "Invite = email + seat Full + Monthly; buys a $49/mo seat. Team list: GET /app/subscriptionSeat/list.",
   },
   quo: {
-    origin: "https://my.openphone.com",
-    // CAPTURE-PENDING: record the "invite a member" request once from a logged-in Quo/OpenPhone admin
-    // session, then fill it here. Quo runs on its OWN origin, so this replays from a logged-in Quo tab
-    // (its own content script / bookmarklet), not the Goodshuffle pull.
-    provision: null,
-    // CAPTURE-PENDING: record the "remove / suspend a member" request once from Quo admin.
+    origin: "https://my.quo.com",
+    // Captured live 2026-11-10 (docs/provisioning-captures.md). Quo's API wants an app version header the page
+    // builds at runtime, so the extension fills Quo's own Invite form instead (shared Zoe Events line, Member).
+    provision: { method: "POST", path: "https://account.openphoneapi.com/v2/org/OR9X6MA29e/invite/bulk", bodyType: "json" },
     revoke: null,
+    runner: "extension",
+    approval: "paid",
+    notes: "Invite on the shared Zoe Events line (never a new number). Adds a $33/month seat.",
   },
   slack: {
     origin: "https://app.slack.com",
-    // CAPTURE-PENDING: record the "invite member" request once from a logged-in Slack admin session, then
-    // fill it here. Replays from a logged-in Slack tab (its own origin).
-    provision: null,
-    // CAPTURE-PENDING: record the "deactivate member" request once from Slack admin.
+    // Captured live 2026-11-10: users.admin.inviteBulk with the web client's session token (free plan).
+    provision: { method: "POST", path: "/api/users.admin.inviteBulk", bodyType: "form" },
+    // The signed-in Slack account is not a workspace admin, so deactivating stays a manual step.
     revoke: null,
+    runner: "extension",
+    notes: "Slack emails the invite; the step closes when the hire shows up in Slack (bot lookup).",
   },
   squarespace_email: {
-    origin: "https://account.squarespace.com",
-    // CAPTURE-PENDING: Google Workspace mailbox billed through Squarespace (firstname.lastname@zoeeventsdmv.com).
-    // Record "add user" once from Squarespace → Email. If seats are managed in admin.google.com instead,
-    // this flips to the official Google Admin Directory API (users.insert / users.update suspended=true).
-    provision: null,
+    origin: "https://crocodile-chimes-jm6d.squarespace.com",
+    // Captured live 2026-11-10: validate → preview-quantity-change → billing-requests/quantity-change (+ poll).
+    provision: { method: "POST", path: "/api/billing/billing-requests/quantity-change", bodyType: "json" },
     revoke: null,
-    notes: "Mailbox = firstname.lastname@zoeeventsdmv.com. Suspend on offboarding, do not delete (keeps mail).",
+    runner: "extension",
+    approval: "paid",
+    notes: "Mailbox = firstname.lastname@zoeeventsdmv.com, $8.40/month seat. Suspend on offboarding, do not delete.",
   },
   weddingpro: {
-    origin: "https://pros.weddingpro.com",
-    // CAPTURE-PENDING: record "add team member" once from WeddingPro (The Knot / WeddingWire) admin.
-    provision: null,
+    origin: "https://www.weddingpro.com",
+    // Captured live 2026-11-10: POST /wpapi/employee. Its session header is built from protected cookies, so
+    // the extension fills WeddingPro's own Invite user form (Storefront manager role).
+    provision: { method: "POST", path: "/wpapi/employee", bodyType: "json" },
     revoke: null,
+    runner: "extension",
   },
   yelp: {
     origin: "https://biz.yelp.com",
-    // CAPTURE-PENDING: record "add user" once from Yelp for Business → Account settings → Users.
-    provision: null,
+    // Captured live 2026-11-10: GraphQL CreateOrganizationInvite on /gql/batch. Yelp only offers OWNER.
+    provision: { method: "POST", path: "/gql/batch", bodyType: "json" },
     revoke: null,
+    runner: "extension",
+    approval: "owner_role",
+    notes: "Invite grants OWNER (can buy ads on the card on file); asks for the password again first.",
   },
 };
+
+/** True when this system is replayed in the onboarder's own Chrome (not the office Goodshuffle pull). */
+export function runsInChrome(system: string): boolean {
+  return (PROVISION_ENDPOINTS as Record<string, SystemReplayEndpoints | undefined>)[system]?.runner === "extension";
+}
 
 /** True when the given system has a captured endpoint for this action (so it can be replayed). */
 export function hasCapturedEndpoint(system: ReplaySystem, kind: "provision" | "revoke"): boolean {

@@ -4,6 +4,7 @@
 // HONEST rule that OFFBOARDED does NOT auto-complete manual revokes), and audit capture on grant/revoke.
 
 import { describe, it, expect } from "vitest";
+import { runsInChrome } from "./provisioningEndpoints";
 import { getDb } from "@/lib/db";
 import {
   advanceToReady,
@@ -76,7 +77,8 @@ describe("readiness", () => {
 
     // Complete every REQUIRED provision task (zoe via automate, the rest via manual mark-complete).
     for (const t of listTasks(e.id, "provision").filter((t) => t.required)) {
-      if (t.mode === "automated") {
+      // Chrome-run steps (Slack, Quo, email, …) need the onboarder's browser; here they are done by hand.
+      if (t.mode === "automated" && !runsInChrome(t.adapterId)) {
         await executeAutomatedTask(t.id, "tester");
         if (t.adapterId === "zoe_platform") hireAccepts(e.id, t.id, "pat.sales");
       } else markTaskComplete(t.id, "tester");

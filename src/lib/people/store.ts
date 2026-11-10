@@ -136,6 +136,11 @@ export function setEmployeePhone(id: string, phone: string | null): void {
   getDb().prepare("UPDATE employee SET phone = ?, updated_at = ? WHERE id = ?").run(phone, new Date().toISOString(), id);
 }
 
+/** Set the work email (e.g. once the Google Workspace mailbox is created from People). */
+export function setEmployeeWorkEmail(id: string, email: string | null): void {
+  getDb().prepare("UPDATE employee SET work_email = ?, updated_at = ? WHERE id = ?").run(email, new Date().toISOString(), id);
+}
+
 /** Set the access policy (department) for an employee. */
 export function setEmployeeDepartment(id: string, department: string | null): void {
   getDb().prepare("UPDATE employee SET department = ?, updated_at = ? WHERE id = ?").run(department, new Date().toISOString(), id);
