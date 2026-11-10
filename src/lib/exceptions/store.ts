@@ -201,6 +201,14 @@ export function listOpenExceptions(): ExceptionResolution[] {
   return rows.map(toResolution);
 }
 
+/** The most recently closed exceptions (resolved or disposed), newest first, for the review page. */
+export function listRecentlyClosedExceptions(limit = 25): ExceptionResolution[] {
+  const rows = getDb()
+    .prepare(`SELECT * FROM exception_resolutions WHERE status IN ('resolved','disposed') ORDER BY updated_at DESC LIMIT ?`)
+    .all(limit) as Row[];
+  return rows.map(toResolution);
+}
+
 /** Every resolution currently in an OPEN state whose key is in the given set — used to find exceptions whose
  *  source signal has DISAPPEARED (key NOT in the freshly-detected set). */
 export function listOpenNotIn(detectedKeys: ReadonlySet<string>): ExceptionResolution[] {

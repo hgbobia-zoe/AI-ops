@@ -10,7 +10,8 @@
 //     decideApproval enqueues the proven gs_outbox op; WS03's ackGsOp/reconcileApprovalForOp verifies.
 //   • It never adds a second reconciliation path or a new orchestration bus.
 //   • It never silently marks-done: `resolved` requires a VERIFIED landing (getApprovalLifecycle=confirmed)
-//     or a human disposition. Disappearance from a scan becomes `unverifiable`, never `resolved`.
+//     a human disposition, or the source's own recorded closure (closure.ts). Bare disappearance from a scan
+//     becomes `unverifiable`, never `resolved`.
 //   • It never proposes a money/pricing/schedule/hiring/instawork action — the policy downgrades those to
 //     delegate, and the approval path forbids them even if one slipped through.
 
@@ -20,6 +21,8 @@ import { botAnnounce, type BotId } from "@/lib/notify/aiBots";
 import { getJson, setJson } from "@/lib/kv";
 import { decideJobAlert, type JobAlertRecord } from "@/lib/ai/responderHealth";
 import { detectAllExceptions } from "./adapters";
+import { lookupSourceFacts, sourceClosure } from "./closure";
+import { todayInOpsTz } from "@/lib/dates";
 import { escalationTier, ownerRoleFor, planResolution } from "./policy";
 import {
   exceptionSummary,
@@ -267,11 +270,33 @@ export function coordinateException(e: CanonicalException, now: Date = new Date(
 /**
  * Handle an OPEN exception whose source signal DISAPPEARED this scan. Disappearance is NOT proof of
  * resolution: a resolution we drove to `resolved`/`disposed` is already terminal (and excluded); anything
- * still open that we never VERIFIED becomes `unverifiable` (a human confirms + disposes), NEVER auto-closed.
+ * still open closes ONLY when the source recorded how it ended (see closure.ts); otherwise it becomes
+ * `unverifiable` for a human to confirm and dispose. Never closed on disappearance alone.
  * In-flight items (awaiting a human decision or a drainer) are left alone — their lifecycle still governs.
  */
 function reconcileDisappeared(resolution: ExceptionResolution, now: Date): ExceptionResolution {
-  if (resolution.status === "awaiting_approval" || resolution.status === "acting" || resolution.status === "unverifiable") return resolution;
+  if (resolution.status === "awaiting_approval" || resolution.status === "acting") return resolution;
+  // The source may record HOW it ended (fixed on re-check, dismissed by a person, day passed, write-back
+  // retried and accepted). That is a real condition, so close on it with the facts as evidence. This also
+  // sweeps records that were already unverifiable before the source caught up.
+  const closure = sourceClosure(lookupSourceFacts(resolution), todayInOpsTz(now));
+  if (closure) {
+    return (
+      setFields(
+        resolution.key,
+        {
+          status: closure.as,
+          disposition: closure.disposition,
+          disposedBy: closure.by,
+          nextAction: null,
+          verificationEvidence: { closedBy: "source", ...closure.evidence, closedAt: now.toISOString() },
+          resolvedAt: closure.as === "resolved" ? now.toISOString() : resolution.resolvedAt,
+        },
+        now,
+      ) ?? resolution
+    );
+  }
+  if (resolution.status === "unverifiable") return resolution;
   return (
     setFields(
       resolution.key,

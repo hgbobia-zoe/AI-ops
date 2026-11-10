@@ -255,6 +255,12 @@ export function getRiskById(id: string): StoredRisk | null {
   return row ? toStored(row) : null;
 }
 
+/** One risk row by its stable signature, whatever its status (used to read how a risk was closed). */
+export function getRiskBySignature(signature: string): StoredRisk | null {
+  const row = getDb().prepare("SELECT * FROM risk_items WHERE signature = ?").get(signature) as Row | undefined;
+  return row ? toStored(row) : null;
+}
+
 export function setRiskStatus(id: string, status: RiskStatus, owner?: string): boolean {
   const now = new Date().toISOString();
   const resolvedAt = status === "RESOLVED" ? now : null;
