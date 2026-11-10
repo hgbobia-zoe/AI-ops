@@ -248,6 +248,6 @@ and the agent runs as a least-privilege identity it cannot escape. Everything el
   candidate counts.
 - **Operational, to go live (office-machine Phase 1):** provision the machine-user identity + scoped PAT,
   set the secrets, and **run the responder** (a Claude Code session following `ai-bridge-responder.md`;
-  see `scripts/responder/`). The human merges; nothing auto-ships yet.
+  the original office-machine helper in `scripts/responder/` was removed 2026-11-10). The human merges; nothing auto-ships yet.
 - **Next:** prove the human-supervised loop end-to-end; then enable `selfAuditAutoOpen`, and finally the
   merge/deploy autonomy for low-risk changes in the safe order, with auto-rollback validated once first.
