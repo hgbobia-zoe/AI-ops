@@ -41,6 +41,15 @@ export function deliveryPushDisplay(input: PushDisplayInput): PushDisplay {
     return { kind: "done", text: "Pushed to Goodshuffle.", tone: "ok", showPushNow: false };
   }
   if (status === "failed") {
+    // The one failure a rep can fix themselves: the project has no base delivery line to price yet.
+    if (error && error.includes("no_delivery_line")) {
+      return {
+        kind: "failed",
+        text: "This project has no Delivery fee line in Goodshuffle yet. Add one there, then push again.",
+        tone: "error",
+        showPushNow: true,
+      };
+    }
     return {
       kind: "failed",
       text: error ? `Goodshuffle didn't accept it: ${error}` : "Goodshuffle didn't accept the change.",
