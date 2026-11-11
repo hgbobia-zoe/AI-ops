@@ -48,7 +48,14 @@ export const DELIVERY_WINDOW_ITEMS: Record<string, GsAddItem | null> = {
 // ── LOGISTICS legs (Logistics group, need a geocoded delivery location) ──────────────────────────────
 
 // Base delivery = the calculated mileage charge. Added as-is at the $25 base flat fee (mileage = 0 for now).
-export const BASE_DELIVERY_LEG: GsLogisticsLeg = { itemID: 392868144, title: "Standard Delivery", rateType: "FLAT_FEE_WITH_MILEAGE", eventTimeLineMarker: "DROP_OFF", label: "Delivery (base fee)" };
+// Titled with the item's current name, "Delivery fee", like the lines reps add by hand (an older title made
+// Goodshuffle show "(Renamed)"). The price push finds the line by item id either way.
+export const BASE_DELIVERY_LEG: GsLogisticsLeg = { itemID: 392868144, title: "Delivery fee", rateType: "FLAT_FEE_WITH_MILEAGE", eventTimeLineMarker: "DROP_OFF", label: "Delivery drop-off (base fee)" };
+
+// The pickup leg: the same Delivery fee item on the PICK_UP marker, exactly how real projects carry it (a
+// drop-off line and a pickup line). Every delivery we drop off, we also pick up. It lands on the event date;
+// a rep moves it when the pickup is on another day (e.g. a flexible next-day pickup).
+export const BASE_PICKUP_LEG: GsLogisticsLeg = { itemID: 392868144, title: "Delivery fee", rateType: "FLAT_FEE_WITH_MILEAGE", eventTimeLineMarker: "PICK_UP", label: "Delivery pickup (base fee)" };
 
 // When SETUP or BREAKDOWN help is wanted: Event Readiness Service (setup and/or teardown labor — gathering
 // chairs, removing cushions, etc.; tiered by order value $75/$150/$250/$350+, added as-is at the $75 base
@@ -96,11 +103,11 @@ export function windowUpgradeGroup(intake: IntakeSlice): GsWindowUpgrade | null 
 }
 
 /** LOGISTICS legs for the Logistics group — added only when we have a geocoded delivery location (the drainer
- *  passes an empty list otherwise). Base delivery when delivery is wanted; Event Readiness when the customer
+ *  passes an empty list otherwise). A drop-off AND a pickup leg when delivery is wanted; Event Readiness when the customer
  *  wants setup OR breakdown help. */
 export function autoAddLogisticsLegs(intake: IntakeSlice): GsLogisticsLeg[] {
   const legs: GsLogisticsLeg[] = [];
-  if (intake.deliveryRequired !== "no") legs.push(BASE_DELIVERY_LEG);
+  if (intake.deliveryRequired !== "no") legs.push(BASE_DELIVERY_LEG, BASE_PICKUP_LEG);
   if (intake.setupRequired === "yes" || intake.pickupRequired === "yes") legs.push(EVENT_READINESS_LEG);
   return legs;
 }

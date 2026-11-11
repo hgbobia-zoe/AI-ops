@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { autoAddSimpleItems, autoAddLogisticsLegs, windowUpgradeGroup, DAMAGE_WAIVER, DELIVERY_WINDOW_ITEMS, BASE_DELIVERY_LEG, EVENT_READINESS_LEG } from "./gsItems";
+import { autoAddSimpleItems, autoAddLogisticsLegs, windowUpgradeGroup, DAMAGE_WAIVER, DELIVERY_WINDOW_ITEMS, BASE_DELIVERY_LEG, BASE_PICKUP_LEG, EVENT_READINESS_LEG } from "./gsItems";
 import { gsIntakeLocation } from "./format";
 import type { Intake } from "./types";
 import type { GeoResult } from "./geocode";
@@ -38,6 +38,12 @@ describe("windowUpgradeGroup", () => {
 });
 
 describe("autoAddLogisticsLegs", () => {
+  it("adds a pickup leg next to the drop-off, both on the Delivery fee item", () => {
+    const legs = autoAddLogisticsLegs({ setupRequired: "no", deliveryTier: "standard", deliveryRequired: "yes" });
+    expect(legs).toEqual([BASE_DELIVERY_LEG, BASE_PICKUP_LEG]);
+    expect(BASE_PICKUP_LEG).toMatchObject({ itemID: 392868144, title: "Delivery fee", eventTimeLineMarker: "PICK_UP" });
+    expect(BASE_DELIVERY_LEG).toMatchObject({ itemID: 392868144, title: "Delivery fee", eventTimeLineMarker: "DROP_OFF" });
+  });
   it("is empty when delivery is declined and no setup", () => {
     expect(autoAddLogisticsLegs({ ...base, deliveryRequired: "no" })).toEqual([]);
   });
@@ -63,9 +69,9 @@ describe("autoAddLogisticsLegs", () => {
     expect(legs.filter((l) => l.itemID === EVENT_READINESS_LEG.itemID)).toHaveLength(1);
   });
 
-  it("adds both when delivery and setup are both on", () => {
+  it("adds drop-off, pickup and Event Readiness when delivery and setup are both on", () => {
     const legs = autoAddLogisticsLegs({ ...base, deliveryRequired: "yes", setupRequired: "yes" });
-    expect(legs).toHaveLength(2);
+    expect(legs).toEqual([BASE_DELIVERY_LEG, BASE_PICKUP_LEG, EVENT_READINESS_LEG]);
   });
 });
 

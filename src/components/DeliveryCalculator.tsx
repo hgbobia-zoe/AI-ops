@@ -42,7 +42,9 @@ interface ProjectOpt {
   clientName: string;
   subtotal: number | null;
   location: string | null;
-  /** The venue street address from the project's routed stop, when it is on a route. */
+  /** Goodshuffle status label (New Project / Quote Sent / Contract Signed …). */
+  status?: string | null;
+  /** The venue street: the project's routed stop when it is on a route, else Goodshuffle's own. */
   streetAddress?: string | null;
   eventDate: string | null;
   /** The date of the project's routed pickup stop, when known. */
@@ -51,6 +53,16 @@ interface ProjectOpt {
 
 // Result of asking the Auto-Pull extension for the project's CURRENT pre-discount subtotal, live from a
 // logged-in Goodshuffle session. We only ever trust a live number the extension actually returned.
+// The picker's groups, in the order they are listed (matches the server's pickerStage).
+const STAGE_LABELS = ["New", "Quote sent", "Signed", "Other"];
+function stageOf(status: string | null | undefined): number {
+  const s = (status ?? "").toLowerCase();
+  if (s.includes("new")) return 0;
+  if (s.includes("quote") || s.includes("sent")) return 1;
+  if (s.includes("signed")) return 2;
+  return 3;
+}
+
 interface LiveSubtotalResp {
   ok: boolean;
   subtotal?: number; // dollars (pre-discount contract_subtotal)
@@ -179,16 +191,19 @@ export function DeliveryCalculator(): React.JSX.Element {
   const [results, setResults] = useState<ProjectOpt[]>([]);
   const [searching, setSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false); // an empty, focused search box lists every live project
   const [activeIdx, setActiveIdx] = useState(0);
   // Live-subtotal freshness label (honest provenance of the subtotal field).
   const [subtotalInfo, setSubtotalInfo] = useState<SubtotalInfo>(null);
   const pickedLabelRef = useRef<string>(""); // skip re-searching for the label we just filled in
   const liveReqRef = useRef(0); // ignore a stale live-subtotal reply if the user picked another project
 
-  // Debounced type-to-search against the staff-gated search endpoint (project #, name, or customer).
+  // Debounced type-to-search against the staff-gated search endpoint (project #, name, or customer). An
+  // empty box that has focus lists every live project, so the picker works as a plain dropdown too.
   useEffect(() => {
     const term = query.trim();
-    if (term.length < 2 || term === pickedLabelRef.current) {
+    const browsing = term === "" && searchFocused;
+    if ((!browsing && term.length < 2) || (term && term === pickedLabelRef.current)) {
       setResults([]);
       setSearching(false);
       return;
@@ -210,22 +225,46 @@ export function DeliveryCalculator(): React.JSX.Element {
         .finally(() => {
           if (!cancelled) setSearching(false);
         });
-    }, 250);
+    }, browsing ? 0 : 250);
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [query]);
+  }, [query, searchFocused]);
+
+  // Miles from the warehouse to an address (the distance API). Shared by "Get miles" and project pick.
+  const lookupMiles = useCallback(async (a: string) => {
+    if (!a.trim()) return;
+    setLoading(true);
+    setDistNote(null);
+    try {
+      const r = await fetch(`/api/pricing/distance?address=${encodeURIComponent(a.trim())}`);
+      const j = (await r.json()) as { miles: number | null };
+      if (j.miles != null) {
+        setMiles(String(j.miles));
+        setMilesTyped(false); // looked up from the address, not typed
+        setDistNote(`${j.miles} mi from the warehouse (driving)`);
+      } else {
+        setDistNote("Couldn't find that address — type the miles in by hand.");
+      }
+    } catch {
+      setDistNote("Distance lookup failed — type the miles in by hand.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   const pickProject = useCallback((p: ProjectOpt) => {
     setProjectId(p.id);
     setPush(null);
-    // Prefer the routed stop's street address; Goodshuffle's search only knows city + ZIP.
+    // Prefer the street address (routed stop, else Goodshuffle's own); the city + ZIP is the last resort.
+    // Miles are looked up right away, no "Get miles" click needed.
     const addr = p.streetAddress || p.location;
     if (addr) {
       setAddress(addr);
       setMiles("");
       setMilesTyped(false);
+      void lookupMiles(addr);
     }
     setSubtotal(p.subtotal != null ? String(p.subtotal) : "");
     if (p.eventDate) setEventDate(p.eventDate);
@@ -254,7 +293,7 @@ export function DeliveryCalculator(): React.JSX.Element {
         });
       }
     });
-  }, []);
+  }, [lookupMiles]);
 
   const subtotalNum = Number(subtotal) || 0;
 
@@ -339,26 +378,8 @@ export function DeliveryCalculator(): React.JSX.Element {
     return () => clearTimeout(t);
   }, [runQuote]);
 
-  async function getMiles(addr?: string) {
-    const a = (addr ?? address).trim();
-    if (!a) return;
-    setLoading(true);
-    setDistNote(null);
-    try {
-      const r = await fetch(`/api/pricing/distance?address=${encodeURIComponent(a)}`);
-      const j = (await r.json()) as { miles: number | null };
-      if (j.miles != null) {
-        setMiles(String(j.miles));
-        setMilesTyped(false); // looked up from the address, not typed
-        setDistNote(`${j.miles} mi from the warehouse (driving)`);
-      } else {
-        setDistNote("Couldn't find that address — type the miles in by hand.");
-      }
-    } catch {
-      setDistNote("Distance lookup failed — type the miles in by hand.");
-    } finally {
-      setLoading(false);
-    }
+  function getMiles(addr?: string) {
+    return lookupMiles(addr ?? address);
   }
 
   async function pushToGoodshuffle() {
@@ -465,9 +486,15 @@ export function DeliveryCalculator(): React.JSX.Element {
                 setShowResults(true);
               }}
               onFocus={() => {
-                if (results.length > 0) setShowResults(true);
+                setSearchFocused(true);
+                setShowResults(true);
               }}
-              onBlur={() => setTimeout(() => setShowResults(false), 120)}
+              onBlur={() =>
+                setTimeout(() => {
+                  setShowResults(false);
+                  setSearchFocused(false);
+                }, 120)
+              }
               onKeyDown={(e) => {
                 if (!showResults || results.length === 0) return;
                 if (e.key === "ArrowDown") {
@@ -489,7 +516,7 @@ export function DeliveryCalculator(): React.JSX.Element {
               aria-controls="project-results"
               aria-autocomplete="list"
               autoComplete="off"
-              placeholder="search by project #, name, or customer…"
+              placeholder="pick a project, or search by #, name, or customer…"
               className="w-full rounded-xl border border-white/10 bg-background py-2 pl-9 pr-9 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
             {searching && <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-muted-foreground" />}
@@ -502,6 +529,9 @@ export function DeliveryCalculator(): React.JSX.Element {
             >
               {results.map((p, i) => (
                 <li key={p.id} role="option" aria-selected={i === activeIdx}>
+                  {(i === 0 || stageOf(results[i - 1].status) !== stageOf(p.status)) && (
+                    <div className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{STAGE_LABELS[stageOf(p.status)]}</div>
+                  )}
                   <button
                     type="button"
                     onMouseDown={(e) => {
@@ -529,8 +559,8 @@ export function DeliveryCalculator(): React.JSX.Element {
             </div>
           )}
           <p className="text-xs text-muted-foreground">
-            Type a project number, event name, or customer. On select it pulls the project&apos;s subtotal, location and dates. A project
-            already on a route uses its street address; otherwise the location is city level, so add the street address for exact miles.
+            Pick from the list (live projects, New, then Quote sent, then Signed, newest first) or type a project number, event name, or
+            customer. On select it pulls the project&apos;s subtotal, street address and dates, and works out the miles.
           </p>
         </div>
         <div className="space-y-1.5">
