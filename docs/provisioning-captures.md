@@ -12,6 +12,13 @@ owner role, then posts the outcome to `/api/provision/result`. Slack, Squarespac
 below; Quo and WeddingPro fill their own forms (their API auth can't be read from the page). Slack and Quo
 invites close when the hire actually joins (People tick); the rest close on success. Offboarding stays manual.
 
+**Day one (Auto-Pull 1.22.0+).** For a hire whose start date is still ahead, the run is held in the extension and
+fires on day one, 10 minutes after their first Connecteam shift starts (9:00 AM if none), so the Google login and
+invites land that morning. Paid seats are approved in Zoe when it is scheduled, so it runs unattended; the
+Chrome that scheduled it must be running then (a missed time runs when Chrome next starts). "Run now instead"
+skips the hold. If People has no personal email for the Google login, it is filled from the hire's Connecteam
+account, or from Gusto on the next pull.
+
 ## Slack (free plan) — join link
 
 Recorded 2026-11-10 from the web client (Invite people → Copy Invite Link).
@@ -124,6 +131,27 @@ Yelp asks for the password again before this page ("fresh login"); the replay ta
   `GetFreshLoginSessionStatus` (documentId `8cfccbf23509c6d02157dbef7d8413bd48fa36c12496b73476a5dc8c4f0099dd`)
   says whether the password re-check is needed first.
 - Removing an active user (offboarding) not recorded yet: the Remove link on Managed users.
+
+## Goodshuffle — add a teammate (PAID seat, approval required)
+
+Recorded 2026-11-11 from Account → Subscriptions → Team Management → Invite Teammate (real invite, Full monthly).
+
+- `POST https://pro.goodshuffle.com/app/subscriptionSeat/bulkPurchaseSeats` (XHR, JSON, same-origin, cookies)
+- Headers: `Content-Type: application/json`, `Accept: application/json, text/plain, */*`, `X-Requested-With: XMLHttpRequest`
+- Body: `{"seatsToPurchase":[{"invitationEmail":"<hire email>","fullUser":true,"interval":"month"}],"stripePromoCodeID":null,"addingFromAccountShare":false}`
+  - `interval: "month"` = $59/month; `"year"` = $49/month paid annually. `fullUser:false` = Limited seat.
+- Response: `{ fullSeats: [{ id, stripeSubscriptionID, amount, fullUser, invitationEmail, … }] }`; Goodshuffle emails the invite.
+- Done check: `GET /app/subscriptionSeat/list` → `subscriptionSeats[].invitationEmail` / `employee.email`.
+
+## Whimsical — invite to the workspace (free plan)
+
+Recorded 2026-11-11 from the workspace menu → Invite people (real invite, Editor).
+
+- `POST https://whimsical.com/api/workspace.invite`, `Content-Type` and `Accept`: `application/transit+json`.
+  The app also sends `W-App-Version` / `W-Session-Id` / `W-Version`, but plain headers + cookies work.
+- Body (Transit-JSON): `["^ ","~:emails",["~#list",["<hire email>"]],"~:editor",true,"~:team-ids",["~#set",[]],"~:workspace-id","~u799f8e9f-2153-40e0-90a9-569932f8b4d5"]`
+- Response: `["^ ","~:invited",1]`.
+- Pending list: `POST /api/workspace.get-pending-invitations` body `["^ ","~:workspace-id","~u<id>"]` (used to skip a repeat invite).
 
 ## Slack — done check
 

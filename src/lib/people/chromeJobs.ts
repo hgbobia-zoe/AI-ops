@@ -14,13 +14,17 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { getJson, setJson } from "@/lib/kv";
 import { insertAudit } from "@/lib/db/repo";
 import { loadSmsConfig } from "@/lib/providers";
+import { getCrewForDateSafe, getUsersList } from "@/lib/connecteam";
+import { opsLocalInputToIso, todayInOpsTz } from "@/lib/dates";
 import { getAdapter } from "./adapters";
 import { executeAutomatedTask } from "./lifecycle";
 import { PROVISION_ENDPOINTS, runsInChrome, type ReplaySystem } from "./provisioningEndpoints";
-import { getEmployee, getTask, listTasks, setEmployeeWorkEmail, updateTask } from "./store";
+import { fillEmployeeContact, getEmployee, getTask, listTasks, setEmployeeWorkEmail, updateTask } from "./store";
 import type { Employee, LifecycleTask } from "./types";
 
 export const WORK_DOMAIN = "zoeeventsdmv.com";
+/** externalRef of a step the extension holds until day one: `chrome:scheduled:<ISO time>`. */
+export const CHROME_SCHEDULED_PREFIX = "chrome:scheduled:";
 const JOB_TTL_MS = 2 * 60 * 60 * 1000;
 const KEY = (taskId: string): string => `people.chromejob.${taskId}`;
 
@@ -34,6 +38,9 @@ const SITE_CONFIG: Record<string, Record<string, unknown>> = {
     contractId: "con_rDTi5p6O3pWXNr",
   },
   weddingpro: { startUrl: "https://www.weddingpro.com/settings", roleLabel: "Storefront manager" },
+  // Full seat billed monthly ($59/month; annual is $49/month paid up front), as picked for the 2026-11 hire.
+  whimsical: { startUrl: "https://whimsical.com/zoe-event-rentals", workspaceId: "799f8e9f-2153-40e0-90a9-569932f8b4d5", editor: true },
+  goodshuffle: { startUrl: "https://pro.goodshuffle.com/app/vendorAccount/index?tab=subscription", fullUser: true, interval: "month", priceLine: "Full seat, billed monthly: $59 a month." },
   yelp: {
     startUrl: "https://biz.yelp.com/settings/user_management",
     orgId: "tsWbUrSCJa8r8SFh1UQ5ZA",
@@ -44,7 +51,10 @@ const SITE_CONFIG: Record<string, Record<string, unknown>> = {
 };
 
 /** Run order: the mailbox first, so the invites that follow can go to the new work address. */
-const ORDER = ["squarespace_email", "slack", "quo", "weddingpro", "yelp"];
+const ORDER = ["squarespace_email", "slack", "quo", "goodshuffle", "weddingpro", "yelp", "whimsical"];
+
+/** Minutes after the hire's start time that day one setup runs (the Google login email goes out then). */
+export const DAY_ONE_DELAY_MIN = 10;
 
 export interface ChromeJob {
   taskId: string;
@@ -54,6 +64,8 @@ export interface ChromeJob {
   employeeName: string;
   resultUrl: string;
   approval: "paid" | "owner_role" | null;
+  /** When set (ms epoch), the extension holds the job and runs it then: day one, 10 minutes after start. */
+  runAt: number | null;
   data: Record<string, unknown>;
 }
 
@@ -95,10 +107,41 @@ export function jobData(system: string, emp: Employee, plannedWorkEmail: string 
   return { data: { ...cfg, firstName, lastName, email } };
 }
 
-function issue(task: LifecycleTask, actor: string): string {
+function issue(task: LifecycleTask, actor: string, runAt: number | null): string {
   const token = randomBytes(24).toString("base64url");
-  setJson(KEY(task.id), { hash: sha(token), exp: Date.now() + JOB_TTL_MS, actor } satisfies StoredJob);
+  // A scheduled job keeps its key until a day after it is due (the Chrome may be off at that moment).
+  const exp = runAt ? runAt + 24 * 60 * 60 * 1000 : Date.now() + JOB_TTL_MS;
+  setJson(KEY(task.id), { hash: sha(token), exp, actor } satisfies StoredJob);
   return token;
+}
+
+/** The hire's day one start: their first Connecteam shift that day, else 9:00 AM ops time. PURE given inputs. */
+export function dayOneStart(startDate: string, shiftStartsUnix: number[]): number | null {
+  if (shiftStartsUnix.length) return Math.min(...shiftStartsUnix) * 1000;
+  const iso = opsLocalInputToIso(`${startDate}T09:00`);
+  return iso ? Date.parse(iso) : null;
+}
+
+/** When day one setup should run, or null to run now (no start date, or it is already past). */
+async function dayOneRunAt(emp: Employee, now: number): Promise<number | null> {
+  if (!emp.startDate || emp.startDate < todayInOpsTz(new Date(now))) return null;
+  let starts: number[] = [];
+  if (emp.connecteamUserId) {
+    const day = await getCrewForDateSafe(emp.startDate).catch(() => ({ ok: false, shifts: [] }));
+    starts = day.shifts.filter((sh) => sh.assignees.some((a) => a.userId === emp.connecteamUserId)).map((sh) => sh.startUnix);
+  }
+  const start = dayOneStart(emp.startDate, starts);
+  if (start == null) return null;
+  const at = start + DAY_ONE_DELAY_MIN * 60_000;
+  return at > now ? at : null;
+}
+
+/** Personal email for the Google login when People has none: the hire's own Connecteam account email. */
+async function personalEmailFromConnecteam(emp: Employee): Promise<string | null> {
+  if (!emp.connecteamUserId) return null;
+  const roster = await getUsersList().catch(() => []);
+  const email = roster.find((u) => u.userId === emp.connecteamUserId)?.email?.trim().toLowerCase() ?? "";
+  return email.includes("@") && !email.endsWith(`@${WORK_DOMAIN}`) ? email : null;
 }
 
 const OPEN = new Set(["pending", "manual_required", "failed", "in_progress", "blocked"]);
@@ -106,12 +149,27 @@ const OPEN = new Set(["pending", "manual_required", "failed", "in_progress", "bl
 /** Approve and hand out the Chrome jobs for one person (all their open Chrome-run setup steps), or for the
  *  given task ids. Each step goes through the normal approval card + audit. Returns the jobs in run order,
  *  plus the steps that could not start and why. */
-export async function startChromeRun(input: { employeeId: string; taskIds?: string[]; actor: string; origin: string }): Promise<{
+export async function startChromeRun(input: { employeeId: string; taskIds?: string[]; actor: string; origin: string; now?: boolean }): Promise<{
   jobs: ChromeJob[];
   skipped: { taskId: string; system: string; reason: string }[];
+  runAt: number | null;
 }> {
-  const emp = getEmployee(input.employeeId);
-  if (!emp) return { jobs: [], skipped: [] };
+  let emp = getEmployee(input.employeeId);
+  if (!emp) return { jobs: [], skipped: [], runAt: null };
+  // The Google login needs a personal address; Gusto fills it on its next pull, Connecteam has it now.
+  if (!emp.personalEmail) {
+    const fromCt = await personalEmailFromConnecteam(emp);
+    if (fromCt && fillEmployeeContact(emp.id, { personalEmail: fromCt }).length) {
+      try {
+        insertAudit({ actor: "People Lifecycle", action: "CONTACT_FILLED", entity: "employee", entityId: emp.id, before: null, after: { fields: ["personal_email"], detail: "Filled personal email from Connecteam." } });
+      } catch {
+        /* audit best effort */
+      }
+      emp = getEmployee(emp.id) ?? emp;
+    }
+  }
+  // Day one: everything lands 10 minutes after the hire starts, unless asked to run now.
+  const runAt = input.now ? null : await dayOneRunAt(emp, Date.now());
   const wanted = input.taskIds ? new Set(input.taskIds) : null;
   const tasks = listTasks(emp.id, "provision")
     .filter((t) => runsInChrome(t.adapterId) && OPEN.has(t.status) && (!wanted || wanted.has(t.id)))
@@ -147,18 +205,20 @@ export async function startChromeRun(input: { employeeId: string; taskIds?: stri
       }
     }
     const ep = PROVISION_ENDPOINTS[t.adapterId as ReplaySystem];
+    if (runAt) updateTask(t.id, { externalRef: `${CHROME_SCHEDULED_PREFIX}${new Date(runAt).toISOString()}` });
     jobs.push({
       taskId: t.id,
-      token: issue(t, input.actor),
+      token: issue(t, input.actor, runAt),
       system: t.adapterId,
       systemName: t.system,
       employeeName: emp.displayName,
       resultUrl: `${input.origin.replace(/\/+$/, "")}/api/provision/result`,
       approval: ep?.approval ?? null,
+      runAt,
       data: d.data,
     });
   }
-  return { jobs, skipped };
+  return { jobs, skipped, runAt: jobs.length ? runAt : null };
 }
 
 export type ChromeOutcome = "done" | "invited" | "already" | "failed" | "declined" | "by_hand";

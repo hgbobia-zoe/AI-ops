@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request): Promise<NextResponse> {
   const role = await viewerRole();
   if (!canManageUsers(role)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
-  let body: { employeeId?: string; taskIds?: string[] };
+  let body: { employeeId?: string; taskIds?: string[]; now?: boolean };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -23,6 +23,6 @@ export async function POST(req: Request): Promise<NextResponse> {
   const taskIds = Array.isArray(body.taskIds) ? body.taskIds.filter((x) => typeof x === "string" && x) : undefined;
   const actor = (await currentActor()).label;
   const origin = new URL(req.url).origin;
-  const r = await startChromeRun({ employeeId, taskIds, actor, origin });
+  const r = await startChromeRun({ employeeId, taskIds, actor, origin, now: body.now === true });
   return NextResponse.json({ ok: true, ...r });
 }

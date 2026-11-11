@@ -49,9 +49,9 @@ describe("materialization", () => {
     const zoe = tasks.find((t) => t.adapterId === "zoe_platform")!;
     expect(zoe.mode).toBe("automated");
     expect(zoe.status).toBe("pending"); // awaits the approval gate
-    const gs = tasks.find((t) => t.adapterId === "goodshuffle")!;
-    expect(gs.mode).toBe("manual");
-    expect(gs.status).toBe("manual_required"); // a human must act, then Mark Complete
+    const ct = tasks.find((t) => t.adapterId === "connecteam")!; // manual until its write access is verified
+    expect(ct.mode).toBe("manual");
+    expect(ct.status).toBe("manual_required"); // a human must act, then Mark Complete
   });
 
   it("re-running materialization is idempotent (no duplicate tasks)", () => {

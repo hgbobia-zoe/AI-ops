@@ -6,13 +6,20 @@
 //    capable one performs the real action (Connecteam REST create/archive, mocked) or enqueues the replay op.
 
 import { resetConnecteamReadCaches } from "@/lib/connecteam";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getDb } from "@/lib/db";
 import { allAdapters, getAdapter, hasVerifiedProvisioningScope } from "./index";
 import { setSecret } from "@/lib/secrets";
 import { createEmployee, getEmployee } from "../store";
 import { PROVISION_ENDPOINTS } from "../provisioningEndpoints";
 import type { Employee } from "../types";
+
+// The real Goodshuffle entry runs in the onboarder's Chrome. These tests use Goodshuffle as the example of
+// an OFFICE-PULL replay system (uncaptured, then captured), so reset it to that shape around each test.
+const GS_REAL = { ...PROVISION_ENDPOINTS.goodshuffle };
+beforeEach(() => {
+  Object.assign(PROVISION_ENDPOINTS.goodshuffle, { provision: null, revoke: null, runner: undefined, approval: undefined });
+});
 
 function fakeEmp(over: Partial<Employee> = {}): Employee {
   return {
@@ -44,25 +51,25 @@ afterEach(() => {
   getDb().prepare("DELETE FROM secrets").run();
   getDb().prepare("DELETE FROM gs_outbox").run();
   // Restore any endpoint a test captured.
-  PROVISION_ENDPOINTS.goodshuffle.provision = null;
-  PROVISION_ENDPOINTS.goodshuffle.revoke = null;
+  Object.assign(PROVISION_ENDPOINTS.goodshuffle, GS_REAL);
   vi.restoreAllMocks();
   delete process.env.CONNECTEAM_API_KEY;
   resetConnecteamReadCaches();
 });
 
 describe("mode() honesty", () => {
-  it("Zoe + the recorded Chrome-run systems are automated; Connecteam/Goodshuffle manual; Gusto/Google future", () => {
+  it("Zoe + the recorded Chrome-run systems are automated; Connecteam manual until verified; Gusto/Google future", () => {
+    Object.assign(PROVISION_ENDPOINTS.goodshuffle, GS_REAL); // the real registry
     expect(getAdapter("zoe_platform").mode()).toBe("automated");
     expect(getAdapter("connecteam").mode()).toBe("manual"); // no verified scope
-    expect(getAdapter("goodshuffle").mode()).toBe("manual"); // endpoint capture-pending ($49 seat)
+    expect(getAdapter("goodshuffle").mode()).toBe("automated"); // recorded 2026-11-11, runs in the onboarder's Chrome
     expect(getAdapter("quo").mode()).toBe("automated"); // recorded 2026-11-10, runs in the onboarder's Chrome
     expect(getAdapter("slack").mode()).toBe("automated");
     expect(getAdapter("gusto").mode()).toBe("future");
     expect(getAdapter("google").mode()).toBe("future");
     // No adapter is secretly automated beyond the ones we expect.
     const automated = allAdapters().filter((a) => a.mode() === "automated").map((a) => a.id).sort();
-    expect(automated).toEqual(["quo", "slack", "squarespace_email", "weddingpro", "yelp", "zoe_platform"]);
+    expect(automated).toEqual(["goodshuffle", "quo", "slack", "squarespace_email", "weddingpro", "whimsical", "yelp", "zoe_platform"]);
   });
 
   it("a mere Connecteam key does NOT promote the adapter — only a verified scope flips it to automated", () => {
