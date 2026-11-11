@@ -131,6 +131,7 @@ describe("buildSignedCard", () => {
     amountPaid: 4225,
     amountDue: 4225,
     quoteSentDate: "2026-11-05",
+    delivers: null,
     signedAt: now.toISOString(),
   };
 
@@ -141,7 +142,7 @@ describe("buildSignedCard", () => {
     expect(card.subtitle).toBe("Jessie Medalla closed it. Quote sent Thu, Nov 5, signed today (6 days).");
     expect(card.fields).toEqual([
       { label: "Client", value: "Maria Rivera" },
-      { label: "Event date", value: "Sat, Jun 12, 2027 (213 days out)" },
+      { label: "Delivery / pickup", value: "Sat, Jun 12, 2027 (213 days out)" },
       { label: "Venue", value: "Stone Tower Winery" },
       { label: "Contract total", value: "$8,450" },
     ]);
@@ -151,7 +152,7 @@ describe("buildSignedCard", () => {
 
   it("never shows the deposit or balance, and handles the first signing of the week", () => {
     const card = buildSignedCard({ ...base, amountPaid: 0, amountDue: 8450 }, { count: 1, total: 8450 }, now);
-    expect(card.fields?.map((f) => f.label)).toEqual(["Client", "Event date", "Venue", "Contract total"]);
+    expect(card.fields?.map((f) => f.label)).toEqual(["Client", "Delivery / pickup", "Venue", "Contract total"]);
     expect(card.body).toBe("Nice work, Jessie. That's the first one signed this week.");
   });
 
@@ -159,6 +160,29 @@ describe("buildSignedCard", () => {
     const card = buildSignedCard({ ...base, salesLead: null, quoteSentDate: null }, { count: 2, total: 9000 }, now);
     expect(card.subtitle).toBe("Signed today.");
     expect(card.body).toBe("That makes 2 signed this week for $9,000.");
+  });
+});
+
+describe("amounts and dates", () => {
+  it("a pull that can't see pricing never blanks the stored amounts, so the card keeps its total", async () => {
+    saveBookings([project("A1")]);
+    // A sync from a Goodshuffle login without pricing: same project, no amounts.
+    sign("A1", { grandTotal: undefined, contractTotal: undefined, amountPaid: undefined, amountDue: undefined });
+    expect(await runSignedAlerts()).toBe(1);
+    expect(posts[0].text).toContain("Contract total: $8,450");
+    // A second signing: the weekly tally adds the real totals, never $0.
+    saveBookings([project("A2")]);
+    sign("A2", { grandTotal: undefined, contractTotal: undefined, amountPaid: undefined, amountDue: undefined });
+    expect(await runSignedAlerts()).toBe(1);
+    expect(posts[1].text).toContain("That makes 2 signed this week for $16,900.");
+  });
+
+  it("labels the date by what it is", () => {
+    const c = { bookingId: "1", eventName: "X", eventDate: "2027-06-12", clientName: "C", venue: null, location: null, salesLead: null, grandTotal: 100, amountPaid: 0, amountDue: 100, quoteSentDate: null, signedAt: new Date().toISOString() };
+    const label = (delivers: number | null) => buildSignedCard({ ...c, delivers }, { count: 1, total: 100 }).fields?.[1].label;
+    expect(label(1)).toBe("Delivery");
+    expect(label(0)).toBe("Customer pickup");
+    expect(label(null)).toBe("Delivery / pickup");
   });
 });
 

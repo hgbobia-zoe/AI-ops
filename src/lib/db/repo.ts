@@ -1157,6 +1157,8 @@ export interface SignedCandidate {
   amountPaid: number | null;
   amountDue: number | null;
   quoteSentDate: string | null;
+  /** 1 = we drive at least one leg, 0 = in-store pickup only, null = not captured. */
+  delivers: number | null;
   signedAt: string;
 }
 
@@ -1174,12 +1176,13 @@ function toSignedCandidate(r: Record<string, unknown>): SignedCandidate {
     amountPaid: num(r.amount_paid),
     amountDue: num(r.amount_due),
     quoteSentDate: (r.quote_sent_date as string) ?? null,
+    delivers: r.delivers == null ? null : Number(r.delivers),
     signedAt: r.signed_at as string,
   };
 }
 
 const SIGNED_COLS = `booking_id, event_name, event_date, client_name, venue, location, sales_lead, grand_total,
-  amount_paid, amount_due, quote_sent_date, signed_at`;
+  amount_paid, amount_due, quote_sent_date, delivers, signed_at`;
 
 export function pendingSignedAlerts(): SignedCandidate[] {
   return (
@@ -1255,8 +1258,11 @@ export function saveBookings(items: BookingRecord[]): void {
      VALUES (@bookingId,@eventName,@eventDate,@statusLabel,@signed,@contractTotal,@grandTotal,
        @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@venue,@location,@salesLead,@archived,@windowStartTime,@streetAddress,@now)
      ON CONFLICT(booking_id) DO UPDATE SET event_name=@eventName, event_date=@eventDate,
-       status_label=@statusLabel, signed=@signed, contract_total=@contractTotal, grand_total=@grandTotal,
-       amount_paid=@amountPaid, amount_due=@amountDue, client_name=@clientName, client_email=@clientEmail,
+       status_label=@statusLabel, signed=@signed,
+       -- A pull from a Goodshuffle login that can't see pricing sends no amounts (null). Keep the last known
+       -- amounts instead of blanking them, or totals flicker with whichever pull landed last.
+       contract_total=COALESCE(@contractTotal, contract_total), grand_total=COALESCE(@grandTotal, grand_total),
+       amount_paid=COALESCE(@amountPaid, amount_paid), amount_due=COALESCE(@amountDue, amount_due), client_name=@clientName, client_email=@clientEmail,
        client_phone=@clientPhone, quote_sent_date=@quoteSentDate, date_created=@dateCreated,
        venue=@venue, location=@location, sales_lead=COALESCE(@salesLead, sales_lead), archived=@archived,
        window_start_time=CASE WHEN @windowSent = 1 THEN @windowStartTime ELSE window_start_time END,
