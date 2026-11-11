@@ -8,7 +8,7 @@
 
 import type { IntakeEventType, IntakePatch } from "./types";
 import { flagOn } from "@/lib/flags";
-import { withSmsSignoff } from "@/lib/comms/smsSignoff";
+import { withSmsSignoff, type TextTouch } from "@/lib/comms/smsSignoff";
 
 // ── Flags (ON by default, src/lib/flags.ts; set one to "false" to turn that piece off) ───────────────
 // Master switch. With WEB_INTAKE_ENABLED=false the endpoint still ACCEPTS + records a lead (nothing is
@@ -190,10 +190,12 @@ export function webLeadSmsEnabled(): boolean {
 export function webLeadSmsApplies(source: string): boolean {
   return /google/i.test(source || "");
 }
-/** Wording: WEB_LEAD_SMS_TEXT overrides it; "{firstName}" is filled in. House style: no dashes, no emoji. */
-export function webLeadSmsText(firstName: string): string {
+/** Wording: WEB_LEAD_SMS_TEXT overrides it; "{firstName}" is filled in. House style: no dashes, no emoji.
+ *  It is the first text to a new lead, so it ends with the thank-you line unless `history` (this number's
+ *  recent texts) shows the line already went to them today. */
+export function webLeadSmsText(firstName: string, history: TextTouch[] = []): string {
   const tpl =
     process.env.WEB_LEAD_SMS_TEXT?.trim() ||
     "Hi {firstName}, thanks for reaching out to Zoe Events & Party Rentals! We got your request and will follow up shortly. Feel free to reply here with your event date and what you have in mind.";
-  return withSmsSignoff(tpl.replace(/\{firstName\}/g, firstName.trim() || "there"));
+  return withSmsSignoff(tpl.replace(/\{firstName\}/g, firstName.trim() || "there"), { occasion: "start", history });
 }

@@ -14,7 +14,8 @@ import { todayInOpsTz } from "@/lib/dates";
 import { logSalesEvent } from "./audit";
 import { flagOn } from "@/lib/flags";
 import { isSuppressed } from "@/lib/prospecting/store";
-import { withSmsSignoff } from "@/lib/comms/smsSignoff";
+import { appendSmsSignoff, hasSmsSignoff, stripSmsSignoff, withSmsSignoff, type SignoffOccasion } from "@/lib/comms/smsSignoff";
+import { signoffHistoryFor } from "@/lib/comms/smsSignoffHistory";
 
 export const SMS_MAX_LEN = 1000;
 const DEDUPE_MS = 120_000;
@@ -25,26 +26,23 @@ export interface LeadSmsResult {
   duplicate?: boolean; // identical text to the same number within the dedupe window — not re-sent
   skipped?: boolean; //   the active provider is not configured
   providerMsgId?: string | null;
+  signoff?: boolean; //  the sent text carries the thank-you line
   error?: string;
 }
 
 /** Send one reviewed outreach text to a lead through the active phone provider. The number is always the
  *  lead's own phone on file (never a caller-supplied recipient). Gated by SMS_SEND_ENABLED exactly like
- *  the route. `userId` attributes the message to a Quo rep; `initials` label the note/audit/timeline. */
-export async function sendLeadSms(input: { id: string; body: string; userId?: string; initials?: string | null; edited?: boolean }): Promise<LeadSmsResult> {
+ *  the route. `userId` attributes the message to a Quo rep; `initials` label the note/audit/timeline.
+ *  `occasion` feeds the thank-you line rule (default follow_up: added only when the thread has gone quiet). */
+export async function sendLeadSms(input: { id: string; body: string; userId?: string; initials?: string | null; edited?: boolean; occasion?: SignoffOccasion }): Promise<LeadSmsResult> {
   if (!flagOn("SMS_SEND_ENABLED")) {
     return { ok: false, disabled: true, error: "SMS sending is turned off (SMS_SEND_ENABLED=false)." };
   }
   const id = (input.id ?? "").trim();
-  // The thank-you line is added here too, so a rep who edits a draft (or a draft made before this rule)
-  // still sends it. No-op when the text already has it.
-  // A text right at the length limit is sent as written rather than refused.
   const raw = (input.body ?? "").trim();
-  const signed = withSmsSignoff(raw);
-  const text = signed.length <= SMS_MAX_LEN ? signed : raw;
   if (!id) return { ok: false, error: "id required" };
-  if (!text) return { ok: false, error: "message body required" };
-  if (text.length > SMS_MAX_LEN) return { ok: false, error: `message too long (max ${SMS_MAX_LEN})` };
+  if (!raw) return { ok: false, error: "message body required" };
+  if (raw.length > SMS_MAX_LEN) return { ok: false, error: `message too long (max ${SMS_MAX_LEN})` };
 
   const lead = getBookingById(id);
   if (!lead) return { ok: false, error: "lead not found" };
@@ -53,10 +51,18 @@ export async function sendLeadSms(input: { id: string; body: string; userId?: st
   // The shared do-not-contact list (a texted STOP lands there too) wins over any send.
   if (isSuppressed({ phone, email: lead.clientEmail })) return { ok: false, error: "This number is on the do-not-contact list." };
 
-  // Idempotency — never double-text the same message in quick succession.
-  if (smsRecentlySent(phone, text, new Date(Date.now() - DEDUPE_MS).toISOString())) {
+  // Idempotency: never double text the same message in quick succession. Checked with and without the
+  // thank-you line, because a resend seconds later sees a live thread and would drop the line.
+  const dedupeSince = new Date(Date.now() - DEDUPE_MS).toISOString();
+  if ([raw, stripSmsSignoff(raw), appendSmsSignoff(raw)].some((v) => v && smsRecentlySent(phone, v, dedupeSince))) {
     return { ok: true, duplicate: true };
   }
+
+  // The thank-you line rule is applied here, at send time, with this number's real recent history: added
+  // when the text starts or restarts the conversation, taken out of a quick reply or a second text today.
+  // A text that would go past the length limit with the line is sent as written.
+  const decided = withSmsSignoff(raw, { occasion: input.occasion ?? "follow_up", history: signoffHistoryFor(phone) });
+  const text = decided && decided.length <= SMS_MAX_LEN ? decided : raw;
 
   const res = await sendSms(phone, text, { userId: input.userId });
   insertMessage({
@@ -86,7 +92,7 @@ export async function sendLeadSms(input: { id: string; body: string; userId?: st
     } catch {
       /* note + audit + timeline are best-effort — never fail the send over them */
     }
-    return { ok: true, providerMsgId: res.providerMsgId };
+    return { ok: true, providerMsgId: res.providerMsgId, signoff: hasSmsSignoff(text) };
   }
   return { ok: false, error: res.error ?? "send failed", skipped: res.skipped };
 }

@@ -34,7 +34,8 @@ import {
 import { getEmployee } from "@/lib/aiorg/registry";
 import { botAnnounce, botForAgent, appUrl } from "@/lib/notify/aiBots";
 import { humanize } from "@/lib/salesos/outreach";
-import { withSmsSignoff } from "@/lib/comms/smsSignoff";
+import { withSmsSignoff, type TextTouch } from "@/lib/comms/smsSignoff";
+import { signoffHistoryFor } from "@/lib/comms/smsSignoffHistory";
 import { DISPLAY_TZ } from "@/lib/dates";
 
 // The AI employee these proposals are attributed to. Maps to the Sales bot's Slack channel (aiBots.ts
@@ -108,17 +109,27 @@ function noteBody(recap: CallRecap, who: string): string {
   return lines.join("\n");
 }
 
+/** The customer's number for a call: the linked project's phone, else the call's own numbers. PURE. */
+export function callCustomerPhone(call: CallEventView, booking: BookingView | null): string {
+  return booking?.clientPhone?.trim() || call.fromPhone?.trim() || call.toPhone?.trim() || "";
+}
+
 /**
  * Map a call + its recap + the linked Goodshuffle booking into proposed approval cards. PURE (no DB, no LLM).
  * Deterministic: the same call/recap always yields the same proposals, and every six-field card is filled
  * from real recap facts — never invented. Actions needing a Goodshuffle target are reported as skipped (not
  * silently dropped) when the call isn't linked to a project.
  */
-export function buildCallProposals(call: CallEventView, recap: CallRecap, booking: BookingView | null): CallProposal[] {
+export function buildCallProposals(
+  call: CallEventView,
+  recap: CallRecap,
+  booking: BookingView | null,
+  opts: { textHistory?: TextTouch[] } = {},
+): CallProposal[] {
   const out: CallProposal[] = [];
   const txId = booking?.bookingId ?? null;
   const who = booking?.clientName?.trim() || call.contactName?.trim() || "the customer";
-  const phone = booking?.clientPhone?.trim() || call.fromPhone?.trim() || call.toPhone?.trim() || "";
+  const phone = callCustomerPhone(call, booking);
   const dataUsed = `Call ${call.id}${call.occurredAt ? ` (${call.occurredAt})` : ""}; recap by ${recap.model ?? "the coaching model"}${txId ? `; Goodshuffle project ${txId}` : "; no linked Goodshuffle project"}.`;
   const base = (actionType: ApprovalActionType, extra: Partial<CallProposal> & Pick<CallProposal, "title" | "payload" | "card">): CallProposal => ({
     actionType,
@@ -208,7 +219,8 @@ export function buildCallProposals(call: CallEventView, recap: CallRecap, bookin
 
   // 4) FOLLOW-UP SMS — a short, house-style text distilled from the follow-up email. Held (delivers from the
   //    Sales panel), so this is a draft either way; only propose it when we have a number.
-  const sms = recap.followUpEmail.trim() ? withSmsSignoff(smsFromEmail(recap.followUpEmail)) : "";
+  //    It wraps up the call, so it carries the thank-you line unless the line already went to them today.
+  const sms = recap.followUpEmail.trim() ? withSmsSignoff(smsFromEmail(recap.followUpEmail), { occasion: "start", history: opts.textHistory ?? [] }) : "";
   if (sms && phone) {
     out.push(
       base("send_sms", {
@@ -354,7 +366,7 @@ export async function actOnCall(opts: ActOnCallOptions): Promise<ActOnCallResult
   // The human lead who owns the Sales Coach (the AI Org rollup groups approvals by this name).
   const owner = getEmployee(AGENT_ID)?.owner ?? "Sales";
   const raise = opts.raise ?? createApproval;
-  const proposals = buildCallProposals(call, recap, booking);
+  const proposals = buildCallProposals(call, recap, booking, { textHistory: signoffHistoryFor(callCustomerPhone(call, booking)) });
   const created: ActOnCallResult["created"] = [];
   const skipped: string[] = [];
   for (const p of proposals) {
