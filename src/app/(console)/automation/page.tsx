@@ -12,7 +12,9 @@ import type { Tier, Target } from "@/lib/automation/actions";
 import type { JobState } from "@/lib/runtime/jobs";
 import { DISPLAY_TZ } from "@/lib/dates";
 import { viewerRole } from "@/lib/auth/getSession";
-import { canSeeFinancials } from "@/lib/auth/roles";
+import { canSeeFinancials, canManageSettings } from "@/lib/auth/roles";
+import { WriteBacksNeedingPerson } from "@/components/automation/WriteBacksNeedingPerson";
+import { outboxThresholds } from "@/lib/aiorg/outboxHealth";
 import type { Tone } from "@/lib/tone";
 import { PageHeader } from "@/components/ui/page-header";
 import { BladeMain, OverviewLayout } from "@/components/ui/layouts";
@@ -150,7 +152,9 @@ function SectionTitle({ children, sub }: { children: React.ReactNode; sub?: Reac
 }
 
 export default async function AutomationPage(): Promise<React.JSX.Element> {
-  const showMoney = canSeeFinancials(await viewerRole());
+  const role = await viewerRole();
+  const showMoney = canSeeFinancials(role);
+  const canDismiss = canManageSettings(role);
   const now = clockNow();
   const reg = automationRegister({ showMoney }, now);
   const suggestions = automationOverview();
@@ -194,7 +198,10 @@ export default async function AutomationPage(): Promise<React.JSX.Element> {
           </div>
           {wb.summary.oldestDueAgeMs !== null && (
             <p className="border-t border-rule px-3 py-2 text-[12px] text-secondary-text">
-              Oldest waiting change was queued {Math.round(wb.summary.oldestDueAgeMs / 3_600_000)}h ago. If it keeps growing, open Goodshuffle in the office browser.
+              Oldest waiting change was queued {Math.round(wb.summary.oldestDueAgeMs / 3_600_000)}h ago.{" "}
+              {wb.summary.lastLandedAgeMs !== null && wb.summary.lastLandedAgeMs < outboxThresholds().staleHours * 3_600_000
+                ? "Other changes are landing, so the office browser is fine; see the stuck items below."
+                : "If it keeps growing, open Goodshuffle in the office browser."}
             </p>
           )}
           {wb.summary.unhandledOps.length > 0 && (
@@ -202,6 +209,7 @@ export default async function AutomationPage(): Promise<React.JSX.Element> {
               Nothing knows how to send: {wb.summary.unhandledOps.join(", ")}.
             </p>
           )}
+          <WriteBacksNeedingPerson rows={wb.needsPerson} canDismiss={canDismiss} />
           {wb.landed7d.length > 0 && (
             <ul className="border-t border-rule">
               <li className="px-3 pt-2 text-[10.5px] uppercase tracking-[0.06em] text-meta">Landed in the last 7 days</li>

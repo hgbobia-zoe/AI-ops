@@ -2693,7 +2693,8 @@ export interface GsOutboxItem {
   // "pending" = awaiting a drainer (incl. a transient failure being retried behind nextAttemptAt);
   // "done" = destination accepted; "dead" = bounded retries exhausted (dead-letter, needs a human);
   // "failed" survives only on legacy rows written before the WS03 retry lifecycle.
-  status: "pending" | "done" | "failed" | "dead";
+  /** 'dismissed' = a person cancelled it (stuck or dead-lettered) with a reason; it never retries. */
+  status: "pending" | "done" | "failed" | "dead" | "dismissed";
   attempts: number;
   lastError?: string;
   /** Structured op data (e.g. { photoIds } for a photo_upload). */
@@ -2958,6 +2959,51 @@ export function listDeadLetterGsOps(limit = 50): GsOutboxItem[] {
       .prepare("SELECT * FROM gs_outbox WHERE status = 'dead' ORDER BY updated_at DESC LIMIT ?")
       .all(limit) as GsOutboxRow[]
   ).map(toGsItem);
+}
+
+/** Write-backs a person has to decide on: dead-lettered or legacy failed ops, plus pending ops that have
+ *  been due for longer than `staleMs` (nothing is draining them). Oldest first. */
+export function listGsOpsNeedingPerson(staleMs: number, now: number = Date.now(), limit = 100): GsOutboxItem[] {
+  const nowIso = new Date(now).toISOString();
+  const cutoff = new Date(now - staleMs).toISOString();
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM gs_outbox
+          WHERE status IN ('dead','failed')
+             OR (status = 'pending' AND created_at < ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?))
+          ORDER BY created_at LIMIT ?`,
+      )
+      .all(cutoff, nowIso, limit) as GsOutboxRow[]
+  ).map(toGsItem);
+}
+
+/**
+ * A person cancels a write-back that is stuck or dead-lettered: it becomes 'dismissed', never retries,
+ * and stops counting toward the outbox alarm. Records who and why in last_error. A linked approval that
+ * was still waiting on this op is marked failed with the same note, so it doesn't sit "queued" forever.
+ * Only pending, dead and failed ops can be dismissed; a landed op is left alone.
+ */
+export function dismissGsOp(
+  id: string,
+  by: string,
+  reason: string,
+  now: number = Date.now(),
+): { ok: boolean; from?: string; reason?: "not_found" | "not_dismissable" } {
+  const db = getDb();
+  const row = db.prepare("SELECT status FROM gs_outbox WHERE id = ?").get(id) as { status: string } | undefined;
+  if (!row) return { ok: false, reason: "not_found" };
+  if (!["pending", "dead", "failed"].includes(row.status)) return { ok: false, from: row.status, reason: "not_dismissable" };
+  const at = new Date(now).toISOString();
+  const note = `Dismissed by ${by}: ${reason}`.slice(0, 600);
+  db.prepare(
+    "UPDATE gs_outbox SET status = 'dismissed', last_error = ?, next_attempt_at = NULL, claimed_by = NULL, updated_at = ? WHERE id = ?",
+  ).run(note, at, id);
+  db.prepare("UPDATE ai_approvals SET status = 'failed', decision_note = ? WHERE outbox_op_id = ? AND status IN ('queued','executed')").run(
+    `${note}. The action never reached Goodshuffle.`,
+    id,
+  );
+  return { ok: true, from: row.status };
 }
 
 /** One outbox op by id — for correlating an approval to its op outcome (WS03 / consumed by WS05). */

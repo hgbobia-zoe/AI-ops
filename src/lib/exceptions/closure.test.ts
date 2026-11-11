@@ -39,6 +39,12 @@ describe("sourceClosure (close only on what the source recorded)", () => {
     expect(sourceClosure({ kind: "dead_letter", status: "dead", updatedAt: null }, TODAY)).toBeNull();
   });
 
+  it("a write-back a person dismissed is set aside, not called fixed", () => {
+    const c = sourceClosure({ kind: "dead_letter", status: "dismissed", updatedAt: null }, TODAY)!;
+    expect(c.as).toBe("disposed");
+    expect(c.by).toBe("Write-back outbox");
+  });
+
   it("a missing source record never closes anything", () => {
     expect(sourceClosure({ kind: "missing" }, TODAY)).toBeNull();
   });

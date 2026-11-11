@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { getDb } from "@/lib/db";
-import { enqueueGsOp, ackGsOp } from "@/lib/db/repo";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { enqueueGsOp, ackGsOp, dismissGsOp, listGsOpsNeedingPerson, listPendingGsOps } from "@/lib/db/repo";
 import {
   summarizeOutbox,
   evaluateOutbox,
   liveOutboxSummary,
   runOutboxHealthTick,
   outboxThresholds,
+  KNOWN_DRAINABLE_OPS,
   type OutboxHealthRow,
 } from "./outboxHealth";
 
@@ -105,6 +108,34 @@ describe("evaluateOutbox", () => {
     expect(evaluateOutbox(summarizeOutbox([row({ op: "mystery" })], NOW), NOW, T).down).toBe(true);
   });
 
+  it("a stuck op while other changes land → needs a person, but the office browser is NOT called down", () => {
+    const s = summarizeOutbox([row({ created_at: iso(NOW - 258 * HOUR), op: "provision_user", label: "invite Sam to Quo" })], NOW, undefined, {
+      staleMs: 6 * HOUR,
+      lastLandedAt: iso(NOW - 10 * 60_000),
+    });
+    expect(s.stuckCount).toBe(1);
+    expect(s.stuck[0].label).toBe("invite Sam to Quo");
+    const a = evaluateOutbox(s, NOW, T);
+    expect(a.down).toBe(true);
+    expect(a.drainerDown).toBe(false);
+    expect(a.reasons[0]).toMatch(/stuck in the queue/);
+    expect(a.reasons[0]).toMatch(/invite Sam to Quo/);
+    expect(a.reasons.join(" ")).not.toMatch(/signed out/);
+  });
+
+  it("an old op with nothing landing → the office browser looks stopped", () => {
+    const s = summarizeOutbox([row({ created_at: iso(NOW - 8 * HOUR) })], NOW, undefined, { staleMs: 6 * HOUR, lastLandedAt: iso(NOW - 9 * HOUR) });
+    const a = evaluateOutbox(s, NOW, T);
+    expect(a.drainerDown).toBe(true);
+    expect(a.reasons[0]).toMatch(/nothing has landed in 9h/);
+  });
+
+  it("dismissed ops are ignored, like landed ones", () => {
+    const s = summarizeOutbox([row({ status: "dismissed", created_at: iso(NOW - 300 * HOUR) })], NOW);
+    expect(s.pending).toBe(0);
+    expect(evaluateOutbox(s, NOW, T).down).toBe(false);
+  });
+
   it("thresholds come from env with sane defaults", () => {
     expect(outboxThresholds()).toEqual({ staleHours: 6, depthAlarm: 25 });
     process.env.OUTBOX_PENDING_STALE_HOURS = "2";
@@ -150,5 +181,52 @@ describe("liveOutboxSummary + runOutboxHealthTick", () => {
     const recovered = await runOutboxHealthTick(NOW + 120_000);
     expect(recovered.ok).toBe(true);
     expect(recovered.summary.due).toBe(0);
+  });
+});
+
+// ── Dismissing a stuck or failed write-back ─────────────────────────────────────
+describe("dismissGsOp + listGsOpsNeedingPerson", () => {
+  it("lists dead ops and long-stuck pending ops, not fresh or landed ones", () => {
+    const fresh = enqueueGsOp({ op: "note_append", transactionId: "1", label: "fresh", payload: { line: "a" } });
+    const stuck = enqueueGsOp({ op: "provision_user", label: "stuck", payload: { system: "quo" } });
+    const dead = enqueueGsOp({ op: "set_delivery_fee", transactionId: "2", label: "dead", payload: { amount: 10 } });
+    const landed = enqueueGsOp({ op: "note_append", transactionId: "3", label: "landed", payload: { line: "b" } });
+    const now = Date.now();
+    getDb().prepare("UPDATE gs_outbox SET created_at = ? WHERE id IN (?, ?, ?)").run(iso(now - 48 * HOUR), stuck.id, dead.id, landed.id);
+    getDb().prepare("UPDATE gs_outbox SET status = 'dead' WHERE id = ?").run(dead.id);
+    getDb().prepare("UPDATE gs_outbox SET status = 'done' WHERE id = ?").run(landed.id);
+    const ids = listGsOpsNeedingPerson(6 * HOUR, now).map((o) => o.id);
+    expect(ids).toEqual(expect.arrayContaining([stuck.id, dead.id]));
+    expect(ids).not.toContain(fresh.id);
+    expect(ids).not.toContain(landed.id);
+  });
+
+  it("a dismissed op stops counting, records who and why, and never comes back to a drainer", () => {
+    const op = enqueueGsOp({ op: "provision_user", label: "invite", payload: { system: "quo" } });
+    getDb().prepare("UPDATE gs_outbox SET created_at = ? WHERE id = ?").run(iso(Date.now() - 300 * HOUR), op.id);
+    expect(dismissGsOp(op.id, "Pat (Owner)", "Invited by hand").ok).toBe(true);
+    const s = liveOutboxSummary();
+    expect(s.pending).toBe(0);
+    expect(listPendingGsOps().map((o) => o.id)).not.toContain(op.id);
+    expect(listGsOpsNeedingPerson(6 * HOUR).map((o) => o.id)).not.toContain(op.id);
+    expect(getDb().prepare("SELECT last_error FROM gs_outbox WHERE id = ?").get(op.id)).toEqual({ last_error: "Dismissed by Pat (Owner): Invited by hand" });
+  });
+
+  it("a landed op cannot be dismissed; an unknown id says so", () => {
+    const op = enqueueGsOp({ op: "note_append", transactionId: "4", label: "x", payload: { line: "c" } });
+    ackGsOp(op.id, true);
+    expect(dismissGsOp(op.id, "Pat", "nope")).toEqual({ ok: false, from: "done", reason: "not_dismissable" });
+    expect(dismissGsOp("missing", "Pat", "nope")).toEqual({ ok: false, reason: "not_found" });
+  });
+});
+
+// ── Drift guard: the health list must match what the extension actually sends ──
+describe("KNOWN_DRAINABLE_OPS", () => {
+  it("matches the extension's HANDLED set (plus create_project, which background.js drains through the create gate)", () => {
+    const src = readFileSync(join(process.cwd(), "extension", "pull-injected.js"), "utf8");
+    const m = /const HANDLED = \{([^}]*)\}/.exec(src);
+    expect(m).not.toBeNull();
+    const handled = new Set([...m![1].matchAll(/([a-z_]+)\s*:/g)].map((x) => x[1]));
+    expect(new Set([...handled, "create_project"])).toEqual(new Set(KNOWN_DRAINABLE_OPS));
   });
 });
