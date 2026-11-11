@@ -34,6 +34,7 @@ import { TaskActions } from "@/components/people/TaskActions";
 import { ChromeSetupButton } from "@/components/people/ChromeSetup";
 import { getAdapter } from "@/lib/people/adapters";
 import { runsInChrome } from "@/lib/people/provisioningEndpoints";
+import { formatYmdLong, todayInOpsTz } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
 
@@ -166,13 +167,17 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
         icon={<ListChecks className="size-4 text-meta" aria-hidden />}
         tasks={provision}
         note={(() => {
-          const n = provision.filter((t) => chromeReady(t) && CHROME_OPEN.has(t.status)).length;
+          const open = provision.filter((t) => chromeReady(t) && CHROME_OPEN.has(t.status));
+          const n = open.length;
+          const dayOne = emp.startDate && emp.startDate > todayInOpsTz() ? formatYmdLong(emp.startDate) : null;
           return n > 0 ? (
             <Surface className="flex flex-wrap items-center justify-between gap-3">
               <span className="text-[12.5px] text-secondary-text">
-                Auto-Pull can set up {n} account{n === 1 ? "" : "s"} from your Chrome. Each site opens in a tab; sign in if it asks. Paid seats wait for your OK.
+                {dayOne
+                  ? `Auto-Pull can set up ${n} account${n === 1 ? "" : "s"} from your Chrome on ${dayOne}, 10 minutes after the start time, so the logins arrive that morning. Paid seats are approved now.`
+                  : `Auto-Pull can set up ${n} account${n === 1 ? "" : "s"} from your Chrome. Each site opens in a tab; sign in if it asks. Paid seats wait for your OK.`}
               </span>
-              <ChromeSetupButton employeeId={emp.id} count={n} />
+              <ChromeSetupButton employeeId={emp.id} systems={open.map((t) => t.adapterId)} dayOne={dayOne} />
             </Surface>
           ) : undefined;
         })()}
@@ -258,10 +263,13 @@ function ChecklistTable({ title, icon, tasks, note, emptyLabel }: {
             <tbody>
               {tasks.map((t) => {
                 const live = chromeReady(t);
+                // What the system can do NOW (a step made before an integration landed still shows it).
+                const liveMode = getAdapter(t.adapterId).mode();
                 const access = t.adapterId === "sop_ack"
                   ? { label: "Hire signs", hint: "Completes only when the hire signs their SOP link" }
                   : live ? { label: "Runs in your Chrome", hint: "Auto-Pull opens the site and sets it up" }
-                  : ACCESS_TYPE[t.mode];
+                  : t.adapterId === "connecteam" && liveMode === "automated" ? { label: "Automated", hint: "Runs on its own; links an account made by hand" }
+                  : ACCESS_TYPE[liveMode];
                 return (
                   <tr key={t.id} className={compactRowCls}>
                     <td className="px-3 py-2.5 align-top">
@@ -269,7 +277,7 @@ function ChecklistTable({ title, icon, tasks, note, emptyLabel }: {
                       <div className="text-[10.5px] uppercase tracking-[0.05em] text-meta">{t.required ? "required" : "optional"}</div>
                     </td>
                     <td className="px-3 py-2.5 align-top">
-                      <div className={t.mode === "automated" || live ? "font-medium text-foreground" : "text-secondary-text"}>{access.label}</div>
+                      <div className={liveMode === "automated" || live ? "font-medium text-foreground" : "text-secondary-text"}>{access.label}</div>
                       <div className="text-[10.5px] text-meta">{access.hint}</div>
                     </td>
                     <td className="px-3 py-2.5 align-top">
@@ -287,7 +295,7 @@ function ChecklistTable({ title, icon, tasks, note, emptyLabel }: {
                       {(!t.externalRef || t.externalRef === "chrome:waiting") && t.status !== "completed" && <span>—</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right align-top">
-                      <TaskActions task={{ id: t.id, employeeId: t.employeeId, adapterId: t.adapterId, externalRef: t.externalRef, mode: live ? "automated" : t.mode, kind: t.kind, status: t.status, required: t.required }} />
+                      <TaskActions task={{ id: t.id, employeeId: t.employeeId, adapterId: t.adapterId, externalRef: t.externalRef, mode: live ? "automated" : liveMode, kind: t.kind, status: t.status, required: t.required }} />
                     </td>
                   </tr>
                 );

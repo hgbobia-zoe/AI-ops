@@ -10,6 +10,9 @@ import { setSecret } from "@/lib/secrets";
 import { executeAutomatedTask, startOnboarding } from "./lifecycle";
 import { createEmployee, getEmployee, listTasks } from "./store";
 import { PROVISION_ENDPOINTS } from "./provisioningEndpoints";
+
+// Goodshuffle stands in for an office-pull replay system here (the real one runs in the onboarder's Chrome).
+const GS_REAL = { ...PROVISION_ENDPOINTS.goodshuffle };
 import { resetConnecteamReadCaches } from "@/lib/connecteam";
 
 function mockFetch(status: number, body: unknown) {
@@ -26,6 +29,7 @@ function auditCount(action: string, entityId: string): number {
 }
 
 beforeEach(() => {
+  Object.assign(PROVISION_ENDPOINTS.goodshuffle, { provision: null, revoke: null, runner: undefined, approval: undefined });
   process.env.CONNECTEAM_API_KEY = "test-key";
   resetConnecteamReadCaches();
 });
@@ -33,7 +37,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   delete process.env.CONNECTEAM_API_KEY;
   getDb().prepare("DELETE FROM secrets").run();
-  PROVISION_ENDPOINTS.goodshuffle.provision = null;
+  Object.assign(PROVISION_ENDPOINTS.goodshuffle, GS_REAL);
 });
 
 describe("Connecteam automated provision through the engine", () => {

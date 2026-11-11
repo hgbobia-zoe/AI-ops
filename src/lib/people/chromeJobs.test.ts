@@ -122,3 +122,36 @@ describe("confirmChromeInvites", () => {
     expect(getTask(slackTask.id)!.status).toBe("completed");
   });
 });
+
+describe("day one scheduling", () => {
+  it("dayOneStart uses the first Connecteam shift, else 9:00 AM ops time", async () => {
+    const { dayOneStart } = await import("./chromeJobs");
+    expect(dayOneStart("2030-03-04", [1900000300, 1900000100])).toBe(1900000100 * 1000);
+    const nine = dayOneStart("2030-03-04", [])!;
+    expect(new Date(nine).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })).toBe("9:00 AM");
+  });
+
+  it("a hire who has not started gets every job held for 10 minutes after their start", async () => {
+    const e = createEmployee({ displayName: "Future Start", role: "member", department: "sales_associate", phone: "+12025550301", personalEmail: "future@gmail.test", startDate: "2030-03-04" });
+    startOnboarding(e.id, "tester");
+    const r = await startChromeRun({ employeeId: e.id, actor: "Lisa", origin: ORIGIN });
+    expect(r.runAt).not.toBeNull();
+    expect(new Date(r.runAt!).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })).toBe("9:10 AM");
+    expect(r.jobs.every((j) => j.runAt === r.runAt)).toBe(true);
+    expect(getTask(r.jobs[0].taskId)!.externalRef).toMatch(/^chrome:scheduled:2030-03-04T/);
+    // "Run now instead" skips the hold.
+    const now = await startChromeRun({ employeeId: e.id, actor: "Lisa", origin: ORIGIN, now: true });
+    expect(now.runAt).toBeNull();
+    expect(now.jobs.every((j) => j.runAt === null)).toBe(true);
+  });
+
+  it("Goodshuffle is part of the run, after the mailbox, and is a paid step", async () => {
+    const e = onboardSales("Gail Seat", { personalEmail: "gail@gmail.test" });
+    const { jobs } = await startChromeRun({ employeeId: e.id, actor: "Lisa", origin: ORIGIN });
+    const gs = jobs.find((j) => j.system === "goodshuffle")!;
+    expect(gs).toBeTruthy();
+    expect(gs.approval).toBe("paid");
+    expect(gs.data).toMatchObject({ email: "gail.seat@zoeeventsdmv.com", interval: "month", fullUser: true });
+    expect(jobs.map((j) => j.system).indexOf("goodshuffle")).toBeGreaterThan(jobs.map((j) => j.system).indexOf("squarespace_email"));
+  });
+});

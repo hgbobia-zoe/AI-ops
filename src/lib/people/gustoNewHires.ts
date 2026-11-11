@@ -16,7 +16,7 @@ import { insertAudit } from "@/lib/db/repo";
 import { listWorkerRecords } from "@/lib/payroll/store";
 import { todayInOpsTz } from "@/lib/dates";
 import { toE164 } from "@/lib/notify/sms";
-import { createEmployee, getPolicy, linkEmployee, listEmployees } from "./store";
+import { createEmployee, fillEmployeeContact, getPolicy, linkEmployee, listEmployees } from "./store";
 import { deriveWorkEmail, policyIssuesWorkEmail } from "./policy";
 import { nameKey, policyForTitle } from "./match";
 import { announceNewHire } from "./notify";
@@ -241,7 +241,13 @@ export function ingestGustoRoster(roster: GustoRosterPerson[]): { netNew: number
   // Keep details already read for someone still net new; drop everyone else's.
   const people: GustoNewHire[] = netNew.map((p) => ({ ...p, details: prev?.people.find((x) => x.id === p.id)?.details ?? null }));
   setJson(LIST_KEY, { pulledAt: new Date().toISOString(), people, linked } satisfies GustoNewHireList);
-  return { netNew: people.length, linked: linked.length, needDetails: people.filter((p) => p.source === "member").map((p) => p.id) };
+  // People already added (or linked) but still missing contact details: ask the pull for theirs too, so the
+  // work email step can send the Google login to the hire's personal address.
+  const missing = listEmployees()
+    .filter((e) => e.gustoId && ["HIRE", "ONBOARD", "READY"].includes(e.lifecycleState) && (!e.personalEmail || !e.phone))
+    .map((e) => e.gustoId as string);
+  const needDetails = [...new Set([...people.filter((p) => p.source === "member").map((p) => p.id), ...missing])].slice(0, 25);
+  return { netNew: people.length, linked: linked.length, needDetails };
 }
 
 /** Ingest personal details. Accepted ONLY for people currently on the net-new list. */
@@ -253,7 +259,13 @@ export function ingestGustoDetails(details: GustoPersonDetails[]): { stored: num
   for (const d of details) {
     const p = list.people.find((x) => x.id === d.id);
     if (!p) {
-      refused++;
+      // Someone already in People who is still being onboarded: fill only what People is missing.
+      const emp = listEmployees().find((e) => e.gustoId === d.id && ["HIRE", "ONBOARD", "READY"].includes(e.lifecycleState));
+      const filled = emp ? fillEmployeeContact(emp.id, { personalEmail: d.personalEmail, phone: d.phone, birthDate: d.birthDate }) : [];
+      if (emp && filled.length) {
+        audit("Gusto pull", "CONTACT_FILLED", emp.id, { fields: filled, detail: `Filled ${filled.map((f) => f.replace("_", " ")).join(", ")} from Gusto.` });
+        stored++;
+      } else refused++;
       continue;
     }
     p.details = d;

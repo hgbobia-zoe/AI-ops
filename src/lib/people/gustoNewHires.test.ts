@@ -122,3 +122,18 @@ describe("ingest, details gate, add and hide", () => {
     expect(ingestGustoRoster(parseGustoRoster(rosterResp([member("h1", "Contract", "Abroad")]), null)).netNew).toBe(0);
   });
 });
+
+describe("contact details for people already added", () => {
+  it("asks for and fills a missing personal email for someone being onboarded, never overwriting", async () => {
+    const { createEmployee, getEmployee } = await import("./store");
+    const { ingestGustoDetails, ingestGustoRoster } = await import("./gustoNewHires");
+    const e = createEmployee({ displayName: "Fill Me", role: "member", department: "sales_associate", phone: "+12025550999", gustoId: "g-fill-1" });
+    const r = ingestGustoRoster([]);
+    expect(r.needDetails).toContain("g-fill-1");
+    const out = ingestGustoDetails([{ id: "g-fill-1", personalEmail: "fill.me@gmail.test", phone: "+13015550000", birthDate: "1990-01-02", legalFirstName: "Fill", legalLastName: "Me", startDate: null } as never]);
+    expect(out.stored).toBe(1);
+    const after = getEmployee(e.id)!;
+    expect(after.personalEmail).toBe("fill.me@gmail.test");
+    expect(after.phone).toBe("+12025550999"); // kept
+  });
+});

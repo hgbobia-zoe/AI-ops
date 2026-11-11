@@ -37,24 +37,23 @@ export interface SystemReplayEndpoints {
   approval?: "paid" | "owner_role";
 }
 
-export type ReplaySystem = "goodshuffle" | "quo" | "slack" | "squarespace_email" | "weddingpro" | "yelp";
+export type ReplaySystem = "goodshuffle" | "quo" | "slack" | "squarespace_email" | "weddingpro" | "yelp" | "whimsical";
 
 // All null = capture-pending. Fill a system's provision/revoke with the EXACT captured request + body
 // encoding, then the adapter flips to automated and the drainer starts replaying it.
 export const PROVISION_ENDPOINTS: Record<ReplaySystem, SystemReplayEndpoints> = {
   goodshuffle: {
     origin: "https://pro.goodshuffle.com",
-    // CAPTURE-PENDING: record the "invite a team member" request once from a logged-in GSPRO admin session
-    // (Settings → Team → Invite), then fill { method, path, bodyType } here. This drains in the office pull
-    // (same origin as the Goodshuffle tab).
-    provision: null,
-    // CAPTURE-PENDING: record the "remove / deactivate a team member" request once from GSPRO admin.
+    // Captured live 2026-11-11 (Account → Subscriptions → Team Management → Invite Teammate):
+    // POST /app/subscriptionSeat/bulkPurchaseSeats {seatsToPurchase:[{invitationEmail,fullUser,interval}],
+    // stripePromoCodeID:null, addingFromAccountShare:false}. Buys a seat (Full monthly $59, annual $49/mo paid
+    // up front), so it always waits for the onboarder's OK. Runs in the onboarder's Chrome, not the office pull.
+    provision: { method: "POST", path: "/app/subscriptionSeat/bulkPurchaseSeats", bodyType: "json" },
+    // CAPTURE-PENDING: removing a teammate (seat cancel) — offboarding stays manual.
     revoke: null,
-    // Mapped live 2026-11-02 (read-only): Account → Subscriptions → Team Management. The team list is
-    // GET /app/subscriptionSeat/list ({subscriptionSeats:[{id,status,fullUser,hasAdminPrivileges,
-    // invitationEmail,interval,employee:{fullName,email}}]}). "Invite Teammate" takes email + seat type
-    // (Full/Limited) + billing interval and BUYS a seat ($49/mo Full), so it always rides the approval gate.
-    notes: "Invite = email + seat Full + Monthly; buys a $49/mo seat. Team list: GET /app/subscriptionSeat/list.",
+    runner: "extension",
+    approval: "paid",
+    notes: "Invite = email + Full seat + monthly; buys a $59/mo seat. Team list: GET /app/subscriptionSeat/list.",
   },
   quo: {
     origin: "https://my.quo.com",
@@ -101,6 +100,16 @@ export const PROVISION_ENDPOINTS: Record<ReplaySystem, SystemReplayEndpoints> = 
     approval: "owner_role",
     notes: "Invite grants OWNER (can buy ads on the card on file); asks for the password again first.",
   },
+  whimsical: {
+    origin: "https://whimsical.com",
+    // Captured live 2026-11-11 (workspace menu → Invite people): POST /api/workspace.invite, Transit-JSON
+    // ["^ ","~:emails",["~#list",[email]],"~:editor",true,"~:team-ids",["~#set",[]],"~:workspace-id","~u<id>"]
+    // with Content-Type/Accept application/transit+json. Free plan, so no charge.
+    provision: { method: "POST", path: "/api/workspace.invite", bodyType: "json" },
+    revoke: null,
+    runner: "extension",
+    notes: "Invite as Editor to the Zoe Event Rentals workspace (free plan).",
+  },
 };
 
 /** True when this system is replayed in the onboarder's own Chrome (not the office Goodshuffle pull). */
@@ -115,4 +124,4 @@ export function hasCapturedEndpoint(system: ReplaySystem, kind: "provision" | "r
 }
 
 /** The replay systems in id order (for the Systems view / the drainer). */
-export const REPLAY_SYSTEMS: ReplaySystem[] = ["goodshuffle", "quo", "slack", "squarespace_email", "weddingpro", "yelp"];
+export const REPLAY_SYSTEMS: ReplaySystem[] = ["goodshuffle", "quo", "slack", "squarespace_email", "weddingpro", "yelp", "whimsical"];

@@ -136,6 +136,22 @@ export function setEmployeePhone(id: string, phone: string | null): void {
   getDb().prepare("UPDATE employee SET phone = ?, updated_at = ? WHERE id = ?").run(phone, new Date().toISOString(), id);
 }
 
+/** Fill contact details that are still empty (never overwrites what People already has). Returns the
+ *  fields it filled. Birth date is stored for Connecteam only and never shown (PI). */
+export function fillEmployeeContact(id: string, v: { personalEmail?: string | null; phone?: string | null; birthDate?: string | null }): string[] {
+  const cur = getEmployee(id);
+  if (!cur) return [];
+  const filled: string[] = [];
+  const set = (col: string, val: string) => {
+    getDb().prepare(`UPDATE employee SET ${col} = ?, updated_at = ? WHERE id = ?`).run(val, new Date().toISOString(), id);
+    filled.push(col);
+  };
+  if (!cur.personalEmail && v.personalEmail) set("personal_email", v.personalEmail.trim().toLowerCase());
+  if (!cur.phone && v.phone) set("phone", v.phone);
+  if (!cur.birthDate && v.birthDate) set("birth_date", v.birthDate);
+  return filled;
+}
+
 /** Set the work email (e.g. once the Google Workspace mailbox is created from People). */
 export function setEmployeeWorkEmail(id: string, email: string | null): void {
   getDb().prepare("UPDATE employee SET work_email = ?, updated_at = ? WHERE id = ?").run(email, new Date().toISOString(), id);

@@ -47,10 +47,10 @@ export function TaskActions({ task }: { task: TaskView }): React.JSX.Element {
     }
   }
 
-  async function chrome(): Promise<void> {
+  async function chrome(now = false): Promise<void> {
     setBusy("chrome");
     setMsg(null);
-    const r = await runInChrome(task.employeeId, [task.id]);
+    const r = await runInChrome(task.employeeId, { taskIds: [task.id], systems: [task.adapterId], now });
     setMsg({ text: r.text, tone: r.ok ? "ok" : "bad" });
     setBusy(null);
     if (r.ok) refreshFor(5 * 60_000);
@@ -94,11 +94,25 @@ export function TaskActions({ task }: { task: TaskView }): React.JSX.Element {
   if (inChrome && task.status === "in_progress" && task.externalRef?.startsWith("invited:")) {
     return <span className="text-[11.5px] text-meta">Invite sent, closes when they join</span>;
   }
+  const scheduledAt = task.externalRef?.startsWith("chrome:scheduled:") ? Date.parse(task.externalRef.slice("chrome:scheduled:".length)) : NaN;
+  if (inChrome && task.status === "in_progress" && Number.isFinite(scheduledAt)) {
+    return (
+      <div className="flex flex-wrap items-center justify-end gap-1.5">
+        <span className="text-[11.5px] text-meta">
+          Scheduled {new Date(scheduledAt).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" })}
+        </span>
+        <Button variant="outline" size="xs" onClick={() => void chrome(true)} disabled={disabled}>
+          {busy === "chrome" ? "Starting…" : "Run now"}
+        </Button>
+        {msg && <span className={`text-[11px] ${msg.tone === "ok" ? "text-positive" : "text-critical"}`}>{msg.text}</span>}
+      </div>
+    );
+  }
   if (inChrome && task.status === "in_progress") {
     return (
       <div className="flex flex-wrap items-center justify-end gap-1.5">
         <span className="text-[11.5px] text-meta">Waiting for Chrome</span>
-        <Button variant="outline" size="xs" onClick={() => void chrome()} disabled={disabled}>
+        <Button variant="outline" size="xs" onClick={() => void chrome(true)} disabled={disabled}>
           {busy === "chrome" ? "Starting…" : "Run again"}
         </Button>
         {msg && <span className={`text-[11px] ${msg.tone === "ok" ? "text-positive" : "text-critical"}`}>{msg.text}</span>}
@@ -113,7 +127,7 @@ export function TaskActions({ task }: { task: TaskView }): React.JSX.Element {
     <div className="flex flex-wrap items-center justify-end gap-1.5">
       {inChrome ? (
         <>
-          <Button size="xs" onClick={() => void chrome()} disabled={disabled}>
+          <Button size="xs" onClick={() => void chrome(true)} disabled={disabled}>
             {busy === "chrome" ? "Starting…" : "Run in my Chrome"}
           </Button>
           <Button variant="outline" size="xs" onClick={() => run("mark_complete")} disabled={disabled}>
