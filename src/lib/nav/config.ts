@@ -62,7 +62,7 @@ export const PAYROLL_SUBNAV: SubBlade[] = [
   { tab: "overview", label: "Overview", icon: Gauge },
   { tab: "review", label: "Payroll Review", icon: ClipboardCheck },
   { tab: "sync", label: "Time Sync", icon: RefreshCw },
-  { tab: "workers", label: "Workers", icon: UsersRound },
+  { tab: "workers", label: "Employees", icon: UsersRound },
   { tab: "contractors", label: "Contractors", icon: Globe2 },
   { tab: "exceptions", label: "Exceptions", icon: AlertTriangle },
   { tab: "history", label: "History", icon: History },
