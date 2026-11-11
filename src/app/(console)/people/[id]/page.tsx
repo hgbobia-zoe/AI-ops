@@ -34,6 +34,7 @@ import { TaskActions } from "@/components/people/TaskActions";
 import { ChromeSetupButton } from "@/components/people/ChromeSetup";
 import { getAdapter } from "@/lib/people/adapters";
 import { runsInChrome } from "@/lib/people/provisioningEndpoints";
+import { ADAPTER_LABEL } from "@/lib/people/policy";
 import { formatYmdLong, todayInOpsTz } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
@@ -65,6 +66,77 @@ function chromeReady(t: LifecycleTask): boolean {
   return t.kind === "provision" && runsInChrome(t.adapterId) && getAdapter(t.adapterId).mode() === "automated";
 }
 const CHROME_OPEN = new Set<TaskStatus>(["pending", "manual_required", "failed", "blocked"]);
+
+function fmtWhen(iso: string): string {
+  const d = new Date(iso);
+  return Number.isFinite(d.getTime())
+    ? d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })
+    : iso;
+}
+
+/** The checklist's "Last change" cell, in plain words. */
+function lastChange(t: LifecycleTask): React.ReactNode {
+  const ref = t.externalRef ?? "";
+  if (t.status === "completed") {
+    const who = t.actor && !/runtime|People Lifecycle/i.test(t.actor) ? t.actor : null;
+    const how = t.source === "automated"
+      ? (who ? `Set up automatically, approved by ${who}` : "Set up automatically")
+      : `Done by ${who ?? t.actor ?? "someone"}`;
+    return (
+      <div>
+        <div className="text-secondary-text">{how}</div>
+        {t.completedAt && <div>{relTime(t.completedAt)}</div>}
+      </div>
+    );
+  }
+  if (ref.startsWith("invited:")) return <span className="text-secondary-text">Invite sent to {ref.slice("invited:".length)}</span>;
+  if (ref.startsWith("chrome:scheduled:")) return <span className="text-secondary-text">Scheduled for {fmtWhen(ref.slice("chrome:scheduled:".length))}</span>;
+  if (ref === "chrome:waiting") return <span>Sent to Chrome, waiting for it to finish</span>;
+  if (/^https?:/.test(ref) || ref.startsWith("/join")) return <span className="text-secondary-text">Link ready</span>;
+  return <span>—</span>;
+}
+
+const AUDIT_WHAT: Record<string, string> = {
+  ACCESS_GRANTED: "Access granted",
+  ACCESS_SETUP_FAILED: "Setup did not finish",
+  ACCESS_CONFIRMED: "Joined",
+  ACCESS_REVOKED: "Access removed",
+  IDENTITY_LINKED: "Account linked",
+  EMPLOYEE_ADDED_FROM_GUSTO: "Added from Gusto",
+  EMPLOYEE_IMPORTED: "Added as existing staff",
+  ONBOARDING_STARTED: "Onboarding started",
+  MARKED_READY: "Marked ready",
+  ACTIVATED: "Activated",
+  OFFBOARDING_STARTED: "Offboarding started",
+  OFFBOARDED: "Offboarded",
+  PHONE_SET: "Phone updated",
+  CONTACT_FILLED: "Contact details filled",
+  TASK_RETRIED: "Step retried",
+  TASK_SKIPPED: "Step skipped",
+};
+
+const LINK_FIELD: Record<string, string> = {
+  connecteam_user_id: "Connecteam",
+  hr_worker_id: "Payroll",
+  user_id: "Zoe login",
+  openphone_user_id: "Quo (OpenPhone)",
+  gusto_id: "Gusto",
+};
+
+/** One audit entry as a readable row. A queued Chrome step reads "Setup started", not "Access granted". */
+function auditRow(a: { action: string; entityId: string; detail: Record<string, unknown> | null }): { what: string; system: string | null; details: string | null } {
+  const d = a.detail ?? {};
+  const adapterId = a.entityId.includes(":") ? a.entityId.slice(a.entityId.indexOf(":") + 1) : null;
+  let what = AUDIT_WHAT[a.action] ?? a.action.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase());
+  if (a.action === "ACCESS_GRANTED" && d.outcome === "invited") what = "Invite sent";
+  else if (a.action === "ACCESS_GRANTED" && d.status === "in_progress") what = "Setup started";
+  const field = typeof d.field === "string" ? d.field : adapterId;
+  const system = (adapterId && ADAPTER_LABEL[adapterId]) || (field && (LINK_FIELD[field] ?? ADAPTER_LABEL[field])) || null;
+  let details = typeof d.detail === "string" && d.detail ? d.detail : typeof d.note === "string" && d.note ? d.note : null;
+  if (details?.startsWith("Ready to run in your Chrome")) details = "Handed to Auto-Pull in Chrome";
+  return { what, system, details };
+}
+
 
 function relTime(iso: string | null): string {
   if (!iso) return "—";
@@ -222,17 +294,33 @@ export default async function EmployeeDetailPage({ params }: { params: Promise<{
         {audit.length === 0 ? (
           <Surface className="text-[12.5px] text-meta">No recorded actions yet.</Surface>
         ) : (
-          <Surface pad="none" className="divide-y divide-[var(--row-rule)] overflow-hidden">
-            {audit.map((a, i) => (
-              <div key={i} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
-                <span className="min-w-0 text-[12.5px] text-foreground">
-                  {a.action.replace(/_/g, " ").toLowerCase()}
-                  {a.detail?.detail ? <span className="ml-2 text-[11.5px] text-meta">{String(a.detail.detail)}</span> : null}
-                </span>
-                <span className="shrink-0 text-right text-[11px] text-meta">{a.actor} · {new Date(a.ts).toLocaleString()}</span>
-              </div>
-            ))}
-          </Surface>
+          <div className={compactTableFrameCls}>
+            <table className={`${compactTableCls} min-w-[720px]`}>
+              <thead>
+                <tr className={compactTheadRowCls}>
+                  <th className={`${compactThCls} w-[17%]`}>When</th>
+                  <th className={`${compactThCls} w-[17%]`}>What</th>
+                  <th className={`${compactThCls} w-[18%]`}>System</th>
+                  <th className={compactThCls}>Details</th>
+                  <th className={`${compactThCls} w-[16%]`}>By</th>
+                </tr>
+              </thead>
+              <tbody>
+                {audit.map((a, i) => {
+                  const row = auditRow(a);
+                  return (
+                    <tr key={i} className={compactRowCls}>
+                      <td className="whitespace-nowrap px-3 py-2 align-top text-meta tabular-nums">{fmtWhen(a.ts)}</td>
+                      <td className="px-3 py-2 align-top text-foreground">{row.what}</td>
+                      <td className="px-3 py-2 align-top text-secondary-text">{row.system ?? "—"}</td>
+                      <td className="px-3 py-2 align-top text-[12px] text-meta">{row.details ?? "—"}</td>
+                      <td className="px-3 py-2 align-top text-secondary-text">{a.actor}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
     </main>
@@ -254,9 +342,8 @@ function ChecklistTable({ title, icon, tasks, note, emptyLabel }: {
             <thead>
               <tr className={compactTheadRowCls}>
                 <th className={`${compactThCls} w-[26%]`}>System</th>
-                <th className={`${compactThCls} w-[18%]`}>Access type</th>
-                <th className={`${compactThCls} w-[18%]`}>Status</th>
-                <th className={`${compactThCls} w-[20%]`}>Evidence</th>
+                <th className={`${compactThCls} w-[22%]`}>Status</th>
+                <th className={`${compactThCls} w-[24%]`}>Last change</th>
                 <th className={`${compactThCls} text-right`}>Action</th>
               </tr>
             </thead>
@@ -273,27 +360,15 @@ function ChecklistTable({ title, icon, tasks, note, emptyLabel }: {
                 return (
                   <tr key={t.id} className={compactRowCls}>
                     <td className="px-3 py-2.5 align-top">
-                      <div className="font-medium text-foreground">{t.system}</div>
+                      {/* How the step gets done stays one hover away (for the technical eye), not a column. */}
+                      <div className="font-medium text-foreground" title={`${access.label}: ${access.hint}`}>{t.system}</div>
                       <div className="text-[10.5px] uppercase tracking-[0.05em] text-meta">{t.required ? "required" : "optional"}</div>
-                    </td>
-                    <td className="px-3 py-2.5 align-top">
-                      <div className={liveMode === "automated" || live ? "font-medium text-foreground" : "text-secondary-text"}>{access.label}</div>
-                      <div className="text-[10.5px] text-meta">{access.hint}</div>
                     </td>
                     <td className="px-3 py-2.5 align-top">
                       <StatusBadge tone={STATUS_TONE[t.status]} size="sm" animated={t.status === "in_progress"}>{STATUS_LABEL[t.status]}</StatusBadge>
                       {t.error && <div className="mt-0.5 text-[11px] text-critical">{t.error}</div>}
                     </td>
-                    <td className="px-3 py-2.5 align-top text-[11.5px] text-meta">
-                      {t.externalRef && t.externalRef !== "chrome:waiting" && (
-                        <div className="truncate text-positive" title={t.externalRef}>
-                          {t.externalRef.startsWith("invited:") ? `Invited ${t.externalRef.slice("invited:".length)}` : t.externalRef}
-                        </div>
-                      )}
-                      {t.status === "completed" && t.actor && <div>by {t.actor}{t.source === "automated" ? " · automated" : " · manual"}</div>}
-                      {t.completedAt && <div>{relTime(t.completedAt)}</div>}
-                      {(!t.externalRef || t.externalRef === "chrome:waiting") && t.status !== "completed" && <span>—</span>}
-                    </td>
+                    <td className="px-3 py-2.5 align-top text-[11.5px] text-meta">{lastChange(t)}</td>
                     <td className="px-3 py-2.5 text-right align-top">
                       <TaskActions task={{ id: t.id, employeeId: t.employeeId, adapterId: t.adapterId, externalRef: t.externalRef, mode: live ? "automated" : liveMode, kind: t.kind, status: t.status, required: t.required }} />
                     </td>
