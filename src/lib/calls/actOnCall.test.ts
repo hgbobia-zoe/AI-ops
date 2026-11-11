@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { buildCallProposals, parseEmailDraft, smsFromEmail, mentionsQuote, digits10, askerLabel, callLabel } from "./actOnCall";
 import type { CallEventView, BookingView } from "@/lib/db/repo";
 import type { CallRecap } from "@/lib/coach/recap";
+import { SMS_SIGNOFF } from "@/lib/comms/smsSignoff";
 
 function call(over: Partial<CallEventView> = {}): CallEventView {
   return {
@@ -142,6 +143,17 @@ describe("buildCallProposals (linked to a Goodshuffle project)", () => {
     const sms = byType("send_sms")[0];
     expect(sms).toBeTruthy();
     expect(sms.payload.phone).toBeTruthy();
+  });
+
+  it("the SMS wraps up the call, so it ends with the thank-you line", () => {
+    expect(String(byType("send_sms")[0].payload.body).endsWith(SMS_SIGNOFF)).toBe(true);
+  });
+
+  it("but not when the line already went to that customer today", () => {
+    const sentToday = [{ direction: "outbound" as const, channel: "sms" as const, at: new Date(Date.now() - 60_000).toISOString(), body: SMS_SIGNOFF }];
+    const again = buildCallProposals(call(), recap(), booking(), { textHistory: sentToday });
+    const sms = again.find((p) => p.actionType === "send_sms" && !p.skipReason)!;
+    expect(String(sms.payload.body)).not.toContain(SMS_SIGNOFF);
   });
 
   it("proposes a quote-prep card marked financial (never auto-executes)", () => {

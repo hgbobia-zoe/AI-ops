@@ -3848,6 +3848,42 @@ export function smsRecentlySent(toPhone: string, body: string, sinceIso: string)
   return !!r;
 }
 
+/** Every text and call with one customer number since `sinceIso`, oldest first: the app's own sent sales
+ *  texts (messages, minus dispatch stop texts) plus the OpenPhone synced timeline (comms_events, both
+ *  directions). Numbers are matched on their last 10 digits since the two tables store different formats.
+ *  Feeds the thank-you line rule (src/lib/comms/smsSignoff.ts). */
+export function textTouchesForPhone(
+  phone: string,
+  sinceIso: string,
+): { direction: "inbound" | "outbound"; channel: "sms" | "call"; at: string; body: string | null }[] {
+  const key = (p: unknown): string => String(p ?? "").replace(/\D/g, "").slice(-10);
+  const want = key(phone);
+  if (want.length < 10) return [];
+  const db = getDb();
+  const sent = (
+    db
+      .prepare("SELECT to_phone, body, sent_at FROM messages WHERE channel='sms' AND status='sent' AND stop_id IS NULL AND sent_at > ?")
+      .all(sinceIso) as { to_phone: string | null; body: string | null; sent_at: string }[]
+  )
+    .filter((r) => key(r.to_phone) === want)
+    .map((r) => ({ direction: "outbound" as const, channel: "sms" as const, at: r.sent_at, body: r.body }));
+  const timeline = (
+    db
+      .prepare(
+        "SELECT direction, channel, from_phone, to_phone, body, COALESCE(occurred_at, ts) AS at FROM comms_events WHERE channel IN ('sms','call') AND COALESCE(occurred_at, ts) > ?",
+      )
+      .all(sinceIso) as { direction: string; channel: string; from_phone: string | null; to_phone: string | null; body: string | null; at: string }[]
+  )
+    .filter((r) => key(r.direction === "inbound" ? r.from_phone : r.to_phone) === want)
+    .map((r) => ({
+      direction: r.direction === "inbound" ? ("inbound" as const) : ("outbound" as const),
+      channel: r.channel === "call" ? ("call" as const) : ("sms" as const),
+      at: r.at,
+      body: r.body,
+    }));
+  return [...sent, ...timeline].sort((a, b) => a.at.localeCompare(b.at));
+}
+
 export function insertMessage(m: {
   stopId?: string;
   channel: string;

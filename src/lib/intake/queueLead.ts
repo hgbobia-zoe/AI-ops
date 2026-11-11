@@ -16,12 +16,14 @@ import {
   webLeadSmsText,
   type NormalizedLead,
 } from "./webLead";
-import { enqueueGsOp, recentLeadCreateOpExists } from "@/lib/db/repo";
+import { enqueueGsOp, insertMessage, recentLeadCreateOpExists } from "@/lib/db/repo";
 import { logImport } from "@/lib/pull/state";
 import { logIntakeEvent } from "./audit";
 import { notify } from "@/lib/notify/channels";
 import { postNewLeadToSlack } from "./leadSlackReply";
 import { sendSms } from "@/lib/notify/sms";
+import { getSettings } from "@/lib/settings";
+import { signoffHistoryFor } from "@/lib/comms/smsSignoffHistory";
 
 export interface QueueLeadOpts {
   /** Post this text to #new-leads before the project exists (Viktor threads the project link under it). */
@@ -94,7 +96,15 @@ export async function queueLeadProject(lead: NormalizedLead, opts: QueueLeadOpts
 
   // Welcome text for sources whose Zap does not text the customer (Google). Never blocks the lead.
   if (webLeadSmsEnabled() && webLeadSmsApplies(lead.source) && lead.phone.trim()) {
-    const sms = await sendSms(lead.phone, webLeadSmsText(lead.firstName)).catch((e) => ({ ok: false, error: String(e) }));
+    const text = webLeadSmsText(lead.firstName, signoffHistoryFor(lead.phone));
+    const sms = await sendSms(lead.phone, text).catch((e) => ({ ok: false, error: String(e) }));
+    // Logged like every other sent text, so the thank-you line rule sees it (never twice in one day).
+    try {
+      const r = sms as { ok: boolean; skipped?: boolean; providerMsgId?: string | null; error?: string };
+      insertMessage({ channel: "sms", provider: getSettings().smsProvider, toPhone: lead.phone, body: text, providerMsgId: r.providerMsgId ?? undefined, status: r.ok ? "sent" : r.skipped ? "skipped" : "failed", error: r.error });
+    } catch {
+      /* logging never blocks the lead */
+    }
     await logIntakeEvent(sms.ok ? "WEB_LEAD_SMS_SENT" : "WEB_LEAD_SMS_FAILED", intake.id, { source: lead.source, error: sms.ok ? undefined : (sms as { error?: string }).error });
   }
 

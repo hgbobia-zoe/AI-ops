@@ -10,6 +10,9 @@ import { sendLeadSms, SMS_MAX_LEN } from "@/lib/salesos/smsSend";
 import { viewerInitials, viewerQuoUserId, authEnabled } from "@/lib/auth/getSession";
 import { openphoneUserInitials } from "@/lib/comms/openphone";
 import { flagOn } from "@/lib/flags";
+import type { SignoffOccasion } from "@/lib/comms/smsSignoff";
+
+const OCCASIONS: SignoffOccasion[] = ["start", "follow_up", "reply"];
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +21,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json({ ok: false, disabled: true, error: "SMS sending is turned off (SMS_SEND_ENABLED=false)." });
   }
 
-  let body: { id?: string; body?: string; userId?: string; edited?: boolean };
+  let body: { id?: string; body?: string; userId?: string; edited?: boolean; occasion?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -42,9 +45,12 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   // Initials: the picked Quo rep first (Quo's own record matches), then the signed-in user, else "Zoe team".
   const initials = (userId ? await openphoneUserInitials(userId) : null) ?? (await viewerInitials());
-  const res = await sendLeadSms({ id, body: text, userId, initials, edited: Boolean(body.edited) });
+  // The thank-you line rule: a caller that knows the text opens a conversation (or is a quick reply) says
+  // so; otherwise it is a follow up and the line goes on only when the thread has gone quiet.
+  const occasion = OCCASIONS.find((o) => o === body.occasion);
+  const res = await sendLeadSms({ id, body: text, userId, initials, edited: Boolean(body.edited), occasion });
 
   if (res.ok && res.duplicate) return NextResponse.json({ ok: true, duplicate: true, message: "That exact text was just sent — not sending again." });
-  if (res.ok) return NextResponse.json({ ok: true, providerMsgId: res.providerMsgId });
+  if (res.ok) return NextResponse.json({ ok: true, providerMsgId: res.providerMsgId, signoff: Boolean(res.signoff) });
   return NextResponse.json({ ok: false, error: res.error ?? "send failed", skipped: res.skipped });
 }

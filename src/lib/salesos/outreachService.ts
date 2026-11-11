@@ -13,6 +13,7 @@ import { summarizeComms, templateOutreach, humanize, renderConversationContext, 
 import { chat, llmConfigured, llmModel } from "@/lib/llm";
 import { formatYmdLong } from "@/lib/dates";
 import { withSmsSignoff } from "@/lib/comms/smsSignoff";
+import { signoffHistoryFor } from "@/lib/comms/smsSignoffHistory";
 
 export interface OutreachResult {
   id: string;
@@ -106,7 +107,7 @@ async function llmDraft(lead: OutreachLead, clientName: string, eventDate: strin
     return {
       draft: {
         // humanize() strips any em/en dashes the model slips in, so drafts always read like a person.
-        sms: withSmsSignoff(humanize(p.sms)),
+        sms: humanize(p.sms),
         callStrategy: typeof p.callStrategy === "string" ? humanize(p.callStrategy) : "",
         cadence: typeof p.cadence === "string" ? humanize(p.cadence) : "",
         caution: typeof p.caution === "string" && p.caution.trim() ? humanize(p.caution) : null,
@@ -151,6 +152,9 @@ export async function draftLeadOutreach(id: string, repFirstName?: string | null
       if (!draft.caution && comms.clientContext) draft.caution = humanize(`Client note: "${comms.clientContext}".`);
     }
   }
+  // A follow up: the thank-you line shows in the draft only when the thread has gone quiet and it has not
+  // gone to this number today. The sender checks again at send time, so the preview never overrules it.
+  draft = { ...draft, sms: withSmsSignoff(draft.sms, { occasion: "follow_up", history: signoffHistoryFor(l.clientPhone) }) };
 
   return {
     id: l.id,
