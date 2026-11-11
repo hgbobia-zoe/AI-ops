@@ -23,6 +23,7 @@
 //     failure-probe are STRUCTURALLY unreachable on this path (early return below). `partial` is a
 //     full-lane concept and is ignored here.
 
+import { runSignedAlerts } from "@/lib/salesos/signedAlert";
 import { NextResponse } from "next/server";
 import {
   saveBookings,
@@ -251,6 +252,8 @@ export async function POST(req: Request): Promise<NextResponse> {
     }
   }
   if (records.length > 0) saveBookings(records);
+  // Contract-signed card for any project this save saw go from unsigned to signed. Best effort, async.
+  if (records.length > 0) void runSignedAlerts().catch(() => {});
   // Timeline windows may also ride alongside a projects pull: store them after the bookings rows exist
   // (their year is read from the booking's logistics date). The stop refresh below covers them.
   if (windowsIn.length > 0) {

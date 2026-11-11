@@ -87,6 +87,8 @@ export interface BotCard {
   body?: string;
   /** A link button ("View in app"); dropped when url is empty. */
   link?: { text: string; url: string | null };
+  /** More link buttons after `link` (e.g. "Open in Goodshuffle" + "Open in Zoe"); each drops when its url is empty. */
+  links?: { text: string; url: string | null }[];
   /** Interactive buttons (Approve / Dismiss …) — each carries an action_id + value the Slack interactivity
    *  endpoint reads. Rendered alongside the link button. */
   buttons?: { text: string; actionId: string; value: string; style?: "primary" | "danger" }[];
@@ -145,7 +147,9 @@ export function cardBlocks(card: BotCard): unknown[] {
   for (const b of card.buttons ?? []) {
     elements.push({ type: "button", text: { type: "plain_text", text: b.text, emoji: true }, action_id: b.actionId, value: b.value, ...(b.style ? { style: b.style } : {}) });
   }
-  if (card.link?.url) elements.push({ type: "button", text: { type: "plain_text", text: card.link.text, emoji: true }, url: card.link.url });
+  for (const l of [card.link, ...(card.links ?? [])]) {
+    if (l?.url) elements.push({ type: "button", text: { type: "plain_text", text: l.text, emoji: true }, url: l.url });
+  }
   if (elements.length) blocks.push({ type: "actions", elements });
   if (card.context?.trim()) blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: card.context.trim() }] });
   return blocks;
@@ -158,7 +162,7 @@ export function cardToText(card: BotCard): string {
   for (const f of card.fields ?? []) lines.push(`${f.label}: ${f.value}`);
   for (const s of card.sections ?? []) if (s?.trim()) lines.push(s.trim());
   if (card.body?.trim()) lines.push(card.body.trim());
-  if (card.link?.url) lines.push(`${card.link.text}: ${card.link.url}`);
+  for (const l of [card.link, ...(card.links ?? [])]) if (l?.url) lines.push(`${l.text}: ${l.url}`);
   if (card.context?.trim()) lines.push(card.context.trim());
   return lines.join("\n");
 }
