@@ -144,16 +144,14 @@ describe("buildSignedCard", () => {
       { label: "Event date", value: "Sat, Jun 12, 2027 (213 days out)" },
       { label: "Venue", value: "Stone Tower Winery" },
       { label: "Contract total", value: "$8,450" },
-      { label: "Deposit", value: "$4,225 paid" },
-      { label: "Balance due", value: "$4,225" },
     ]);
     expect(card.body).toBe("Nice work, Jessie. That makes 3 signed this week for $21,300.");
     expect(card.link?.url).toBe("https://pro.goodshuffle.com/app/project/detail?id=231000001");
   });
 
-  it("says when no deposit is in yet, and handles the first signing of the week", () => {
+  it("never shows the deposit or balance, and handles the first signing of the week", () => {
     const card = buildSignedCard({ ...base, amountPaid: 0, amountDue: 8450 }, { count: 1, total: 8450 }, now);
-    expect(card.fields).toContainEqual({ label: "Deposit", value: "Not paid yet" });
+    expect(card.fields?.map((f) => f.label)).toEqual(["Client", "Event date", "Venue", "Contract total"]);
     expect(card.body).toBe("Nice work, Jessie. That's the first one signed this week.");
   });
 
