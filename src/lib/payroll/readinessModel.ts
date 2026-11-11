@@ -65,8 +65,12 @@ function readinessIssue(e: ReadinessException): UnifiedIssue {
       return { code: "APPROVAL_UNVERIFIED", label: "Approval unverified", severity: "unverified", gate: "timesheetApproval", detail: `${e.description} — ${e.ownerAction}` };
     case "MISSING_PUNCH":
       return { code: "MISSING_PUNCH", label: "Open punch", severity: "review", gate: "timesheetApproval", detail: `${e.description} — ${e.ownerAction}` };
+    // A schedule discrepancy is a REVIEW anomaly (hours differ from the plan), like overtime: accepting the
+    // worker into the run resolves it. It is not a source-approval problem, so it must not sit on the
+    // timesheet-approval gate (there it could never be cleared by accepting, and the worker could never be
+    // approved).
     case "SCHEDULE_DISCREPANCY":
-      return { code: "SCHEDULE_DISCREPANCY", label: "Schedule discrepancy", severity: "review", gate: "timesheetApproval", detail: `${e.description} — ${e.ownerAction}` };
+      return { code: "SCHEDULE_DISCREPANCY", label: "Schedule discrepancy", severity: "review", gate: "zoeReview", detail: `${e.description} — ${e.ownerAction}` };
     case "MISSING_GUSTO_MAPPING":
       // Same underlying problem as review's NO_GUSTO_MAPPING — use its code so the merge dedupes to one issue.
       return { code: "NO_GUSTO_MAPPING", label: "No Gusto mapping", severity: "blocker", gate: "gustoMapping", detail: `${e.description} — ${e.ownerAction}` };

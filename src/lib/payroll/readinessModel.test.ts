@@ -298,6 +298,26 @@ describe("composeReadinessModel — rate comparison (three distinct populations)
   });
 });
 
+describe("schedule discrepancy is a review item, not an approval blocker", () => {
+  const SCHEDULE = exc("SCHEDULE_DISCREPANCY", "EXCEPTION");
+  it("an accepted worker with a schedule discrepancy + unapproved timesheet can be approved (with acknowledgement)", () => {
+    const m = compose({
+      workers: [rv({ key: "ct:1", name: "A", accepted: true })],
+      readiness: [rdw({ key: "ct:1", name: "A", unapprovedHours: 10.92, issues: [UNAPPROVED, SCHEDULE] })],
+    });
+    expect(m.workers[0].issues.find((i) => i.code === "SCHEDULE_DISCREPANCY")?.gate).toBe("zoeReview");
+    expect(payrollApprovability(m, true).approvableKeys).toEqual(["ct:1"]);
+  });
+  it("before accepting, the discrepancy still holds the worker for review", () => {
+    const m = compose({
+      workers: [rv({ key: "ct:1", name: "A" })],
+      readiness: [rdw({ key: "ct:1", name: "A", unapprovedHours: 10.92, issues: [UNAPPROVED, SCHEDULE] })],
+    });
+    expect(m.workers[0].status).toBe("ACTION_REQUIRED");
+    expect(payrollApprovability(m, true).approvableKeys).toEqual([]);
+  });
+});
+
 describe("payrollApprovability — gating cannot be bypassed", () => {
   const unapproved = compose({ workers: [rv({ key: "ct:1", name: "A" }), rv({ key: "ct:2", name: "B" })], readiness: [rdw({ key: "ct:1", name: "A" }), rdw({ key: "ct:2", name: "B", unapprovedHours: 3, issues: [UNAPPROVED] })] });
 
