@@ -93,7 +93,7 @@ export function classifyReadinessWorker(f: ReadinessFacts, ctx: ReadinessContext
   if (!f.gustoMapped) {
     issues.push(mkException(ctx.period, who, "MISSING_GUSTO_MAPPING", "BLOCKING",
       `${f.name} worked ${hours ?? "?"}h but is not mapped to a Gusto member.`,
-      "Map this worker to Gusto in the Workers tab.", "reconciliation"));
+      "Map this worker to Gusto in the Employees tab.", "reconciliation"));
   }
   if ((hours ?? 0) > 0 && f.payRate == null) {
     // NOT a blocker (policy, aligned with review.ts): Gusto applies its OWN stored rate when the hours are
@@ -182,7 +182,7 @@ export function classifyReadiness(facts: ReadinessFacts[], ctx: ReadinessContext
         ctx.period, { key: `gusto:${gid}`, label: names, connecteamUserId: null },
         "DUPLICATE_GUSTO_MAPPING", "BLOCKING",
         `${group.length} workers map to the same Gusto member (${names}).`,
-        "Fix the duplicate Gusto mapping in the Workers tab.", "reconciliation",
+        "Fix the duplicate Gusto mapping in the Employees tab.", "reconciliation",
       );
       exceptions.push(exc);
       // Reflect the block on each involved worker's status.

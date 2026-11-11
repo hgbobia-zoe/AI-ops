@@ -62,7 +62,7 @@ export const dynamic = "force-dynamic";
 type Tab = "overview" | "review" | "sync" | "workers" | "contractors" | "exceptions" | "history" | "settings";
 const TAB_KEYS: Tab[] = ["overview", "review", "sync", "workers", "contractors", "exceptions", "history", "settings"];
 const TAB_TITLE: Record<Tab, string> = {
-  overview: "Payroll Overview", review: "Payroll Review", sync: "Time Sync", workers: "Workers",
+  overview: "Payroll Overview", review: "Payroll Review", sync: "Time Sync", workers: "Employees",
   contractors: "Contractors", exceptions: "Exceptions", history: "History", settings: "Settings",
 };
 
