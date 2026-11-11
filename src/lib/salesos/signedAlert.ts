@@ -1,6 +1,6 @@
 // Contract-signed card. When a customer signs (our Goodshuffle pull sees a project go from unsigned to
 // signed, stamped as bookings.signed_at in saveBookings), the Sales Bot posts one celebration card to the
-// signed-deals channel: who closed it, the client, event, venue, total, deposit, and a weekly tally.
+// signed-deals channel: who closed it, the client, event, venue, contract total, and a weekly tally.
 //
 // Once per project, ever (claimed via bookings.signed_alerted_at). Test projects (TEST 1/2/3) are skipped.
 // A signing older than STALE_HOURS is stamped silently (a backlog after downtime or a kill switch flip is
@@ -79,11 +79,8 @@ export function buildSignedCard(c: SignedCandidate, week: WeekTally, now: Date =
   }
   const place = c.venue?.trim() || c.location?.trim();
   if (place) fields.push({ label: "Venue", value: place });
+  // Only the contract total: deposit and balance lines take the excitement out of a win (owner, 2026-11-11).
   if (c.grandTotal != null) fields.push({ label: "Contract total", value: money(c.grandTotal) });
-  const paid = c.amountPaid ?? 0;
-  fields.push({ label: "Deposit", value: paid > 0 ? `${money(paid)} paid` : "Not paid yet" });
-  const due = c.amountDue ?? (c.grandTotal != null ? Math.max(0, c.grandTotal - paid) : null);
-  if (due != null) fields.push({ label: "Balance due", value: money(due) });
 
   const tally =
     week.count <= 1
