@@ -156,7 +156,8 @@ function zoePull(apiBase, tier) {
             if (!j) return; // no contract view → skip (don't blank stored notes with a partial record)
             const g = (j.lineItemGroupsToLoad) || [];
             return Promise.all(g.map((x) => fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID=" + x.id + "&transactionID=" + id, H).then((r2) => r2.json()).catch(() => null))).then((lists) => {
-              notes.push({ bookingId: String(id), internalNotes: (j.internalNotes || "").trim(), clientNotes: (j.clientVisibleNotes || "").trim(), lastSentDate: null, lineItems: titlesFrom(lists), quoteSentAt: qt.sent, quoteOpenedAt: qt.opened });
+              const tx = (res[1] && res[1].transaction) || {}; // the project itself: fromDate/toDate = the EVENT start/end (ISO)
+              notes.push({ bookingId: String(id), internalNotes: (j.internalNotes || "").trim(), clientNotes: (j.clientVisibleNotes || "").trim(), lastSentDate: null, lineItems: titlesFrom(lists), quoteSentAt: qt.sent, quoteOpenedAt: qt.opened, eventStart: tx.fromDate || null, eventEnd: tx.toDate || null });
             });
           }).catch(() => {}).then(() => one(i + 1));
         }

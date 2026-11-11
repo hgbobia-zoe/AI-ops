@@ -2506,6 +2506,10 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Contract-signed card (src/lib/salesos/signedAlert.ts): when our pull first saw the project go from
   // unsigned to signed (null = signed before we tracked it, never announced), and when the card went out.
   { table: "bookings", column: "signed_at", type: "TEXT" },
+  // The EVENT start/end (ISO) from Goodshuffle's transaction.fromDate/toDate, captured with the lead notes.
+  // event_date stays the LOGISTICS start (drop-off or in-store collection day), which is not the event.
+  { table: "bookings", column: "event_start", type: "TEXT" },
+  { table: "bookings", column: "event_end", type: "TEXT" },
   { table: "bookings", column: "signed_alerted_at", type: "TEXT" },
   // Goodshuffle `archived` flag (project removed from the active board — Lost/Cancelled/closed). The
   // authoritative off-pipeline signal; excluded from open-quote pipeline/upcoming (text status can lag).

@@ -242,7 +242,7 @@ ${GS_TEMPLATE_JS}
               if(!j) return; // no contract view → skip (don't blank stored notes with a partial record)
               var g=(j.lineItemGroupsToLoad)||[];
               return Promise.all(g.map(function(x){ return fetch("/app/lineItemGroup/loadContractLineItemGroup?lineItemGroupID="+x.id+"&transactionID="+id,H).then(function(r){return r.json();}).catch(function(){return null;}); })).then(function(lists){
-                notes.push({ bookingId:String(id), internalNotes:(j.internalNotes||"").trim(), clientNotes:(j.clientVisibleNotes||"").trim(), lastSentDate:null, lineItems:titlesFrom(lists), quoteSentAt:qt.sent, quoteOpenedAt:qt.opened });
+                var tx=(res[1]&&res[1].transaction)||{}; notes.push({ bookingId:String(id), internalNotes:(j.internalNotes||"").trim(), clientNotes:(j.clientVisibleNotes||"").trim(), lastSentDate:null, lineItems:titlesFrom(lists), quoteSentAt:qt.sent, quoteOpenedAt:qt.opened, eventStart:tx.fromDate||null, eventEnd:tx.toDate||null });
               });
             }).catch(function(){}).then(function(){ return one(i+1); }); }
           return one(0).then(function(){

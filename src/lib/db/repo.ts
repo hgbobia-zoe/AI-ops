@@ -1045,6 +1045,8 @@ export interface LeadNotesRecord {
   lineItems?: string[] | null; // captured line-item titles (event-type signal)
   quoteSentAt?: string | null; // ISO — precise quote-email send time
   quoteOpenedAt?: string | null; // ISO — latest client open of the quote email
+  eventStart?: string | null; // ISO — the EVENT start (GS transaction.fromDate); null/absent keeps the stored one
+  eventEnd?: string | null; // ISO — the event end (GS transaction.toDate)
 }
 
 /** Attach captured Goodshuffle notes (comms history) to existing bookings, keyed by project id. Only
@@ -1058,6 +1060,7 @@ export function saveLeadNotes(items: LeadNotesRecord[]): number {
        line_items=CASE WHEN @lineItemsProvided=1 THEN @lineItems ELSE line_items END,
        quote_sent_at=COALESCE(@quoteSentAt, quote_sent_at),
        quote_opened_at=COALESCE(@quoteOpenedAt, quote_opened_at),
+       event_start=COALESCE(@eventStart, event_start), event_end=COALESCE(@eventEnd, event_end),
        notes_updated_at=@now WHERE booking_id=@bookingId`,
   );
   let n = 0;
@@ -1073,6 +1076,8 @@ export function saveLeadNotes(items: LeadNotesRecord[]): number {
         lineItems: provided ? JSON.stringify(i.lineItems ?? []) : null,
         quoteSentAt: i.quoteSentAt ?? null,
         quoteOpenedAt: i.quoteOpenedAt ?? null,
+        eventStart: i.eventStart ?? null,
+        eventEnd: i.eventEnd ?? null,
         now,
       });
       n += r.changes;
@@ -1159,6 +1164,8 @@ export interface SignedCandidate {
   quoteSentDate: string | null;
   /** 1 = we drive at least one leg, 0 = in-store pickup only, null = not captured. */
   delivers: number | null;
+  /** ISO — the EVENT start from Goodshuffle (eventDate above is the logistics date). Null until captured. */
+  eventStart: string | null;
   signedAt: string;
 }
 
@@ -1177,12 +1184,13 @@ function toSignedCandidate(r: Record<string, unknown>): SignedCandidate {
     amountDue: num(r.amount_due),
     quoteSentDate: (r.quote_sent_date as string) ?? null,
     delivers: r.delivers == null ? null : Number(r.delivers),
+    eventStart: (r.event_start as string) ?? null,
     signedAt: r.signed_at as string,
   };
 }
 
 const SIGNED_COLS = `booking_id, event_name, event_date, client_name, venue, location, sales_lead, grand_total,
-  amount_paid, amount_due, quote_sent_date, delivers, signed_at`;
+  amount_paid, amount_due, quote_sent_date, delivers, event_start, signed_at`;
 
 export function pendingSignedAlerts(): SignedCandidate[] {
   return (
