@@ -191,9 +191,29 @@ function zoePull(apiBase, tier) {
       if (FULL) {
         return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, partial: pErr, scope: "full" }) }).then((r) => r.json()).then((j) => pullLogistics().catch(() => null).then(() => pullWindows(windowIds(true)).catch(() => ({ windows: 0 }))).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: pErr || !!(j && j.partial), notes: 0, windows: (wj && wj.windows) || 0 }))).catch(() => ({ saved: 0, partial: true }));
       }
+      // Offline payment confirmation: the server names projects whose amount paid went up. Read each one's payment
+      // history (one at a time, 250ms apart) and post ONLY its offline charges (no card details leave Goodshuffle).
+      // MIRRORS pullPayments() in src/lib/gsPull.ts.
+      function pullPayments(ids) {
+        const list = (ids || []).map(String).slice(0, 25);
+        if (!list.length) return Promise.resolve({ cards: 0 });
+        const out = [];
+        const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+        function one(i) {
+          if (i >= list.length) return Promise.resolve();
+          const id = list[i];
+          return fetch("/app/vendorPayment/loadPaymentHistoryAndContractTotals?transactionID=" + id, H).then((r) => (r.ok ? r.json() : null)).then((pt) => {
+            const ph = pt && pt.paymentHistory;
+            if (!ph) { out.push({ bookingId: id, ok: false }); return; }
+            const evs = (ph.paymentEvents || []).filter((e) => e && e.offlinePayment === true && e.type === "charge").map((e) => ({ id: e.id, type: e.type, offlinePayment: true, paymentType: (e.offline && e.offline.paymentType) || null, label: e.paymentMethodLabel || null, amount: e.amount, dateMillis: e.dateMillis, status: e.status || null, processedBy: e.processedBy || null }));
+            out.push({ bookingId: id, ok: true, grandTotalCents: (typeof pt.grandTotal === "number" ? pt.grandTotal : null), paidCents: (typeof ph.totalContractApplicablePaid === "number" ? ph.totalContractApplicablePaid : null), events: evs });
+          }).catch(() => { out.push({ bookingId: id, ok: false }); }).then(() => (i + 1 < list.length ? wait(250).then(() => one(i + 1)) : null));
+        }
+        return one(0).then(() => fetch(API + "/api/gs/payments", { method: "POST", headers: POSTH, body: JSON.stringify({ payments: out }) }).then((r) => r.json()).then((j) => ({ cards: (j && j.cardsRaised) || 0 })).catch(() => ({ cards: 0 })));
+      }
       // Lost-reason tracker: the server names recently lost quotes still missing a reason; re-read their
       // notes too (they are off the open-lead set) so a reason written in Goodshuffle is seen.
-      return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, scope: "active" }) }).then((r) => r.json()).then((j) => { ((j && j.lossNoteIds) || []).forEach((id) => { id = String(id); if (!seenCap[id]) { seenCap[id] = 1; capIds.push(id); } }); return j; }).then((j) => pullNotes().then((nj) => activeWindows().catch(() => ({ windows: 0 })).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: false, notes: (nj && nj.updated) || 0, windows: (wj && wj.windows) || 0 })))).catch(() => ({ saved: 0, partial: false }));
+      return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, scope: "active" }) }).then((r) => r.json()).then((j) => { ((j && j.lossNoteIds) || []).forEach((id) => { id = String(id); if (!seenCap[id]) { seenCap[id] = 1; capIds.push(id); } }); return j; }).then((j) => pullPayments(j && j.paymentIds).catch(() => null).then(() => j)).then((j) => pullNotes().then((nj) => activeWindows().catch(() => ({ windows: 0 })).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: false, notes: (nj && nj.updated) || 0, windows: (wj && wj.windows) || 0 })))).catch(() => ({ saved: 0, partial: false }));
     });
   }
 
@@ -306,6 +326,21 @@ function gsTemplateText(html) {
   return String(html || "").replace(/<br\s*\/?>/gi, " ").replace(/<\/(div|p|li)>/gi, " ").replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
     .replace(/\s+/g, " ").trim();
+}
+function gsTagsWithAmount(tags, amount) {
+  var a = String(amount == null ? "" : amount).trim();
+  if (!a) return tags || [];
+  return (tags || []).map(function (t) {
+    var k = t && t.name ? String(t.name).replace(/\s+/g, "").toLowerCase() : "";
+    if (k === "paymentamount" && (t.transactionValue == null || t.transactionValue === "")) return { name: t.name, transactionValue: "$" + a };
+    return t;
+  });
+}
+function gsFillAmount(html, amount) {
+  var a = String(amount == null ? "" : amount).trim();
+  if (!a) return String(html || "");
+  var safe = a.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(html || "").replace(/\$(?=\s|&nbsp;|<|$)/, function () { return "$" + safe; });
 }
 
   // ---- Outbox drain: push queued Dispatch → Goodshuffle writes (photos, note appends) ----
@@ -481,11 +516,16 @@ function gsTemplateText(html) {
           if (tpl.medium && tpl.medium !== "EMAIL") throw "template_not_email";
           return fetch("/app/conversation/getMessagesForTransaction?transactionID=" + encodeURIComponent(tx), GH);
         }).then((r) => { if (!r.ok) throw "thread_" + r.status; return r.json(); }).then((cv) => {
-          const subject = gsTemplateText(gsRenderTemplate(tpl.subject, tpl.templateTags));
-          const content = gsRenderTemplate(tpl.content, tpl.templateTags);
+          // fillAmount (payment confirmation): the amount goes into an empty PaymentAmount chip and the body's bare "$".
+          const tags = gsTagsWithAmount(tpl.templateTags, o.payload.fillAmount);
+          const subject = gsTemplateText(gsRenderTemplate(tpl.subject, tags));
+          const content = gsFillAmount(gsRenderTemplate(tpl.content, tags), o.payload.fillAmount);
           if (!subject || !gsTemplateText(content)) throw "template_empty";
           const msgs = (cv && cv.client && cv.client.messages) || [];
-          if (msgs.some((m) => gsTemplateText(m.subject) === subject)) return true; // already sent
+          // sentAfter: a template that can repeat (one per payment) counts as already sent only when the same subject
+          // landed after that time; without it, any earlier email with the same subject counts.
+          const after = o.payload.sentAfter ? Date.parse(o.payload.sentAfter) : NaN;
+          if (msgs.some((m) => gsTemplateText(m.subject) === subject && (!(after > 0) || !(Date.parse(m.date) < after)))) return true; // already sent
           const recips = ((cv && cv.client && cv.client.participants) || []).filter((p) => p && p.email).map((p) => ({ contactID: p.contactID, email: p.email, name: p.name, isCurrentUser: false, isEmailValid: true, deliveryConfirmedDate: null, messageOpenedDate: null, hardBouncedDate: null, droppedMessageDate: null }));
           if (!recips.length) throw "no_recipient";
           const payload = { messageID: null, templateID: tpl.id, transactionID: txID, content, recipients: recips, subject, messageType: "CLIENT", attachments: (tpl.attachments || []).map((a) => a && a.id).filter(Boolean) };

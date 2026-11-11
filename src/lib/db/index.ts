@@ -2367,6 +2367,53 @@ CREATE TABLE IF NOT EXISTS booking_windows (
   updated_at  TEXT NOT NULL,
   PRIMARY KEY (booking_id, kind, seq)
 );
+
+-- Offline payment confirmation (src/lib/payments/offlineConfirmService.ts). When the pull sees a project's
+-- amount paid go up, the project goes on this watch list; the fast pull reads its Goodshuffle payment
+-- history and posts it to /api/gs/payments, which closes the watch. Gives up after a few failed reads.
+CREATE TABLE IF NOT EXISTS gs_payment_watch (
+  booking_id   TEXT PRIMARY KEY,
+  requested_at TEXT NOT NULL,
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  done_at      TEXT
+);
+-- Every offline (check / ACH / cash) charge seen in a payment history, once per Goodshuffle payment id.
+-- state: proposed (approval card raised) | too_old (recorded before the look-back, never confirmed) |
+-- disabled (kill switch off when seen) | no_booking. Amounts are DOLLARS.
+CREATE TABLE IF NOT EXISTS gs_offline_payments (
+  payment_id        TEXT PRIMARY KEY,   -- Goodshuffle paymentEvents[].id
+  booking_id        TEXT NOT NULL,
+  amount            REAL NOT NULL,
+  method            TEXT,               -- CHECK | ACH | CASH | OTHER
+  method_label      TEXT,               -- "Offline - Check"
+  recorded_by       TEXT,               -- processedBy (the GS user who recorded it)
+  paid_at           TEXT,               -- ISO, from dateMillis
+  remaining_balance REAL,
+  state             TEXT NOT NULL,
+  approval_id       TEXT,
+  bank_deposit_id   TEXT,
+  approved_by       TEXT,
+  approved_at       TEXT,
+  sms_status        TEXT,               -- sent | held | failed | skipped
+  sms_detail        TEXT,
+  note_op_id        TEXT,
+  first_seen_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gs_offline_payments_booking ON gs_offline_payments(booking_id);
+-- Deposits into the "Check Deposit" bank account, posted by a Zapier zap (/api/payments/bank-deposit) and
+-- matched to a project (project number in the memo, else a unique 50% deposit / amount due / total match).
+CREATE TABLE IF NOT EXISTS bank_deposits (
+  deposit_id  TEXT PRIMARY KEY,         -- bank transaction id (or amount+date when the bank gives none)
+  amount      REAL NOT NULL,
+  posted_at   TEXT,
+  description TEXT,
+  account     TEXT,
+  booking_id  TEXT,                     -- matched project, null when none or ambiguous
+  match_kind  TEXT,                     -- project_number | deposit_50 | amount_due | full_total | ambiguous | none
+  match_note  TEXT,
+  received_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bank_deposits_booking ON bank_deposits(booking_id);
 `;
 
 type DB = InstanceType<typeof Database>;

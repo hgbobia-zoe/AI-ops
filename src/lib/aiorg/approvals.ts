@@ -25,6 +25,7 @@ export type ApprovalActionType =
   | "send_sms" //       -> held: no async outbox op; delivers from the Sales lead panel (gate SMS_SEND_ENABLED)
   | "append_note" //    -> gs_outbox note_append (no master gate)
   | "create_gs_task" // -> gs_outbox create_gs_task (no master gate)
+  | "confirm_payment" // -> gs_outbox email_template (gate EMAIL_SEND_ENABLED), then a Quo text + GS note (offlineConfirmService)
   | "modify_quote" //      FORBIDDEN in v2 (money)
   | "change_pricing" //    FORBIDDEN in v2 (money)
   | "schedule_change" //   FORBIDDEN in v2 (operationally significant)
@@ -115,8 +116,10 @@ export function applyDecision(status: ApprovalStatus, decision: ApprovalDecision
 /** The outbox op + env gate an action type maps to on approve. Returns the proven mechanism only —
  *  never invents a path. 'forbidden' = money/pricing/schedule/hiring/instawork (execution not wired
  *  in v2); 'held' = recognised but no async path (SMS). PURE. */
+export type OutboxOp = "email_send" | "email_template" | "note_append" | "create_gs_task";
+
 export type ExecutionPlan =
-  | { kind: "outbox"; op: "email_send" | "note_append" | "create_gs_task"; gate: "EMAIL_SEND_ENABLED" | null }
+  | { kind: "outbox"; op: OutboxOp; gate: "EMAIL_SEND_ENABLED" | null }
   | { kind: "held"; reason: string }
   | { kind: "forbidden"; reason: string };
 
@@ -137,6 +140,8 @@ export function executionPlan(actionType: ApprovalActionType): ExecutionPlan {
       return { kind: "outbox", op: "note_append", gate: null };
     case "create_gs_task":
       return { kind: "outbox", op: "create_gs_task", gate: null };
+    case "confirm_payment":
+      return { kind: "outbox", op: "email_template", gate: "EMAIL_SEND_ENABLED" };
     case "send_sms":
       return { kind: "held", reason: "SMS has no async outbox op; it delivers live from the Sales lead panel send. Approving records the decision; delivery stays a human step." };
     default:
@@ -163,7 +168,7 @@ export function plainToHtml(text: string): string {
 /** Build the exact gs_outbox payload the drainer expects for an executable action, from the (possibly
  *  edited) stored payload. PURE — no DB, no env. Returns null for a non-outbox action type. */
 export function buildOutboxPayload(
-  op: "email_send" | "note_append" | "create_gs_task",
+  op: OutboxOp,
   payload: Record<string, unknown>,
 ): { transactionId?: string; opPayload: Record<string, unknown> } {
   const txRaw = payload.transactionId;
@@ -175,6 +180,22 @@ export function buildOutboxPayload(
     const content = typeof payload.content === "string" && payload.content ? payload.content : plainToHtml(stripSignOff(body));
     const subject = typeof payload.subject === "string" ? payload.subject : undefined;
     return { transactionId, opPayload: { content, subject } };
+  }
+  if (op === "email_template") {
+    // A Goodshuffle template sent as a new client email. `fillAmount` fills the template's bare "$" (and an
+    // empty PaymentAmount chip); `sentAfter` lets the same template go out again for a later payment while
+    // still skipping a send that already landed (the drainer compares message dates, not just the subject).
+    const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : typeof v === "number" ? String(v) : undefined);
+    return {
+      transactionId,
+      opPayload: {
+        templateName: str(payload.templateName),
+        templateId: str(payload.templateId),
+        fillAmount: str(payload.fillAmount),
+        sentAfter: str(payload.sentAfter),
+        dedupeKey: str(payload.dedupeKey),
+      },
+    };
   }
   if (op === "note_append") {
     const line = typeof payload.line === "string" && payload.line ? payload.line : body;
@@ -369,7 +390,13 @@ export function decideApproval(
   }
 
   const now = new Date().toISOString();
-  const payload = opts.editedPayload ?? current.actionPayload;
+  // A payment confirmation card carries ids the UI never edits (payment, template, amount): an edit only
+  // changes the text, so it merges onto the stored payload instead of replacing it.
+  const payload = opts.editedPayload
+    ? current.actionType === "confirm_payment"
+      ? { ...current.actionPayload, ...opts.editedPayload }
+      : opts.editedPayload
+    : current.actionPayload;
 
   // Non-approve decisions: record and return.
   if (decision !== "approve") {
@@ -440,6 +467,13 @@ export function decideApproval(
     id, payload: JSON.stringify(payload), op: opId, note, by: actor, at: now,
   });
   recordAudit(current, "APPROVAL_QUEUED", actor, { queued: true, op: plan.op, outboxOpId: opId });
+  if (current.actionType === "confirm_payment") {
+    // The email is queued; the text and the Goodshuffle note follow (async: the text goes out live through
+    // Quo). Loaded lazily so approvals.ts keeps no import cycle with the payments service.
+    void import("@/lib/payments/offlineConfirmService")
+      .then((m) => m.afterConfirmApproved(id, actor))
+      .catch((e) => console.error("[approvals] payment confirmation follow up failed", e));
+  }
   // Confirm the send in the owning bot's channel (owner rule: no silent AI actions). Honest: it's QUEUED and
   // goes out on the next office sync, not confirmed delivered yet.
   void botAnnounce(botForAgent(current.agentId), {
