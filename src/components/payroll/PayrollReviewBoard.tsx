@@ -6,7 +6,9 @@
 // edit, exclude) and the Run payroll flow.
 
 import { useMemo, useState } from "react";
-import { ChevronRight, Search } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { CheckCircle2, ChevronDown, ChevronRight, Search, X } from "lucide-react";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/ui/status";
 import type { Tone } from "@/lib/tone";
@@ -72,6 +74,13 @@ const fmtDay = (ymd: string): string => {
   if (!y || !m || !d) return ymd;
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 };
+// A worker can be ticked for bulk approval only when the approval gate allows it and they are not approved yet.
+const selectable = (w: ReviewRow): boolean => !w.excluded && w.approvable && w.approvalState !== "APPROVED_IN_ZOE";
+const notSelectableReason = (w: ReviewRow): string =>
+  w.excluded ? "Excluded from this run"
+    : w.approvalState === "APPROVED_IN_ZOE" ? "Already approved"
+      : w.status === "BLOCKED" ? "Blocked: fix the blocker first"
+        : "Not approvable yet: open the worker for details";
 const isContractor = (w: ReviewRow): boolean => w.workerType === "US_CONTRACTOR" || w.workerType === "INTERNATIONAL_CONTRACTOR";
 
 export function PayrollReviewBoard({ rows, timesheetsOk, period, gustoMembers }: {
@@ -83,6 +92,14 @@ export function PayrollReviewBoard({ rows, timesheetsOk, period, gustoMembers }:
   const [filter, setFilter] = useState<Filter>("in_run");
   const [q, setQ] = useState("");
   const [openKey, setOpenKey] = useState<string | null>(null);
+  // Bulk actions: tick workers, then Actions > Approve selected. Only workers the approval gate allows can be
+  // ticked (never blocked or already approved), and the server re-checks the same gate.
+  const router = useRouter();
+  const [ask, confirmDialog] = useConfirm();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [bulkMsg, setBulkMsg] = useState<{ text: string; tone: "ok" | "bad" } | null>(null);
 
   const inRun = useMemo(() => rows.filter((w) => !w.excluded), [rows]);
   const counts = useMemo(() => {
@@ -119,6 +136,59 @@ export function PayrollReviewBoard({ rows, timesheetsOk, period, gustoMembers }:
   }, [rows, filter, q]);
 
   const open = openKey ? rows.find((w) => w.key === openKey) ?? null : null;
+  const selectableVisible = visible.filter(selectable);
+  const selectedRows = rows.filter((w) => selected.has(w.key) && selectable(w));
+  const allVisibleTicked = selectableVisible.length > 0 && selectableVisible.every((w) => selected.has(w.key));
+  const toggle = (key: string): void => setSelected((cur) => { const n = new Set(cur); if (n.has(key)) n.delete(key); else n.add(key); return n; });
+  const toggleAll = (): void => setSelected((cur) => {
+    const n = new Set(cur);
+    if (allVisibleTicked) for (const w of selectableVisible) n.delete(w.key);
+    else for (const w of selectableVisible) n.add(w.key);
+    return n;
+  });
+
+  async function approveSelected(): Promise<void> {
+    setMenuOpen(false);
+    const list = selectedRows;
+    if (list.length === 0) return;
+    const ok = await ask({
+      title: `Approve ${list.length} timesheet${list.length === 1 ? "" : "s"}?`,
+      body: (
+        <>
+          <p>This records the Zoe approval for each worker and locks their days in Connecteam for {period.label}. It does not submit payroll in Gusto.</p>
+          <p className="text-meta">{list.map((w) => w.name).join(", ")}</p>
+        </>
+      ),
+      confirmLabel: `Approve ${list.length}`,
+    });
+    if (!ok) return;
+    setBusy(true);
+    setBulkMsg(null);
+    try {
+      const res = await fetch("/api/payroll/approve", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ start: period.start, end: period.end, workerKeys: list.map((w) => w.key), acknowledge: true }),
+      });
+      const data = (await res.json().catch(() => null)) as { error?: string; approvedKeys?: string[]; finalize?: { locked?: number; failed?: number; na?: number } } | null;
+      if (!res.ok) {
+        setBulkMsg({ text: data?.error ?? "Approval failed.", tone: "bad" });
+      } else {
+        const done = data?.approvedKeys?.length ?? 0;
+        const skipped = list.length - done;
+        const fin = data?.finalize;
+        setBulkMsg({
+          text: `Approved ${done} worker${done === 1 ? "" : "s"}.${fin?.locked ? " Locked in Connecteam." : ""}${fin?.failed ? ` ${fin.failed} Connecteam lock failed, approve again to retry.` : ""}${skipped > 0 ? ` ${skipped} not approvable right now.` : ""}`,
+          tone: fin?.failed || skipped > 0 ? "bad" : "ok",
+        });
+        setSelected(new Set());
+        router.refresh();
+      }
+    } catch {
+      setBulkMsg({ text: "Approval failed. Network error.", tone: "bad" });
+    } finally {
+      setBusy(false);
+    }
+  }
   const chip = (f: Filter, label: string, n: number, sub = false): React.JSX.Element => (
     <button
       key={f}
@@ -133,6 +203,31 @@ export function PayrollReviewBoard({ rows, timesheetsOk, period, gustoMembers }:
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-1.5">
+        <div className="relative">
+          <button
+            onClick={() => setMenuOpen((o) => !o)}
+            disabled={selectedRows.length === 0 || busy}
+            className="inline-flex h-[26px] items-center gap-1 rounded-md bg-foreground px-2.5 text-[11.5px] font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-35"
+          >
+            {busy ? "Working…" : "Actions"} <ChevronDown className="size-3.5" aria-hidden />
+          </button>
+          {menuOpen && selectedRows.length > 0 && (
+            <div className="absolute left-0 top-8 z-20 w-56 overflow-hidden rounded-md border border-border bg-[var(--panel)] shadow-lg">
+              <button onClick={() => void approveSelected()} className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-secondary-text hover:bg-[var(--row-hover)] hover:text-foreground">
+                <CheckCircle2 className="size-3.5 text-positive" aria-hidden /> Approve selected ({selectedRows.length})
+              </button>
+              <button onClick={() => { setSelected(new Set()); setMenuOpen(false); }} className="flex w-full items-center gap-2 border-t border-rule px-3 py-2 text-left text-[12px] text-meta hover:bg-[var(--row-hover)] hover:text-foreground">
+                <X className="size-3.5" aria-hidden /> Clear selection
+              </button>
+            </div>
+          )}
+        </div>
+        {selectedRows.length > 0 && (
+          <span className="mr-1 inline-flex items-center gap-1 text-[11.5px] text-secondary-text">
+            {selectedRows.length} selected
+            <button onClick={() => setSelected(new Set())} aria-label="Clear selection" className="text-meta hover:text-foreground"><X className="size-3.5" /></button>
+          </span>
+        )}
         {chip("in_run", "In run", counts.in_run)}
         {chip("attention", "Needs attention", counts.attention)}
         {(filter === "attention" || filter === "blockers" || filter === "warnings") && (
@@ -148,11 +243,23 @@ export function PayrollReviewBoard({ rows, timesheetsOk, period, gustoMembers }:
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search workers" aria-label="Search workers" className="w-40 bg-transparent text-[12px] text-foreground outline-none placeholder:text-meta" />
         </label>
       </div>
+      {bulkMsg && <p className={`text-[11.5px] ${bulkMsg.tone === "ok" ? "text-positive" : "text-attention"}`}>{bulkMsg.text}</p>}
 
       <div className="surface overflow-x-auto border">
         <table className="w-full min-w-[760px] text-[12.5px]">
           <thead>
             <tr className="border-b border-rule text-left text-[10.5px] uppercase tracking-[0.06em] text-meta">
+              <th className="w-10 px-3 py-2.5">
+                <input
+                  type="checkbox"
+                  aria-label="Select all workers that can be approved"
+                  title={selectableVisible.length === 0 ? "No worker in this view can be approved" : "Select all that can be approved"}
+                  disabled={selectableVisible.length === 0}
+                  checked={allVisibleTicked}
+                  onChange={toggleAll}
+                  className="size-3.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
+                />
+              </th>
               <th className="whitespace-nowrap px-3 py-2.5 font-medium">Worker</th>
               <th className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Payable hours</th>
               <th className="whitespace-nowrap px-3 py-2.5 text-right font-medium">Pay rate</th>
@@ -163,14 +270,25 @@ export function PayrollReviewBoard({ rows, timesheetsOk, period, gustoMembers }:
           </thead>
           <tbody>
             {visible.length === 0 && (
-              <tr><td colSpan={6} className="px-3 py-8 text-center text-meta">No workers in this view.</td></tr>
+              <tr><td colSpan={7} className="px-3 py-8 text-center text-meta">No workers in this view.</td></tr>
             )}
             {visible.map((w) => {
               const b = bucketOf(w);
               const ui = BUCKET_UI[b];
               const issue = b === "excluded" ? null : topIssue(w);
               return (
-                <tr key={w.key} onClick={() => setOpenKey(w.key)} className="cursor-pointer border-b border-rule/60 last:border-0 hover:bg-[var(--row-hover)]">
+                <tr key={w.key} onClick={() => setOpenKey(w.key)} className={`cursor-pointer border-b border-rule/60 last:border-0 hover:bg-[var(--row-hover)] ${selected.has(w.key) && selectable(w) ? "bg-foreground/[0.04]" : ""}`}>
+                  <td className="w-10 px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${w.name}`}
+                      title={selectable(w) ? "Select to approve" : notSelectableReason(w)}
+                      disabled={!selectable(w)}
+                      checked={selected.has(w.key) && selectable(w)}
+                      onChange={() => toggle(w.key)}
+                      className="size-3.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
+                    />
+                  </td>
                   <td className="px-3 py-2">
                     <div className="font-medium text-foreground">{w.name}</div>
                     {(isContractor(w) || w.workerType === "TEMPORARY_WORKER") && (
@@ -197,6 +315,7 @@ export function PayrollReviewBoard({ rows, timesheetsOk, period, gustoMembers }:
           </tbody>
           <tfoot>
             <tr className="border-t border-border bg-[var(--row)]/40 text-[12px]">
+              <td />
               <td className="px-3 py-2.5 font-medium text-foreground">
                 Run total · {inRun.length} worker{inRun.length === 1 ? "" : "s"}
                 {visible.length !== inRun.length && <span className="ml-2 font-normal text-meta">(showing {visible.length})</span>}
@@ -213,6 +332,7 @@ export function PayrollReviewBoard({ rows, timesheetsOk, period, gustoMembers }:
       </div>
 
       <WorkerPanel worker={open} onClose={() => setOpenKey(null)} timesheetsOk={timesheetsOk} period={period} gustoMembers={gustoMembers} />
+      {confirmDialog}
     </div>
   );
 }
