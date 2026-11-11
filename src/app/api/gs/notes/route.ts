@@ -32,6 +32,8 @@ interface InNote {
   lineItems?: unknown;
   quoteSentAt?: string | null; // ISO — precise quote-email send time
   quoteOpenedAt?: string | null; // ISO — latest client open of the quote email
+  eventStart?: string | null; // ISO — the EVENT start (Goodshuffle transaction.fromDate), not the logistics date
+  eventEnd?: string | null; // ISO — the event end (transaction.toDate)
 }
 
 const iso = (s: string | null | undefined): string | null => (s && !Number.isNaN(Date.parse(s)) ? s : null);
@@ -76,6 +78,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       lineItems: cleanLineItems(n.lineItems), // undefined ⇒ leave stored line_items untouched
       quoteSentAt: iso(n.quoteSentAt),
       quoteOpenedAt: iso(n.quoteOpenedAt),
+      eventStart: iso(n.eventStart),
+      eventEnd: iso(n.eventEnd),
     });
   }
   const updated = records.length > 0 ? saveLeadNotes(records) : 0;

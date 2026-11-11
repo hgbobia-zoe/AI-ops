@@ -23,7 +23,7 @@ vi.mock("@/lib/notify/aiBots", async (orig) => {
 });
 
 import { getDb } from "@/lib/db";
-import { saveBookings, type BookingRecord } from "@/lib/db/repo";
+import { saveBookings, saveLeadNotes, type BookingRecord } from "@/lib/db/repo";
 import { buildSignedCard, isTestProject, runSignedAlerts, weekStartYmd } from "./signedAlert";
 import { todayInOpsTz } from "@/lib/dates";
 
@@ -132,6 +132,7 @@ describe("buildSignedCard", () => {
     amountDue: 4225,
     quoteSentDate: "2026-11-05",
     delivers: null,
+    eventStart: null,
     signedAt: now.toISOString(),
   };
 
@@ -178,11 +179,35 @@ describe("amounts and dates", () => {
   });
 
   it("labels the date by what it is", () => {
-    const c = { bookingId: "1", eventName: "X", eventDate: "2027-06-12", clientName: "C", venue: null, location: null, salesLead: null, grandTotal: 100, amountPaid: 0, amountDue: 100, quoteSentDate: null, signedAt: new Date().toISOString() };
+    const c = { bookingId: "1", eventName: "X", eventDate: "2027-06-12", clientName: "C", venue: null, location: null, salesLead: null, grandTotal: 100, amountPaid: 0, amountDue: 100, quoteSentDate: null, eventStart: null, signedAt: new Date().toISOString() };
     const label = (delivers: number | null) => buildSignedCard({ ...c, delivers }, { count: 1, total: 100 }).fields?.[1].label;
     expect(label(1)).toBe("Delivery");
     expect(label(0)).toBe("Customer pickup");
     expect(label(null)).toBe("Delivery / pickup");
+  });
+
+  it("leads with the real event date and time, then the logistics day when it differs", () => {
+    const now = new Date("2026-11-11T22:14:00Z");
+    const c = { bookingId: "1", eventName: "X", eventDate: "2026-11-13", clientName: "C", venue: null, location: null, salesLead: null, grandTotal: 108.01, amountPaid: 0, amountDue: 0, quoteSentDate: null, delivers: null, signedAt: now.toISOString() };
+    const card = buildSignedCard({ ...c, eventStart: "2026-11-14T15:30:00.000Z" }, { count: 1, total: 108.01 }, now);
+    expect(card.fields?.slice(1, 3)).toEqual([
+      { label: "Event date", value: "Sat, Nov 14, 2026, 10:30 AM (3 days out)" },
+      { label: "Delivery / pickup", value: "Fri, Nov 13" },
+    ]);
+    // Same day as the logistics date: just the event line.
+    const same = buildSignedCard({ ...c, eventDate: "2026-11-14", eventStart: "2026-11-14T23:00:00.000Z" }, { count: 1, total: 1 }, now);
+    expect(same.fields?.map((f) => f.label)).toEqual(["Client", "Event date", "Contract total"]);
+    expect(same.fields?.[1].value).toBe("Sat, Nov 14, 2026, 6:00 PM (3 days out)");
+  });
+
+  it("the event date captured with the lead notes reaches the card, and a later empty capture keeps it", async () => {
+    saveBookings([project("E1", { eventDate: "2099-06-11" })]);
+    saveLeadNotes([{ bookingId: "E1", eventStart: "2099-06-12T22:00:00.000Z", eventEnd: "2099-06-13T03:00:00.000Z" }]);
+    saveLeadNotes([{ bookingId: "E1", eventStart: null }]); // a capture without the project dates
+    sign("E1", { eventDate: "2099-06-11" });
+    expect(await runSignedAlerts()).toBe(1);
+    expect(posts[0].text).toContain("Event date: Fri, Jun 12, 2099, 6:00 PM");
+    expect(posts[0].text).toContain("Delivery / pickup: Thu, Jun 11");
   });
 });
 

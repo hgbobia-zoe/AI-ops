@@ -70,15 +70,24 @@ export function buildSignedCard(c: SignedCandidate, week: WeekTally, now: Date =
   const fields: { label: string; value: string }[] = [];
   fields.push({ label: "Client", value: c.clientName?.trim() || "Not on file" });
   // bookings.event_date is Goodshuffle's LOGISTICS start (the drop-off, or the day the customer collects an
-  // in-store order), not the event itself, so the label says which one it is.
+  // in-store order). The real event start (event_start, captured with the lead notes) leads when we have it;
+  // the logistics day follows only when it is a different day.
   const dateLabel = c.delivers === 1 ? "Delivery" : c.delivers === 0 ? "Customer pickup" : "Delivery / pickup";
-  if (c.eventDate) {
-    const out = daysBetween(today, c.eventDate);
-    const year = c.eventDate.slice(0, 4);
-    const tail = out > 1 ? ` (${out} days out)` : out === 1 ? " (tomorrow)" : out === 0 ? " (today)" : "";
-    fields.push({ label: dateLabel, value: `${formatYmdLong(c.eventDate)}, ${year}${tail}` });
+  const daysOut = (ymd: string) => {
+    const out = daysBetween(today, ymd);
+    return out > 1 ? ` (${out} days out)` : out === 1 ? " (tomorrow)" : out === 0 ? " (today)" : "";
+  };
+  const eventStartMs = c.eventStart ? Date.parse(c.eventStart) : NaN;
+  if (Number.isFinite(eventStartMs)) {
+    const at = new Date(eventStartMs);
+    const eventYmd = ymdInTz(DISPLAY_TZ, at);
+    const time = at.toLocaleTimeString("en-US", { timeZone: DISPLAY_TZ, hour: "numeric", minute: "2-digit" });
+    fields.push({ label: "Event date", value: `${formatYmdLong(eventYmd)}, ${eventYmd.slice(0, 4)}, ${time}${daysOut(eventYmd)}` });
+    if (c.eventDate && c.eventDate !== eventYmd) fields.push({ label: dateLabel, value: formatYmdLong(c.eventDate) });
+  } else if (c.eventDate) {
+    fields.push({ label: dateLabel, value: `${formatYmdLong(c.eventDate)}, ${c.eventDate.slice(0, 4)}${daysOut(c.eventDate)}` });
   } else {
-    fields.push({ label: dateLabel, value: "Not set yet" });
+    fields.push({ label: "Event date", value: "Not set yet" });
   }
   const place = c.venue?.trim() || c.location?.trim();
   if (place) fields.push({ label: "Venue", value: place });
