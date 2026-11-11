@@ -61,6 +61,14 @@ export function sourceClosure(facts: SourceFacts, today: string): SourceClosure 
         evidence: { opStatus: facts.status, opUpdatedAt: facts.updatedAt },
       };
     }
+    if (facts.status === "dismissed") {
+      return {
+        as: "disposed",
+        disposition: "A person dismissed the write-back, so it will not be retried.",
+        by: "Write-back outbox",
+        evidence: { opStatus: facts.status, opUpdatedAt: facts.updatedAt },
+      };
+    }
     return null;
   }
   return null;

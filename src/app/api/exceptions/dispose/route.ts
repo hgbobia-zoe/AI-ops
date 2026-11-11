@@ -9,6 +9,7 @@ import { canManageSettings } from "@/lib/auth/roles";
 import { disposeException } from "@/lib/exceptions/engine";
 import { getException } from "@/lib/exceptions/store";
 import { TERMINAL_STATUSES } from "@/lib/exceptions/types";
+import { dismissGsOp } from "@/lib/db/repo";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,9 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (TERMINAL_STATUSES.has(existing.status)) return NextResponse.json({ ok: true, status: existing.status, already: true });
 
   const by = (await currentActor()).label;
+  // A failed write-back is closed at its source too: the outbox op is dismissed, so it stops counting
+  // toward the write-back alarm and never retries. Without this the exception closes but the alarm stays.
+  const writeBack = existing.source === "dead_letter" ? dismissGsOp(existing.sourceId, by, reason) : null;
   const r = disposeException(key, reason, by, as);
-  return NextResponse.json({ ok: !!r, status: r?.status ?? null });
+  return NextResponse.json({ ok: !!r, status: r?.status ?? null, writeBackDismissed: writeBack?.ok ?? undefined });
 }

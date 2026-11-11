@@ -67,6 +67,14 @@ export interface OutboxHealthRow {
   attempts: number;
   next_attempt_at: string | null;
   dead_lettered_at: string | null;
+  label?: string | null;
+}
+
+/** One change that has waited past the stale threshold, for the alarm copy. */
+export interface StuckOp {
+  op: string;
+  label: string | null;
+  ageMs: number;
 }
 
 export interface OutboxSummary {
@@ -78,6 +86,17 @@ export interface OutboxSummary {
   legacyFailed: number; //       status='failed' — pre-WS03 rows that never retried (also needs attention)
   unhandled: number; //          pending ops of a type NO drainer handles (stuck forever)
   unhandledOps: string[]; //     the distinct unknown op types, for the alarm copy
+  stuckCount: number; //         DUE-pending ops older than the stale threshold
+  stuck: StuckOp[]; //           the oldest few of those, oldest first
+  lastLandedAgeMs: number | null; // how long since ANY write-back landed; null when unknown
+}
+
+export interface SummaryOptions {
+  /** A due op older than this counts as stuck. Default: the configured stale threshold. */
+  staleMs?: number;
+  /** When the newest write-back landed (status done). Lets the alarm tell "the office browser stopped"
+   *  apart from "a few items are stuck while everything else lands". */
+  lastLandedAt?: string | null;
 }
 
 /** PURE. Summarize the outbox from its rows + now. */
@@ -85,7 +104,9 @@ export function summarizeOutbox(
   rows: OutboxHealthRow[],
   now: number,
   knownOps: ReadonlySet<string> = KNOWN_DRAINABLE_OPS,
+  opts: SummaryOptions = {},
 ): OutboxSummary {
+  const staleMs = opts.staleMs ?? outboxThresholds().staleHours * 3_600_000;
   let pending = 0;
   let due = 0;
   let waitingRetry = 0;
@@ -94,6 +115,7 @@ export function summarizeOutbox(
   let unhandled = 0;
   let oldestDueMs: number | null = null;
   const unknownSet = new Set<string>();
+  const stuck: StuckOp[] = [];
 
   for (const r of rows) {
     if (r.status === "dead") {
@@ -104,13 +126,16 @@ export function summarizeOutbox(
       legacyFailed++;
       continue;
     }
-    if (r.status !== "pending") continue; // done — not a health concern
+    if (r.status !== "pending") continue; // done or dismissed: not a health concern
     pending++;
     const eligible = !r.next_attempt_at || Date.parse(r.next_attempt_at) <= now;
     if (eligible) {
       due++;
       const age = now - Date.parse(r.created_at);
-      if (Number.isFinite(age) && (oldestDueMs === null || age > oldestDueMs)) oldestDueMs = age;
+      if (Number.isFinite(age)) {
+        if (oldestDueMs === null || age > oldestDueMs) oldestDueMs = age;
+        if (age > staleMs) stuck.push({ op: r.op, label: r.label ?? null, ageMs: age });
+      }
       if (!knownOps.has(r.op)) {
         unhandled++;
         unknownSet.add(r.op);
@@ -120,6 +145,8 @@ export function summarizeOutbox(
     }
   }
 
+  stuck.sort((a, b) => b.ageMs - a.ageMs);
+  const landedMs = opts.lastLandedAt ? now - Date.parse(opts.lastLandedAt) : NaN;
   return {
     pending,
     due,
@@ -129,46 +156,67 @@ export function summarizeOutbox(
     legacyFailed,
     unhandled,
     unhandledOps: [...unknownSet],
+    stuckCount: stuck.length,
+    stuck: stuck.slice(0, 3),
+    lastLandedAgeMs: Number.isFinite(landedMs) ? Math.max(0, landedMs) : null,
   };
 }
 
 // ── Pure alarm decision ─────────────────────────────────────────────────────────────────────────────
 
 export interface OutboxAlarm {
-  down: boolean; //      true when any threshold is tripped
-  reasons: string[]; //  human one-liners for the Slack copy
+  down: boolean; //        true when any threshold is tripped
+  drainerDown: boolean; // true only when nothing is landing at all (the office browser looks stopped)
+  reasons: string[]; //    human one-liners for the Slack copy
 }
+
+const plural = (n: number, one: string, many: string = one + "s"): string => `${n} ${n === 1 ? one : many}`;
 
 /** PURE. Decide whether the outbox is unhealthy from the summary + thresholds. */
 export function evaluateOutbox(summary: OutboxSummary, now: number, t: OutboxThresholds = outboxThresholds()): OutboxAlarm {
   const reasons: string[] = [];
   const staleMs = t.staleHours * 3_600_000;
+  let drainerDown = false;
   if (summary.oldestDueAgeMs !== null && summary.oldestDueAgeMs > staleMs) {
-    reasons.push(`oldest pending write-back is ${formatAge(summary.oldestDueAgeMs)} old (drainer may be down — open the office Goodshuffle tab)`);
+    const landing = summary.lastLandedAgeMs !== null && summary.lastLandedAgeMs <= staleMs;
+    if (landing) {
+      // Other changes land, so the office browser works. These items are stuck on their own.
+      const n = Math.max(summary.stuckCount, 1);
+      const names = summary.stuck.map((s) => s.label || s.op).join(", ");
+      reasons.push(
+        `${plural(n, "change")} stuck in the queue, oldest ${formatAge(summary.oldestDueAgeMs)}${names ? ` (${names})` : ""}. Other changes are landing, so the office browser is fine`,
+      );
+    } else {
+      drainerDown = true;
+      const since = summary.lastLandedAgeMs !== null ? `nothing has landed in ${formatAge(summary.lastLandedAgeMs)}` : "nothing has landed recently";
+      reasons.push(`${since} and the oldest change has waited ${formatAge(summary.oldestDueAgeMs)}. The office browser may be closed or signed out of Goodshuffle`);
+    }
   }
   if (summary.due > t.depthAlarm) {
     reasons.push(`${summary.due} write-backs are waiting to drain`);
   }
   if (summary.deadLetter > 0) {
-    reasons.push(`${summary.deadLetter} op${summary.deadLetter === 1 ? "" : "s"} dead-lettered (retries exhausted — needs a human)`);
+    reasons.push(`${plural(summary.deadLetter, "change")} failed after every retry (dead-lettered) and ${summary.deadLetter === 1 ? "needs" : "need"} a person`);
   }
   if (summary.unhandled > 0) {
-    reasons.push(`${summary.unhandled} queued op${summary.unhandled === 1 ? "" : "s"} of a type no drainer handles (${summary.unhandledOps.join(", ")})`);
+    reasons.push(`${plural(summary.unhandled, "queued change")} of a type nothing can send (${summary.unhandledOps.join(", ")})`);
   }
   if (summary.legacyFailed > 0) {
-    reasons.push(`${summary.legacyFailed} legacy failed op${summary.legacyFailed === 1 ? "" : "s"} never retried`);
+    reasons.push(`${plural(summary.legacyFailed, "old failed change")} never retried`);
   }
-  return { down: reasons.length > 0, reasons };
+  return { down: reasons.length > 0, drainerDown, reasons };
 }
 
 // ── Live wrappers (thin DB + kv + Slack glue) ─────────────────────────────────────────────────────────
 
 /** Read the current outbox summary from the DB. */
 export function liveOutboxSummary(now: number = Date.now()): OutboxSummary {
-  const rows = getDb()
-    .prepare("SELECT op, status, created_at, attempts, next_attempt_at, dead_lettered_at FROM gs_outbox WHERE status IN ('pending','dead','failed')")
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT op, status, created_at, attempts, next_attempt_at, dead_lettered_at, label FROM gs_outbox WHERE status IN ('pending','dead','failed')")
     .all() as OutboxHealthRow[];
-  return summarizeOutbox(rows, now);
+  const last = db.prepare("SELECT MAX(updated_at) AS at FROM gs_outbox WHERE status = 'done'").get() as { at: string | null } | undefined;
+  return summarizeOutbox(rows, now, KNOWN_DRAINABLE_OPS, { lastLandedAt: last?.at ?? null });
 }
 
 interface AlarmState {
@@ -203,14 +251,26 @@ export async function runOutboxHealthTick(now: number = Date.now()): Promise<Out
   const { alert } = recordOutboxAlert(alarm.down, now);
 
   if (alert === "down") {
-    await postStatus({
-      system: "Goodshuffle write-back",
-      level: "degraded",
-      title: "Goodshuffle write-backs are not landing",
-      impact: "Approved changes (photos, emails, tasks, status updates) wait in the queue until the office Auto-Pull drains them.",
-      fix: "Make sure an office computer has Goodshuffle open and signed in. Dead-lettered items need a person to look at them on the Automation page.",
-      detail: alarm.reasons.join("; "),
-    }, now);
+    await postStatus(
+      alarm.drainerDown
+        ? {
+            system: "Goodshuffle write-back",
+            level: "degraded",
+            title: "Goodshuffle write-backs are not landing",
+            impact: "Approved changes (photos, emails, tasks, status updates) wait in the queue until the office Auto-Pull sends them.",
+            fix: "Make sure an office computer has Goodshuffle open and signed in.",
+            detail: alarm.reasons.join("; "),
+          }
+        : {
+            system: "Goodshuffle write-back",
+            level: "degraded",
+            title: "Some Goodshuffle write-backs need a person",
+            impact: "Most changes are landing. The items listed are stuck or failed and will not land on their own.",
+            fix: "Open the Automation page, Goodshuffle write-backs. Redo each item in the app if it is still needed, then dismiss it with a reason.",
+            detail: alarm.reasons.join("; "),
+          },
+      now,
+    );
   } else if (alert === "recovered") {
     await postStatus({
       system: "Goodshuffle write-back",

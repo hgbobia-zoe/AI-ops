@@ -9,7 +9,8 @@
 
 import { getDb } from "@/lib/db";
 import { runtimeStatus, type JobStatus, type JobState } from "@/lib/runtime/jobs";
-import { liveOutboxSummary, type OutboxSummary } from "@/lib/aiorg/outboxHealth";
+import { liveOutboxSummary, outboxThresholds, type OutboxSummary } from "@/lib/aiorg/outboxHealth";
+import { listGsOpsNeedingPerson } from "@/lib/db/repo";
 import { flagOn } from "@/lib/flags";
 
 // ── Scheduled jobs ─────────────────────────────────────────────────────────────────────────────────
@@ -166,10 +167,21 @@ export interface LandedOp {
   count: number;
 }
 
+/** A write-back that will not land on its own: failed after every retry, or stuck past the threshold. */
+export interface NeedsPersonOp {
+  id: string;
+  kind: string;
+  label: string | null;
+  state: "failed" | "stuck";
+  since: string;
+  lastError: string | null;
+}
+
 export interface WriteBacks {
   summary: OutboxSummary;
   landed7d: LandedOp[];
   landedTotal: number;
+  needsPerson: NeedsPersonOp[];
 }
 
 const WEEK_MS = 7 * 86_400_000;
@@ -180,7 +192,15 @@ function liveWriteBacks(now: number): WriteBacks {
     .prepare("SELECT op, COUNT(*) AS n FROM gs_outbox WHERE status = 'done' AND updated_at >= ? GROUP BY op ORDER BY n DESC")
     .all(since) as { op: string; n: number }[];
   const landed7d = rows.map((r) => ({ op: r.op, label: opLabel(r.op), count: Number(r.n) }));
-  return { summary: liveOutboxSummary(now), landed7d, landedTotal: landed7d.reduce((s, r) => s + r.count, 0) };
+  const needsPerson = listGsOpsNeedingPerson(outboxThresholds().staleHours * 3_600_000, now).map((o) => ({
+    id: o.id,
+    kind: opLabel(o.op),
+    label: o.label ?? null,
+    state: (o.status === "pending" ? "stuck" : "failed") as NeedsPersonOp["state"],
+    since: o.createdAt,
+    lastError: o.lastError ?? null,
+  }));
+  return { summary: liveOutboxSummary(now), landed7d, landedTotal: landed7d.reduce((s, r) => s + r.count, 0), needsPerson };
 }
 
 // ── AI approvals ───────────────────────────────────────────────────────────────────────────────────
