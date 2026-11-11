@@ -51,7 +51,7 @@ export function ApproveControl(props: ApproveControlProps): React.JSX.Element {
           title={props.acceptedBy ? `Accepted by ${props.acceptedBy}` : undefined}
           className="inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded border border-border px-2 text-[11.5px] text-meta transition-colors hover:bg-[var(--row-hover)] hover:text-secondary-text disabled:opacity-40"
         >
-          <RotateCcw className="size-3.5" /> {busy ? "…" : "Un-approve"}
+          <RotateCcw className="size-3.5" /> {busy ? "…" : "Undo accept"}
         </button>
         {err && <span className="text-[10.5px] text-critical">{err}</span>}
       </div>
@@ -65,7 +65,7 @@ export function ApproveControl(props: ApproveControlProps): React.JSX.Element {
         disabled={busy}
         className="inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded border border-positive/40 px-2 text-[11.5px] text-positive transition-colors hover:bg-positive/10 disabled:opacity-40"
       >
-        <Check className="size-3.5" /> {busy ? "…" : "Approve"}
+        <Check className="size-3.5" /> {busy ? "…" : "Accept hours"}
       </button>
       {err && <span className="text-[10.5px] text-critical">{err}</span>}
     </div>

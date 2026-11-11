@@ -488,7 +488,9 @@ function WorkerPanel({ worker: w, onClose, timesheetsOk, period, gustoMembers }:
               ) : (
                 <>
                   {w.approvable && !zoeApproved && <WorkerApproveControl workerKey={w.key} name={w.name} periodStart={period.start} periodEnd={period.end} />}
-                  {w.status === "ACTION_REQUIRED" && <ApproveControl workerKey={w.key} name={w.name} periodStart={period.start} periodEnd={period.end} />}
+                  {/* "Accept hours" clears review items (e.g. hours differ from the schedule); it is not the timesheet
+                      approval above. Shown once; after that the worker can be approved. */}
+                  {w.status === "ACTION_REQUIRED" && !w.accepted && <ApproveControl workerKey={w.key} name={w.name} periodStart={period.start} periodEnd={period.end} />}
                   {w.accepted && <ApproveControl workerKey={w.key} name={w.name} periodStart={period.start} periodEnd={period.end} accepted acceptedBy={w.acceptedBy} />}
                   <WorkerEditor
                     worker={{ recordId: w.recordId, connecteamUserId: w.connecteamUserId, name: w.name, workerType: w.workerType, payType: w.payType, payRate: w.payRate, currency: w.currency, country: w.country, gustoId: w.gustoId }}
