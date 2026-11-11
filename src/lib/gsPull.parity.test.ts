@@ -35,6 +35,24 @@ describe("extension drainer ↔ bookmarklet parity (defect #3)", () => {
     }
   });
 
+  it("both pulls read payment histories the server names and post only offline charges (payment confirmation)", () => {
+    for (const src of [extSrc, bookmarkletSrc]) {
+      expect(src).toContain("paymentIds");
+      expect(src).toContain("/app/vendorPayment/loadPaymentHistoryAndContractTotals?transactionID=");
+      expect(src).toContain("/api/gs/payments");
+      expect(src).toMatch(/offlinePayment ?=== ?true ?&& ?e\.type ?=== ?"charge"/); // no card charges leave Goodshuffle
+      expect(src).toContain("totalContractApplicablePaid");
+    }
+  });
+
+  it("both email_template drainers fill the payment amount and dedupe by time for repeatable templates", () => {
+    for (const src of [extSrc, bookmarkletSrc]) {
+      expect(src).toContain("gsTagsWithAmount(tpl.templateTags");
+      expect(src).toContain("gsFillAmount(gsRenderTemplate(tpl.content");
+      expect(src).toContain("o.payload.sentAfter");
+    }
+  });
+
   it("both pulls re-read GS notes on the lost quotes the server names (lost-reason tracker)", () => {
     for (const src of [extSrc, bookmarkletSrc]) expect(src).toContain("lossNoteIds");
   });

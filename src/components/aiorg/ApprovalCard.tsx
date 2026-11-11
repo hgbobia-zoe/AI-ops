@@ -35,6 +35,7 @@ const ACTION_LABEL: Record<string, string> = {
   send_sms: "Send SMS",
   append_note: "Append note",
   create_gs_task: "Create task",
+  confirm_payment: "Confirm payment",
   modify_quote: "Modify quote",
   change_pricing: "Change pricing",
   schedule_change: "Schedule change",
@@ -62,7 +63,7 @@ export function ApprovalCard({ data, actionable }: { data: ApprovalCardData; act
   const [note, setNote] = useState("");
 
   const forbidden = FORBIDDEN.has(data.actionType);
-  const hasBody = data.actionType === "send_email" || data.actionType === "send_sms" || data.actionType === "append_note";
+  const hasBody = data.actionType === "send_email" || data.actionType === "send_sms" || data.actionType === "append_note" || data.actionType === "confirm_payment";
 
   const post = async (decision: string, payload?: Record<string, unknown>, infoNote?: string): Promise<void> => {
     setUi({ mode: "working" });
@@ -120,7 +121,7 @@ export function ApprovalCard({ data, actionable }: { data: ApprovalCardData; act
 
         {hasBody && (
           <div className="mt-2 border-t border-[var(--row-rule)] pt-2">
-            <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-meta">Drafted message</div>
+            <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-meta">{data.actionType === "confirm_payment" ? "Text to the customer (the email is the Goodshuffle template)" : "Drafted message"}</div>
             {ui.mode === "editing" ? (
               <div className="space-y-1.5">
                 {data.actionType === "send_email" && (
@@ -155,7 +156,9 @@ export function ApprovalCard({ data, actionable }: { data: ApprovalCardData; act
                   ? "This action type cannot execute in v2. Approving records the intent only (no send)."
                   : data.actionType === "send_sms"
                     ? "SMS has no async send path here. Approving records the decision; the text itself delivers from the Sales lead panel."
-                    : "On approve, the action is queued to the Goodshuffle outbox and respects its send gate. Nothing goes out until the office Auto-Pull drains it."}
+                    : data.actionType === "confirm_payment"
+                      ? "On approve, the Goodshuffle template email is queued (it sends on the next office sync), the text goes out through Quo right away, and a note naming you is added to the project."
+                      : "On approve, the action is queued to the Goodshuffle outbox and respects its send gate. Nothing goes out until the office Auto-Pull drains it."}
               </div>
               <div className="mt-2 flex items-center gap-2">
                 <button onClick={() => post("approve", hasBody ? editedPayload() : undefined)} className="flex items-center gap-1 border border-emerald-500/50 bg-emerald-500/20 px-3 py-1.5 text-[12px] text-emerald-100"><Check className="size-3" /> Confirm approve</button>

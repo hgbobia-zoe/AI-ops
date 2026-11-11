@@ -58,11 +58,13 @@ const PUBLIC: string[] = [
   "/api/gs/logistics", // Auto-Pull posts each upcoming signed project's timeline legs (delivery pricing); own token (fail-open), CORS-locked
   "/api/gs/emails", // Auto-Pull captures the client email thread; own token (fail-open), CORS-locked — must not bounce to auth
   "/api/gs/outbox",
+  "/api/gs/payments", // Auto-Pull posts payment histories of projects whose amount paid went up (offline payment confirmation); own token (fail-open), CORS-locked
   "/api/gs/intake-result", // Auto-Pull reports the created project id back here; own token (fail-open), CORS-locked — must not bounce to auth
   "/api/intake/email", // Email to hello@ → lead: a Gmail Zap POSTs each new email with no session; INTAKE_TOKEN is the gate (GET is fail-closed). EXACT path only.
   "/api/intake/lead", // Structured lead receiver — every source Zap POSTs here with no session; INTAKE_TOKEN (fail-open-until-set) is the gate. EXACT path only: the /api/intake wizard + /api/intake/[id]/create stay session-gated.
   "/api/payroll/wire-detected", // Mercury "wire out to Gusto" webhook — a Zapier workflow POSTs the matching transaction with no session; WIRE_WEBHOOK_TOKEN (fail-open-until-set) is the gate. EXACT path only, so it is NOT caught by the owner/admin /api/payroll gate; the rest of /api/payroll stays session + owner/admin gated.
   "/api/payroll/gusto-wire-received", // Gusto "we received your wire" email → payroll channel (the receive-side bookend to wire-detected). A Gmail→Zapier zap POSTs with no session; reuses WIRE_WEBHOOK_TOKEN (fail-open-until-set). EXACT path only — the rest of /api/payroll stays session + owner/admin gated.
+  "/api/payments/bank-deposit", // "Check Deposit" bank account zap posts each deposit (matched to a project for the payment confirmation card). READ ONLY; BANK_WEBHOOK_TOKEN / WIRE_WEBHOOK_TOKEN (fail-open-until-set). EXACT path.
   "/api/etalink", // Ignition etaLink mint pending/result; GS_INGEST_TOKEN (fail-open), CORS-locked to ignition.zonarsystems.com — the office-machine Ignition tab reads/posts here, NOT a session (distinct from the /api/eta GPS prefix)
   "/api/pull/heartbeat", // Auto-Pull extension status ping; own token (fail-open), CORS-open
   "/api/provision/result", // Auto-Pull reports a Chrome-run account setup step; gated by the job's one-time key (hashed, 2h, single use), never a session

@@ -36,6 +36,7 @@ import {
   type BookingTimelineInput,
 } from "@/lib/db/repo";
 import { lossReasonFlagsEnabled } from "@/lib/salesos/lossReasonFlag";
+import { watchPaidIncreases, paymentWatchIds } from "@/lib/payments/offlineConfirmService";
 import type { RawTimelineEvent } from "@/lib/dispatch/onTime";
 import { recordPull, logImport, recordBookingsImportFailure, claimBlankDraftBurstAlert } from "@/lib/pull/state";
 import { findBlankDraftBursts, blankDraftBurstAlert, BLANK_DRAFT_BURST_THRESHOLD } from "@/lib/ingest/blankDraft";
@@ -239,6 +240,16 @@ export async function POST(req: Request): Promise<NextResponse> {
       streetAddress: p.streetAddress === undefined ? undefined : typeof p.streetAddress === "string" ? p.streetAddress : null,
     });
   }
+  // Offline payment confirmation: a project whose amount paid went up goes on the payment watch list
+  // (compared against the stored row, so this runs BEFORE the upsert). Best effort.
+  let paymentWatched = 0;
+  if (records.length > 0) {
+    try {
+      paymentWatched = watchPaidIncreases(records);
+    } catch (e) {
+      console.error("[gs/projects] watchPaidIncreases failed (ignored)", e);
+    }
+  }
   if (records.length > 0) saveBookings(records);
   // Timeline windows may also ride alongside a projects pull: store them after the bookings rows exist
   // (their year is read from the booking's logistics date). The stop refresh below covers them.
@@ -279,7 +290,15 @@ export async function POST(req: Request): Promise<NextResponse> {
     // Lost-reason tracker: recently lost quotes still missing a reason. They are off the open-lead notes
     // capture, so the pull re-reads their GS notes (a reason written there clears the flag).
     const lossNoteIds = lossReasonFlagsEnabled() ? lossNoteWatchIds(new Date(Date.now() - LOSS_NOTE_WATCH_DAYS * 86_400_000).toISOString(), LOSS_NOTE_WATCH_CAP) : [];
-    return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial: false, wdQueued, pruned: 0, blankDraftAlerts, lossNoteIds }, { headers: CORS });
+    // Offline payment confirmation: projects whose payment history the pull should read next (it posts
+    // them to /api/gs/payments). Includes any put on the watch list by the full lane.
+    let paymentIds: string[] = [];
+    try {
+      paymentIds = paymentWatchIds();
+    } catch (e) {
+      console.error("[gs/projects] paymentWatchIds failed (ignored)", e);
+    }
+    return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial: false, wdQueued, pruned: 0, blankDraftAlerts, lossNoteIds, paymentWatched, paymentIds }, { headers: CORS });
   }
 
   // ── SLOW LANE (scope:"full", or absent) ─────────────────────────────────────────────────────────
@@ -342,7 +361,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   // so the warehouse tablet/workstation sees signed work. The office extension drains these ops.
   const wdQueued = records.length > 0 ? enqueueWarehouseTeamAdds() : 0;
 
-  return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial, wdQueued, pruned, blankDraftAlerts }, { headers: CORS });
+  return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial, wdQueued, pruned, blankDraftAlerts, paymentWatched }, { headers: CORS });
 }
 
 /** Threshold for the blank-draft guard. GS_BLANK_DRAFT_ALERT_THRESHOLD overrides the default of 5. */

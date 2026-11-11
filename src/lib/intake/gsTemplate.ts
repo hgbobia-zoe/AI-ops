@@ -13,7 +13,10 @@
 /** gsRenderTemplate(html, templateTags): replace every mention chip
  *  (<span class="mention" data-original="FirstName" ...>...</span>, nested spans included) with its
  *  escaped value. A chip with no value becomes empty, except FirstName, which falls back to "there".
- *  gsTemplateText(html): the plain text of an HTML fragment (for the subject and for emptiness checks). */
+ *  gsTemplateText(html): the plain text of an HTML fragment (for the subject and for emptiness checks).
+ *  gsTagsWithAmount(tags, amount) + gsFillAmount(html, amount): fill a payment amount ("1,026.51") into an
+ *  empty PaymentAmount chip and into the first bare "$" of the body (the payment received template reads
+ *  "check payment for $ and appreciate", the amount typed in by hand until now). */
 export const GS_TEMPLATE_JS = `function gsRenderTemplate(html, tags) {
   var vals = {};
   (tags || []).forEach(function (t) { if (t && t.name) vals[String(t.name).replace(/\\s+/g, "").toLowerCase()] = t.transactionValue; });
@@ -40,6 +43,21 @@ function gsTemplateText(html) {
   return String(html || "").replace(/<br\\s*\\/?>/gi, " ").replace(/<\\/(div|p|li)>/gi, " ").replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&")
     .replace(/\\s+/g, " ").trim();
+}
+function gsTagsWithAmount(tags, amount) {
+  var a = String(amount == null ? "" : amount).trim();
+  if (!a) return tags || [];
+  return (tags || []).map(function (t) {
+    var k = t && t.name ? String(t.name).replace(/\\s+/g, "").toLowerCase() : "";
+    if (k === "paymentamount" && (t.transactionValue == null || t.transactionValue === "")) return { name: t.name, transactionValue: "$" + a };
+    return t;
+  });
+}
+function gsFillAmount(html, amount) {
+  var a = String(amount == null ? "" : amount).trim();
+  if (!a) return String(html || "");
+  var safe = a.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(html || "").replace(/\\$(?=\\s|&nbsp;|<|$)/, function () { return "$" + safe; });
 }`;
 
 export interface GsTemplateTag {
@@ -50,9 +68,11 @@ export interface GsTemplateTag {
 type Renderers = {
   gsRenderTemplate: (html: string, tags: GsTemplateTag[]) => string;
   gsTemplateText: (html: string) => string;
+  gsTagsWithAmount: (tags: GsTemplateTag[], amount: string | null | undefined) => GsTemplateTag[];
+  gsFillAmount: (html: string, amount: string | null | undefined) => string;
 };
 
 /** The renderer as callable functions (server side + tests), built from the exact text the drainers run. */
 export function gsTemplateRenderers(): Renderers {
-  return new Function(`${GS_TEMPLATE_JS}\nreturn { gsRenderTemplate: gsRenderTemplate, gsTemplateText: gsTemplateText };`)() as Renderers;
+  return new Function(`${GS_TEMPLATE_JS}\nreturn { gsRenderTemplate: gsRenderTemplate, gsTemplateText: gsTemplateText, gsTagsWithAmount: gsTagsWithAmount, gsFillAmount: gsFillAmount };`)() as Renderers;
 }

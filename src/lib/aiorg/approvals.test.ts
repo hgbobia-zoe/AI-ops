@@ -52,6 +52,12 @@ describe("approval state machine", () => {
 
 // ── Pure execution plan ──────────────────────────────────────────────────────────
 describe("executionPlan", () => {
+  it("confirm_payment queues the email template op behind the email send gate", () => {
+    expect(executionPlan("confirm_payment")).toEqual({ kind: "outbox", op: "email_template", gate: "EMAIL_SEND_ENABLED" });
+    const { transactionId, opPayload } = buildOutboxPayload("email_template", { transactionId: "231812125", templateName: "T", templateId: "61182", fillAmount: "1,026.51", sentAfter: "2026-11-11T16:00:00.000Z", dedupeKey: "offline-payment:1", body: "the text" });
+    expect(transactionId).toBe("231812125");
+    expect(opPayload).toEqual({ templateName: "T", templateId: "61182", fillAmount: "1,026.51", sentAfter: "2026-11-11T16:00:00.000Z", dedupeKey: "offline-payment:1" });
+  });
   it("routes the executable action types to the proven outbox ops + gates", () => {
     expect(executionPlan("send_email")).toEqual({ kind: "outbox", op: "email_send", gate: "EMAIL_SEND_ENABLED" });
     expect(executionPlan("append_note")).toEqual({ kind: "outbox", op: "note_append", gate: null });

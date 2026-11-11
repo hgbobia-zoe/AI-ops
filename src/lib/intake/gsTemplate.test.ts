@@ -68,3 +68,31 @@ describe("drainer parity", () => {
     expect(GS_TEMPLATE_JS).not.toContain("#"); // a "#" can cut a javascript: bookmarklet URL short
   });
 });
+
+describe("payment amount fill (offline payment confirmation)", () => {
+  const { gsTagsWithAmount, gsFillAmount } = gsTemplateRenderers();
+  // The owner's "Payment Received, Balance Update Coming Soon" template body, as Goodshuffle stores it.
+  const BODY = "<div>We have received your check payment for $ and appreciate your prompt payment.</div>";
+
+  it("fills the bare $ with the amount, literally (no $1 group substitution)", () => {
+    expect(gsFillAmount(BODY, "1,026.51")).toBe("<div>We have received your check payment for $1,026.51 and appreciate your prompt payment.</div>");
+    expect(gsFillAmount("<div>for $&nbsp;now</div>", "10.00")).toBe("<div>for $10.00&nbsp;now</div>");
+  });
+
+  it("leaves a priced $ alone and fills only the first bare one", () => {
+    expect(gsFillAmount("<div>fee $25.00, paid $ today, $ more</div>", "5.00")).toBe("<div>fee $25.00, paid $5.00 today, $ more</div>");
+  });
+
+  it("does nothing without an amount", () => {
+    expect(gsFillAmount(BODY, "")).toBe(BODY);
+    expect(gsFillAmount(BODY, null)).toBe(BODY);
+  });
+
+  it("fills an empty PaymentAmount chip and keeps a value Goodshuffle already filled", () => {
+    const html = `<div>A payment of ${chip("Payment Amount", "PaymentAmount")} was processed.</div>`;
+    const empty = [{ name: "PaymentAmount", transactionValue: null }];
+    expect(gsTemplateText(gsRenderTemplate(html, gsTagsWithAmount(empty, "1,026.51")))).toBe("A payment of $1,026.51 was processed.");
+    const filled = [{ name: "PaymentAmount", transactionValue: "$99.00" }];
+    expect(gsTemplateText(gsRenderTemplate(html, gsTagsWithAmount(filled, "1,026.51")))).toBe("A payment of $99.00 was processed.");
+  });
+});

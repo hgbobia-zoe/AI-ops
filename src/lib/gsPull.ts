@@ -258,9 +258,28 @@ ${GS_TEMPLATE_JS}
         if(FULL){
           return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr,scope:"full"})}).then(function(r){return r.json();}).then(function(j){ return pullWindows(windowIds(true)).catch(function(){ return {windows:0}; }).then(function(wj){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:0, windows:(wj&&wj.windows)||0 }; }); }).catch(function(){ return { saved:0, partial:true }; });
         }
+        // Offline payment confirmation: the server names projects whose amount paid went up; read each one's payment
+        // history (one at a time, 250ms apart) and post ONLY its offline charges. MIRRORS extension/pull-injected.js.
+        function pullPayments(ids){
+          var list=(ids||[]).map(String).slice(0,25);
+          if(!list.length) return Promise.resolve({cards:0});
+          var out=[];
+          var pause=function(ms){ return new Promise(function(res){ setTimeout(res,ms); }); };
+          function one(i){
+            if(i>=list.length) return Promise.resolve();
+            var id=list[i];
+            return fetch("/app/vendorPayment/loadPaymentHistoryAndContractTotals?transactionID="+id,H).then(function(r){ return r.ok?r.json():null; }).then(function(pt){
+              var ph=pt&&pt.paymentHistory;
+              if(!ph){ out.push({bookingId:id, ok:false}); return; }
+              var evs=(ph.paymentEvents||[]).filter(function(e){ return e&&e.offlinePayment===true&&e.type==="charge"; }).map(function(e){ return {id:e.id, type:e.type, offlinePayment:true, paymentType:(e.offline&&e.offline.paymentType)||null, label:e.paymentMethodLabel||null, amount:e.amount, dateMillis:e.dateMillis, status:e.status||null, processedBy:e.processedBy||null}; });
+              out.push({bookingId:id, ok:true, grandTotalCents:(typeof pt.grandTotal==="number"?pt.grandTotal:null), paidCents:(typeof ph.totalContractApplicablePaid==="number"?ph.totalContractApplicablePaid:null), events:evs});
+            }).catch(function(){ out.push({bookingId:id, ok:false}); }).then(function(){ return (i+1<list.length)?pause(250).then(function(){ return one(i+1); }):null; });
+          }
+          return one(0).then(function(){ return fetch(API+"/api/gs/payments",{method:"POST",headers:POSTH(),body:JSON.stringify({payments:out})}).then(function(r){return r.json();}).then(function(j){ return {cards:(j&&j.cardsRaised)||0}; }).catch(function(){ return {cards:0}; }); });
+        }
         // Lost-reason tracker: the server names recently lost quotes still missing a reason; re-read their
         // notes too (they are off the open-lead set) so a reason written in Goodshuffle is seen.
-        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,scope:"active"})}).then(function(r){return r.json();}).then(function(j){ ((j&&j.lossNoteIds)||[]).forEach(function(id){ id=String(id); if(!seenCap[id]){ seenCap[id]=1; captureIds.push(id); } }); return j; }).then(function(j){ return pullNotes().then(function(nj){ return activeWindows().catch(function(){ return {windows:0}; }).then(function(wj){ return { saved:(j&&j.saved)||recs.length, partial:false, notes:(nj&&nj.updated)||0, windows:(wj&&wj.windows)||0 }; }); }); }).catch(function(){ return { saved:0, partial:false }; });
+        return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,scope:"active"})}).then(function(r){return r.json();}).then(function(j){ ((j&&j.lossNoteIds)||[]).forEach(function(id){ id=String(id); if(!seenCap[id]){ seenCap[id]=1; captureIds.push(id); } }); return j; }).then(function(j){ return pullPayments(j&&j.paymentIds).catch(function(){ return null; }).then(function(){ return j; }); }).then(function(j){ return pullNotes().then(function(nj){ return activeWindows().catch(function(){ return {windows:0}; }).then(function(wj){ return { saved:(j&&j.saved)||recs.length, partial:false, notes:(nj&&nj.updated)||0, windows:(wj&&wj.windows)||0 }; }); }); }).catch(function(){ return { saved:0, partial:false }; });
       });
     }
 
@@ -536,11 +555,15 @@ ${GS_TEMPLATE_JS}
               if(tpl.medium && tpl.medium!=="EMAIL") throw "template_not_email";
               return fetch("/app/conversation/getMessagesForTransaction?transactionID="+encodeURIComponent(tx),GH);
             }).then(function(r){ if(!r.ok) throw "thread_"+r.status; return r.json(); }).then(function(cv){
-              var subject=gsTemplateText(gsRenderTemplate(tpl.subject,tpl.templateTags));
-              var content=gsRenderTemplate(tpl.content,tpl.templateTags);
+              // fillAmount (payment confirmation): the amount fills an empty PaymentAmount chip and the body's bare "$".
+              var tags=gsTagsWithAmount(tpl.templateTags,o.payload.fillAmount);
+              var subject=gsTemplateText(gsRenderTemplate(tpl.subject,tags));
+              var content=gsFillAmount(gsRenderTemplate(tpl.content,tags),o.payload.fillAmount);
               if(!subject || !gsTemplateText(content)) throw "template_empty";
               var msgs=(cv&&cv.client&&cv.client.messages)||[];
-              if(msgs.some(function(m){ return gsTemplateText(m.subject)===subject; })) return true; // already sent
+              // sentAfter: a repeatable template (one per payment) counts as sent only when the subject landed after it.
+              var after=o.payload.sentAfter?Date.parse(o.payload.sentAfter):NaN;
+              if(msgs.some(function(m){ return gsTemplateText(m.subject)===subject && (!(after>0) || !(Date.parse(m.date)<after)); })) return true; // already sent
               var recips=((cv&&cv.client&&cv.client.participants)||[]).filter(function(p){ return p&&p.email; }).map(function(p){ return {contactID:p.contactID, email:p.email, name:p.name, isCurrentUser:false, isEmailValid:true, deliveryConfirmedDate:null, messageOpenedDate:null, hardBouncedDate:null, droppedMessageDate:null}; });
               if(!recips.length) throw "no_recipient";
               var payload={ messageID:null, templateID:tpl.id, transactionID:txID, content:content, recipients:recips, subject:subject, messageType:"CLIENT", attachments:(tpl.attachments||[]).map(function(a){ return a&&a.id; }).filter(Boolean) };
