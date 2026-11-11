@@ -69,13 +69,16 @@ export function buildSignedCard(c: SignedCandidate, week: WeekTally, now: Date =
 
   const fields: { label: string; value: string }[] = [];
   fields.push({ label: "Client", value: c.clientName?.trim() || "Not on file" });
+  // bookings.event_date is Goodshuffle's LOGISTICS start (the drop-off, or the day the customer collects an
+  // in-store order), not the event itself, so the label says which one it is.
+  const dateLabel = c.delivers === 1 ? "Delivery" : c.delivers === 0 ? "Customer pickup" : "Delivery / pickup";
   if (c.eventDate) {
     const out = daysBetween(today, c.eventDate);
     const year = c.eventDate.slice(0, 4);
     const tail = out > 1 ? ` (${out} days out)` : out === 1 ? " (tomorrow)" : out === 0 ? " (today)" : "";
-    fields.push({ label: "Event date", value: `${formatYmdLong(c.eventDate)}, ${year}${tail}` });
+    fields.push({ label: dateLabel, value: `${formatYmdLong(c.eventDate)}, ${year}${tail}` });
   } else {
-    fields.push({ label: "Event date", value: "Not set yet" });
+    fields.push({ label: dateLabel, value: "Not set yet" });
   }
   const place = c.venue?.trim() || c.location?.trim();
   if (place) fields.push({ label: "Venue", value: place });
