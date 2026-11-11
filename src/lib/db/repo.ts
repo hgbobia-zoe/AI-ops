@@ -419,10 +419,13 @@ export function getBookingLogistics(
   const uniq = [...new Set(ids.filter(Boolean))];
   if (uniq.length === 0) return out;
   const rows = getDb()
-    .prepare(`SELECT booking_id, street_address, location, delivery_date, pickup_date FROM bookings WHERE booking_id IN (${uniq.map(() => "?").join(",")})`)
-    .all(...uniq) as Array<{ booking_id: string; street_address: string | null; location: string | null; delivery_date: string | null; pickup_date: string | null }>;
+    .prepare(`SELECT booking_id, street_address, venue, location, delivery_date, pickup_date FROM bookings WHERE booking_id IN (${uniq.map(() => "?").join(",")})`)
+    .all(...uniq) as Array<{ booking_id: string; street_address: string | null; venue: string | null; location: string | null; delivery_date: string | null; pickup_date: string | null }>;
   for (const r of rows) {
-    const street = (r.street_address ?? "").trim();
+    // The street comes from the pull. Until a pull has stored it (a project made minutes ago), Goodshuffle's
+    // venue label IS the street whenever no venue name was given ("20631 Highland Hall Dr").
+    const venue = (r.venue ?? "").trim();
+    const street = (r.street_address ?? "").trim() || (/^\d+[A-Za-z]?\s+\S/.test(venue) ? venue : "");
     out.set(String(r.booking_id), {
       streetAddress: street ? [street, (r.location ?? "").trim()].filter(Boolean).join(", ") : null,
       deliveryDate: r.delivery_date,
@@ -1783,6 +1786,48 @@ export function searchBookings(query: string, limit = 25): BookingView[] {
       )
       .all({ like, lim }) as Record<string, unknown>[]
   ).map(toBookingView);
+}
+
+/** How long a non-archived project can go unseen by the pull before we treat it as deleted in Goodshuffle.
+ *  The active lane re-sends every live project every few minutes, so a day of silence means it is gone. */
+const PICKER_STALE_MS = 24 * 3_600_000;
+
+/** Pipeline group for the project picker: New, then Quote Sent, then Signed (Unsigned Changes is a signed
+ *  contract with pending edits). PURE. */
+export function pickerStage(statusLabel: string | null | undefined): number {
+  const s = (statusLabel ?? "").toLowerCase();
+  if (s.includes("new")) return 0;
+  if (s.includes("quote") || s.includes("sent")) return 1;
+  if (s.includes("signed")) return 2;
+  return 3;
+}
+
+/** The delivery calculator's project picker: LIVE projects only (not archived, lost, cancelled, or gone
+ *  from Goodshuffle), grouped New > Quote Sent > Signed, newest first inside each group. An empty query
+ *  lists them all (the dropdown); a query matches project #, event name, or customer. */
+export function pickerBookings(query: string, limit = 100): BookingView[] {
+  const db = getDb();
+  const q = query.trim().toLowerCase();
+  const lim = Math.max(1, Math.min(200, Math.floor(limit) || 100));
+  // "Gone from Goodshuffle" is judged against the latest pull, so a paused pull never empties the picker.
+  const latest = (db.prepare("SELECT MAX(updated_at) AS m FROM bookings WHERE COALESCE(archived,0) = 0").get() as { m: string | null } | undefined)?.m;
+  const latestMs = latest ? Date.parse(latest) : NaN;
+  const cutoff = Number.isFinite(latestMs) ? new Date(latestMs - PICKER_STALE_MS).toISOString() : null;
+  const rows = db
+    .prepare(
+      `SELECT * FROM bookings
+        WHERE COALESCE(archived,0) = 0
+          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%cancel%'
+          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
+          AND LOWER(COALESCE(status_label,'')) NOT LIKE '%dead%'
+          AND (@cutoff IS NULL OR updated_at >= @cutoff)
+          AND (@q = '' OR LOWER(booking_id) LIKE @like OR LOWER(COALESCE(event_name,'')) LIKE @like OR LOWER(COALESCE(client_name,'')) LIKE @like)`,
+    )
+    .all({ cutoff, q, like: `%${q}%` }) as Record<string, unknown>[];
+  // Goodshuffle project ids only grow, so a bigger id is a newer project (date_created can be missing).
+  const idNum = (r: Record<string, unknown>) => Number(r.booking_id) || 0;
+  rows.sort((a, b) => pickerStage(a.status_label as string) - pickerStage(b.status_label as string) || idNum(b) - idNum(a));
+  return rows.slice(0, lim).map(toBookingView);
 }
 
 /** SIGNED, non-cancelled/lost bookings whose event is on `date` — the candidate route anchors for the
