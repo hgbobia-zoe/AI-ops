@@ -12,6 +12,7 @@ import { STAGE_LABEL, type SalesStage } from "./calc";
 import { summarizeComms, templateOutreach, humanize, renderConversationContext, type CommsSummary, type ConversationContext, type OutreachDraft, type OutreachLead } from "./outreach";
 import { chat, llmConfigured, llmModel } from "@/lib/llm";
 import { formatYmdLong } from "@/lib/dates";
+import { withSmsSignoff } from "@/lib/comms/smsSignoff";
 
 export interface OutreachResult {
   id: string;
@@ -105,7 +106,7 @@ async function llmDraft(lead: OutreachLead, clientName: string, eventDate: strin
     return {
       draft: {
         // humanize() strips any em/en dashes the model slips in, so drafts always read like a person.
-        sms: humanize(p.sms),
+        sms: withSmsSignoff(humanize(p.sms)),
         callStrategy: typeof p.callStrategy === "string" ? humanize(p.callStrategy) : "",
         cadence: typeof p.cadence === "string" ? humanize(p.cadence) : "",
         caution: typeof p.caution === "string" && p.caution.trim() ? humanize(p.caution) : null,

@@ -14,6 +14,7 @@ import { todayInOpsTz } from "@/lib/dates";
 import { logSalesEvent } from "./audit";
 import { flagOn } from "@/lib/flags";
 import { isSuppressed } from "@/lib/prospecting/store";
+import { withSmsSignoff } from "@/lib/comms/smsSignoff";
 
 export const SMS_MAX_LEN = 1000;
 const DEDUPE_MS = 120_000;
@@ -35,7 +36,12 @@ export async function sendLeadSms(input: { id: string; body: string; userId?: st
     return { ok: false, disabled: true, error: "SMS sending is turned off (SMS_SEND_ENABLED=false)." };
   }
   const id = (input.id ?? "").trim();
-  const text = (input.body ?? "").trim();
+  // The thank-you line is added here too, so a rep who edits a draft (or a draft made before this rule)
+  // still sends it. No-op when the text already has it.
+  // A text right at the length limit is sent as written rather than refused.
+  const raw = (input.body ?? "").trim();
+  const signed = withSmsSignoff(raw);
+  const text = signed.length <= SMS_MAX_LEN ? signed : raw;
   if (!id) return { ok: false, error: "id required" };
   if (!text) return { ok: false, error: "message body required" };
   if (text.length > SMS_MAX_LEN) return { ok: false, error: `message too long (max ${SMS_MAX_LEN})` };
