@@ -1141,6 +1141,71 @@ export function markQuoteOpenAlerted(bookingId: string, openedAt: string): void 
   getDb().prepare(`UPDATE bookings SET quote_open_alerted_at=@openedAt WHERE booking_id=@bookingId`).run({ bookingId, openedAt });
 }
 
+/** A project our pull saw become signed that has not been announced yet (contract-signed card). */
+export interface SignedCandidate {
+  bookingId: string;
+  eventName: string | null;
+  eventDate: string | null;
+  clientName: string | null;
+  venue: string | null;
+  location: string | null;
+  salesLead: string | null;
+  grandTotal: number | null;
+  amountPaid: number | null;
+  amountDue: number | null;
+  quoteSentDate: string | null;
+  signedAt: string;
+}
+
+function toSignedCandidate(r: Record<string, unknown>): SignedCandidate {
+  const num = (v: unknown) => (v == null ? null : Number(v));
+  return {
+    bookingId: String(r.booking_id),
+    eventName: (r.event_name as string) ?? null,
+    eventDate: (r.event_date as string) ?? null,
+    clientName: (r.client_name as string) ?? null,
+    venue: (r.venue as string) ?? null,
+    location: (r.location as string) ?? null,
+    salesLead: (r.sales_lead as string) ?? null,
+    grandTotal: num(r.grand_total),
+    amountPaid: num(r.amount_paid),
+    amountDue: num(r.amount_due),
+    quoteSentDate: (r.quote_sent_date as string) ?? null,
+    signedAt: r.signed_at as string,
+  };
+}
+
+const SIGNED_COLS = `booking_id, event_name, event_date, client_name, venue, location, sales_lead, grand_total,
+  amount_paid, amount_due, quote_sent_date, signed_at`;
+
+export function pendingSignedAlerts(): SignedCandidate[] {
+  return (
+    getDb()
+      .prepare(`SELECT ${SIGNED_COLS} FROM bookings WHERE signed_at IS NOT NULL AND signed_alerted_at IS NULL AND signed = 1 ORDER BY signed_at`)
+      .all() as Record<string, unknown>[]
+  ).map(toSignedCandidate);
+}
+
+/** Claim a signed project for its card. True only for the one caller that wins, so two overlapping pulls
+ *  never post the same card twice. */
+export function claimSignedAlert(bookingId: string, at: string): boolean {
+  return getDb().prepare(`UPDATE bookings SET signed_alerted_at=@at WHERE booking_id=@bookingId AND signed_alerted_at IS NULL`).run({ bookingId, at }).changes === 1;
+}
+
+/** Give a claim back (the card could not be posted anywhere), so the next pull tries again. */
+export function releaseSignedAlert(bookingId: string): void {
+  getDb().prepare(`UPDATE bookings SET signed_alerted_at=NULL WHERE booking_id=@bookingId`).run({ bookingId });
+}
+
+/** Projects that became signed at or after `sinceISO` (still signed), for the weekly tally. */
+export function signedSince(sinceISO: string): SignedCandidate[] {
+  return (
+    getDb()
+      .prepare(`SELECT ${SIGNED_COLS} FROM bookings WHERE signed_at IS NOT NULL AND signed_at >= @sinceISO AND signed = 1`)
+      .all({ sinceISO }) as Record<string, unknown>[]
+  ).map(toSignedCandidate);
+}
+
 /** Upsert bookings (from a searchProjects pull), keyed by Goodshuffle project id. Logs a
  *  financial-plan change to Operational History when an existing booking's revenue changes. */
 /** Store the raw GS window time trimmed; "TBD"/blank → null (no window, never a guessed one). */
@@ -1229,6 +1294,8 @@ export function saveBookings(items: BookingRecord[]): void {
   const isCancelled = (s: string): boolean => s.includes("cancel") || s.includes("lost") || s.includes("dead");
   const markSafeguard = db.prepare("UPDATE bookings SET cancel_safeguard_at = ? WHERE booking_id = ?");
   // Snapshot the notes we had when tracking began, so a note written AFTER the loss can count as the reason.
+  // Once per project, ever: a project that flips back and later signs again keeps its first signed time.
+  const markSigned = db.prepare("UPDATE bookings SET signed_at = COALESCE(signed_at, @now) WHERE booking_id = @id");
   const markLossTracked = db.prepare(
     `UPDATE bookings SET lost_at = @now,
        lost_notes_snapshot = CASE WHEN loss_track_at IS NULL THEN internal_notes ELSE lost_notes_snapshot END,
@@ -1291,6 +1358,14 @@ export function saveBookings(items: BookingRecord[]): void {
       !priorStatus.has(i.bookingId) && nowCancelled && !!i.dateCreated && i.dateCreated >= shiftYmd(todayInOpsTz(), -LOSS_NEW_ROW_DAYS);
     if ((priorStatus.has(i.bookingId) && !wasCancelled && nowCancelled) || newRowJustLost) {
       markLossTracked.run({ id: i.bookingId, now });
+    }
+    // Contract-signed card: the moment our pull sees a project go from unsigned to signed is its signed
+    // time. Projects signed before we tracked them never flip, so they are never announced. A project we
+    // have never seen that arrives already signed counts only when GS created it in the last few days.
+    const newRowJustSigned =
+      !priorStatus.has(i.bookingId) && !!i.signed && !!i.dateCreated && i.dateCreated >= shiftYmd(todayInOpsTz(), -LOSS_NEW_ROW_DAYS);
+    if ((priorStatus.has(i.bookingId) && priorSigned.get(i.bookingId) !== 1 && !!i.signed) || newRowJustSigned) {
+      markSigned.run({ id: i.bookingId, now });
     }
   }
 }
