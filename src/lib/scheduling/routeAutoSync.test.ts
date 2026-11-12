@@ -298,6 +298,36 @@ describe("applyRouteWindowRatchet (shift follows the route; hours never auto-shr
   });
 });
 
+describe("applyRouteWindowRatchet: crew start on the quarter hour", () => {
+  // Dec 10 is EST: stops at 9:03 AM and 5:03 PM → raw crew window 8:03 AM to 6:03 PM (13:03Z to 23:03Z).
+  const oddRoute = (routeId: string): Route =>
+    ({
+      routeId,
+      date: DATE,
+      truckId: "E450",
+      status: "planned",
+      stops: [
+        { sequence: 1, custName: "A", kind: "delivery", plannedWindow: `${DATE}T14:03:00.000Z` },
+        { sequence: 2, custName: "B", kind: "delivery", plannedWindow: `${DATE}T22:03:00.000Z` },
+      ],
+    }) as unknown as Route;
+
+  it("moves an unpublished route derived 8:03 shift to 8:00 (same length) and leaves a typed time alone", async () => {
+    const m = await mods();
+    const { applyRouteWindowRatchet } = await import("./routeAutoSync");
+    const derived = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T13:03:00.000Z`, endTime: `${DATE}T23:03:00.000Z`, windowKnown: true, routeId: "rQ1", truckId: "E450", assignees: [20], source: "derived" });
+    const typed = m.createShift({ date: DATE, role: "field", headcount: 1, startTime: `${DATE}T12:50:00.000Z`, endTime: `${DATE}T23:10:00.000Z`, windowKnown: true, routeId: "rQ1", truckId: "E450", assignees: [21], source: "manual" });
+
+    const n = await applyRouteWindowRatchet({ date: DATE, routesById: new Map([["rQ1", oddRoute("rQ1")]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" });
+    expect(n).toBe(1);
+    expect(m.getShiftById(derived.id)).toMatchObject({ startTime: `${DATE}T13:00:00.000Z`, endTime: `${DATE}T23:00:00.000Z` });
+    expect(m.getShiftById(typed.id)).toMatchObject({ startTime: `${DATE}T12:50:00.000Z`, endTime: `${DATE}T23:10:00.000Z` });
+
+    // Idempotent: a second pass finds nothing to do.
+    expect(await applyRouteWindowRatchet({ date: DATE, routesById: new Map([["rQ1", oddRoute("rQ1")]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" })).toBe(0);
+  });
+});
+
 describe("applyRouteConnecteamCreate (silent + honest)", () => {
   it("creates a SILENT Connecteam shift and stores the returned id (idempotent link)", async () => {
     const { createShift, getShiftById, applyRouteConnecteamCreate } = await mods();

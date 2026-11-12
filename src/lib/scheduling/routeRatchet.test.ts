@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { trackWindow, routeOwnWindow } from "./routeRatchet";
+import { trackWindow, routeOwnWindow, quarterRoundingDecision } from "./routeRatchet";
 import type { Route } from "@/lib/types";
 
 const DATE = "2026-12-10";
@@ -92,5 +92,24 @@ describe("routeOwnWindow", () => {
 
   it("is unknown for a route with no stop times", () => {
     expect(routeOwnWindow(route([])).known).toBe(false);
+  });
+});
+
+describe("quarterRoundingDecision (crew start floored to the quarter hour)", () => {
+  const raw = { start: at(8, 3), end: at(16, 3), known: true };
+  const routeDerived = { start: at(8, 3), end: at(16, 3), windowKnown: true };
+
+  it("applies to a route derived shift that is not in Connecteam yet", () => {
+    expect(quarterRoundingDecision(routeDerived, raw, { linked: false, republishApproved: false })).toBe("apply");
+  });
+  it("holds a shift already in Connecteam until the owner approves", () => {
+    expect(quarterRoundingDecision(routeDerived, raw, { linked: true, republishApproved: false })).toBe("hold_published");
+    expect(quarterRoundingDecision(routeDerived, raw, { linked: true, republishApproved: true })).toBe("apply");
+  });
+  it("leaves a time a person typed alone", () => {
+    expect(quarterRoundingDecision({ start: at(7, 50), end: at(16, 10), windowKnown: true }, raw, { linked: false, republishApproved: true })).toBe("hold_manual");
+  });
+  it("is not a rounding case when the route itself moved", () => {
+    expect(quarterRoundingDecision({ start: at(9, 3), end: at(17, 3), windowKnown: true }, raw, { linked: true, republishApproved: false })).toBe("not_rounding");
   });
 });

@@ -10,6 +10,7 @@
 // Connecteam silently, then announce it — lives in routeAutoSync.ts (applyRouteWindowRatchet).
 
 import { routeWindow } from "@/lib/risk/engine";
+import { crewWindow } from "./quarterHour";
 import { DEFAULT_RISK_CONFIG, type EngineRoute } from "@/lib/risk/types";
 import type { Route } from "@/lib/types";
 
@@ -71,9 +72,11 @@ export function trackWindow(shift: WindowISO, route: { start: string | null; end
   return { start: new Date(newS).toISOString(), end: new Date(newE).toISOString(), windowKnown: true, changed: true, reason };
 }
 
-/** A route's OWN stop-derived window (not the shift's), buffers included — the signal for where the route
- *  now sits in the day. Mirrors preCheck.routeAssignWindow's EngineRoute mapping but always the route's own. */
-export function routeOwnWindow(route: Route): { start: string | null; end: string | null; known: boolean } {
+/** A route's OWN stop-derived CREW window (not the shift's), buffers included, start floored to the quarter
+ *  hour (quarterHour.ts) — the signal for where the route now sits in the day. Mirrors
+ *  preCheck.routeAssignWindow's EngineRoute mapping but always the route's own. `opts.raw` skips the rounding
+ *  (used to tell a rounding-only move from a real route change). */
+export function routeOwnWindow(route: Route, opts: { raw?: boolean } = {}): { start: string | null; end: string | null; known: boolean } {
   const er: EngineRoute = {
     routeId: route.routeId,
     truckId: route.truckId,
@@ -84,7 +87,32 @@ export function routeOwnWindow(route: Route): { start: string | null; end: strin
     driverName: route.driverName,
     stops: route.stops.map((s) => ({ sequence: s.sequence, custName: s.custName, kind: s.kind, plannedWindow: s.plannedWindow, eta: s.eta, items: s.items })),
   };
-  const w = routeWindow(er, DEFAULT_RISK_CONFIG);
-  if (!w) return { start: null, end: null, known: false };
+  const raw = routeWindow(er, DEFAULT_RISK_CONFIG);
+  if (!raw) return { start: null, end: null, known: false };
+  const w = opts.raw ? raw : crewWindow(raw);
   return { start: new Date(w.startUnix * 1000).toISOString(), end: new Date(w.endUnix * 1000).toISOString(), known: true };
+}
+
+export type QuarterRounding = "not_rounding" | "apply" | "hold_published" | "hold_manual";
+
+/**
+ * PURE. Is this shift about to move ONLY because the crew start is now floored to the quarter hour, and if so
+ * may it? (Owner rule 2026-11-12.)
+ *  - not_rounding: the shift does not cover the RAW route either, so this is a real route change → normal tracking.
+ *  - hold_manual: it covers the raw route but its start is not the raw route start, so a person set that time
+ *    (or it is deliberately generous) → leave it alone.
+ *  - hold_published: route derived, but already in Connecteam → do NOT re-push until the owner approves
+ *    (changing a schedule people already see). `republishApproved` lifts this.
+ *  - apply: route derived and not in Connecteam yet → take the quarter hour start.
+ */
+export function quarterRoundingDecision(
+  shift: WindowISO,
+  rawRoute: { start: string | null; end: string | null; known: boolean },
+  opts: { linked: boolean; republishApproved: boolean },
+): QuarterRounding {
+  if (trackWindow(shift, rawRoute).changed) return "not_rounding";
+  const derived = Boolean(shift.start && rawRoute.start && Date.parse(shift.start) === Date.parse(rawRoute.start));
+  if (!derived) return "hold_manual";
+  if (opts.linked && !opts.republishApproved) return "hold_published";
+  return "apply";
 }

@@ -107,3 +107,35 @@ describe("buildDemand", () => {
     expect(buildDemand([route({ stops: [] })])).toHaveLength(0);
   });
 });
+
+describe("buildDemand: crew start on the quarter hour", () => {
+  it("rounds an odd minute start DOWN to the quarter and keeps the length (9:03 first stop → 8:00 crew start)", () => {
+    // Nov 14 2026 is EST: 14:03Z = 9:03 AM first stop, so the 60 min load buffer puts the raw start at 8:03.
+    const r = route({
+      date: "2026-11-14",
+      stops: [
+        stop({ sequence: 1, plannedWindow: "2026-11-14T14:03:00.000Z" }),
+        stop({ sequence: 2, plannedWindow: "2026-11-14T17:33:00.000Z" }),
+      ],
+    });
+    const driver = buildDemand([r]).find((s) => s.role === "driver")!;
+    expect(driver.startTime).toBe("2026-11-14T13:00:00.000Z"); // 8:00 AM, not 8:03
+    const rawLen = (Date.parse("2026-11-14T17:33:00.000Z") + 60 * 60000) - (Date.parse("2026-11-14T14:03:00.000Z") - 60 * 60000);
+    expect(Date.parse(driver.endTime!) - Date.parse(driver.startTime!)).toBe(rawLen);
+  });
+});
+
+describe("buildDemand: the real Nov 14 2026 route (Isuzu NPR 1)", () => {
+  it("stops at 8:40 AM, 12:00 PM, 2:40 PM → crew start 7:40 floors to 7:30 AM", () => {
+    const r = route({
+      date: "2026-11-14",
+      stops: [
+        stop({ sequence: 1, plannedWindow: "2026-11-14T08:40:00.000-05:00" }),
+        stop({ sequence: 2, plannedWindow: "2026-11-14T12:00:00.000-05:00" }),
+        stop({ sequence: 3, plannedWindow: "2026-11-14T14:40:00.000-05:00" }),
+      ],
+    });
+    const driver = buildDemand([r]).find((s) => s.role === "driver")!;
+    expect(driver.startTime).toBe("2026-11-14T12:30:00.000Z"); // 7:30 AM EST
+  });
+});
