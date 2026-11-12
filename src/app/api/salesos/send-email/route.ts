@@ -81,5 +81,5 @@ export async function POST(req: Request): Promise<NextResponse> {
     /* note is best-effort — never fail the send over it */
   }
 
-  return NextResponse.json({ ok: true, queued: true, message: "Queued — it sends on the next Auto-Pull cycle from the office machine." });
+  return NextResponse.json({ ok: true, queued: true, message: "Queued. It sends on the next Auto-Pull cycle." });
 }

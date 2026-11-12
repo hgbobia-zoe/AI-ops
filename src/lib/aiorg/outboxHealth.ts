@@ -184,12 +184,12 @@ export function evaluateOutbox(summary: OutboxSummary, now: number, t: OutboxThr
       const n = Math.max(summary.stuckCount, 1);
       const names = summary.stuck.map((s) => s.label || s.op).join(", ");
       reasons.push(
-        `${plural(n, "change")} stuck in the queue, oldest ${formatAge(summary.oldestDueAgeMs)}${names ? ` (${names})` : ""}. Other changes are landing, so the office browser is fine`,
+        `${plural(n, "change")} stuck in the queue, oldest ${formatAge(summary.oldestDueAgeMs)}${names ? ` (${names})` : ""}. Other changes are landing, so Auto-Pull is running`,
       );
     } else {
       drainerDown = true;
       const since = summary.lastLandedAgeMs !== null ? `nothing has landed in ${formatAge(summary.lastLandedAgeMs)}` : "nothing has landed recently";
-      reasons.push(`${since} and the oldest change has waited ${formatAge(summary.oldestDueAgeMs)}. The office browser may be closed or signed out of Goodshuffle`);
+      reasons.push(`${since} and the oldest change has waited ${formatAge(summary.oldestDueAgeMs)}. Auto-Pull may have stopped: no teammate's Chrome looks signed in to Goodshuffle`);
     }
   }
   if (summary.due > t.depthAlarm) {

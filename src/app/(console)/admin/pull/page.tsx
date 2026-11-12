@@ -115,19 +115,18 @@ export default async function PullSetupPage(): Promise<React.JSX.Element> {
           <Puzzle className="size-5" /> Auto-Pull extension (recommended)
         </h2>
         <p className="text-sm text-muted-foreground">
-          Install once on the <b>office machine</b>, then just stay <b>signed into Goodshuffle</b> in that browser —
-          <b> there&apos;s no tab to keep open</b>. The extension schedules itself and opens/keeps its own background
+          Everyone in the office installs it in their own Chrome, then just stays <b>signed into Goodshuffle</b> there.
+          <b> There&apos;s no tab to keep open</b>. The extension schedules itself and opens/keeps its own background
           Goodshuffle tab. It runs on <b>two tiers</b>: a <b>fast lane every {FAST_MIN} minutes</b> (today&apos;s routes,
           active bookings, notes and queued pushes) and a <b>full history sweep every {FULL_MIN} minutes</b> (the whole
           archive for finance and reporting). And when you log into Zoe Ops, it kicks an immediate sync (prompting a
-          Goodshuffle sign-in only if needed). Everyone else just uses the app; only this one machine needs it.
+          Goodshuffle sign-in only if needed). Every signed-in copy keeps the app current, so one signed-out laptop
+          stops nothing; the app only goes stale when no one&apos;s Chrome is signed in.
         </p>
         <p className="border-l-2 border-indigo-400/40 pl-3 text-[13px] text-muted-foreground">
-          <b>Install only on the office machine(s)</b> that stay signed in, not on everyone&apos;s computer. Sign into
-          both <b>Goodshuffle</b> and <b>Instawork</b> there (Instawork powers the temp-labor sync). Once it&apos;s
-          published to the Chrome Web Store, install from the store link (open it in Chrome, Add to Chrome) and it
-          <b> auto-updates</b> with no more manual reloads. Until then, use the download below and re-load it after an
-          update.
+          <b>Install from the Chrome Web Store</b> (open the store link in Chrome, Add to Chrome) so it
+          <b> auto-updates</b>. The download below is only for Load unpacked testing. On the machine that runs the
+          temp-labor sync, sign into <b>Instawork</b> too.
         </p>
 
         {/* Live status from the extension heartbeats — the whole fleet, not a single install */}

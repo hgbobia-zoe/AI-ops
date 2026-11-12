@@ -29,7 +29,7 @@ export function PullRoutesButton(): React.JSX.Element {
     const chromeApi = (window as unknown as { chrome?: ChromeRuntimeLike }).chrome;
     if (!chromeApi?.runtime || typeof chromeApi.runtime.sendMessage !== "function") {
       toast.error("Auto-Pull extension not found in this browser", {
-        description: "Routes pull from the office machine that has the extension and a signed-in Goodshuffle. See Admin → Pull Routes.",
+        description: "Routes pull from any Chrome that has Auto-Pull and a signed-in Goodshuffle. Install it from the Chrome Web Store, or see Admin, Pull Routes.",
       });
       return;
     }

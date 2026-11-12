@@ -32,7 +32,7 @@ const STATE: Record<JobState, { tone: Tone; label: string }> = {
   stale: { tone: "attention", label: "Stale" },
   never: { tone: "neutral", label: "No run yet" },
   not_configured: { tone: "neutral", label: "Not set up" },
-  browser_pending: { tone: "info", label: "Office browser" },
+  browser_pending: { tone: "info", label: "Auto-Pull" },
 };
 
 const when = (iso: string | null): string => {
@@ -179,7 +179,7 @@ export default async function AutomationPage(): Promise<React.JSX.Element> {
       </section>
 
       <section>
-        <SectionTitle sub="Changes the app makes in Goodshuffle. They wait here until the logged-in office browser picks them up.">
+        <SectionTitle sub="Changes the app makes in Goodshuffle. They wait here until Auto-Pull picks them up from a teammate's Chrome.">
           Goodshuffle write-backs
         </SectionTitle>
         <Surface pad="none">
@@ -200,8 +200,8 @@ export default async function AutomationPage(): Promise<React.JSX.Element> {
             <p className="border-t border-rule px-3 py-2 text-[12px] text-secondary-text">
               Oldest waiting change was queued {Math.round(wb.summary.oldestDueAgeMs / 3_600_000)}h ago.{" "}
               {wb.summary.lastLandedAgeMs !== null && wb.summary.lastLandedAgeMs < outboxThresholds().staleHours * 3_600_000
-                ? "Other changes are landing, so the office browser is fine; see the stuck items below."
-                : "If it keeps growing, open Goodshuffle in the office browser."}
+                ? "Other changes are landing, so Auto-Pull is running; see the stuck items below."
+                : "If it keeps growing, make sure someone's Chrome with Auto-Pull is open and signed in to Goodshuffle."}
             </p>
           )}
           {wb.summary.unhandledOps.length > 0 && (
