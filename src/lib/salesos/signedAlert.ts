@@ -1,6 +1,6 @@
 // Contract-signed card. When a customer signs (our Goodshuffle pull sees a project go from unsigned to
 // signed, stamped as bookings.signed_at in saveBookings), the Sales Bot posts one celebration card to the
-// signed-deals channel: who closed it, the client, event, venue, contract total, and a weekly tally.
+// signed-deals channel: the client, event, venue, contract total, and a weekly count, crediting the team.
 //
 // Once per project, ever (claimed via bookings.signed_alerted_at). Test projects (TEST 1/2/3) are skipped.
 // A signing older than STALE_HOURS is stamped silently (a backlog after downtime or a kill switch flip is
@@ -35,11 +35,6 @@ function daysBetween(fromYmd: string, toYmd: string): number {
   return Math.round((Date.parse(`${toYmd}T00:00:00Z`) - Date.parse(`${fromYmd}T00:00:00Z`)) / 86_400_000);
 }
 
-function firstName(full: string | null): string | null {
-  const f = (full ?? "").trim().split(/\s+/)[0];
-  return f || null;
-}
-
 /** Monday of the Eastern week holding `todayYmd`. */
 export function weekStartYmd(todayYmd: string): string {
   const dow = new Date(`${todayYmd}T00:00:00Z`).getUTCDay(); // 0 = Sunday
@@ -48,23 +43,21 @@ export function weekStartYmd(todayYmd: string): string {
 
 export interface WeekTally {
   count: number;
-  total: number;
 }
 
 /** The card for one signing. PURE: everything it shows comes from its inputs. */
 export function buildSignedCard(c: SignedCandidate, week: WeekTally, now: Date = new Date()): BotCard {
   const today = todayInOpsTz(now);
   const signedYmd = ymdInTz(DISPLAY_TZ, new Date(c.signedAt));
-  const rep = c.salesLead?.trim() || null;
-  const repFirst = firstName(rep);
 
+  // No single rep is credited: nobody owns a quote end to end yet, so the win goes to the team (owner, 2026-11-12).
   const when = signedYmd === today ? "signed today" : `signed ${formatYmdLong(signedYmd)}`;
-  let subtitle = rep ? `${rep} closed it. ` : "";
+  let subtitle: string;
   if (c.quoteSentDate) {
     const days = Math.max(0, daysBetween(c.quoteSentDate, signedYmd));
-    subtitle += `Quote sent ${formatYmdLong(c.quoteSentDate)}, ${when} (${days === 1 ? "1 day" : `${days} days`}).`;
+    subtitle = `Quote sent ${formatYmdLong(c.quoteSentDate)}, ${when} (${days === 1 ? "1 day" : `${days} days`}).`;
   } else {
-    subtitle += `${when[0].toUpperCase()}${when.slice(1)}.`;
+    subtitle = `${when[0].toUpperCase()}${when.slice(1)}.`;
   }
 
   const fields: { label: string; value: string }[] = [];
@@ -94,11 +87,9 @@ export function buildSignedCard(c: SignedCandidate, week: WeekTally, now: Date =
   // Only the contract total: deposit and balance lines take the excitement out of a win (owner, 2026-11-11).
   if (c.grandTotal != null) fields.push({ label: "Contract total", value: money(c.grandTotal) });
 
-  const tally =
-    week.count <= 1
-      ? "That's the first one signed this week."
-      : `That makes ${week.count} signed this week for ${money(week.total)}.`;
-  const body = `${repFirst ? `Nice work, ${repFirst}. ` : ""}${tally}`;
+  // The tally counts signings only, no running dollar total (owner, 2026-11-12).
+  const tally = week.count <= 1 ? "That's the first one signed this week." : `That makes ${week.count} signed this week.`;
+  const body = `Great work, team. ${tally}`;
 
   return {
     emoji: "🎉",
@@ -119,7 +110,7 @@ function weekTally(now: Date): WeekTally {
   const rows = signedSince(new Date(now.getTime() - 8 * 86_400_000).toISOString()).filter(
     (r) => !isTestProject(r.eventName) && ymdInTz(DISPLAY_TZ, new Date(r.signedAt)) >= start,
   );
-  return { count: rows.length, total: rows.reduce((s, r) => s + (r.grandTotal ?? 0), 0) };
+  return { count: rows.length };
 }
 
 /** Post a card for every newly signed project. Never throws; returns how many cards went out. */

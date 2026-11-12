@@ -66,7 +66,8 @@ describe("contract signed card", () => {
     expect(posts).toHaveLength(1);
     expect(posts[0].to).toBe("quote-signed");
     expect(posts[0].text).toContain("🎉 Contract signed: Rivera Wedding");
-    expect(posts[0].text).toContain("Jessie Medalla closed it.");
+    expect(posts[0].text).toContain("Great work, team.");
+    expect(posts[0].text).not.toContain("Jessie");
     // Later pulls, and the project flipping back and signing again, never post twice.
     sign("S1");
     saveBookings([project("S1")]);
@@ -136,31 +137,31 @@ describe("buildSignedCard", () => {
     signedAt: now.toISOString(),
   };
 
-  it("shows who closed it, the facts, and the weekly tally", () => {
-    const card = buildSignedCard(base, { count: 3, total: 21300 }, now);
+  it("credits the team, shows the facts, and counts the week without a dollar total", () => {
+    const card = buildSignedCard(base, { count: 3 }, now);
     expect(card.title).toBe("Contract signed: Rivera Wedding");
     expect(card.emoji).toBe("🎉");
-    expect(card.subtitle).toBe("Jessie Medalla closed it. Quote sent Thu, Nov 5, signed today (6 days).");
+    expect(card.subtitle).toBe("Quote sent Thu, Nov 5, signed today (6 days).");
     expect(card.fields).toEqual([
       { label: "Client", value: "Maria Rivera" },
       { label: "Delivery / pickup", value: "Sat, Jun 12, 2027 (213 days out)" },
       { label: "Venue", value: "Stone Tower Winery" },
       { label: "Contract total", value: "$8,450" },
     ]);
-    expect(card.body).toBe("Nice work, Jessie. That makes 3 signed this week for $21,300.");
+    expect(card.body).toBe("Great work, team. That makes 3 signed this week.");
     expect(card.link?.url).toBe("https://pro.goodshuffle.com/app/project/detail?id=231000001");
   });
 
   it("never shows the deposit or balance, and handles the first signing of the week", () => {
-    const card = buildSignedCard({ ...base, amountPaid: 0, amountDue: 8450 }, { count: 1, total: 8450 }, now);
+    const card = buildSignedCard({ ...base, amountPaid: 0, amountDue: 8450 }, { count: 1 }, now);
     expect(card.fields?.map((f) => f.label)).toEqual(["Client", "Delivery / pickup", "Venue", "Contract total"]);
-    expect(card.body).toBe("Nice work, Jessie. That's the first one signed this week.");
+    expect(card.body).toBe("Great work, team. That's the first one signed this week.");
   });
 
   it("works without a sales lead or quote date", () => {
-    const card = buildSignedCard({ ...base, salesLead: null, quoteSentDate: null }, { count: 2, total: 9000 }, now);
+    const card = buildSignedCard({ ...base, salesLead: null, quoteSentDate: null }, { count: 2 }, now);
     expect(card.subtitle).toBe("Signed today.");
-    expect(card.body).toBe("That makes 2 signed this week for $9,000.");
+    expect(card.body).toBe("Great work, team. That makes 2 signed this week.");
   });
 });
 
@@ -171,16 +172,18 @@ describe("amounts and dates", () => {
     sign("A1", { grandTotal: undefined, contractTotal: undefined, amountPaid: undefined, amountDue: undefined });
     expect(await runSignedAlerts()).toBe(1);
     expect(posts[0].text).toContain("Contract total: $8,450");
-    // A second signing: the weekly tally adds the real totals, never $0.
+    // A second signing: the weekly count includes both, with no running dollar total.
     saveBookings([project("A2")]);
     sign("A2", { grandTotal: undefined, contractTotal: undefined, amountPaid: undefined, amountDue: undefined });
     expect(await runSignedAlerts()).toBe(1);
-    expect(posts[1].text).toContain("That makes 2 signed this week for $16,900.");
+    expect(posts[1].text).toContain("That makes 2 signed this week.");
+    expect(posts[1].text).toContain("Contract total: $8,450");
+    expect(posts[1].text).not.toContain("$16,900");
   });
 
   it("labels the date by what it is", () => {
     const c = { bookingId: "1", eventName: "X", eventDate: "2027-06-12", clientName: "C", venue: null, location: null, salesLead: null, grandTotal: 100, amountPaid: 0, amountDue: 100, quoteSentDate: null, eventStart: null, signedAt: new Date().toISOString() };
-    const label = (delivers: number | null) => buildSignedCard({ ...c, delivers }, { count: 1, total: 100 }).fields?.[1].label;
+    const label = (delivers: number | null) => buildSignedCard({ ...c, delivers }, { count: 1 }).fields?.[1].label;
     expect(label(1)).toBe("Delivery");
     expect(label(0)).toBe("Customer pickup");
     expect(label(null)).toBe("Delivery / pickup");
@@ -189,13 +192,13 @@ describe("amounts and dates", () => {
   it("leads with the real event date and time, then the logistics day when it differs", () => {
     const now = new Date("2026-11-11T22:14:00Z");
     const c = { bookingId: "1", eventName: "X", eventDate: "2026-11-13", clientName: "C", venue: null, location: null, salesLead: null, grandTotal: 108.01, amountPaid: 0, amountDue: 0, quoteSentDate: null, delivers: null, signedAt: now.toISOString() };
-    const card = buildSignedCard({ ...c, eventStart: "2026-11-14T15:30:00.000Z" }, { count: 1, total: 108.01 }, now);
+    const card = buildSignedCard({ ...c, eventStart: "2026-11-14T15:30:00.000Z" }, { count: 1 }, now);
     expect(card.fields?.slice(1, 3)).toEqual([
       { label: "Event date", value: "Sat, Nov 14, 2026, 10:30 AM (3 days out)" },
       { label: "Delivery / pickup", value: "Fri, Nov 13" },
     ]);
     // Same day as the logistics date: just the event line.
-    const same = buildSignedCard({ ...c, eventDate: "2026-11-14", eventStart: "2026-11-14T23:00:00.000Z" }, { count: 1, total: 1 }, now);
+    const same = buildSignedCard({ ...c, eventDate: "2026-11-14", eventStart: "2026-11-14T23:00:00.000Z" }, { count: 1 }, now);
     expect(same.fields?.map((f) => f.label)).toEqual(["Client", "Event date", "Contract total"]);
     expect(same.fields?.[1].value).toBe("Sat, Nov 14, 2026, 6:00 PM (3 days out)");
   });
