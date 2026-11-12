@@ -624,27 +624,27 @@ function CreatingScreen({ intake, setIntake, setPhase }: { intake: Intake; setIn
       <div className="mx-auto flex min-h-[calc(100dvh-8rem)] max-w-xl flex-col items-center justify-center px-4 text-center">
         <Loader2 className="size-8 animate-spin text-foreground" />
         <h1 className="mt-4 text-[20px] font-medium">Creating the project in Goodshuffle…</h1>
-        <p className="mt-2 max-w-sm text-[13px] text-meta">Your project is saved. This runs through the logged-in office browser, so it can take a few seconds.</p>
+        <p className="mt-2 max-w-sm text-[13px] text-meta">Your project is saved. Auto-Pull creates it from Chrome, so it can take a few seconds.</p>
       </div>
     );
   }
 
   // Honest queued state — never a dead spinner. We keep polling in the background, so this flips to the
-  // success screen on its own the instant the office browser finishes.
+  // success screen on its own the instant Auto-Pull finishes.
   return (
     <div className="mx-auto flex min-h-[calc(100dvh-8rem)] max-w-xl flex-col items-center justify-center px-4 text-center">
       <div className="flex size-12 items-center justify-center rounded-full border border-attention/40 bg-attention/[0.08]"><Loader2 className="size-6 animate-spin text-attention" /></div>
-      <h1 className="mt-4 text-[20px] font-medium">Queued — waiting for the office browser</h1>
+      <h1 className="mt-4 text-[20px] font-medium">Queued, waiting for Auto-Pull</h1>
       <p className="mt-2 max-w-md text-[13px] text-meta">
-        Your project is saved and queued. The Goodshuffle project is created by the logged-in office browser (Auto-Pull).
+        Your project is saved and queued. Auto-Pull creates the Goodshuffle project from any teammate&apos;s Chrome that is signed in to Goodshuffle.
         It hasn&apos;t picked this up yet. This screen will update the moment it does — you can safely leave it open.
       </p>
       <div className="mt-5 flex flex-col items-center gap-2">
         <button onClick={() => void createNow()} disabled={nudged === "asking"} className="flex items-center gap-2 rounded border border-foreground/70 bg-foreground/[0.06] px-5 py-2.5 text-[14px] font-medium transition-colors hover:bg-[var(--row-hover)] disabled:opacity-50">
           <RefreshCw className={`size-4 ${nudged === "asking" ? "animate-spin" : ""}`} /> Create now
         </button>
-        {nudged === "asked" && <p className="text-[12px] text-emerald-300">Asked the office browser to create it now.</p>}
-        {nudged === "unavailable" && <p className="max-w-md text-[12px] text-attention">The office Auto-Pull extension isn&apos;t in this browser. Run this on the office machine, or it will create on the next Auto-Pull cycle.</p>}
+        {nudged === "asked" && <p className="text-[12px] text-emerald-300">Asked Auto-Pull in this Chrome to create it now.</p>}
+        {nudged === "unavailable" && <p className="max-w-md text-[12px] text-attention">Auto-Pull isn&apos;t installed in this browser, so it will create on the next cycle from a teammate&apos;s Chrome. Install Auto-Pull from the Chrome Web Store to create it from here.</p>}
       </div>
     </div>
   );

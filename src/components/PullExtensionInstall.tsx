@@ -58,9 +58,9 @@ export function PullExtensionInstall({ downloadHref, version }: { downloadHref: 
       </ol>
 
       <p className="text-[12px] text-muted-foreground">
-        Do this on the <b>office machine only</b> — the one that stays signed into Goodshuffle. The pull feeds the whole
-        team; nobody else needs to install anything. Use the same browser that&apos;s signed into GSPRO. Logging into Zoe Ops
-        in this browser also kicks an immediate sync.
+        Each teammate can run it in their own Chrome; every copy that is signed into Goodshuffle keeps the whole team
+        current. Use the same browser that&apos;s signed into GSPRO. Logging into Zoe Ops in this browser also kicks an
+        immediate sync.
       </p>
     </div>
   );

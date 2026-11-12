@@ -63,7 +63,7 @@ export function deliveryPushDisplay(input: PushDisplayInput): PushDisplay {
   if (extReachable === false) {
     return {
       kind: "queued",
-      text: "Queued. The office Auto-Pull browser isn't in this tab, so it applies on the next Auto-Pull (or open this on the office machine to apply it now).",
+      text: "Queued. Auto-Pull isn't installed in this browser, so it applies on the next cycle from a teammate's Chrome.",
       tone: "attention",
       showPushNow: true,
     };
@@ -75,7 +75,7 @@ export function deliveryPushDisplay(input: PushDisplayInput): PushDisplay {
   }
   return {
     kind: "queued",
-    text: "Queued — waiting for the office browser. This updates the moment it lands.",
+    text: "Queued, waiting for Auto-Pull. This updates the moment it lands.",
     tone: "attention",
     showPushNow: true,
   };

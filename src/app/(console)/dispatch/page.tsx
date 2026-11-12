@@ -309,7 +309,7 @@ async function DispatchBoard({ date, today }: { date: string; today: string }) {
           <ErrorState
             tone="attention"
             title="No route data retrieved"
-            body="Routes have not been pulled from Goodshuffle yet. Start the Auto-Pull on the office machine, or pull now."
+            body="Routes have not been pulled from Goodshuffle yet. Sign in to Goodshuffle in a Chrome that has Auto-Pull, or pull now."
             action={<PullRoutesButton />}
           />
         )

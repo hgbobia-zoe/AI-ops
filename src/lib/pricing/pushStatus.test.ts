@@ -35,7 +35,7 @@ describe("deliveryPushDisplay", () => {
     const d = deliveryPushDisplay({ status: "pending", waitedSec: 1, extReachable: false });
     expect(d.kind).toBe("queued");
     expect(d.tone).toBe("attention");
-    expect(d.text).toMatch(/office/i);
+    expect(d.text).toMatch(/teammate's Chrome/i);
     expect(d.showPushNow).toBe(true);
   });
 

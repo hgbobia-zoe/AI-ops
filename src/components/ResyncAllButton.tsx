@@ -46,8 +46,8 @@ export function ResyncAllButton({ routeIds }: { routeIds: string[] }): React.JSX
       //    to /api/route/import, which consumes each flag and force-applies the Goodshuffle order.
       const chromeApi = (window as unknown as { chrome?: ChromeRuntimeLike }).chrome;
       if (!chromeApi?.runtime || typeof chromeApi.runtime.sendMessage !== "function") {
-        toast.warning("Re-sync armed. Run the pull from the office machine.", {
-          description: "This browser has no Auto-Pull extension. Open the office machine (Admin, Pull Routes) to apply the Goodshuffle order.",
+        toast.warning("Re-sync armed. It applies on the next Auto-Pull.", {
+          description: "This browser has no Auto-Pull, so a teammate's Chrome applies the Goodshuffle order on its next cycle. Install Auto-Pull here to apply it now.",
         });
         return;
       }
@@ -57,7 +57,7 @@ export function ResyncAllButton({ routeIds }: { routeIds: string[] }): React.JSX
         if (chromeApi.runtime?.lastError) {
           toast.error("Couldn't reach the Auto-Pull extension", {
             id: "resync-all",
-            description: "Re-sync is armed. Run the pull from the office machine to apply it.",
+            description: "Re-sync is armed. It applies on the next Auto-Pull.",
           });
           return;
         }

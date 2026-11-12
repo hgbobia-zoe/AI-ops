@@ -746,7 +746,7 @@ export function DeliveryCalculator(): React.JSX.Element {
                     {legsDiffer
                       ? `, the average of the drop-off (${money(q.dropOff!.total)}) and the pickup (${money(q.pickup!.total)}), so the round trip in Goodshuffle matches ${money(q.total)} to within a cent`
                       : ""}
-                    . Applied through the logged-in office browser, usually within seconds.
+                    . Applied by Auto-Pull in Chrome, usually within seconds.
                   </p>
                   {push?.phase === "error" && <p className="text-xs text-red-400">{push.text}</p>}
                   {display && (
