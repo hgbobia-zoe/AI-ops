@@ -904,9 +904,11 @@ async function openLoginTab() {
 // ── Live subtotal (on-demand, for the Delivery Pricing calculator) ──────────────────
 // The Zoe app page asks (externally_connectable) for a project's CURRENT pre-discount subtotal. We run a
 // same-origin fetch IN the signed-in GS tab via chrome.scripting.executeScript (the tab carries the
-// operator's GS cookies) and return the live value. Reads the SAME field the pull captures —
-// searchProjects results' `contract_subtotal` (CENTS) — and returns it in DOLLARS so it matches the
-// calculator's expectation. Never server-side (GS is Cloudflare-blocked there).
+// operator's GS cookies) and return the live value in DOLLARS. Never server-side (GS is Cloudflare-blocked).
+//
+// Reads the project's own contract totals (loadPaymentHistoryAndContractTotals), ONE call, no paging.
+// searchProjects is NOT used: Goodshuffle caps it at 100 rows a page (pageSize=500 is ignored), and its
+// contract_subtotal is 0 on every unsigned quote and post-discount on signed ones (verified live 2026-11-12).
 
 /** Resolve once the given tab reports status "complete", or after timeoutMs. */
 function waitForTabComplete(tabId, timeoutMs) {
@@ -925,34 +927,33 @@ function waitForTabComplete(tabId, timeoutMs) {
   });
 }
 
-/** Injected INTO the GS tab (runs in its page origin). Pages searchProjects (newest-logistics first, all
- *  statuses incl. archived) with early-exit on the matching project id, and returns its pre-discount
- *  contract_subtotal in dollars. Fully self-contained — executeScript serializes this function. */
+/** Injected INTO the GS tab (runs in its page origin). Returns the project's pre-discount subtotal in
+ *  dollars: contractOriginalSubTotal (CENTS, before discount) minus the logistics lines, so a delivery fee
+ *  already on the quote never feeds its own percentage (a re-push would otherwise ratchet it up).
+ *  Fully self-contained: executeScript serializes this function. */
 async function gsReadSubtotal(projectId) {
   const H = { headers: { "x-requested-with": "XMLHttpRequest", accept: "application/json" }, credentials: "include" };
   const AUTH_RE = /\/(ui\/auth|app\/login|login|signin|auth)\b/i;
-  const target = String(projectId);
   try {
-    for (let pg = 0; pg < 12; pg++) {
-      const r = await fetch(
-        "/app/project/searchProjects?page=" + pg + "&pageSize=500&allProjects=true&sortColumn=logistics_start_date&sortDirection=desc&useV2DateHandling=true",
-        H,
-      );
-      if (r.redirected && AUTH_RE.test(r.url)) return { ok: false, reason: "signed_out" };
-      if (!r.ok) return { ok: false, reason: "http_" + r.status };
-      const b = await r.json();
-      const ps = b && b.projectSearch;
-      if (!ps) return { ok: false, reason: "no_search" };
-      const results = ps.results || [];
-      const hit = results.find((p) => p && String(p.id) === target);
-      if (hit) {
-        const cents = hit.contract_subtotal;
-        if (cents == null || isNaN(Number(cents))) return { ok: false, reason: "no_subtotal" };
-        return { ok: true, subtotal: Math.round(Number(cents)) / 100, pulledAt: new Date().toISOString() };
-      }
-      if (results.length < 500) break; // last page reached without a match
-    }
-    return { ok: false, reason: "not_found" };
+    const r = await fetch("/app/vendorPayment/loadPaymentHistoryAndContractTotals?transactionID=" + encodeURIComponent(String(projectId)), H);
+    if (r.redirected && AUTH_RE.test(r.url)) return { ok: false, reason: "signed_out" };
+    if (r.status === 404 || r.status === 403) return { ok: false, reason: "not_found" }; // 403 = no such project
+    if (!r.ok) return { ok: false, reason: "http_" + r.status };
+    const ct = r.headers.get("content-type") || "";
+    if (ct.indexOf("json") < 0) return { ok: false, reason: AUTH_RE.test(r.url) ? "signed_out" : "not_json" };
+    const b = await r.json();
+    const num = (v) => (v == null || v === "" || isNaN(Number(v)) ? null : Number(v));
+    const orig = num(b && b.contractOriginalSubTotal);
+    if (orig == null) return { ok: false, reason: "no_subtotal" };
+    const logistics = num(b.contractLogisticsSubTotal) || 0;
+    const cents = Math.max(0, orig - logistics);
+    return {
+      ok: true,
+      subtotal: Math.round(cents) / 100,
+      logistics: Math.round(logistics) / 100,
+      discount: Math.round(Math.abs(num(b.contractDiscountSubTotal) || 0)) / 100,
+      pulledAt: new Date().toISOString(),
+    };
   } catch (e) {
     return { ok: false, reason: "fetch_error" };
   }
