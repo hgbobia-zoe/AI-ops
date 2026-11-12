@@ -70,6 +70,7 @@ import { summarizeInstaworkByRole, instaworkShiftsForDate, instaworkGigsForRoute
 import { todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
 import { routeWindow } from "@/lib/risk/engine";
+import { crewWindow } from "@/lib/scheduling/quarterHour";
 import { DEFAULT_RISK_CONFIG, type EngineRoute } from "@/lib/risk/types";
 import type { Route } from "@/lib/types";
 import { BladeAgents } from "@/components/aiorg/BladeAgents";
@@ -108,8 +109,9 @@ function routeOwnWindow(route: Route): { start: string | null; end: string | nul
     driverName: route.driverName,
     stops: route.stops.map((s) => ({ sequence: s.sequence, custName: s.custName, kind: s.kind, plannedWindow: s.plannedWindow, eta: s.eta, items: s.items })),
   };
-  const w = routeWindow(er, DEFAULT_RISK_CONFIG);
-  if (!w) return { start: null, end: null, known: false };
+  const raw = routeWindow(er, DEFAULT_RISK_CONFIG);
+  if (!raw) return { start: null, end: null, known: false };
+  const w = crewWindow(raw); // crew start on the quarter hour, same as the shifts we build (quarterHour.ts)
   return { start: new Date(w.startUnix * 1000).toISOString(), end: new Date(w.endUnix * 1000).toISOString(), known: true };
 }
 

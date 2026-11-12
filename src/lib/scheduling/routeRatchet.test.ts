@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { trackWindow, routeOwnWindow } from "./routeRatchet";
+import { trackWindow, routeOwnWindow, quarterRoundingDecision } from "./routeRatchet";
 import type { Route } from "@/lib/types";
 
 const DATE = "2026-12-10";
@@ -92,5 +92,39 @@ describe("routeOwnWindow", () => {
 
   it("is unknown for a route with no stop times", () => {
     expect(routeOwnWindow(route([])).known).toBe(false);
+  });
+});
+
+describe("quarterRoundingDecision (crew start rounded to the nearest quarter, end stays)", () => {
+  const raw = { start: at(7, 40), end: at(15, 40), known: true };
+  const crew = { start: at(7, 45), end: at(15, 40), known: true };
+  const routeDerived = { start: at(7, 40), end: at(17, 0), windowKnown: true };
+  const opts = (linked: boolean, republishApproved = false) => ({ linked, republishApproved });
+
+  it("applies the rounded start to a route derived shift not yet in Connecteam", () => {
+    expect(quarterRoundingDecision(routeDerived, raw, crew, opts(false))).toEqual({ kind: "apply", start: at(7, 45) });
+  });
+  it("holds a shift already in Connecteam until the owner approves", () => {
+    expect(quarterRoundingDecision(routeDerived, raw, crew, opts(true))).toEqual({ kind: "hold_published", start: at(7, 45) });
+    expect(quarterRoundingDecision(routeDerived, raw, crew, opts(true, true))).toEqual({ kind: "apply", start: at(7, 45) });
+  });
+  it("leaves a time a person typed alone", () => {
+    expect(quarterRoundingDecision({ start: at(7, 35), end: at(17, 0), windowKnown: true }, raw, crew, opts(false, true))).toEqual({ kind: "hold_manual" });
+  });
+  it("is idempotent: an already rounded shift is left as is", () => {
+    expect(quarterRoundingDecision({ start: at(7, 45), end: at(17, 0), windowKnown: true }, raw, crew, opts(false)).kind).toBe("not_rounding");
+    expect(trackWindow({ start: at(7, 45), end: at(17, 0), windowKnown: true }, crew).changed).toBe(false);
+  });
+  it("does nothing when the route start is already on a quarter", () => {
+    const onQ = { start: at(7, 45), end: at(15, 40), known: true };
+    expect(quarterRoundingDecision({ start: at(7, 45), end: at(17, 0), windowKnown: true }, onQ, onQ, opts(false))).toEqual({ kind: "none" });
+  });
+  it("keeps the original start when rounding would reach the shift end", () => {
+    const shortRaw = { start: at(8, 10), end: at(8, 14), known: true };
+    const shortCrew = { start: at(8, 15), end: at(8, 14), known: true };
+    expect(quarterRoundingDecision({ start: at(8, 10), end: at(8, 14), windowKnown: true }, shortRaw, shortCrew, opts(false))).toEqual({ kind: "none" });
+  });
+  it("is not a rounding case when the route itself moved", () => {
+    expect(quarterRoundingDecision({ start: at(9, 3), end: at(17, 3), windowKnown: true }, raw, crew, opts(true)).kind).toBe("not_rounding");
   });
 });

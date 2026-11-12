@@ -58,7 +58,7 @@ import type { CrewShift, CrewRole } from "@/lib/connecteam";
 import { planRouteAutoAssign, isAutoRouteEligible, type RouteAutoAssignPlan, type AutoAssignDecision } from "./routeAutoAssign";
 import { resolveDriverSeniority, type SeniorityRouteMeta } from "./driverSeniority";
 import { routeSpecialty } from "./routeSpecialty";
-import { trackWindow, routeOwnWindow } from "./routeRatchet";
+import { trackWindow, routeOwnWindow, quarterRoundingDecision, type RatchetOutcome } from "./routeRatchet";
 import { getSettings } from "@/lib/settings";
 import type { ShiftRole, StaffShift } from "./types";
 import type { Route } from "@/lib/types";
@@ -651,6 +651,12 @@ function hhmm(iso: string | null): string {
  * no flag). Every move is announced in Slack so a human can see it and override. Returns the count of shifts
  * moved. Honest-when-unreachable: a failed Connecteam push skips that shift (retry next tick).
  */
+/** Owner approval gate for re-pushing ALREADY PUBLISHED shifts to the quarter hour start. Off until the owner
+ *  says yes (it changes a schedule crew already see); set SHIFT_QUARTER_REPUBLISH=true to apply. */
+export function quarterRepublishApproved(): boolean {
+  return process.env.SHIFT_QUARTER_REPUBLISH === "true";
+}
+
 export async function applyRouteWindowRatchet(deps: {
   date: string;
   routesById: Map<string, Route>;
@@ -664,12 +670,27 @@ export async function applyRouteWindowRatchet(deps: {
   for (const route of deps.routesById.values()) {
     const rw = routeOwnWindow(route);
     if (!rw.known) continue; // no route window to compare against — nothing to ratchet
+    const rawRw = routeOwnWindow(route, { raw: true });
     const routeShifts = dayShifts.filter(
       (s) => s.routeId === route.routeId && (s.role === "driver" || s.role === "field") && s.status !== "cancelled",
     );
     for (const shift of routeShifts) {
-      const out = trackWindow({ start: shift.startTime, end: shift.endTime, windowKnown: shift.windowKnown }, rw);
-      if (!out.changed || !out.start || !out.end) continue;
+      const cur = { start: shift.startTime, end: shift.endTime, windowKnown: shift.windowKnown };
+      // Quarter hour crew starts (quarterHour.ts): rounding moves ONLY the start (the end stays), never touches
+      // a time a person typed, and never re-pushes a shift already in Connecteam until the owner approves
+      // (SHIFT_QUARTER_REPUBLISH=true). It is a tidy up, so it is audited but not announced in Slack.
+      const rounding = quarterRoundingDecision(cur, rawRw, rw, { linked: Boolean(shift.connecteamShiftId), republishApproved: quarterRepublishApproved() });
+      let out: RatchetOutcome;
+      if (rounding.kind === "not_rounding") {
+        out = trackWindow(cur, rw);
+        if (!out.changed || !out.start || !out.end) continue;
+      } else if (rounding.kind === "apply" && shift.endTime) {
+        out = { start: rounding.start, end: shift.endTime, windowKnown: true, changed: true, reason: "the start was rounded to the nearest quarter hour" };
+      } else {
+        continue; // none / hold_manual / hold_published
+      }
+      if (!out.start || !out.end) continue;
+      const roundingOnly = rounding.kind === "apply";
 
       // Linked to Connecteam → push the grown window silently FIRST; only expand the app side if it sticks.
       if (shift.connecteamShiftId) {
@@ -707,6 +728,7 @@ export async function applyRouteWindowRatchet(deps: {
         reason: out.reason,
         pushedToConnecteam: Boolean(shift.connecteamShiftId),
       });
+      if (roundingOnly) continue; // audited above; a few minutes earlier is not worth a Slack card
       const who = shift.assignees.map((u) => deps.nameOf(u) || `#${u}`).join(", ") || "the crew";
       const truck = shift.truckId ? deps.truckNameOf(shift.truckId) : "the route";
       // "moved" when the block slid earlier/later; "extended" when it only grew at the end.

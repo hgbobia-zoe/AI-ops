@@ -17,6 +17,7 @@
 // than a made-up time. Done/closed routes are skipped.
 
 import { routeWindow } from "@/lib/risk/engine";
+import { crewWindow } from "./quarterHour";
 import { DEFAULT_RISK_CONFIG, type RiskConfig, type EngineRoute } from "@/lib/risk/types";
 import { crewForRoute } from "@/lib/crewRules";
 import type { Route } from "@/lib/types";
@@ -74,7 +75,9 @@ export function buildDemand(
   const eventDate = active[0].date;
 
   for (const r of active) {
-    const win = routeWindow(toEngineRoute(r), cfg);
+    // Crew start rounded to the nearest quarter hour (8:03 → 8:00, 7:40 → 7:45); the end stays. See quarterHour.ts.
+    const raw = routeWindow(toEngineRoute(r), cfg);
+    const win = raw ? crewWindow(raw) : null;
     const start = win ? isoFromUnix(win.startUnix) : null;
     const end = win ? isoFromUnix(win.endUnix) : null;
     const label = routeLabel(r);

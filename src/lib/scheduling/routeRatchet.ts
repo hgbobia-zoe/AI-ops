@@ -10,6 +10,7 @@
 // Connecteam silently, then announce it — lives in routeAutoSync.ts (applyRouteWindowRatchet).
 
 import { routeWindow } from "@/lib/risk/engine";
+import { crewWindow } from "./quarterHour";
 import { DEFAULT_RISK_CONFIG, type EngineRoute } from "@/lib/risk/types";
 import type { Route } from "@/lib/types";
 
@@ -71,9 +72,11 @@ export function trackWindow(shift: WindowISO, route: { start: string | null; end
   return { start: new Date(newS).toISOString(), end: new Date(newE).toISOString(), windowKnown: true, changed: true, reason };
 }
 
-/** A route's OWN stop-derived window (not the shift's), buffers included — the signal for where the route
- *  now sits in the day. Mirrors preCheck.routeAssignWindow's EngineRoute mapping but always the route's own. */
-export function routeOwnWindow(route: Route): { start: string | null; end: string | null; known: boolean } {
+/** A route's OWN stop-derived CREW window (not the shift's), buffers included, start rounded to the nearest quarter
+ *  hour, end unchanged (quarterHour.ts) — the signal for where the route now sits in the day. Mirrors
+ *  preCheck.routeAssignWindow's EngineRoute mapping but always the route's own. `opts.raw` skips the rounding
+ *  (used to tell a rounding-only move from a real route change). */
+export function routeOwnWindow(route: Route, opts: { raw?: boolean } = {}): { start: string | null; end: string | null; known: boolean } {
   const er: EngineRoute = {
     routeId: route.routeId,
     truckId: route.truckId,
@@ -84,7 +87,42 @@ export function routeOwnWindow(route: Route): { start: string | null; end: strin
     driverName: route.driverName,
     stops: route.stops.map((s) => ({ sequence: s.sequence, custName: s.custName, kind: s.kind, plannedWindow: s.plannedWindow, eta: s.eta, items: s.items })),
   };
-  const w = routeWindow(er, DEFAULT_RISK_CONFIG);
-  if (!w) return { start: null, end: null, known: false };
+  const raw = routeWindow(er, DEFAULT_RISK_CONFIG);
+  if (!raw) return { start: null, end: null, known: false };
+  const w = opts.raw ? raw : crewWindow(raw);
   return { start: new Date(w.startUnix * 1000).toISOString(), end: new Date(w.endUnix * 1000).toISOString(), known: true };
+}
+
+export type QuarterRounding =
+  | { kind: "not_rounding" }
+  | { kind: "none" }
+  | { kind: "hold_manual" }
+  | { kind: "hold_published"; start: string }
+  | { kind: "apply"; start: string };
+
+/**
+ * PURE. Should this route shift take the quarter hour crew start, and may it now? (Owner rule 2026-11-12:
+ * START rounded to the NEAREST quarter, END never moved.)
+ *  - not_rounding: the shift does not cover the RAW route, so the route itself changed → normal tracking.
+ *  - none: nothing to round (the route start is already on a quarter), or rounding would reach the shift's
+ *    end (a very short shift keeps its original start).
+ *  - hold_manual: the start is not the route's own start, so a person set it (or it is deliberately
+ *    generous) → leave it alone.
+ *  - hold_published: route derived, but already in Connecteam → do NOT re-push until the owner approves
+ *    (it changes a schedule people already see). `republishApproved` lifts this.
+ *  - apply: route derived and not in Connecteam yet → move ONLY the start to `start`; the end stays.
+ */
+export function quarterRoundingDecision(
+  shift: WindowISO,
+  rawRoute: { start: string | null; end: string | null; known: boolean },
+  crewRoute: { start: string | null; end: string | null; known: boolean },
+  opts: { linked: boolean; republishApproved: boolean },
+): QuarterRounding {
+  if (trackWindow(shift, rawRoute).changed) return { kind: "not_rounding" };
+  if (!rawRoute.start || !crewRoute.start || Date.parse(crewRoute.start) === Date.parse(rawRoute.start)) return { kind: "none" };
+  const derived = Boolean(shift.start && Date.parse(shift.start) === Date.parse(rawRoute.start));
+  if (!derived) return { kind: "hold_manual" };
+  if (shift.end && Date.parse(crewRoute.start) >= Date.parse(shift.end)) return { kind: "none" };
+  if (opts.linked && !opts.republishApproved) return { kind: "hold_published", start: crewRoute.start };
+  return { kind: "apply", start: crewRoute.start };
 }
