@@ -78,6 +78,18 @@ describe("buildDayTimeline", () => {
     expect(t.people.every((r) => r.bars.length === 0)).toBe(true);
   });
 
+  it("leaves cancelled shifts off the schedule, including their Connecteam copy", () => {
+    const t = buildDayTimeline(
+      input({
+        appShifts: [shift({ id: "S1", assignees: [1], status: "cancelled", connecteamShiftId: "CT1" }), shift({ id: "S2", windowKnown: false, startTime: null, status: "cancelled" })],
+        connecteamShifts: [ct({ id: "CT1", assignees: [roster[0]] })],
+      }),
+    );
+    expect(t.people.find((r) => r.userId === 1)!.bars).toHaveLength(0);
+    expect(t.unassigned.bars).toHaveLength(0);
+    expect(t.untimed).toHaveLength(0);
+  });
+
   it("widens the visible hours to fit an early shift, defaulting to 6am to 10pm", () => {
     expect(buildDayTimeline(input())).toMatchObject({ startHour: 6, endHour: 22 });
     const t = buildDayTimeline(input({ appShifts: [shift({ id: "S1", startTime: iso(4, 30), endTime: iso(23, 15), assignees: [1] })] }));
