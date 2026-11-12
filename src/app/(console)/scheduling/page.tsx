@@ -167,7 +167,10 @@ export default async function SchedulingPage({
     .flatMap((t) => getRoutesForDate(t.truckId, date))
     .filter((r) => r.status !== "done");
 
-  const shifts = getShiftsForDate(date);
+  // A cancelled shift is off the schedule everywhere on this page (Day schedule, By route, counts, open
+  // seats, recommendations). If it was already in Connecteam, that copy still shows as a Connecteam shift
+  // until someone removes it there, because crew can still see it.
+  const shifts = getShiftsForDate(date).filter((s) => s.status !== "cancelled");
   // Per-worker assignment rows (the lifecycle keystone), kept in lock-step with assignees by the live
   // assign path. Readiness + exceptions compute over these real rows instead of a hardcoded 0.
   const assignmentsByShift = getAssignmentsForDate(date);
