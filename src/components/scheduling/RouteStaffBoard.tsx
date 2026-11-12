@@ -197,12 +197,12 @@ export function RouteStaffBoard({
     <>
       {!hasRoutes && (
         <p className="mb-4 rounded border border-border bg-[var(--row-hover)]/40 px-3 py-2.5 text-[12.5px] text-tertiary-text">
-          No routes for this day — pull routes first, or add a shift from the header.
+          No routes for this day yet. Pull routes from Goodshuffle, or use Add shift at the top.
         </p>
       )}
 
       {routeCards.length === 0 && otherShifts.length === 0 && officeShifts.length === 0 && prepCrewToday.length === 0 && prepNeed === 0 ? (
-        <p className="text-[13px] text-meta">No shifts built for this day yet.</p>
+        <p className="text-[13px] text-meta">No shifts for this day yet. Use Add shift at the top to enter one.</p>
       ) : (
         <div className="space-y-6">
           {/* Route staffing board — strict per-field columns, one row per route; click to expand. */}

@@ -1,4 +1,9 @@
-// Scheduling — the app-owned staffing schedule builder. The app is the source of truth: demand is
+// Scheduling opens on a Connecteam style day schedule (people down the side, hours across the top),
+// because that is the screen the office already knows. The route board, auto staff, overrides and the
+// proposed plan sit under the "By route" tab. Admin and diagnostic panels (connection status, roster
+// mirror, activity baseline) are folded into one collapsed section at the bottom.
+//
+// Scheduling, the app-owned staffing schedule builder. The app is the source of truth: demand is
 // derived from the day's routes (deterministic, same primitives as Event Risk), a human assigns internal
 // crew, and the remaining gap becomes the Instawork top-up. This blade is the read/build UI over that
 // model; the external pushes (Connecteam + Instawork) are wired in the next increment.
@@ -10,7 +15,9 @@ import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { DatePicker } from "@/components/DatePicker";
 import { AutoRefresh } from "@/components/AutoRefresh";
-import { FigureStrip, type Figure } from "@/components/console-primitives";
+import { SchedulingViews } from "@/components/scheduling/SchedulingViews";
+import { DayTimeline } from "@/components/scheduling/DayTimeline";
+import { buildDayTimeline, TIMELINE_ROLE_LABEL } from "@/lib/scheduling/dayTimeline";
 import {
   RouteStaffBoard,
   type RouteCardData,
@@ -47,7 +54,7 @@ import { FocusScroller } from "@/components/scheduling/FocusScroller";
 import { summarizeConnecteamSchedule, connecteamScheduleHeadline } from "@/lib/scheduling/connecteamSchedule";
 import { routePreChecksForDate } from "@/lib/scheduling/preCheck";
 import { scheduledUnroutedForDate } from "@/lib/scheduling/scheduledUnrouted";
-import { ROLE_LABEL } from "@/components/scheduling/RouteStaffBoard";
+// ROLE_LABEL from RouteStaffBoard is a "use client" export (a client reference here, so undefined); use the server-safe copy.
 import {
   getCrewForDateSafe,
   getCrewForDate,
@@ -67,7 +74,7 @@ import { computeSchedulingBaseline } from "@/lib/scheduling/opsMetrics";
 import { getInstaworkShifts, instaworkConfigured } from "@/lib/instawork/client";
 import { ConnectInstaworkButton } from "@/components/ConnectInstaworkButton";
 import { summarizeInstaworkByRole, instaworkShiftsForDate, instaworkGigsForRoute } from "@/lib/instawork/reconcile";
-import { todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime } from "@/lib/dates";
+import { todayInOpsTz, shiftYmd, formatYmdLong, formatClockTime, opsLocalInputToIso, DISPLAY_TZ } from "@/lib/dates";
 import { shiftGap, type ShiftRole, type StaffShift } from "@/lib/scheduling/types";
 import { routeWindow } from "@/lib/risk/engine";
 import { DEFAULT_RISK_CONFIG, type EngineRoute } from "@/lib/risk/types";
@@ -141,12 +148,14 @@ export const dynamic = "force-dynamic";
 export default async function SchedulingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string; focus?: string }>;
+  searchParams: Promise<{ date?: string; focus?: string; view?: string }>;
 }): Promise<React.JSX.Element> {
   const sp = await searchParams;
   const today = todayInOpsTz();
   const date = sp?.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : today;
   const focus = typeof sp?.focus === "string" ? sp.focus : null;
+  // A Dispatch deep link (?focus=<routeId>) or ?view=routes lands on the route board; otherwise the day schedule.
+  const initialView = focus || sp?.view === "routes" ? "routes" : "schedule";
   const isToday = date === today;
   const dayBefore = shiftYmd(date, -1);
   const nextDay = shiftYmd(date, 1);
@@ -334,7 +343,7 @@ export default async function SchedulingPage({
       allConfirmed: assignmentCount > 0 && live.every((a) => a.confirmedAt != null),
       confirmationUnverified: !commsWired,
     });
-    return { shiftId: s.id, routeId: s.routeId, roleLabel: ROLE_LABEL[s.role], level: r.level, score: r.score, blockers: r.blockers };
+    return { shiftId: s.id, routeId: s.routeId, roleLabel: TIMELINE_ROLE_LABEL[s.role], level: r.level, score: r.score, blockers: r.blockers };
   });
   const shiftExceptions = scanShiftExceptions({ shifts, coverage: cov, now: nowMs(), staffingVerified: coverage.ok, assignmentsByShift, commsWired, unavailabilityByUser: dayAvailability.byUser, availabilityVerified: dayAvailability.ok });
 
@@ -539,141 +548,190 @@ export default async function SchedulingPage({
   // TEMP BOOKED is "n/a" when Instawork is unavailable (not "0 booked"); OPEN SEATS is the engine's gap.
   const tempBooked: number | null = iwOn && iw?.ok ? iwDayShifts.reduce((n, s) => n + s.filled, 0) : null;
   const readyRoutes = routes.filter((r) => readinessByRoute[r.routeId] === "READY").length;
-  const figures: Figure[] = [
-    // Demand
+  const summary: { label: string; value: string | number; attention?: boolean }[] = [
     { label: "Routes", value: routes.length },
-    { label: "Required", value: peopleNeeded },
-    // Coverage
-    { label: "Internal assigned", value: cov.internalTotal, tone: "positive", sep: true },
-    { label: "Temp booked", value: tempBooked == null ? "n/a" : tempBooked, tone: tempBooked && tempBooked > 0 ? "attention" : "default" },
-    { label: "Open seats", value: cov.gapTotal, tone: cov.gapTotal > 0 ? "attention" : "default" },
-    // Readiness
-    { label: "Ready", value: `${readyRoutes}/${routes.length}`, tone: routes.length > 0 && readyRoutes < routes.length ? "attention" : "positive", sep: true },
+    { label: "People needed", value: peopleNeeded },
+    { label: "Assigned", value: cov.internalTotal },
+    { label: "Instawork booked", value: tempBooked == null ? "n/a" : tempBooked },
+    { label: "Still open", value: cov.gapTotal, attention: cov.gapTotal > 0 },
+    { label: "Routes ready", value: `${readyRoutes}/${routes.length}`, attention: routes.length > 0 && readyRoutes < routes.length },
   ];
+
+  // ── Day schedule (Connecteam style grid): app shifts + Connecteam-only shifts + unavailability. ──
+  const dayStartMs = Date.parse(opsLocalInputToIso(`${date}T00:00`) ?? `${date}T00:00:00Z`);
+  const clockFmt = new Intl.DateTimeFormat("en-US", { timeZone: DISPLAY_TZ, hour: "numeric", minute: "2-digit" });
+  const timeline = buildDayTimeline({
+    dayStartMs,
+    roster,
+    appShifts: shifts,
+    gapByShift: Object.fromEntries(shifts.map((s) => [s.id, cov.byShift[s.id]?.gap ?? shiftGap(s)])),
+    connecteamShifts: coverage.shifts,
+    unavailability: [...dayAvailability.byUser.values()].flat(),
+    routeLabel: (id) => {
+      const r = id ? routes.find((x) => x.routeId === id) : undefined;
+      return r ? truckName(r.truckId) : null;
+    },
+    clock: (ms) => clockFmt.format(ms).replace(/\s?([AP])M$/, (_m, ap: string) => ap.toLowerCase()),
+  });
 
   return (
     <main className="p-6">
       {isToday && <AutoRefresh seconds={90} />}
       <FocusScroller focus={focus} />
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-[22px] font-medium tracking-tight">Scheduling</h1>
-          <p className="text-[12.5px] text-meta">
-            Workforce allocation · {formatYmdLong(date)} · {routes.length} route{routes.length === 1 ? "" : "s"}
-          </p>
-        </div>
-        <div className="flex min-w-0 max-w-full flex-col items-stretch gap-3 sm:items-end">
-          <div className="flex flex-wrap items-end justify-end gap-x-6 gap-y-3">
-            <div className="max-w-full overflow-x-auto">
-              <FigureStrip figures={figures} />
-            </div>
-            <DateNav date={date} today={today} />
-          </div>
-          <SchedulingHeaderActions date={date} roster={roster} eligibilityData={eligibilityData} />
-        </div>
+      <header className="mb-4">
+        <h1 className="text-[22px] font-medium tracking-tight">Scheduling</h1>
+        <p className="text-[12.5px] text-meta">
+          {formatYmdLong(date)} · {routes.length} route{routes.length === 1 ? "" : "s"}
+        </p>
       </header>
 
-      <BladeAgents blade="scheduling" className="mb-5" />
+      {/* ── The schedule: Day schedule (default) or By route, under one toolbar like Connecteam's. ── */}
+      <SchedulingViews
+        initial={initialView}
+        dateNav={<DateNav date={date} today={today} />}
+        actions={<SchedulingHeaderActions date={date} roster={roster} eligibilityData={eligibilityData} />}
+        summary={
+          <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px]">
+            {summary.map((f) => (
+              <div key={f.label} className="flex items-baseline gap-1.5">
+                <dt className="text-meta">{f.label}</dt>
+                <dd className={`tabular-nums font-medium ${f.attention ? "text-status-warning" : "text-foreground"}`}>{f.value}</dd>
+              </div>
+            ))}
+          </dl>
+        }
+        hint="To add a shift: pick the day, click Add shift, then choose the role and the person. Or click an empty spot on a person's row."
+        schedule={
+          <DayTimeline
+            timeline={timeline}
+            date={date}
+            dayStartMs={dayStartMs}
+            shifts={shifts}
+            roster={roster}
+            eligibilityData={eligibilityData}
+            recommendations={recommendations}
+          />
+        }
+        routes={
+          <>
+            <div id="staffing-board">
+              <RouteStaffBoard
+                date={date}
+                routeCards={routeCards}
+                shifts={shifts}
+                otherShifts={otherShifts}
+                officeShifts={officeShifts}
+                roster={roster}
+                eligibilityData={eligibilityData}
+                coverage={cov.byShift}
+                recommendations={recommendations}
+                routeRecs={routeRecs}
+                prepCrewToday={prepCrewToday}
+                prepNeed={prepNeed}
+                routeFieldNeed={routeFieldNeed}
+                proposedByRoute={proposedByRoute}
+                moveEligibilityByPerson={moveEligibilityByPerson}
+                instawork={iwByRole}
+                iwConfigured={iwOn}
+                hasRoutes={routes.length > 0}
+              />
+            </div>
+            {/* Proposed staffing plan (from Auto staff): a decision point, kept apart from committed assignments. */}
+            <div className="mt-6">
+              <StaffingPlanPreview plan={staffingPlan} date={date} routeLabel={routeLabelFor} summary={planSummary} health={staffingHealth} />
+            </div>
+          </>
+        }
+      />
 
-      {/* Coverage + day economics context (compact). Connecteam work-schedule crew are context only — never
-          credited as route coverage; the full schedule mirror lives in "Workforce schedule" below. */}
-      <div className="mb-5 space-y-1 text-[12.5px] text-meta">
-        <p>
-          {!configured ? "Connecteam isn't connected — no internal coverage to compare against." : connecteamScheduleHeadline(ctSchedule)}
-        </p>
-        <p>
-          {!iwOn ? (
-            <>{"Instawork isn't connected. Log in once in the office browser to reconcile booked temp labor. "}<ConnectInstaworkButton variant="link" /></>
-          ) : iw && !iw.ok ? (
-            <>{"Instawork unverified: couldn't reach it, so this is not “nothing booked.” "}<ConnectInstaworkButton variant="link" /></>
-          ) : iwDayShifts.length === 0 ? (
-            "Instawork today: nothing booked for this day."
-          ) : (
-            `Instawork today: ${iwDayShifts.reduce((n, s) => n + s.filled, 0)} booked, ${iwDayShifts.reduce((n, s) => n + Math.max(0, s.total - s.filled), 0)} pending across ${iwDayShifts.length} gig${iwDayShifts.length === 1 ? "" : "s"}.`
-          )}
-        </p>
-        {economics.tempCount > 0 && (
-          <p>
-            Day economics · {economics.tempHours == null ? "n/a" : `${economics.tempHours} temp hrs`} · {money(economics.tempCost)} temp cost · {money(economics.incrementalTempCost)} premium vs internal · {pct(economics.tempHourShare)} of hours temp
-          </p>
-        )}
-      </div>
-
-      {/* ── STAFFING & READINESS — the ONE consolidated queue (doc §15). Every row scrolls to the detail
-          panel below that owns its workflow; all-clear shows a compact line, not an empty card. ── */}
+      {/* ── Needs attention: ONE ordered list (doc §15). Each row reveals the panel that owns its fix. ── */}
       <StaffingReadinessQueue items={queueItems} />
 
-      {/* ── Route staffing board — the primary planning workspace. ── */}
-      <div id="staffing-board">
-      <RouteStaffBoard
-        date={date}
-        routeCards={routeCards}
-        shifts={shifts}
-        otherShifts={otherShifts}
-        officeShifts={officeShifts}
-        roster={roster}
-        eligibilityData={eligibilityData}
-        coverage={cov.byShift}
-        recommendations={recommendations}
-        routeRecs={routeRecs}
-        prepCrewToday={prepCrewToday}
-        prepNeed={prepNeed}
-        routeFieldNeed={routeFieldNeed}
-        proposedByRoute={proposedByRoute}
-        moveEligibilityByPerson={moveEligibilityByPerson}
-        instawork={iwByRole}
-        iwConfigured={iwOn}
-        hasRoutes={routes.length > 0}
-      />
-      </div>
-
-      {/* ── Detail panels — the workflows the queue above points at (each the scroll target for its rows).
-          They render only when they have something to show, keeping the page quiet when all is clear. ── */}
-      <div id="scheduled-to-route" className="mt-6">
-        <ScheduledToRoutePrompt date={date} people={scheduledUnroutedViews} routeCards={routeCards} shifts={shifts} />
-      </div>
-      <div id="sync-conflicts">
-        <NeedsReviewPanel views={conflictViews} />
-      </div>
-      <div id="shift-readiness">
-        <ShiftReadinessExceptions rows={readinessRows} exceptions={shiftExceptions} routeLabel={routeLabelFor} />
-      </div>
-      <div id="precheck">
-        <StaffingPreCheck routes={preChecks} />
-      </div>
-
-      {/* ── Proposed staffing plan — a decision point, kept visually distinct from committed assignments. ── */}
-      <StaffingPlanPreview plan={staffingPlan} date={date} routeLabel={routeLabelFor} summary={planSummary} health={staffingHealth} />
-
-      {/* ── Workforce schedule — the full Connecteam mirror, below the main workflow, collapsed by default. ── */}
-      {configured && ctSchedule.reachable && ctSchedule.totalScheduled > 0 && (
-        <details className="group mt-6 border border-border">
+      {/* ── The panels the list above points at. They render only when they have something to show, and stay
+          folded so the page reads top to bottom: schedule first, then what needs attention. ── */}
+      {(scheduledUnroutedViews.length > 0 || conflictViews.length > 0 || readinessRows.length > 0 || shiftExceptions.length > 0 || preChecks.length > 0) && (
+        <details className="group mb-6 border border-border">
           <summary className="cursor-pointer select-none px-4 py-3 text-[13px] font-medium transition-colors hover:bg-[var(--row-hover)]">
-            Workforce schedule · {ctSchedule.totalScheduled} worker{ctSchedule.totalScheduled === 1 ? "" : "s"} scheduled in Connecteam
+            Details and fixes for the items above
           </summary>
-          <div className="border-t border-border p-3">
-            <ConnecteamScheduleMirror summary={ctSchedule} timezone={ctTimezone} />
+          <div className="border-t border-border p-4">
+            <div id="scheduled-to-route">
+              <ScheduledToRoutePrompt date={date} people={scheduledUnroutedViews} routeCards={routeCards} shifts={shifts} />
+            </div>
+            <div id="sync-conflicts">
+              <NeedsReviewPanel views={conflictViews} />
+            </div>
+            <div id="shift-readiness">
+              <ShiftReadinessExceptions rows={readinessRows} exceptions={shiftExceptions} routeLabel={routeLabelFor} />
+            </div>
+            <div id="precheck">
+              <StaffingPreCheck routes={preChecks} />
+            </div>
           </div>
         </details>
       )}
 
-      <StaffingRosterSections
-        configured={configured}
-        verified={coverage.ok}
-        openShifts={openShifts}
-        crewD={coverage.shifts}
-        crewPrev={crewPrev}
-        crewNext={crewNext}
-        routes={routes}
-        date={date}
-        dayBefore={dayBefore}
-        nextDay={nextDay}
-        isToday={isToday}
-      />
+      {/* ── More: connection status, the AI employees on this blade, the full Connecteam mirror, the roster and
+          the activity baseline. Useful to owners and admins, not needed to enter a shift, so folded away. ── */}
+      <details className="group border border-border">
+        <summary className="cursor-pointer select-none px-4 py-3 text-[13px] font-medium transition-colors hover:bg-[var(--row-hover)]">
+          More: Connecteam and Instawork status, team roster, activity
+        </summary>
+        <div className="space-y-5 border-t border-border p-4">
+          {/* Connecteam work-schedule crew are context only, never credited as route coverage. */}
+          <div className="space-y-1 text-[12.5px] text-meta">
+            <p>
+              {!configured ? "Connecteam isn't connected, so there is no internal coverage to compare against." : connecteamScheduleHeadline(ctSchedule)}
+            </p>
+            <p>
+              {!iwOn ? (
+                <>{"Instawork isn't connected. Log in once in the office browser to see booked temp labor. "}<ConnectInstaworkButton variant="link" /></>
+              ) : iw && !iw.ok ? (
+                <>{"Instawork unverified: couldn't reach it, so this is not “nothing booked.” "}<ConnectInstaworkButton variant="link" /></>
+              ) : iwDayShifts.length === 0 ? (
+                "Instawork today: nothing booked for this day."
+              ) : (
+                `Instawork today: ${iwDayShifts.reduce((n, s) => n + s.filled, 0)} booked, ${iwDayShifts.reduce((n, s) => n + Math.max(0, s.total - s.filled), 0)} pending across ${iwDayShifts.length} gig${iwDayShifts.length === 1 ? "" : "s"}.`
+              )}
+            </p>
+            {economics.tempCount > 0 && (
+              <p>
+                Day economics · {economics.tempHours == null ? "n/a" : `${economics.tempHours} temp hrs`} · {money(economics.tempCost)} temp cost · {money(economics.incrementalTempCost)} premium vs internal · {pct(economics.tempHourShare)} of hours temp
+              </p>
+            )}
+          </div>
 
-      {/* ── Operations baseline — read-only activity roll-up over the trailing two weeks, so automation
-          workload change can be MEASURED over several cycles. Honest counts only; no fabricated savings. ── */}
-      <SchedulingBaselinePanel baseline={computeSchedulingBaseline(shiftYmd(date, -13), date)} />
+          <BladeAgents blade="scheduling" />
+
+          {configured && ctSchedule.reachable && ctSchedule.totalScheduled > 0 && (
+            <details className="group border border-border">
+              <summary className="cursor-pointer select-none px-4 py-3 text-[13px] font-medium transition-colors hover:bg-[var(--row-hover)]">
+                Workforce schedule · {ctSchedule.totalScheduled} worker{ctSchedule.totalScheduled === 1 ? "" : "s"} scheduled in Connecteam
+              </summary>
+              <div className="border-t border-border p-3">
+                <ConnecteamScheduleMirror summary={ctSchedule} timezone={ctTimezone} />
+              </div>
+            </details>
+          )}
+
+          <StaffingRosterSections
+            configured={configured}
+            verified={coverage.ok}
+            openShifts={openShifts}
+            crewD={coverage.shifts}
+            crewPrev={crewPrev}
+            crewNext={crewNext}
+            routes={routes}
+            date={date}
+            dayBefore={dayBefore}
+            nextDay={nextDay}
+            isToday={isToday}
+          />
+
+          {/* Read-only activity roll-up over the trailing two weeks. Honest counts only. */}
+          <SchedulingBaselinePanel baseline={computeSchedulingBaseline(shiftYmd(date, -13), date)} />
+        </div>
+      </details>
     </main>
   );
 }

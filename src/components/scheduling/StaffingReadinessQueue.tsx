@@ -10,6 +10,7 @@
 // all-clear line, not an empty bordered card. Comms style: no em-dashes, no emoji.
 
 import { ArrowRight } from "lucide-react";
+import { revealTarget } from "@/components/scheduling/reveal";
 import { StatusBadge, STATUS_ICON } from "@/components/ui/status";
 import { StatusMark } from "@/components/console-primitives";
 import type { QueueItem, QueueSeverity, QueueTarget } from "@/lib/scheduling/staffingQueue";
@@ -33,15 +34,14 @@ const TARGET_ANCHOR: Record<QueueTarget, string> = {
   "shift-readiness": "shift-readiness",
 };
 
-function scrollTo(anchor: string): void {
-  document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" });
-}
+// The target may sit in the other view tab or a collapsed section: reveal opens it before scrolling.
+const scrollTo = revealTarget;
 
 export function StaffingReadinessQueue({ items }: { items: QueueItem[] }): React.JSX.Element {
   if (items.length === 0) {
     return (
       <div className="mb-5">
-        <StatusBadge tone="positive">Staffing and readiness all clear for this day. Nothing needs attention.</StatusBadge>
+        <StatusBadge tone="positive">Nothing needs attention for this day.</StatusBadge>
       </div>
     );
   }
@@ -50,9 +50,9 @@ export function StaffingReadinessQueue({ items }: { items: QueueItem[] }): React
     <section className="surface mb-6 border border-border" aria-label="Staffing and readiness queue">
       <header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
         <STATUS_ICON.attention className="size-4 shrink-0 text-status-warning" aria-hidden />
-        <h2 className="text-[13px] font-medium uppercase tracking-[0.08em]">Staffing &amp; readiness</h2>
+        <h2 className="text-[13px] font-medium uppercase tracking-[0.08em]">Needs attention</h2>
         <span className="text-[12px] text-meta">
-          · {items.length} item{items.length === 1 ? "" : "s"} need{items.length === 1 ? "s" : ""} attention
+          · {items.length} item{items.length === 1 ? "" : "s"}
         </span>
       </header>
       <ul className="divide-y divide-[var(--row-rule)]">

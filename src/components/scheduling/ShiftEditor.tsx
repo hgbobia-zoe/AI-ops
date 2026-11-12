@@ -58,9 +58,20 @@ interface Draft {
   status: ShiftStatus;
 }
 
-function toDraft(shift: StaffShift | null): Draft {
+/** Prefill for a NEW shift (e.g. clicking an empty spot on a person's row in the day timeline). */
+export interface NewShiftPrefill {
+  assignees?: number[];
+  startIso?: string | null;
+  endIso?: string | null;
+}
+
+function toDraft(shift: StaffShift | null, prefill?: NewShiftPrefill): Draft {
   if (!shift) {
-    return { role: "field", headcount: 1, start: "", end: "", location: "", eventLabel: "", notes: "", assignees: [], instaworkHeadcount: 0, payRate: "", status: "draft" };
+    return {
+      role: "field", headcount: Math.max(1, prefill?.assignees?.length ?? 1),
+      start: isoToLocalInput(prefill?.startIso ?? null), end: isoToLocalInput(prefill?.endIso ?? null),
+      location: "", eventLabel: "", notes: "", assignees: [...(prefill?.assignees ?? [])], instaworkHeadcount: 0, payRate: "", status: "draft",
+    };
   }
   const gap = shiftGap(shift);
   return {
@@ -85,6 +96,7 @@ export function ShiftEditor({
   eligibilityData,
   recommendations,
   onClose,
+  prefill,
 }: {
   shift: StaffShift | null;
   date: string; // the day being edited (for a new shift)
@@ -92,10 +104,11 @@ export function ShiftEditor({
   eligibilityData: WorkerDayEligibilityData;
   recommendations: CrewRecommendation[];
   onClose: () => void;
+  prefill?: NewShiftPrefill;
 }): React.JSX.Element {
   const router = useRouter();
   const isNew = shift == null;
-  const [draft, setDraft] = useState<Draft>(() => toDraft(shift));
+  const [draft, setDraft] = useState<Draft>(() => toDraft(shift, prefill));
   const [instaTouched, setInstaTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
