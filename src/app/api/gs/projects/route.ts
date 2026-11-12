@@ -241,6 +241,17 @@ export async function POST(req: Request): Promise<NextResponse> {
       streetAddress: p.streetAddress === undefined ? undefined : typeof p.streetAddress === "string" ? p.streetAddress : null,
     });
   }
+  // Date drift guard. Every real Goodshuffle project has a created date, so a batch where NONE has one means
+  // the pull could not read Goodshuffle's date fields (it renamed them to *_millis in Nov 2026 and an older
+  // pull build blanked every date). Keep the stored dates and delivery windows instead of erasing them.
+  const dateDrift = records.length >= 5 && records.every((r) => !r.dateCreated);
+  if (dateDrift) {
+    for (const r of records) {
+      r.eventDate = undefined;
+      r.windowStartTime = undefined;
+    }
+    console.warn(`[gs/projects] ${records.length} projects arrived with no dates; kept the stored dates (pull build is out of date)`);
+  }
   // Offline payment confirmation: a project whose amount paid went up goes on the payment watch list
   // (compared against the stored row, so this runs BEFORE the upsert). Best effort.
   let paymentWatched = 0;
