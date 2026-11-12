@@ -933,7 +933,7 @@ export function getEventStub(txId: string): { date: string; label: string; route
 export interface BookingRecord {
   bookingId: string;
   eventName?: string;
-  eventDate?: string | null; // YYYY-MM-DD
+  eventDate?: string | null; // YYYY-MM-DD; undefined = not read by this pull (the stored date is kept)
   statusLabel?: string;
   signed?: boolean;
   contractTotal?: number | null; // dollars
@@ -1265,13 +1265,18 @@ export function saveBookings(items: BookingRecord[]): void {
        date_created, venue, location, sales_lead, archived, window_start_time, street_address, updated_at)
      VALUES (@bookingId,@eventName,@eventDate,@statusLabel,@signed,@contractTotal,@grandTotal,
        @amountPaid,@amountDue,@clientName,@clientEmail,@clientPhone,@quoteSentDate,@dateCreated,@venue,@location,@salesLead,@archived,@windowStartTime,@streetAddress,@now)
-     ON CONFLICT(booking_id) DO UPDATE SET event_name=@eventName, event_date=@eventDate,
+     ON CONFLICT(booking_id) DO UPDATE SET event_name=@eventName,
+       -- event_date undefined = the pull could not read dates (Goodshuffle renamed its fields): keep ours.
+       event_date=CASE WHEN @eventDateSent = 1 THEN @eventDate ELSE event_date END,
        status_label=@statusLabel, signed=@signed,
        -- A pull from a Goodshuffle login that can't see pricing sends no amounts (null). Keep the last known
        -- amounts instead of blanking them, or totals flicker with whichever pull landed last.
        contract_total=COALESCE(@contractTotal, contract_total), grand_total=COALESCE(@grandTotal, grand_total),
        amount_paid=COALESCE(@amountPaid, amount_paid), amount_due=COALESCE(@amountDue, amount_due), client_name=@clientName, client_email=@clientEmail,
-       client_phone=@clientPhone, quote_sent_date=@quoteSentDate, date_created=@dateCreated,
+       client_phone=@clientPhone,
+       -- A project's quote-sent and created dates never go away in Goodshuffle; a blank one means the pull
+       -- could not read it, so keep what we have.
+       quote_sent_date=COALESCE(@quoteSentDate, quote_sent_date), date_created=COALESCE(@dateCreated, date_created),
        venue=@venue, location=@location, sales_lead=COALESCE(@salesLead, sales_lead), archived=@archived,
        window_start_time=CASE WHEN @windowSent = 1 THEN @windowStartTime ELSE window_start_time END,
        street_address=CASE WHEN @streetSent = 1 THEN @streetAddress ELSE street_address END, updated_at=@now`,
@@ -1281,6 +1286,7 @@ export function saveBookings(items: BookingRecord[]): void {
       up.run({
         bookingId: i.bookingId,
         eventName: i.eventName ?? null,
+        eventDateSent: i.eventDate === undefined ? 0 : 1,
         eventDate: i.eventDate ?? null,
         statusLabel: i.statusLabel ?? null,
         signed: i.signed ? 1 : 0,

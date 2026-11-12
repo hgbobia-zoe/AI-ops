@@ -30,7 +30,42 @@ export const DELIVERY_HORIZON_DAYS = 3;
 export interface PullProjectLite {
   signed?: boolean;
   statusLabel?: string;
+  /** Old shape ("Oct 31, 2026"), before Goodshuffle's Nov 2026 switch to *_millis. */
   logistics_start_date?: string | null;
+  logistics_start_millis?: number | string | null;
+  logistics_start_zone?: string | null;
+}
+
+/** YYYY-MM-DD for a Goodshuffle date: the old string when present, else the *_millis instant read in its
+ *  *_zone (Goodshuffle's shape since Nov 2026). MIRRORS the inline gsYmd in both pull scripts. */
+export function gsYmd(old: string | null | undefined, ms: number | string | null | undefined, zone?: string | null): string | null {
+  if (old) return pullYmd(old);
+  if (ms == null || ms === "" || isNaN(Number(ms))) return null;
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: zone || "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Number(ms)));
+  } catch {
+    return pullYmd(new Date(Number(ms)).toISOString());
+  }
+}
+
+/** The project's logistics (delivery) day. */
+export function gsEventYmd(p: PullProjectLite): string | null {
+  return gsYmd(p.logistics_start_date, p.logistics_start_millis, p.logistics_start_zone);
+}
+
+/** The delivery window start as "9:00 AM EST" (what parseGsWindowTime reads), "TBD" when Goodshuffle has no
+ *  time set, null when unknown. MIRRORS the inline gsTime in both pull scripts. */
+export function gsWindowTime(p: PullProjectLite & { logistics_start_from_time?: string | null; logistics_start_time_set?: boolean }): string | null {
+  if (p.logistics_start_from_time != null) return String(p.logistics_start_from_time);
+  if (p.logistics_start_millis == null || p.logistics_start_millis === "") return null;
+  if (p.logistics_start_time_set === false) return "TBD";
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: p.logistics_start_zone || "America/New_York", hour: "numeric", minute: "2-digit", timeZoneName: "short" })
+      .format(new Date(Number(p.logistics_start_millis)))
+      .replace(/[  ]/g, " ");
+  } catch {
+    return null;
+  }
 }
 
 /** YYYY-MM-DD for a Goodshuffle date string (local-day normalized), matching the bookmarklet's inline d2. */
@@ -58,7 +93,7 @@ export function selectNoteCaptureIds(
   const signed: string[] = [];
   for (const id of Object.keys(projects)) {
     const p = projects[id];
-    const d = pullYmd(p.logistics_start_date);
+    const d = gsEventYmd(p);
     if (p.signed) {
       // Near-term delivery: a signed project with a logistics date within today..+horizon.
       if (d && d >= todayY && d <= horizonY) signed.push(id);
@@ -108,7 +143,7 @@ export function selectWindowCaptureIds(
   const out: string[] = [];
   for (const id of Object.keys(projects)) {
     const p = projects[id];
-    const d = pullYmd(p.logistics_start_date);
+    const d = gsEventYmd(p);
     if (!d || d < fromY || d > toY) continue;
     const s = (p.statusLabel || "").toLowerCase();
     if (s.indexOf("lost") >= 0 || s.indexOf("cancel") >= 0 || s.indexOf("dead") >= 0) continue;
@@ -165,9 +200,13 @@ ${GS_TEMPLATE_JS}
       function loop(pg){ return fetchPage(pg).then(function(r){ if(FULL && !pErr && r.count>0 && pg<60) return loop(pg+1); return null; }); }
       return loop(0).then(function(){
         function d2(s){ try{ if(!s) return null; var dt=new Date(s); if(isNaN(dt)) return null; return new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,10); }catch(e){ return null; } }
+        // Goodshuffle dates: *_millis + *_zone since Nov 2026, the old *_date strings before. MIRRORS gsYmd / gsWindowTime above.
+        function gsYmd(old,ms,zone){ if(old) return d2(old); if(ms==null||ms===""||isNaN(Number(ms))) return null; try{ return new Intl.DateTimeFormat("en-CA",{timeZone:zone||"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(Number(ms))); }catch(e){ return d2(new Date(Number(ms)).toISOString()); } }
+        function evYmd(p){ return gsYmd(p.logistics_start_date,p.logistics_start_millis,p.logistics_start_zone); }
+        function gsTime(p){ if(p.logistics_start_from_time!=null) return String(p.logistics_start_from_time); if(p.logistics_start_millis==null||p.logistics_start_millis==="") return null; if(p.logistics_start_time_set===false) return "TBD"; try{ return new Intl.DateTimeFormat("en-US",{timeZone:p.logistics_start_zone||"America/New_York",hour:"numeric",minute:"2-digit",timeZoneName:"short"}).format(new Date(Number(p.logistics_start_millis))).replace(/[\u202f\u00a0]/g," "); }catch(e){ return null; } }
         var recs=Object.keys(all).map(function(id){ var p=all[id];
           // NB: Goodshuffle's searchProjects field is contract_subtotal (there is no contract_total).
-          return { bookingId:String(p.id), eventName:p.eventName||"", eventDate:d2(p.logistics_start_date), statusLabel:p.statusLabel||"", signed:!!p.signed, archived:!!p.archived, grandTotalCents:p.grand_total, contractTotalCents:p.contract_subtotal, amountPaidCents:p.amount_paid, amountDueCents:p.amount_due, clientName:p.client_name||"", clientEmail:p.client_email||"", clientPhone:p.client_phone||"", quoteSentDate:d2(p.quote_sent_date), dateCreated:d2(p.date_created), venue:p.venueLabel||"", location:p.cityStateZipCounty||"", salesLead:p.salesLeadName||"", logisticsStartTime:(p.logistics_start_from_time==null?null:String(p.logistics_start_from_time)), streetAddress:[p.streetLine1,p.streetLine2].filter(Boolean).join(", ") }; });
+          return { bookingId:String(p.id), eventName:p.eventName||"", eventDate:evYmd(p), statusLabel:p.statusLabel||"", signed:!!p.signed, archived:!!p.archived, grandTotalCents:p.grand_total, contractTotalCents:p.contract_subtotal, amountPaidCents:p.amount_paid, amountDueCents:p.amount_due, clientName:p.client_name||"", clientEmail:p.client_email||"", clientPhone:p.client_phone||"", quoteSentDate:gsYmd(p.quote_sent_date,p.quote_sent_millis,p.quote_sent_zone), dateCreated:gsYmd(p.date_created,p.date_created_millis,p.date_created_zone), venue:p.venueLabel||"", location:p.cityStateZipCounty||"", salesLead:p.salesLeadName||"", logisticsStartTime:gsTime(p), streetAddress:[p.streetLine1,p.streetLine2].filter(Boolean).join(", ") }; });
         if(!recs.length) return { saved:0, partial:pErr };
         // Capture comms history for OPEN leads AND SIGNED near-term deliveries. The team's call/text/email
         // log lives in each project's internalNotes (via initContractView). OPEN leads = unsigned, not lost,
@@ -177,7 +216,7 @@ ${GS_TEMPLATE_JS}
         var todayY=new Date().toISOString().slice(0,10);
         var horizonY=new Date(Date.now()+${DELIVERY_HORIZON_DAYS}*86400000).toISOString().slice(0,10);
         var openIds=[], signedIds=[];
-        Object.keys(all).forEach(function(id){ var p=all[id]; var d=d2(p.logistics_start_date);
+        Object.keys(all).forEach(function(id){ var p=all[id]; var d=evYmd(p);
           if(p.signed){ if(d&&d>=todayY&&d<=horizonY) signedIds.push(id); return; }
           var s=(p.statusLabel||"").toLowerCase(); if(s.indexOf("lost")>=0||s.indexOf("cancel")>=0||s.indexOf("dead")>=0) return;
           if(!d||d>=todayY) openIds.push(id); });
@@ -187,7 +226,7 @@ ${GS_TEMPLATE_JS}
         // after a 429. A failed fetch is left out (the stored windows stay); an empty timeline is sent (clears).
         var winFrom=new Date(Date.now()-${WINDOW_PAST_DAYS}*86400000).toISOString().slice(0,10);
         var winTo=new Date(Date.now()+${WINDOW_FUTURE_DAYS}*86400000).toISOString().slice(0,10);
-        function windowIds(archivedOnly){ var out=[]; Object.keys(all).forEach(function(id){ var p=all[id]; var d=d2(p.logistics_start_date); if(!d||d<winFrom||d>winTo) return;
+        function windowIds(archivedOnly){ var out=[]; Object.keys(all).forEach(function(id){ var p=all[id]; var d=evYmd(p); if(!d||d<winFrom||d>winTo) return;
           var s=(p.statusLabel||"").toLowerCase(); if(s.indexOf("lost")>=0||s.indexOf("cancel")>=0||s.indexOf("dead")>=0) return; if(archivedOnly&&!p.archived) return; out.push(id); }); return out.slice(0,${WINDOW_CAPTURE_CAP}); }
         function pullWindows(ids){ var wins=[];
           function wait(ms){ return new Promise(function(res){ setTimeout(res,ms); }); }

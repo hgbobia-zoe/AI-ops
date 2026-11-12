@@ -166,3 +166,31 @@ describe("POST /api/gs/projects — sales lead", () => {
     expect(lead()).toBe("Pat Lee");
   });
 });
+
+describe("POST /api/gs/projects — date drift guard", () => {
+  const row = (id: string) =>
+    (getDb().prepare("SELECT event_date, quote_sent_date, date_created, window_start_time FROM bookings WHERE booking_id = ?").get(id) as Record<string, string | null>);
+
+  it("a pull where no project has a created date (an out-of-date pull build) keeps the stored dates", async () => {
+    const seeded: BookingRecord[] = [];
+    for (let i = 1; i <= 6; i++)
+      seeded.push({ bookingId: `D-${i}`, eventName: `E${i}`, statusLabel: "Quote Sent", eventDate: "2026-12-07", quoteSentDate: "2026-11-05", dateCreated: "2026-11-03", windowStartTime: "9:00 AM EST" });
+    saveBookings(seeded);
+    // What the old pull sends after Goodshuffle renamed its date fields: every date blank.
+    const projects = seeded.map((s) => ({ bookingId: s.bookingId, eventName: s.eventName, statusLabel: "Contract Signed", eventDate: null, quoteSentDate: null, dateCreated: null, logisticsStartTime: null }));
+    const res = await POST(req(JSON.stringify({ projects })));
+    expect(res.status).toBe(200);
+    expect(row("D-1")).toEqual({ event_date: "2026-12-07", quote_sent_date: "2026-11-05", date_created: "2026-11-03", window_start_time: "9:00 AM EST" });
+    // The rest of the row still updates.
+    expect((getDb().prepare("SELECT status_label FROM bookings WHERE booking_id = 'D-1'").get() as { status_label: string }).status_label).toBe("Contract Signed");
+  });
+
+  it("a normal pull still clears a delivery date Goodshuffle removed", async () => {
+    saveBookings([{ bookingId: "C-1", eventName: "X", statusLabel: "Quote Sent", eventDate: "2026-12-07", dateCreated: "2026-11-03" }]);
+    const projects = [{ bookingId: "C-1", eventName: "X", statusLabel: "Quote Sent", eventDate: null, dateCreated: "2026-11-03" }];
+    for (let i = 2; i <= 6; i++) projects.push({ bookingId: `C-${i}`, eventName: "Y", statusLabel: "Quote Sent", eventDate: "2026-12-01", dateCreated: "2026-11-01" });
+    await POST(req(JSON.stringify({ projects })));
+    expect(row("C-1").event_date).toBeNull();
+    expect(row("C-2").event_date).toBe("2026-12-01");
+  });
+});

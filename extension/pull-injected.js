@@ -30,6 +30,23 @@ function zoePull(apiBase, tier) {
 
   function d2(s) { try { if (!s) return null; const dt = new Date(s); if (isNaN(dt)) return null; return new Date(dt.getTime() - dt.getTimezoneOffset() * 60000).toISOString().slice(0, 10); } catch (e) { return null; } }
 
+  // Goodshuffle dates. searchProjects used to send logistics_start_date / quote_sent_date / date_created
+  // ("Oct 31, 2026") and logistics_start_from_time ("9:00 AM EDT"). In Nov 2026 it switched to *_millis +
+  // *_zone (+ logistics_start_time_set). Read the new shape, fall back to the old one. MIRRORS gsYmd /
+  // gsWindowTime in src/lib/gsPull.ts (unit-tested).
+  function gsYmd(old, ms, zone) {
+    if (old) return d2(old);
+    if (ms == null || ms === "" || isNaN(Number(ms))) return null;
+    try { return new Intl.DateTimeFormat("en-CA", { timeZone: zone || "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Number(ms))); } catch (e) { return d2(new Date(Number(ms)).toISOString()); }
+  }
+  function evYmd(p) { return gsYmd(p.logistics_start_date, p.logistics_start_millis, p.logistics_start_zone); }
+  function gsTime(p) {
+    if (p.logistics_start_from_time != null) return String(p.logistics_start_from_time);
+    if (p.logistics_start_millis == null || p.logistics_start_millis === "") return null;
+    if (p.logistics_start_time_set === false) return "TBD";
+    try { return new Intl.DateTimeFormat("en-US", { timeZone: p.logistics_start_zone || "America/New_York", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(Number(p.logistics_start_millis))).replace(/[\u202f\u00a0]/g, " "); } catch (e) { return null; }
+  }
+
   // ---- Bookings feed (projects) → Sales / Finance / Customer ----
   // TWO-TIER: mode="active" pulls ONLY the ~88 active, non-archived projects (searchProjects WITHOUT
   // allProjects, a single page) — the FAST lane that rides with routes/notes/outbox and POSTs
@@ -48,7 +65,7 @@ function zoePull(apiBase, tier) {
     function loop(pg) { return fetchPage(pg).then((r) => { if (FULL && !pErr && r.count > 0 && pg < 60) return loop(pg + 1); return null; }); }
     return loop(0).then(() => {
       const recs = Object.keys(all).map((id) => { const p = all[id];
-        return { bookingId: String(p.id), eventName: p.eventName || "", eventDate: d2(p.logistics_start_date), statusLabel: p.statusLabel || "", signed: !!p.signed, archived: !!p.archived, grandTotalCents: p.grand_total, contractTotalCents: p.contract_subtotal, amountPaidCents: p.amount_paid, amountDueCents: p.amount_due, clientName: p.client_name || "", clientEmail: p.client_email || "", clientPhone: p.client_phone || "", quoteSentDate: d2(p.quote_sent_date), dateCreated: d2(p.date_created), venue: p.venueLabel || "", location: p.cityStateZipCounty || "", salesLead: p.salesLeadName || "", logisticsStartTime: (p.logistics_start_from_time == null ? null : String(p.logistics_start_from_time)), streetAddress: [p.streetLine1, p.streetLine2].filter(Boolean).join(", ") };
+        return { bookingId: String(p.id), eventName: p.eventName || "", eventDate: evYmd(p), statusLabel: p.statusLabel || "", signed: !!p.signed, archived: !!p.archived, grandTotalCents: p.grand_total, contractTotalCents: p.contract_subtotal, amountPaidCents: p.amount_paid, amountDueCents: p.amount_due, clientName: p.client_name || "", clientEmail: p.client_email || "", clientPhone: p.client_phone || "", quoteSentDate: gsYmd(p.quote_sent_date, p.quote_sent_millis, p.quote_sent_zone), dateCreated: gsYmd(p.date_created, p.date_created_millis, p.date_created_zone), venue: p.venueLabel || "", location: p.cityStateZipCounty || "", salesLead: p.salesLeadName || "", logisticsStartTime: gsTime(p), streetAddress: [p.streetLine1, p.streetLine2].filter(Boolean).join(", ") };
       });
       if (!recs.length) return { saved: 0, partial: pErr };
       // Capture comms for OPEN leads AND SIGNED near-term deliveries (within today..+3 days), so the driver
@@ -57,7 +74,7 @@ function zoePull(apiBase, tier) {
       const todayY = new Date().toISOString().slice(0, 10);
       const horizonY = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
       const openIds = [], signedIds = [];
-      Object.keys(all).forEach((id) => { const p = all[id]; const d = d2(p.logistics_start_date);
+      Object.keys(all).forEach((id) => { const p = all[id]; const d = evYmd(p);
         if (p.signed) { if (d && d >= todayY && d <= horizonY) signedIds.push(id); return; }
         const s = (p.statusLabel || "").toLowerCase(); if (s.indexOf("lost") >= 0 || s.indexOf("cancel") >= 0 || s.indexOf("dead") >= 0) return;
         if (!d || d >= todayY) openIds.push(id); });
@@ -70,7 +87,7 @@ function zoePull(apiBase, tier) {
       const winTo = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
       function windowIds(archivedOnly) {
         const out = [];
-        Object.keys(all).forEach((id) => { const p = all[id]; const d = d2(p.logistics_start_date); if (!d || d < winFrom || d > winTo) return;
+        Object.keys(all).forEach((id) => { const p = all[id]; const d = evYmd(p); if (!d || d < winFrom || d > winTo) return;
           const s = (p.statusLabel || "").toLowerCase(); if (s.indexOf("lost") >= 0 || s.indexOf("cancel") >= 0 || s.indexOf("dead") >= 0) return; if (archivedOnly && !p.archived) return; out.push(id); });
         return out.slice(0, 150);
       }
@@ -176,7 +193,7 @@ function zoePull(apiBase, tier) {
       function pullLogistics() {
         const lo = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
         const hi = new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10);
-        const ids = Object.keys(all).filter((id) => { const p = all[id]; const d = d2(p.logistics_start_date); const s = (p.statusLabel || "").toLowerCase();
+        const ids = Object.keys(all).filter((id) => { const p = all[id]; const d = evYmd(p); const s = (p.statusLabel || "").toLowerCase();
           return p.signed && !p.archived && d && d >= lo && d <= hi && s.indexOf("lost") < 0 && s.indexOf("cancel") < 0 && s.indexOf("dead") < 0; }).slice(0, 300);
         const out = [];
         function one(i) {
@@ -184,7 +201,7 @@ function zoePull(apiBase, tier) {
           const id = ids[i];
           return fetch("/app/vendorTransaction/initProjectTimeline?transactionID=" + id, H).then((r) => (r.ok ? r.json() : null)).then((t) => {
             const ev = ((t && t.events) || []).map((e) => ({ type: e && e.type, dateLabel: e && e.dateLabel }));
-            if (ev.length) out.push({ bookingId: String(id), startDate: d2(all[id].logistics_start_date), events: ev });
+            if (ev.length) out.push({ bookingId: String(id), startDate: evYmd(all[id]), events: ev });
           }).catch(() => {}).then(() => one(i + 1));
         }
         return one(0).then(() => (out.length ? fetch(API + "/api/gs/logistics", { method: "POST", headers: POSTH, body: JSON.stringify({ logistics: out }) }).then((r) => r.json()).catch(() => ({ updated: 0 })) : { updated: 0 }));
