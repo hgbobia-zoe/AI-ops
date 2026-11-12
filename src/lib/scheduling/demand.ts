@@ -75,7 +75,7 @@ export function buildDemand(
   const eventDate = active[0].date;
 
   for (const r of active) {
-    // Crew start floored to the quarter hour (8:03 → 8:00), same length. See quarterHour.ts.
+    // Crew start rounded to the nearest quarter hour (8:03 → 8:00, 7:40 → 7:45); the end stays. See quarterHour.ts.
     const raw = routeWindow(toEngineRoute(r), cfg);
     const win = raw ? crewWindow(raw) : null;
     const start = win ? isoFromUnix(win.startUnix) : null;

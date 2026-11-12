@@ -58,7 +58,7 @@ import type { CrewShift, CrewRole } from "@/lib/connecteam";
 import { planRouteAutoAssign, isAutoRouteEligible, type RouteAutoAssignPlan, type AutoAssignDecision } from "./routeAutoAssign";
 import { resolveDriverSeniority, type SeniorityRouteMeta } from "./driverSeniority";
 import { routeSpecialty } from "./routeSpecialty";
-import { trackWindow, routeOwnWindow, quarterRoundingDecision } from "./routeRatchet";
+import { trackWindow, routeOwnWindow, quarterRoundingDecision, type RatchetOutcome } from "./routeRatchet";
 import { getSettings } from "@/lib/settings";
 import type { ShiftRole, StaffShift } from "./types";
 import type { Route } from "@/lib/types";
@@ -676,15 +676,21 @@ export async function applyRouteWindowRatchet(deps: {
     );
     for (const shift of routeShifts) {
       const cur = { start: shift.startTime, end: shift.endTime, windowKnown: shift.windowKnown };
-      const out = trackWindow(cur, rw);
-      if (!out.changed || !out.start || !out.end) continue;
-      // Quarter hour crew starts (quarterHour.ts): a move caused ONLY by the rounding never touches a time a
-      // person typed, and never re-pushes a shift already in Connecteam until the owner approves
+      // Quarter hour crew starts (quarterHour.ts): rounding moves ONLY the start (the end stays), never touches
+      // a time a person typed, and never re-pushes a shift already in Connecteam until the owner approves
       // (SHIFT_QUARTER_REPUBLISH=true). It is a tidy up, so it is audited but not announced in Slack.
-      const rounding = quarterRoundingDecision(cur, rawRw, { linked: Boolean(shift.connecteamShiftId), republishApproved: quarterRepublishApproved() });
-      if (rounding === "hold_manual" || rounding === "hold_published") continue;
-      const roundingOnly = rounding === "apply";
-      if (roundingOnly) out.reason = "the start was rounded down to the quarter hour";
+      const rounding = quarterRoundingDecision(cur, rawRw, rw, { linked: Boolean(shift.connecteamShiftId), republishApproved: quarterRepublishApproved() });
+      let out: RatchetOutcome;
+      if (rounding.kind === "not_rounding") {
+        out = trackWindow(cur, rw);
+        if (!out.changed || !out.start || !out.end) continue;
+      } else if (rounding.kind === "apply" && shift.endTime) {
+        out = { start: rounding.start, end: shift.endTime, windowKnown: true, changed: true, reason: "the start was rounded to the nearest quarter hour" };
+      } else {
+        continue; // none / hold_manual / hold_published
+      }
+      if (!out.start || !out.end) continue;
+      const roundingOnly = rounding.kind === "apply";
 
       // Linked to Connecteam → push the grown window silently FIRST; only expand the app side if it sticks.
       if (shift.connecteamShiftId) {

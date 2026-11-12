@@ -312,7 +312,7 @@ describe("applyRouteWindowRatchet: crew start on the quarter hour", () => {
       ],
     }) as unknown as Route;
 
-  it("moves an unpublished route derived 8:03 shift to 8:00 (same length) and leaves a typed time alone", async () => {
+  it("rounds an unpublished route derived 8:03 start to 8:00, keeps the end, and leaves a typed time alone", async () => {
     const m = await mods();
     const { applyRouteWindowRatchet } = await import("./routeAutoSync");
     const derived = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T13:03:00.000Z`, endTime: `${DATE}T23:03:00.000Z`, windowKnown: true, routeId: "rQ1", truckId: "E450", assignees: [20], source: "derived" });
@@ -320,7 +320,7 @@ describe("applyRouteWindowRatchet: crew start on the quarter hour", () => {
 
     const n = await applyRouteWindowRatchet({ date: DATE, routesById: new Map([["rQ1", oddRoute("rQ1")]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" });
     expect(n).toBe(1);
-    expect(m.getShiftById(derived.id)).toMatchObject({ startTime: `${DATE}T13:00:00.000Z`, endTime: `${DATE}T23:00:00.000Z` });
+    expect(m.getShiftById(derived.id)).toMatchObject({ startTime: `${DATE}T13:00:00.000Z`, endTime: `${DATE}T23:03:00.000Z` });
     expect(m.getShiftById(typed.id)).toMatchObject({ startTime: `${DATE}T12:50:00.000Z`, endTime: `${DATE}T23:10:00.000Z` });
 
     // Idempotent: a second pass finds nothing to do.

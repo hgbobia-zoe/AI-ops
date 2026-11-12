@@ -2,16 +2,20 @@
 //
 // A route's crew window is derived from its stop times (first stop minus the load buffer), so it used to
 // start on odd minutes like 8:03, and that exact minute went into the app and into Connecteam. Owner rule
-// (2026-11-12): round the crew start DOWN to the previous quarter hour (:00 :15 :30 :45), never the
-// nearest, so crew are never scheduled later than the route needs them. 8:03 → 8:00, 7:54 → 7:45, and a
-// start already on a quarter stays put. The shift keeps its planned length, so the end moves earlier by
-// the same minutes (the end is not rounded on its own). Customer facing stop windows and ETAs are untouched:
-// this only shapes CREW shift windows.
+// (2026-11-12): round the crew START to the NEAREST quarter hour (:00 :15 :30 :45) on the Eastern wall
+// clock. On whole minutes past a quarter, 0 to 7 rounds down and 8 to 14 rounds up: 8:03 → 8:00,
+// 7:54 → 8:00, 7:52 → 7:45, 7:53 → 8:00, 7:40 → 7:45. So a start can move up to 7 minutes LATER than the
+// computed crew start (the owner chose nearest over always earlier).
+//
+// Only the start is rounded. The END stays exactly as the route sets it (it is not moved and not rounded).
+// If rounding would put the start at or after the end (a very short shift), the original start is kept.
+// Customer facing stop windows and ETAs are untouched: this only shapes CREW shift windows.
 
 import { DISPLAY_TZ } from "@/lib/dates";
 import type { RouteWindow } from "@/lib/risk/engine";
 
-const QUARTER_MS = 15 * 60 * 1000;
+const MIN_MS = 60 * 1000;
+const QUARTER_MS = 15 * MIN_MS;
 
 /** Minutes to add to a UTC instant to get wall clock time in `tz` at that instant (e.g. -300 in EST). */
 function offsetMinutes(tz: string, ms: number): number {
@@ -34,19 +38,23 @@ function offsetMinutes(tz: string, ms: number): number {
   return Math.round((asUtc - Math.floor(ms / 1000) * 1000) / 60000);
 }
 
-/** Round an instant DOWN to the previous quarter hour on the wall clock in `tz` (Eastern by default).
- *  Seconds are dropped too. An instant already on a quarter is returned unchanged. Pure. */
-export function floorToQuarterHour(ms: number, tz: string = DISPLAY_TZ): number {
-  const off = offsetMinutes(tz, ms) * 60000;
+/** Round an instant to the NEAREST quarter hour on the wall clock in `tz` (Eastern by default), judged on
+ *  whole minutes past the quarter: 0 to 7 rounds down, 8 to 14 rounds up (seconds are dropped first, so
+ *  7:52:59 is still 7:52 → 7:45). Rolls over the hour and the date (11:53 PM → 12:00 AM next day). Pure. */
+export function roundToNearestQuarterHour(ms: number, tz: string = DISPLAY_TZ): number {
+  const off = offsetMinutes(tz, ms) * MIN_MS;
   const local = ms + off;
-  return local - (((local % QUARTER_MS) + QUARTER_MS) % QUARTER_MS) - off;
+  const intoQuarter = ((local % QUARTER_MS) + QUARTER_MS) % QUARTER_MS;
+  const down = local - intoQuarter;
+  const minutesPast = Math.floor(intoQuarter / MIN_MS);
+  const rounded = minutesPast >= 8 ? down + QUARTER_MS : down;
+  return rounded - off;
 }
 
-/** The CREW window for a route: start floored to the quarter hour, same length (end moves by the same
- *  minutes). Raw stop times (rawStart/rawEnd) are left as they are. Pure. */
+/** The CREW window for a route: start rounded to the nearest quarter hour, end left exactly as the route
+ *  sets it. Keeps the original start if rounding would reach the end. Raw stop times are untouched. Pure. */
 export function crewWindow(w: RouteWindow, tz: string = DISPLAY_TZ): RouteWindow {
-  const startMs = w.startUnix * 1000;
-  const shiftMs = startMs - floorToQuarterHour(startMs, tz);
-  const shiftSec = Math.round(shiftMs / 1000);
-  return { ...w, startUnix: w.startUnix - shiftSec, endUnix: w.endUnix - shiftSec };
+  const startUnix = Math.round(roundToNearestQuarterHour(w.startUnix * 1000, tz) / 1000);
+  if (startUnix >= w.endUnix) return w;
+  return { ...w, startUnix };
 }

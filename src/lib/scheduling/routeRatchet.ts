@@ -72,8 +72,8 @@ export function trackWindow(shift: WindowISO, route: { start: string | null; end
   return { start: new Date(newS).toISOString(), end: new Date(newE).toISOString(), windowKnown: true, changed: true, reason };
 }
 
-/** A route's OWN stop-derived CREW window (not the shift's), buffers included, start floored to the quarter
- *  hour (quarterHour.ts) — the signal for where the route now sits in the day. Mirrors
+/** A route's OWN stop-derived CREW window (not the shift's), buffers included, start rounded to the nearest quarter
+ *  hour, end unchanged (quarterHour.ts) — the signal for where the route now sits in the day. Mirrors
  *  preCheck.routeAssignWindow's EngineRoute mapping but always the route's own. `opts.raw` skips the rounding
  *  (used to tell a rounding-only move from a real route change). */
 export function routeOwnWindow(route: Route, opts: { raw?: boolean } = {}): { start: string | null; end: string | null; known: boolean } {
@@ -93,26 +93,36 @@ export function routeOwnWindow(route: Route, opts: { raw?: boolean } = {}): { st
   return { start: new Date(w.startUnix * 1000).toISOString(), end: new Date(w.endUnix * 1000).toISOString(), known: true };
 }
 
-export type QuarterRounding = "not_rounding" | "apply" | "hold_published" | "hold_manual";
+export type QuarterRounding =
+  | { kind: "not_rounding" }
+  | { kind: "none" }
+  | { kind: "hold_manual" }
+  | { kind: "hold_published"; start: string }
+  | { kind: "apply"; start: string };
 
 /**
- * PURE. Is this shift about to move ONLY because the crew start is now floored to the quarter hour, and if so
- * may it? (Owner rule 2026-11-12.)
- *  - not_rounding: the shift does not cover the RAW route either, so this is a real route change → normal tracking.
- *  - hold_manual: it covers the raw route but its start is not the raw route start, so a person set that time
- *    (or it is deliberately generous) → leave it alone.
+ * PURE. Should this route shift take the quarter hour crew start, and may it now? (Owner rule 2026-11-12:
+ * START rounded to the NEAREST quarter, END never moved.)
+ *  - not_rounding: the shift does not cover the RAW route, so the route itself changed → normal tracking.
+ *  - none: nothing to round (the route start is already on a quarter), or rounding would reach the shift's
+ *    end (a very short shift keeps its original start).
+ *  - hold_manual: the start is not the route's own start, so a person set it (or it is deliberately
+ *    generous) → leave it alone.
  *  - hold_published: route derived, but already in Connecteam → do NOT re-push until the owner approves
- *    (changing a schedule people already see). `republishApproved` lifts this.
- *  - apply: route derived and not in Connecteam yet → take the quarter hour start.
+ *    (it changes a schedule people already see). `republishApproved` lifts this.
+ *  - apply: route derived and not in Connecteam yet → move ONLY the start to `start`; the end stays.
  */
 export function quarterRoundingDecision(
   shift: WindowISO,
   rawRoute: { start: string | null; end: string | null; known: boolean },
+  crewRoute: { start: string | null; end: string | null; known: boolean },
   opts: { linked: boolean; republishApproved: boolean },
 ): QuarterRounding {
-  if (trackWindow(shift, rawRoute).changed) return "not_rounding";
-  const derived = Boolean(shift.start && rawRoute.start && Date.parse(shift.start) === Date.parse(rawRoute.start));
-  if (!derived) return "hold_manual";
-  if (opts.linked && !opts.republishApproved) return "hold_published";
-  return "apply";
+  if (trackWindow(shift, rawRoute).changed) return { kind: "not_rounding" };
+  if (!rawRoute.start || !crewRoute.start || Date.parse(crewRoute.start) === Date.parse(rawRoute.start)) return { kind: "none" };
+  const derived = Boolean(shift.start && Date.parse(shift.start) === Date.parse(rawRoute.start));
+  if (!derived) return { kind: "hold_manual" };
+  if (shift.end && Date.parse(crewRoute.start) >= Date.parse(shift.end)) return { kind: "none" };
+  if (opts.linked && !opts.republishApproved) return { kind: "hold_published", start: crewRoute.start };
+  return { kind: "apply", start: crewRoute.start };
 }
