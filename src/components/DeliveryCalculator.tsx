@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Calculator, Check, FolderOpen, Loader2, MapPin, RefreshCw, Route as RouteIcon, Search, Send, Truck, Wrench } from "lucide-react";
 import { deliveryQuote, pushPerLeg, type LegMode, type LegBreakdown, type MileageTier, type DeliveryQuote } from "@/lib/pricing/delivery";
 import { readinessTier } from "@/lib/pricing/eventReadiness";
-import { EXTENSION_ID } from "@/lib/extensionId";
+import { canMessageExtension, sendToExtension } from "@/lib/extensionId";
 import { nudgeDrainNow } from "@/lib/extensionNudge";
 import { deliveryPushDisplay, type PushOpStatus, type PushDisplayTone } from "@/lib/pricing/pushStatus";
 
@@ -65,7 +65,8 @@ function stageOf(status: string | null | undefined): number {
 
 interface LiveSubtotalResp {
   ok: boolean;
-  subtotal?: number; // dollars (pre-discount contract_subtotal)
+  subtotal?: number; // dollars, pre-discount, delivery (logistics) lines left out
+  logistics?: number; // dollars of logistics lines already on the quote
   pulledAt?: string; // ISO
   reason?: string;
 }
@@ -91,37 +92,34 @@ const TONE_CLS: Record<PushDisplayTone, string> = {
  *  installed / not on this machine / signed out / slow — the page then keeps the stored value and labels
  *  it honestly. ~8s timeout; guards for a missing chrome.runtime. */
 function requestLiveSubtotal(projectId: string): Promise<LiveSubtotalResp> {
-  return new Promise((resolve) => {
-    try {
-      const rt = (globalThis as unknown as { chrome?: { runtime?: { sendMessage?: (id: string, msg: unknown, cb: (r: unknown) => void) => void; lastError?: unknown } } }).chrome?.runtime;
-      if (!rt?.sendMessage) {
-        resolve({ ok: false, reason: "no_extension" });
-        return;
-      }
-      let done = false;
-      const timer = setTimeout(() => {
-        if (!done) {
-          done = true;
-          resolve({ ok: false, reason: "timeout" });
-        }
-      }, 8000);
-      rt.sendMessage(EXTENSION_ID, { type: "zoe-fetch-subtotal", projectId }, (resp: unknown) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        // Reading lastError clears Chrome's "Unchecked runtime.lastError" console noise when the
-        // extension isn't there / didn't answer.
-        const hadError = Boolean(rt.lastError);
-        if (hadError || !resp || typeof resp !== "object") {
-          resolve({ ok: false, reason: "unreachable" });
-          return;
-        }
-        resolve(resp as LiveSubtotalResp);
-      });
-    } catch {
-      resolve({ ok: false, reason: "error" });
-    }
+  if (!canMessageExtension()) return Promise.resolve({ ok: false, reason: "no_extension" });
+  const timeout = new Promise<LiveSubtotalResp>((resolve) => setTimeout(() => resolve({ ok: false, reason: "timeout" }), 8000));
+  // sendToExtension tries the store build, then the "Load unpacked" build.
+  const ask = sendToExtension({ type: "zoe-fetch-subtotal", projectId }).then((r): LiveSubtotalResp => {
+    if (!r.ok) return { ok: false, reason: "no_extension" };
+    const resp = r.response;
+    return resp && typeof resp === "object" ? (resp as LiveSubtotalResp) : { ok: false, reason: "unreachable" };
   });
+  return Promise.race([ask, timeout]).catch(() => ({ ok: false, reason: "error" }));
+}
+
+/** Why the live read failed, in plain words for the label under the subtotal field. */
+function liveSubtotalFailureText(reason: string | undefined): string {
+  switch (reason) {
+    case "no_extension":
+      return "the Auto-Pull extension isn't on this browser";
+    case "signed_out":
+      return "Goodshuffle is signed out in this browser";
+    case "no_tab":
+    case "tab_loading":
+      return "Goodshuffle didn't open in time, try again";
+    case "timeout":
+      return "Goodshuffle took too long to answer";
+    case "not_found":
+      return "Goodshuffle doesn't know this project";
+    default:
+      return "couldn't reach Goodshuffle live";
+  }
 }
 
 type AnchorRef = { id: string; label: string; truckId: string | null; source: "route" | "booking"; timingVerified: boolean };
@@ -282,14 +280,16 @@ export function DeliveryCalculator(): React.JSX.Element {
       if (reqId !== liveReqRef.current) return; // a newer selection superseded this one
       if (resp.ok && typeof resp.subtotal === "number" && Number.isFinite(resp.subtotal)) {
         setSubtotal(String(resp.subtotal));
-        setSubtotalInfo({ state: "live", text: "live from Goodshuffle just now" });
+        const excl = resp.logistics ? ` (delivery lines of ${money(resp.logistics)} left out)` : "";
+        setSubtotalInfo({ state: "live", text: `live from Goodshuffle just now${excl}` });
       } else {
+        // A stored 0 is not a real subtotal: the pull's search row reads 0 on every unsigned quote.
+        const why = liveSubtotalFailureText(resp.reason);
+        const hasStored = p.subtotal != null && p.subtotal > 0;
+        if (!hasStored) setSubtotal("");
         setSubtotalInfo({
           state: "stored",
-          text:
-            p.subtotal != null
-              ? "subtotal as of the last pull — couldn't reach Goodshuffle live"
-              : "no stored subtotal on this project — enter it by hand",
+          text: hasStored ? `subtotal as of the last pull: ${why}` : `${why}. Enter the subtotal by hand.`,
         });
       }
     });
