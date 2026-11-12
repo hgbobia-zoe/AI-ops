@@ -51,6 +51,12 @@ export function computeCoverage(shifts: StaffShift[]): DayCoverage {
     const roleShifts = shifts.filter((s) => s.role === role);
     if (roleShifts.length === 0) continue;
     for (const s of roleShifts) {
+      // A cancelled shift needs nobody. Recorded with gap 0 (not left out) so callers that fall back to
+      // headcount minus assignees never invent open seats for it.
+      if (s.status === "cancelled") {
+        byShift[s.id] = { headcount: 0, assigned: 0, scheduledCredit: 0, scheduledNames: [], scheduledUserIds: [], covered: 0, gap: 0 };
+        continue;
+      }
       const assigned = s.assignees.length;
       const covered = Math.min(s.headcount, assigned);
       const gap = Math.max(0, s.headcount - covered);
