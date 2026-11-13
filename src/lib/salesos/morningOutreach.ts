@@ -27,6 +27,8 @@ import { botAnnounce, appUrl, type BotCard } from "@/lib/notify/aiBots";
 import { STOP_RE } from "@/lib/comms/optOut";
 import { todayInOpsTz, shiftYmd, opsLocalInputToIso, DISPLAY_TZ } from "@/lib/dates";
 import { getJson, setJson } from "@/lib/kv";
+import { getBookingById } from "@/lib/db/repo";
+import { outreachBlock, type OutreachBlock } from "./outreachEligibility";
 
 // ── Send time ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -81,6 +83,8 @@ export interface GateInput {
   timeline: TimelineEntry[]; // newest first (buildLeadTimeline order)
   liveCalls: LiveCall[];
   now: number;
+  /** The hard gate (outreachEligibility): archived / lost / no event date / past event. Checked first. */
+  block?: OutreachBlock | null;
 }
 
 export interface GateResult {
@@ -97,7 +101,7 @@ export interface GateResult {
   said?: string;
 }
 
-export type HoldKind = "lose" | "lose_waiting" | "no_phone" | "opt_out" | "client_done" | "waiting" | "board_flag" | "cadence";
+export type HoldKind = "archived" | "closed" | "no_date" | "lose" | "lose_waiting" | "no_phone" | "opt_out" | "client_done" | "waiting" | "board_flag" | "cadence";
 
 /** Owner call (2026-11-03): follow up less often the further away the event is, keep going until 3 days
  *  before the event, then mark the project lost and archive it. A follow up goes out only when nobody
@@ -157,6 +161,12 @@ export function touches(timeline: TimelineEntry[], liveCalls: LiveCall[]): { at:
 const inDays = (d: number): string => (d < 0 ? "has passed" : d === 0 ? "is today" : `is in ${d} day${d === 1 ? "" : "s"}`);
 
 export function gateLead(g: GateInput): GateResult {
+  // Hard gate first: nothing below (cadence, the drafter, a manual board status) can send to an archived or
+  // lost project, or one with no event date. A past event on an open, unarchived quote still falls through to
+  // the mark lost rule below (it never sends either).
+  if (g.block && g.block.kind !== "past_event") return { send: false, kind: g.block.kind, reason: g.block.reason };
+  if (g.daysToEvent == null) return { send: false, kind: "no_date", reason: "No event date on the project, a person should check it." };
+
   const list = touches(g.timeline, g.liveCalls);
   // Skip the client's closing thank yous; whatever came before them decides whether they are waiting.
   let skip = 0;
@@ -357,7 +367,10 @@ async function planLead(card: LeadCard, numbers: QuoNumber[], sendDay: string, n
   const timeline = buildLeadTimeline(card.id);
   const subStatus = card.status as OpenQuoteSubStatus;
   const daysToEvent = lead?.signals.daysToEvent ?? card.daysToEvent;
-  const gate = gateLead({ hasPhone: phone.trim().length > 0, daysToEvent, subStatus, timeline, liveCalls, now });
+  // Read the stored project, not the card: archived and the status label live on the booking.
+  const booking = getBookingById(card.id);
+  const block = outreachBlock(booking ?? { eventDate: card.eventDate, statusLabel: card.statusLabel }, todayInOpsTz(new Date(now)));
+  const gate = gateLead({ hasPhone: phone.trim().length > 0, daysToEvent, subStatus, timeline, liveCalls, now, block });
 
   let draft: string | null = null;
   let caution: string | null = null;

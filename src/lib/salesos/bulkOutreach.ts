@@ -21,6 +21,8 @@ import { leadTouchContext, type LeadTouchpoint } from "./timeline";
 import { createApproval, decideApproval, type ApprovalActionType, type ApprovalCard } from "@/lib/aiorg/approvals";
 import { sendLeadSms } from "./smsSend";
 import { flagOn } from "@/lib/flags";
+import { getBookingById } from "@/lib/db/repo";
+import { outreachBlock } from "./outreachEligibility";
 
 /** Default email subject for a quote-sent follow-up — matches the single-send outreach proposer. */
 export const BULK_EMAIL_SUBJECT = "Following up on your event";
@@ -152,7 +154,8 @@ export async function buildBulkOutreachCohort(repFirstName?: string | null): Pro
   const today = todayInOpsTz();
   // EVERY open lead with a quote out (quote_sent + follow_up + action_needed), not just the recent slice —
   // the dormant and replied quotes are exactly the ones that most need a nudge. See OPEN_QUOTE_STATUSES.
-  const cohort = openQuoteCards();
+  // The hard gate: archived, lost, no event date or a past event never reaches the bulk pass.
+  const cohort = openQuoteCards().filter((c) => !outreachBlock(getBookingById(c.id) ?? { eventDate: c.eventDate, statusLabel: c.statusLabel }, today));
 
   // Build one row. `skipLlm` returns the deterministic template draft (no model call) so a row never blocks
   // on the LLM; the fast per-lead work (lead lookup, merged timeline, availability) always runs.
@@ -376,6 +379,16 @@ export async function queueBulkOutreach(
     }
 
     const clientName = lead.clientName || item.clientName || leadId;
+
+    // The hard gate again at fire time, on the project as stored now (never trust the reviewed table).
+    const block = outreachBlock(getBookingById(leadId) ?? { eventDate: lead.eventDate ?? null }, today);
+    if (block) {
+      if (item.email) rowSkipped.push({ channel: "email", reason: block.reason });
+      if (item.sms) rowSkipped.push({ channel: "sms", reason: block.reason });
+      skipped += rowSkipped.length || 1;
+      rows.push({ leadId, clientName, channels, skipped: rowSkipped.length ? rowSkipped : [{ channel: "email", reason: block.reason }] });
+      continue;
+    }
     const cardBase = { clientName, eventDate: lead.eventDate ?? item.eventDate ?? null, value: lead.value ?? item.value ?? null, stageLabel: STAGE_LABEL[lead.stage], daysSinceQuote: lead.quoteSentDate ? daysBetweenYmd(lead.quoteSentDate.slice(0, 10), today) : null };
 
     // EMAIL — governed outbox op (email_send), gated by EMAIL_SEND_ENABLED inside decideApproval.

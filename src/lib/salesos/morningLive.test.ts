@@ -90,6 +90,27 @@ describe("morning outreach live", () => {
     expect(getMorningLiveDay(DAY)!.rows[0]).toMatchObject({ status: "skipped", detail: expect.stringContaining("reached out since the plan") });
   });
 
+  it("never texts a project that is archived, lost or lost its event date after the plan (hard gate recheck)", async () => {
+    const cases: [string, Record<string, unknown>, string][] = [
+      ["archived", { archived: true }, "archived in Goodshuffle"],
+      ["lost", { statusLabel: "Lost" }, "marked Lost"],
+      ["no date", { eventDate: null }, "No event date on the project"],
+      ["past event", { eventDate: "2023-04-08" }, "has passed"],
+    ];
+    for (const [name, over, why] of cases) {
+      setJson(liveKey(DAY), null);
+      send.mockClear();
+      vi.setSystemTime(at("08:20"));
+      await runMorningOutreachTick(at("08:20"));
+      await awaitPlanning();
+      // The plan said send; the project changed before 9:14 (an archived quote whose date a pull blanked).
+      saveBookings([{ bookingId: "L1", eventName: "Chang Party", eventDate: "2027-05-01", statusLabel: "Quote Sent", signed: false, grandTotal: 2000, clientName: "Holly Chang", clientPhone: "+13015550111", ...over }]);
+      await vi.advanceTimersByTimeAsync(Date.parse(`${DAY}T14:14:38Z`) - Date.now());
+      expect(send, name).not.toHaveBeenCalled();
+      expect(getMorningLiveDay(DAY)!.rows[0], name).toMatchObject({ status: "skipped", detail: expect.stringContaining(why) });
+    }
+  });
+
   it("after a restart it catches up a missed send before 11, and calls it missed after", async () => {
     vi.setSystemTime(at("08:20"));
     await runMorningOutreachTick(at("08:20"));

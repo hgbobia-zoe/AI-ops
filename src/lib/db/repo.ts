@@ -1899,6 +1899,9 @@ export function getPipelineLeads(todayYmd: string): BookingView[] {
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%lost%'
            AND LOWER(COALESCE(status_label,'')) NOT LIKE '%dead%'
            AND (event_date IS NULL OR event_date >= ?)
+           -- Archived in Goodshuffle = off the active board. Without this, an archived quote whose event date
+           -- went missing looked open (morning outreach texted 2023 quotes, 2026-11-13).
+           AND COALESCE(archived, 0) = 0
            AND ${NOT_BLANK_DRAFT_SQL}
          ORDER BY COALESCE(date_created, event_date, '') DESC`,
       )

@@ -219,6 +219,26 @@ describe("buildBulkOutreachCohort — broadened open-quote cohort + sub-status",
   });
 });
 
+describe("hard gate (archived / lost / no date / past event)", () => {
+  it("keeps blocked projects out of the cohort", async () => {
+    seedQuoteSent({ eventDate: null });
+    expect((await buildBulkOutreachCohort()).rows).toHaveLength(0);
+    seedQuoteSent({ archived: true });
+    expect((await buildBulkOutreachCohort()).rows).toHaveLength(0);
+  });
+
+  it("re-checks at fire time: a project archived or dateless since the review sends nothing", async () => {
+    process.env.EMAIL_SEND_ENABLED = "true";
+    for (const over of [{ archived: true }, { eventDate: null }, { statusLabel: "Lost" }]) {
+      seedQuoteSent(over);
+      const summary = await queueBulkOutreach([{ leadId: "QS1", email: { subject: "Following up", body: "Hi Pat." }, sms: { body: "Hi Pat." } }], "Owner");
+      expect(summary.queuedEmail + summary.sentSms, JSON.stringify(over)).toBe(0);
+      expect(summary.rows[0].skipped.length, JSON.stringify(over)).toBe(2);
+    }
+    expect(listPendingGsOps(50).filter((o) => o.op === "email_send")).toHaveLength(0);
+  });
+});
+
 describe("queueBulkOutreach — email (governed outbox op)", () => {
   it("email with the gate ON enqueues the email_send outbox op, status queued (not 'sent')", async () => {
     process.env.EMAIL_SEND_ENABLED = "true";
