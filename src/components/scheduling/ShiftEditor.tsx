@@ -17,7 +17,8 @@ import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import { shiftGap, type ShiftRole, type ShiftStatus, type StaffShift } from "@/lib/scheduling/types";
 import { classifyWorkerFor, eligibilityView, dayTz, type WorkerDayEligibilityData } from "@/lib/scheduling/eligibilityLabel";
 import { ELIG_BADGE } from "@/components/scheduling/AddWorkerPanel";
-import { isoToOpsLocalInput, opsLocalInputToIso } from "@/lib/dates";
+import { DISPLAY_TZ, isoToOpsLocalInput, opsLocalInputToIso, formatClockTime } from "@/lib/dates";
+import type { RouteOption } from "@/lib/scheduling/routeOptions";
 
 const INPUT = "w-full rounded border border-border bg-background px-2.5 py-1.5 text-[13px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 const BTN = "inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-[12.5px] text-tertiary-text transition-colors hover:bg-[var(--row-hover)] hover:text-foreground disabled:opacity-50 disabled:pointer-events-none";
@@ -45,6 +46,8 @@ const isoToLocalInput = isoToOpsLocalInput;
 const localInputToIso = opsLocalInputToIso;
 
 interface Draft {
+  /** "" = no route (warehouse, prep, other: times are typed by the person). */
+  routeId: string;
   role: ShiftRole;
   headcount: number;
   start: string; // datetime-local
@@ -61,20 +64,27 @@ interface Draft {
 /** Prefill for a NEW shift (e.g. clicking an empty spot on a person's row in the day timeline). */
 export interface NewShiftPrefill {
   assignees?: number[];
+  /** Route the new shift is for; its times come from the route (owner rule: shifts match the route). */
+  routeId?: string | null;
   startIso?: string | null;
   endIso?: string | null;
 }
 
-function toDraft(shift: StaffShift | null, prefill?: NewShiftPrefill): Draft {
+function toDraft(shift: StaffShift | null, prefill?: NewShiftPrefill, routes: RouteOption[] = []): Draft {
   if (!shift) {
+    // A new route shift takes the route's crew window; a shift with no route starts with BLANK times (the
+    // person picks them). Never a guessed hour.
+    const route = prefill?.routeId ? routes.find((r) => r.routeId === prefill.routeId) ?? null : null;
     return {
+      routeId: route?.routeId ?? "",
       role: "field", headcount: Math.max(1, prefill?.assignees?.length ?? 1),
-      start: isoToLocalInput(prefill?.startIso ?? null), end: isoToLocalInput(prefill?.endIso ?? null),
+      start: isoToLocalInput(route ? route.start : prefill?.startIso ?? null), end: isoToLocalInput(route ? route.end : prefill?.endIso ?? null),
       location: "", eventLabel: "", notes: "", assignees: [...(prefill?.assignees ?? [])], instaworkHeadcount: 0, payRate: "", status: "draft",
     };
   }
   const gap = shiftGap(shift);
   return {
+    routeId: shift.routeId ?? "",
     role: shift.role,
     headcount: shift.headcount,
     start: isoToLocalInput(shift.startTime),
@@ -97,6 +107,7 @@ export function ShiftEditor({
   recommendations,
   onClose,
   prefill,
+  routeOptions = [],
 }: {
   shift: StaffShift | null;
   date: string; // the day being edited (for a new shift)
@@ -105,10 +116,46 @@ export function ShiftEditor({
   recommendations: CrewRecommendation[];
   onClose: () => void;
   prefill?: NewShiftPrefill;
+  /** The day's routes with their crew windows (Add shift asks for the route first). */
+  routeOptions?: RouteOption[];
 }): React.JSX.Element {
   const router = useRouter();
   const isNew = shift == null;
-  const [draft, setDraft] = useState<Draft>(() => toDraft(shift, prefill));
+  const [draft, setDraft] = useState<Draft>(() => toDraft(shift, prefill, routeOptions));
+  const draftRoute = draft.routeId ? routeOptions.find((r) => r.routeId === draft.routeId) ?? null : null;
+  const onRouteTime = Boolean(draftRoute?.start && draftRoute.end && draft.start === isoToLocalInput(draftRoute.start) && draft.end === isoToLocalInput(draftRoute.end));
+
+  /** Pick the route for a NEW shift: its times fill from the route; "no route" clears them. */
+  function pickRoute(routeId: string): void {
+    const r = routeOptions.find((x) => x.routeId === routeId) ?? null;
+    setDraft((d) => ({ ...d, routeId, start: isoToLocalInput(r?.start ?? null), end: isoToLocalInput(r?.end ?? null) }));
+  }
+
+  /** Reset to route / Keep this time on an existing route shift (the server owns the override record). */
+  async function routeTime(action: "reset" | "keep"): Promise<void> {
+    if (!shift) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/scheduling/shift/${shift.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ routeTimeAction: action }),
+      });
+      const j = (await res.json().catch(() => null)) as { message?: string } | null;
+      if (!res.ok) {
+        setError(j?.message || "Couldn't update the shift. Try again.");
+        return;
+      }
+      toast.success(action === "reset" ? (shift.connecteamShiftId ? "Back on the route time. Publish to update Connecteam." : "Back on the route time.") : "Kept this time as an override.");
+      onClose();
+      router.refresh();
+    } catch {
+      setError("Couldn't update the shift. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
   const [instaTouched, setInstaTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -183,6 +230,7 @@ export function ShiftEditor({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             date,
+            routeId: draft.routeId || null,
             role: draft.role,
             headcount: draft.headcount,
             startTime: startIso,
@@ -324,6 +372,21 @@ export function ShiftEditor({
 
       {/* Body */}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        {isNew && routeOptions.length > 0 && (
+          <label className="mb-3.5 block space-y-1">
+            <span className={LABEL}>Route</span>
+            <select className={INPUT} value={draft.routeId} onChange={(e) => pickRoute(e.target.value)}>
+              <option value="">No route (warehouse, prep, other)</option>
+              {routeOptions.map((r) => <option key={r.routeId} value={r.routeId}>{r.label}</option>)}
+            </select>
+            <span className="block text-[11px] text-meta">
+              {draftRoute ? "Times come from the route. Change them only to override it." : "No route: pick the times yourself."}
+            </span>
+          </label>
+        )}
+        {!isNew && shift?.routeId && (
+          <RouteTimeLine shift={shift} route={draftRoute} saving={saving} onAction={routeTime} />
+        )}
         <div className="grid gap-3.5 sm:grid-cols-2">
           <label className="space-y-1">
             <span className={LABEL}>Role</span>
@@ -344,7 +407,12 @@ export function ShiftEditor({
             <input className={INPUT} type="datetime-local" value={draft.end} onChange={(e) => set("end", e.target.value)} />
           </label>
         </div>
-        {!draft.start && <p className="mt-1.5 text-[11.5px] text-attention">No start time set — this shift shows &ldquo;Set time&rdquo; until you enter one.</p>}
+        {!draft.start && <p className="mt-1.5 text-[11.5px] text-attention">No start time set. This shift shows &ldquo;Set time&rdquo; until you enter one.</p>}
+        {draftRoute && draft.start && !onRouteTime && (
+          <p className="mt-1.5 text-[11.5px] text-attention">
+            Not the route time ({formatClockTime(draftRoute.start)} to {formatClockTime(draftRoute.end)}). Saving keeps your time as an override.
+          </p>
+        )}
 
         <div className="mt-3.5 grid gap-3.5 sm:grid-cols-2">
           <label className="space-y-1">
@@ -522,6 +590,39 @@ export function ShiftEditor({
             : `Publishing notifies the assigned crew in Connecteam. ${publishHint}. The Instawork gap-fill is a separate step (coming next).`}
         </p>
       </div>
+    </div>
+  );
+}
+
+/** The route time line on an existing route shift: the route's time, whether this shift is on it, and the
+ *  Override badge with Reset to route (and Keep this time for a difference nobody has confirmed yet). */
+function RouteTimeLine({ shift, route, saving, onAction }: { shift: StaffShift; route: RouteOption | null; saving: boolean; onAction: (a: "reset" | "keep") => void }): React.JSX.Element {
+  const routeText = route?.start && route.end ? `${formatClockTime(route.start)} to ${formatClockTime(route.end)}` : null;
+  const onRoute = Boolean(route?.start && route.end && shift.startTime && shift.endTime && Date.parse(shift.startTime) === Date.parse(route.start) && Date.parse(shift.endTime) === Date.parse(route.end));
+  const ov = shift.routeOverride;
+  const btn = "rounded border border-border px-2 py-0.5 text-[11.5px] text-foreground transition-colors hover:bg-[var(--row-hover)] disabled:opacity-50";
+  return (
+    <div className="mb-3.5 rounded border border-border px-3 py-2 text-[12.5px]">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-meta">Route time</span>
+        <span className="text-foreground">{routeText ?? "no stop times yet"}</span>
+        {ov && <span className="rounded border border-attention/50 px-1.5 py-px text-[10.5px] uppercase tracking-[0.06em] text-attention">Override</span>}
+        {!ov && routeText && (onRoute
+          ? <span className="text-[11.5px] text-positive">On the route time</span>
+          : <span className="text-[11.5px] text-attention">Differs from the route</span>)}
+      </div>
+      {ov && (
+        <p className="mt-1 text-[11.5px] text-meta">
+          Set by {ov.by} on {new Date(ov.at).toLocaleDateString("en-US", { timeZone: DISPLAY_TZ, month: "short", day: "numeric" })}
+          {ov.source === "connecteam" ? " (changed in Connecteam)" : ""}. The route follow job leaves it alone.
+        </p>
+      )}
+      {routeText && (ov || !onRoute) && (
+        <div className="mt-1.5 flex flex-wrap gap-2">
+          <button type="button" className={btn} disabled={saving} onClick={() => onAction("reset")}>Reset to route</button>
+          {!ov && <button type="button" className={btn} disabled={saving} onClick={() => onAction("keep")}>Keep this time</button>}
+        </div>
+      )}
     </div>
   );
 }

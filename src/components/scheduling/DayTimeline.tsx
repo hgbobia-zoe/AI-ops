@@ -19,6 +19,7 @@ import type { CrewMember } from "@/lib/connecteam";
 import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import type { StaffShift } from "@/lib/scheduling/types";
 import { opsWallTimeToMs } from "@/lib/dates";
+import { routeNearest, type RouteOption } from "@/lib/scheduling/routeOptions";
 import type { WorkerDayEligibilityData } from "@/components/scheduling/RouteStaffBoard";
 import type { DayTimeline as Timeline, TimelineBar } from "@/lib/scheduling/dayTimeline";
 
@@ -49,6 +50,7 @@ export function DayTimeline({
   timeline,
   date,
   shifts,
+  routeOptions,
   roster,
   eligibilityData,
   recommendations,
@@ -56,6 +58,7 @@ export function DayTimeline({
   timeline: Timeline;
   date: string;
   shifts: StaffShift[];
+  routeOptions: RouteOption[];
   roster: CrewMember[];
   eligibilityData: WorkerDayEligibilityData;
   recommendations: Record<string, CrewRecommendation[]>;
@@ -87,15 +90,17 @@ export function DayTimeline({
 
   const shiftById = (id: string | undefined): StaffShift | null => (id ? shifts.find((s) => s.id === id) ?? null : null);
 
-  // Clicked hour on an empty part of a row → a 4 hour new shift starting on that hour.
+  // Tap on an empty part of a row → Add shift for that person. Owner rule: shifts match the route, so the
+  // tapped column never invents a time. On a day with routes the form opens on the route nearest the tap
+  // (its time comes from the route); with no routes the times start blank for the person to pick.
   function addAt(e: React.MouseEvent<HTMLDivElement>, assignees: number[]): void {
     if ((e.target as HTMLElement).closest("[data-bar]")) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    const hour = Math.min(endHour - 1, Math.floor(startHour + frac * (endHour - startHour)));
-    // Eastern wall clock hour on this day (dayStartMs + hour * 1h is an hour off on the two DST switch days).
-    const startMs = opsWallTimeToMs(date, hour);
-    setAdding({ assignees, startIso: new Date(startMs).toISOString(), endIso: new Date(startMs + 4 * 3600000).toISOString() });
+    const minutes = (startHour + frac * (endHour - startHour)) * 60;
+    const tapMs = opsWallTimeToMs(date, Math.floor(minutes / 60), Math.floor(minutes % 60));
+    const route = routeNearest(routeOptions, tapMs);
+    setAdding({ assignees, routeId: route?.routeId ?? null });
   }
 
   const grid = (
@@ -112,13 +117,14 @@ export function DayTimeline({
       <>
         <div className="flex items-center justify-between gap-1 text-[11.5px] font-semibold leading-tight">
           <span className="truncate">{b.allDay ? b.title : b.timeLabel}</span>
+          {b.override && <span className="shrink-0 rounded-sm bg-background/80 px-1 text-[9.5px] font-semibold uppercase tracking-[0.04em] text-attention">Override</span>}
           {b.total != null && <span className="shrink-0 tabular-nums opacity-80">{b.filled}/{b.total}</span>}
         </div>
         <div className="truncate text-[11px] leading-tight opacity-90">{b.allDay ? "All day" : b.title}</div>
       </>
     );
     const cls = `absolute overflow-hidden rounded px-2 py-1 text-left ${barClass(b)} ${b.kind === "unavailable" ? "text-center" : ""}`;
-    const tip = `${b.title}, ${b.timeLabel}${b.kind === "app" && !b.published ? ". Not in Connecteam yet" : ""}${b.kind === "connecteam" ? ". Entered in Connecteam" : ""}`;
+    const tip = `${b.title}, ${b.timeLabel}${b.override ? ". Override: not the route time" : ""}${b.kind === "app" && !b.published ? ". Not in Connecteam yet" : ""}${b.kind === "connecteam" ? ". Entered in Connecteam" : ""}`;
     if (shift) {
       return (
         <button key={b.id} type="button" data-bar style={pos(b)} className={`${cls} transition-opacity hover:opacity-85`} title={`${tip}. Click to edit`} onClick={() => setEditing(shift)}>
@@ -253,12 +259,13 @@ export function DayTimeline({
             eligibilityData={eligibilityData}
             recommendations={recommendations[editing.id] ?? []}
             onClose={() => setEditing(null)}
+            routeOptions={routeOptions}
           />
         </SidePanelOverlay>
       )}
       {adding && (
         <SidePanelOverlay onClose={() => setAdding(null)}>
-          <ShiftEditor shift={null} date={date} roster={roster} eligibilityData={eligibilityData} recommendations={[]} prefill={adding} onClose={() => setAdding(null)} />
+          <ShiftEditor shift={null} date={date} roster={roster} eligibilityData={eligibilityData} recommendations={[]} prefill={adding} routeOptions={routeOptions} onClose={() => setAdding(null)} />
         </SidePanelOverlay>
       )}
     </div>

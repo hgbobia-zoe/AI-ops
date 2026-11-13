@@ -13,7 +13,9 @@
 import { getCrewForDateSafe, connecteamConfigured, connecteamDownReason } from "@/lib/connecteam";
 import { insertAudit } from "@/lib/db/repo";
 import { todayInOpsTz, shiftYmd } from "@/lib/dates";
-import { createIngestedShift, getShiftsForDate, updateShift } from "./store";
+import { createIngestedShift, getShiftById, getShiftsForDate, updateShift } from "./store";
+import { connecteamOverride, type CrewWin } from "./routeMatch";
+import { crewWindowForRoute } from "./routeCrewWindow";
 import { planReconcile, type ReconcilePlan } from "./connecteamImport";
 
 /** How many days forward (including today) the runtime sweep reconciles. Bounds the write surface. */
@@ -30,11 +32,13 @@ export interface ReconcileDayResult {
   updated: number; // content applied (Connecteam won)
   baselined: number; // bookkeeping-only (first adoption of an app-pushed shift)
   flagged: number; // needs_review (conflict / vanished)
+  relinked: number; // pointed at a re-issued Connecteam id
+  merged: number; // duplicate copies cancelled into their keeper
   unchanged: number;
 }
 
 /** Apply a computed plan to the DB. Idempotent + safe. Pure-ish given the plan (only writes what it says). */
-export function applyReconcilePlan(plan: ReconcilePlan, actor = "connecteam-sync"): ReconcileDayResult {
+export function applyReconcilePlan(plan: ReconcilePlan, actor = "connecteam-sync", crewOf: (routeId: string | null) => CrewWin = crewWindowForRoute): ReconcileDayResult {
   const res: ReconcileDayResult = {
     date: plan.date,
     reachable: plan.reachable,
@@ -42,10 +46,64 @@ export function applyReconcilePlan(plan: ReconcilePlan, actor = "connecteam-sync
     updated: 0,
     baselined: 0,
     flagged: 0,
+    relinked: 0,
+    merged: 0,
     unchanged: plan.unchanged,
   };
   if (!plan.reachable) return res;
   const now = new Date().toISOString();
+
+  // A time that came FROM Connecteam onto a route shift is an override (owner rule: shifts match the route
+  // unless someone overrides it, and a change made in Connecteam counts). Null when it is the route's time.
+  const ctOverride = (appShiftId: string, ct: { startTime: string | null; endTime: string | null }) => {
+    const app = getShiftById(appShiftId);
+    if (!app?.routeId) return {};
+    if (app.routeOverride) return {}; // already an override: keep who set it first
+    const timeChanged = !(app.startTime && ct.startTime && Date.parse(app.startTime) === Date.parse(ct.startTime) && app.endTime && ct.endTime && Date.parse(app.endTime) === Date.parse(ct.endTime));
+    if (!timeChanged) return {};
+    const ov = connecteamOverride(app, ct, crewOf(app.routeId), now);
+    return ov ? { routeOverride: ov } : {};
+  };
+
+  for (const r of plan.relinks) {
+    updateShift(r.appShiftId, {
+      connecteamShiftId: r.ct.connecteamShiftId,
+      connecteamSchedulerId: r.ct.schedulerId,
+      connecteamContentHash: r.ct.contentHash,
+      connecteamSyncedAt: now,
+      connecteamLastModified: r.ct.lastModifiedIso,
+      syncStatus: "synced",
+      syncNote: null,
+    });
+    res.relinked += 1;
+    audit(actor, "SHIFT_SYNC_RELINKED", r.appShiftId, { connecteamShiftId: r.ct.connecteamShiftId });
+  }
+
+  for (const m of plan.merges) {
+    const drop = getShiftById(m.dropId);
+    if (!drop) continue;
+    // The keeper takes Connecteam's time (the live truth); on a route shift a different time is an override.
+    updateShift(m.keepId, {
+      ...ctOverride(m.keepId, m.ct),
+      startTime: m.ct.startTime,
+      endTime: m.ct.endTime,
+      windowKnown: m.ct.windowKnown,
+      connecteamShiftId: m.ct.connecteamShiftId,
+      connecteamContentHash: m.ct.contentHash,
+      connecteamSyncedAt: now,
+      syncStatus: "synced",
+      syncNote: null,
+    });
+    updateShift(m.dropId, {
+      status: "cancelled",
+      connecteamShiftId: null,
+      syncStatus: null,
+      syncNote: null,
+      notes: [drop.notes, `Merged into ${m.keepId}: the same Connecteam shift.`].filter(Boolean).join(" "),
+    });
+    res.merged += 1;
+    audit(actor, "SHIFT_SYNC_MERGED", m.dropId, { keptShiftId: m.keepId, connecteamShiftId: m.ct.connecteamShiftId });
+  }
 
   for (const c of plan.creates) {
     const ct = c.ct;
@@ -72,6 +130,7 @@ export function applyReconcilePlan(plan: ReconcilePlan, actor = "connecteam-sync
   for (const u of plan.updates) {
     if (u.applyContent) {
       updateShift(u.appShiftId, {
+        ...ctOverride(u.appShiftId, u.ct),
         role: u.ct.role,
         headcount: u.ct.headcount,
         startTime: u.ct.startTime,
@@ -153,6 +212,8 @@ export async function runConnecteamImportTick(): Promise<ImportTickResult> {
   let updated = 0;
   let baselined = 0;
   let flagged = 0;
+  let relinked = 0;
+  let merged = 0;
   let unreachable = 0;
   let reachableDays = 0;
   for (const d of dates) {
@@ -167,6 +228,8 @@ export async function runConnecteamImportTick(): Promise<ImportTickResult> {
       updated += r.updated;
       baselined += r.baselined;
       flagged += r.flagged;
+      relinked += r.relinked;
+      merged += r.merged;
     } catch {
       unreachable += 1; // a thrown day is an unknown, not a zero — skip it
     }
@@ -174,6 +237,6 @@ export async function runConnecteamImportTick(): Promise<ImportTickResult> {
   const ok = reachableDays > 0; // enabled + configured but nothing reachable = a real outage
   const detail = reachableDays === 0
     ? `${connecteamDownReason()} (${unreachable}/${dates.length} days) — skipped, no app shifts changed`
-    : `${reachableDays}/${dates.length} days synced: ${created} imported, ${updated} updated, ${flagged} need review${baselined ? `, ${baselined} baselined` : ""}${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
+    : `${reachableDays}/${dates.length} days synced: ${created} imported, ${updated} updated, ${flagged} need review${relinked ? `, ${relinked} re-linked` : ""}${merged ? `, ${merged} duplicate copies merged` : ""}${baselined ? `, ${baselined} baselined` : ""}${unreachable ? `, ${unreachable} day(s) unreachable` : ""}`;
   return { ok, detail, days: reachableDays, created, updated, baselined, flagged, unreachableDays: unreachable };
 }

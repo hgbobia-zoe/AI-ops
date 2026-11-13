@@ -266,6 +266,7 @@ function syntheticShift(date: string, role: ShiftRole, win: { start: string | nu
     connecteamContentHash: null, connecteamSyncedAt: null, connecteamLastModified: null, syncStatus: null, syncNote: null,
     instaworkGigId: null, instaworkPostedAt: null,
     lifecycleState: null, supervisorUserId: null, reportLocation: null, reportTime: null, equipment: [], instructions: null,
+    routeOverride: null, routeWindowStart: null, routeWindowEnd: null,
     createdAt: "", updatedAt: "",
   } satisfies StaffShift;
 }

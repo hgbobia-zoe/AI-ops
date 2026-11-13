@@ -58,7 +58,8 @@ import type { CrewShift, CrewRole } from "@/lib/connecteam";
 import { planRouteAutoAssign, isAutoRouteEligible, type RouteAutoAssignPlan, type AutoAssignDecision } from "./routeAutoAssign";
 import { resolveDriverSeniority, type SeniorityRouteMeta } from "./driverSeniority";
 import { routeSpecialty } from "./routeSpecialty";
-import { trackWindow, routeOwnWindow, quarterRoundingDecision, type RatchetOutcome } from "./routeRatchet";
+import { routeOwnWindow } from "./routeRatchet";
+import { isRouteShift, routeMatchDecision } from "./routeMatch";
 import { getSettings } from "@/lib/settings";
 import type { ShiftRole, StaffShift } from "./types";
 import type { Route } from "@/lib/types";
@@ -488,7 +489,7 @@ export async function applyRouteConnecteamCreate(plan: RouteCreatePlan, deps: Ro
         { label: "Truck", value: truckName },
         { label: "Day", value: formatYmdLong(shift.date) },
         { label: "Role", value: ROLE_WORD[shift.role] },
-        { label: "Window", value: `${hhmm(shift.startTime)}–${hhmm(shift.endTime)}` },
+        { label: "Window", value: `${hhmm(shift.startTime)} to ${hhmm(shift.endTime)}` },
       ],
       body: "Created so their schedule and pay match the route.",
       link: { text: "View in Scheduling", url: appUrl("/scheduling") },
@@ -640,23 +641,33 @@ function hhmm(iso: string | null): string {
   }
 }
 
-/**
- * ROUTE-CHANGE TRACKING. For each route-tied app shift, FOLLOW the route's own window — move the shift
- * earlier/later with it and grow it to cover a longer route — so the schedule, Connecteam, and /dispatch all
- * agree with what Goodshuffle re-optimized. Guardrail: the window MOVES but we never auto-shrink a worker's
- * hours (a shorter route keeps the worker's existing duration; cutting hours stays a human decision). A shift
- * that already brackets the route is left as-is. For a Connecteam-linked shift the moved window is pushed to
- * Connecteam FIRST (silent); only on a successful push is the app side updated, so the Connecteam-wins
- * importer can never flap it back (connecteamContentHash=null makes the next import RE-BASELINE — no conflict,
- * no flag). Every move is announced in Slack so a human can see it and override. Returns the count of shifts
- * moved. Honest-when-unreachable: a failed Connecteam push skips that shift (retry next tick).
- */
-/** Owner approval gate for re-pushing ALREADY PUBLISHED shifts to the quarter hour start. Off until the owner
- *  says yes (it changes a schedule crew already see); set SHIFT_QUARTER_REPUBLISH=true to apply. */
-export function quarterRepublishApproved(): boolean {
-  return process.env.SHIFT_QUARTER_REPUBLISH === "true";
+/** PURE. Title + hour labels for the "shift moved with the route" card: Shortened / Lengthened / Moved. */
+export function shiftChangeCard(oldStart: string | null, oldEnd: string | null, newStart: string, newEnd: string): { title: string; oldHours: string | null; newHours: string | null } {
+  const dur = (a: string | null, b: string | null): number | null => {
+    const x = a ? Date.parse(a) : NaN;
+    const y = b ? Date.parse(b) : NaN;
+    return Number.isFinite(x) && Number.isFinite(y) && y > x ? Math.round((y - x) / 60000) : null;
+  };
+  const label = (m: number | null): string | null => (m == null ? null : m % 60 === 0 ? `${m / 60}h` : `${Math.floor(m / 60)}h ${m % 60}m`);
+  const before = dur(oldStart, oldEnd);
+  const after = dur(newStart, newEnd);
+  const title = before != null && after != null && after < before ? "Shift shortened with the route" : before != null && after != null && after > before ? "Shift lengthened with the route" : "Shift moved with the route";
+  return { title, oldHours: label(before), newHours: label(after) };
 }
 
+/**
+ * ROUTE MATCH (owner rule 2026-11-12: "Shifts have to match the route unless someone overrides it."). For each
+ * route shift, routeMatch.routeMatchDecision says what to do:
+ *  - override          → never moved.
+ *  - matches           → only remember the route window (bookkeeping).
+ *  - follow            → the route changed in Goodshuffle: move to the route's crew window, both ways. A shift
+ *                        in Connecteam is pushed there FIRST (silent); only on a successful push is the app side
+ *                        updated, so the Connecteam-wins importer can never flap it back. Announced in Slack.
+ *  - correct           → differs from the route, not in Connecteam yet: put it on the route's time (audited).
+ *  - differs_published → differs from the route, already in Connecteam, route unchanged: HELD for a person
+ *                        (Reset to route or Keep this time). Nothing already published moves for an old difference.
+ * Returns the count of shifts moved. Honest when unreachable: a failed Connecteam push skips that shift.
+ */
 export async function applyRouteWindowRatchet(deps: {
   date: string;
   routesById: Map<string, Route>;
@@ -665,34 +676,23 @@ export async function applyRouteWindowRatchet(deps: {
   nameOf: (uid: number) => string | null;
   actor: string;
 }): Promise<number> {
-  let expanded = 0;
+  let moved = 0;
   const dayShifts = getShiftsForDate(deps.date);
   for (const route of deps.routesById.values()) {
-    const rw = routeOwnWindow(route);
-    if (!rw.known) continue; // no route window to compare against — nothing to ratchet
-    const rawRw = routeOwnWindow(route, { raw: true });
-    const routeShifts = dayShifts.filter(
-      (s) => s.routeId === route.routeId && (s.role === "driver" || s.role === "field") && s.status !== "cancelled",
-    );
+    const crew = routeOwnWindow(route);
+    if (!crew.known || !crew.start || !crew.end) continue; // no route window to match against
+    const routeShifts = dayShifts.filter((s) => s.routeId === route.routeId && isRouteShift(s));
     for (const shift of routeShifts) {
-      const cur = { start: shift.startTime, end: shift.endTime, windowKnown: shift.windowKnown };
-      // Quarter hour crew starts (quarterHour.ts): rounding moves ONLY the start (the end stays), never touches
-      // a time a person typed, and never re-pushes a shift already in Connecteam until the owner approves
-      // (SHIFT_QUARTER_REPUBLISH=true). It is a tidy up, so it is audited but not announced in Slack.
-      const rounding = quarterRoundingDecision(cur, rawRw, rw, { linked: Boolean(shift.connecteamShiftId), republishApproved: quarterRepublishApproved() });
-      let out: RatchetOutcome;
-      if (rounding.kind === "not_rounding") {
-        out = trackWindow(cur, rw);
-        if (!out.changed || !out.start || !out.end) continue;
-      } else if (rounding.kind === "apply" && shift.endTime) {
-        out = { start: rounding.start, end: shift.endTime, windowKnown: true, changed: true, reason: "the start was rounded to the nearest quarter hour" };
-      } else {
-        continue; // none / hold_manual / hold_published
+      const d = routeMatchDecision(shift, crew);
+      if (d.kind === "not_route" || d.kind === "override") continue;
+      if (d.kind === "matches" || d.kind === "differs_published") {
+        if (d.rebaseline) updateShift(shift.id, { routeWindowStart: crew.start, routeWindowEnd: crew.end });
+        continue;
       }
-      if (!out.start || !out.end) continue;
-      const roundingOnly = rounding.kind === "apply";
+      const out = { start: d.start, end: d.end };
 
-      // Linked to Connecteam → push the grown window silently FIRST; only expand the app side if it sticks.
+      // In Connecteam → push the route window silently FIRST; only move the app side if it sticks. A "correct"
+      // never gets here for a linked shift (that is differs_published, held above).
       if (shift.connecteamShiftId) {
         const schedulerId = shift.connecteamSchedulerId ?? deps.scheduler?.schedulerId ?? null;
         if (schedulerId == null) continue; // no scheduler to update — retry next tick
@@ -709,46 +709,50 @@ export async function applyRouteWindowRatchet(deps: {
           },
           { notifyUsers: false },
         );
-        if (!res.ok) continue; // Connecteam unreachable/rejected → never expand app alone (would flap); retry
+        if (!res.ok) continue; // Connecteam unreachable/rejected → never move the app alone (would flap); retry
       }
 
       const updated = updateShift(shift.id, {
         startTime: out.start,
         endTime: out.end,
         windowKnown: true,
-        // null → the next import re-baselines to the grown Connecteam window (no conflict, no flap).
+        routeWindowStart: crew.start,
+        routeWindowEnd: crew.end,
+        // null → the next import re-baselines to the moved Connecteam window (no conflict, no flap).
         ...(shift.connecteamShiftId ? { connecteamContentHash: null } : {}),
       });
       if (!updated) continue;
-      expanded += 1;
+      moved += 1;
+      const reason = d.kind === "follow" ? d.reason : "the shift was put on the route's time";
       audit(deps.actor, "ROUTE_SYNC_SHIFT_EXPANDED", shift.id, {
         routeId: route.routeId,
         from: { start: shift.startTime, end: shift.endTime },
-        to: { start: out.start, end: out.end },
-        reason: out.reason,
+        to: out,
+        reason,
         pushedToConnecteam: Boolean(shift.connecteamShiftId),
       });
-      if (roundingOnly) continue; // audited above; a few minutes earlier is not worth a Slack card
+      if (d.kind === "correct") continue; // not published yet: audited, no Slack card for a draft tidy up
       const who = shift.assignees.map((u) => deps.nameOf(u) || `#${u}`).join(", ") || "the crew";
       const truck = shift.truckId ? deps.truckNameOf(shift.truckId) : "the route";
-      // "moved" when the block slid earlier/later; "extended" when it only grew at the end.
-      const moved = Boolean(out.reason && (out.reason.includes("moved") || out.reason.includes("earlier")));
+      // A shorter route shortens the shift (owner's call, 2026-11-12: the old "never auto shrink" rule is
+      // retired), so the card says so plainly with the old and new times and hours.
+      const card = shiftChangeCard(shift.startTime, shift.endTime, out.start, out.end);
       void botAnnounce("scheduling", {
         emoji: "🗓️",
-        title: moved ? "Shift moved" : "Shift extended",
+        title: card.title,
         fields: [
           { label: "Who", value: who },
           { label: "Truck", value: truck },
-          { label: "New window", value: `${hhmm(out.start)}–${hhmm(out.end)}` },
-          { label: "Was", value: `${hhmm(shift.startTime)}–${hhmm(shift.endTime)}` },
+          { label: "New time", value: `${hhmm(out.start)} to ${hhmm(out.end)}${card.newHours ? ` (${card.newHours})` : ""}` },
+          { label: "Was", value: `${hhmm(shift.startTime)} to ${hhmm(shift.endTime)}${card.oldHours ? ` (${card.oldHours})` : ""}` },
         ],
-        body: `*Why:* ${out.reason}.${shift.connecteamShiftId ? " Updated Connecteam so their hours and pay reflect it." : ""}`,
+        body: `*Why:* ${reason}.${shift.connecteamShiftId ? " Updated Connecteam so their hours and pay reflect it." : ""} Change the time in Dispatch to keep a different one.`,
         link: { text: "View in Scheduling", url: appUrl("/scheduling") },
         context: "Scheduling Bot · reply here if that's wrong",
       }).catch(() => {});
     }
   }
-  return expanded;
+  return moved;
 }
 
 /** Route metadata the driver seniority router needs: start time (for same-time clustering), open driver

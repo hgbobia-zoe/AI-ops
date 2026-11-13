@@ -13,6 +13,7 @@ import { Loader2, RefreshCw, Plus, Wand2 } from "lucide-react";
 import { revealTarget } from "@/components/scheduling/reveal";
 import { SidePanelOverlay } from "@/components/SidePanelOverlay";
 import { ShiftEditor } from "@/components/scheduling/ShiftEditor";
+import type { RouteOption } from "@/lib/scheduling/routeOptions";
 import type { CrewMember } from "@/lib/connecteam";
 import type { WorkerDayEligibilityData } from "@/components/scheduling/RouteStaffBoard";
 
@@ -25,10 +26,12 @@ export function SchedulingHeaderActions({
   date,
   roster,
   eligibilityData,
+  routeOptions = [],
 }: {
   date: string;
   roster: CrewMember[];
   eligibilityData: WorkerDayEligibilityData;
+  routeOptions?: RouteOption[];
 }): React.JSX.Element {
   const router = useRouter();
   const [generating, setGenerating] = useState(false);
@@ -84,7 +87,7 @@ export function SchedulingHeaderActions({
 
       {addingShift && (
         <SidePanelOverlay onClose={() => setAddingShift(false)}>
-          <ShiftEditor shift={null} date={date} roster={roster} eligibilityData={eligibilityData} recommendations={[]} onClose={() => setAddingShift(false)} />
+          <ShiftEditor shift={null} date={date} roster={roster} eligibilityData={eligibilityData} recommendations={[]} routeOptions={routeOptions} onClose={() => setAddingShift(false)} />
         </SidePanelOverlay>
       )}
     </>

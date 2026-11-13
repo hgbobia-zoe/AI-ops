@@ -203,7 +203,8 @@ export type ReconcileReason =
   | "last_edit_wins_connecteam" // both changed, Connecteam's last-modified is newer -> Connecteam wins
   | "last_edit_wins_app" // both changed, the app edit is newer -> app wins, re-publish needed (needs_review)
   | "both_changed_no_timestamp" // both changed and Connecteam exposes no last-modified -> can't pick, needs_review
-  | "connecteam_copy_vanished"; // the linked Connecteam shift is no longer returned -> needs_review, never deleted
+  | "connecteam_copy_vanished" // the linked Connecteam shift is no longer returned -> needs_review, never deleted
+  | "copy_returned"; // a shift flagged "copy vanished" whose Connecteam copy is back -> flag cleared (bookkeeping)
 
 export interface CreateDecision {
   ct: ImportableShift;
@@ -223,12 +224,26 @@ export interface FlagDecision {
   note: string;
 }
 
+/** Point a Dispatch shift at its Connecteam shift's NEW id (Connecteam re-issued it; same person, same time). */
+export interface RelinkDecision {
+  appShiftId: string;
+  ct: ImportableShift;
+}
+/** Two Dispatch copies of ONE Connecteam shift: keep one (the route copy first), cancel the other. */
+export interface MergeDecision {
+  keepId: string;
+  dropId: string;
+  ct: ImportableShift;
+}
+
 export interface ReconcilePlan {
   reachable: boolean;
   date: string;
   creates: CreateDecision[];
   updates: UpdateDecision[];
   flags: FlagDecision[]; // -> sync_status = needs_review
+  relinks: RelinkDecision[];
+  merges: MergeDecision[];
   unchanged: number;
 }
 
@@ -238,8 +253,66 @@ const EMPTY_PLAN = (date: string, reachable: boolean): ReconcilePlan => ({
   creates: [],
   updates: [],
   flags: [],
+  relinks: [],
+  merges: [],
   unchanged: 0,
 });
+
+/** The note a "Connecteam copy vanished" flag carries (so a returned copy can clear exactly that flag). */
+export const VANISHED_NOTE = "The linked Connecteam shift is no longer returned for this day (deleted, unpublished, or moved). Review before removing. Not deleted.";
+const isVanishedFlag = (s: StaffShift): boolean => s.syncStatus === "needs_review" && (s.syncNote ?? "").startsWith("The linked Connecteam shift is no longer returned");
+
+const sameSet = (a: number[], b: number[]): boolean => a.length > 0 && a.length === b.length && [...a].sort((x, y) => x - y).every((v, i) => v === [...b].sort((x, y) => x - y)[i]);
+const sameTime = (a: string | null, b: string | null): boolean => Boolean(a && b && Date.parse(a) === Date.parse(b));
+
+/** Which copy of one Connecteam shift Dispatch keeps: the route copy, then one Dispatch made, then the oldest. */
+function keeperRank(s: StaffShift): number {
+  return (s.routeId ? 0 : 2) + (s.source === "connecteam" ? 1 : 0);
+}
+
+/**
+ * PURE. One shift, one record. Groups the day's live Dispatch shifts by the Connecteam shift they stand for:
+ *  - the linked id, when Connecteam still returns it;
+ *  - otherwise (Connecteam re-issued the id) the ONE returned Connecteam shift with the SAME people and the
+ *    SAME start and end (a shared base id breaks a tie). Never matched on time alone, so two different
+ *    people are never merged.
+ * A group of one whose link changed → relink. A group of two or more → keep one (route copy first), merge the
+ * rest away, but only copies with the same people as the Connecteam shift (anything else is left alone).
+ */
+export function planOneRecord(imported: ImportableShift[], appShifts: StaffShift[]): { relinks: RelinkDecision[]; merges: MergeDecision[]; resolved: Map<string, string> } {
+  const byCtId = new Map(imported.map((i) => [i.connecteamShiftId, i]));
+  const live = appShifts.filter((a) => a.connecteamShiftId && a.status !== "cancelled");
+  const base = (id: string): string => id.split(":")[0];
+  const resolved = new Map<string, string>(); // app shift id -> effective Connecteam id
+  for (const a of live) {
+    const id = a.connecteamShiftId!;
+    if (byCtId.has(id)) {
+      resolved.set(a.id, id);
+      continue;
+    }
+    const cands = imported.filter((c) => sameSet(c.assignees, a.assignees) && sameTime(c.startTime, a.startTime) && sameTime(c.endTime, a.endTime));
+    const pick = cands.length === 1 ? cands[0] : cands.filter((c) => base(c.connecteamShiftId) === base(id)).length === 1 ? cands.find((c) => base(c.connecteamShiftId) === base(id))! : null;
+    if (pick) resolved.set(a.id, pick.connecteamShiftId);
+  }
+  const groups = new Map<string, StaffShift[]>();
+  for (const a of live) {
+    const ct = resolved.get(a.id);
+    if (!ct) continue;
+    groups.set(ct, [...(groups.get(ct) ?? []), a]);
+  }
+  const relinks: RelinkDecision[] = [];
+  const merges: MergeDecision[] = [];
+  for (const [ctId, members] of groups) {
+    const ct = byCtId.get(ctId)!;
+    const same = members.filter((m) => sameSet(m.assignees, ct.assignees));
+    const pool = same.length > 0 ? same : members.length === 1 ? members : [];
+    if (pool.length === 0) continue;
+    const keep = [...pool].sort((x, y) => keeperRank(x) - keeperRank(y) || x.createdAt.localeCompare(y.createdAt))[0];
+    if (keep.connecteamShiftId !== ctId) relinks.push({ appShiftId: keep.id, ct });
+    for (const m of pool) if (m.id !== keep.id) merges.push({ keepId: keep.id, dropId: m.id, ct });
+  }
+  return { relinks, merges, resolved };
+}
 
 /** Was the app shift edited LOCALLY since its last Connecteam sync? (updatedAt meaningfully after syncedAt) */
 function appLocallyEdited(app: StaffShift): boolean {
@@ -280,16 +353,32 @@ export function planReconcile(input: {
   const byCtId = new Map<string, ImportableShift>();
   for (const i of imported) byCtId.set(i.connecteamShiftId, i);
 
+  // One shift, one record: re-link changed ids and merge duplicate copies BEFORE anything else, so a
+  // re-issued Connecteam id is never imported as a second copy.
+  const one = planOneRecord(imported, input.appShifts);
+  plan.relinks = one.relinks;
+  plan.merges = one.merges;
+  const dropped = new Set(one.merges.map((m) => m.dropId));
+  const relinked = new Map(one.relinks.map((r) => [r.appShiftId, r.ct.connecteamShiftId]));
+  const handledCt = new Set([...one.relinks.map((r) => r.ct.connecteamShiftId), ...one.merges.map((m) => m.ct.connecteamShiftId)]);
+
   const linkedApp = new Map<string, StaffShift>();
   for (const a of input.appShifts) {
-    if (a.connecteamShiftId) linkedApp.set(a.connecteamShiftId, a);
+    if (!a.connecteamShiftId || a.status === "cancelled" || dropped.has(a.id) || relinked.has(a.id)) continue;
+    linkedApp.set(a.connecteamShiftId, a);
   }
 
   // Connecteam -> app: create unlinked, reconcile linked.
   for (const ct of imported) {
+    if (handledCt.has(ct.connecteamShiftId)) continue; // re-linked / merged above
     const app = linkedApp.get(ct.connecteamShiftId);
     if (!app) {
       plan.creates.push({ ct });
+      continue;
+    }
+    // A "copy vanished" flag whose Connecteam copy is back is stale: clear it (bookkeeping, no content change).
+    if (isVanishedFlag(app)) {
+      plan.updates.push({ appShiftId: app.id, ct, applyContent: false, reason: "copy_returned" });
       continue;
     }
     // Never fight a human: a shift already flagged needs_review stays flagged until a human resolves it.
@@ -337,7 +426,8 @@ export function planReconcile(input: {
   // app -> (missing) Connecteam: a linked app shift whose Connecteam copy is no longer returned. Conservative:
   // flag, never delete (it may have been unpublished, moved, or deleted — a human decides).
   for (const app of input.appShifts) {
-    if (!app.connecteamShiftId) continue;
+    if (!app.connecteamShiftId || app.status === "cancelled") continue;
+    if (dropped.has(app.id) || relinked.has(app.id)) continue;
     if (byCtId.has(app.connecteamShiftId)) continue;
     if (app.syncStatus === "needs_review") {
       plan.unchanged += 1;
@@ -351,7 +441,7 @@ export function planReconcile(input: {
       connecteamShiftId: app.connecteamShiftId,
       ct: null,
       reason: "connecteam_copy_vanished",
-      note: "The linked Connecteam shift is no longer returned for this day (deleted, unpublished, or moved). Review before removing. Not deleted.",
+      note: VANISHED_NOTE,
     });
   }
 
