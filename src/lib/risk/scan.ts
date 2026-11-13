@@ -4,7 +4,7 @@
 // ONLY meaningful changes (new HIGH/CRITICAL, escalations, resolutions, regressions).
 
 import { getActiveVehicles } from "@/lib/vehicles";
-import { getRoutesForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity, saveDerivedLabor, getGpsVisitSpans } from "@/lib/db/repo";
+import { getRoutesForDate, getRouteDates, getEventsInRange, saveEventReadiness, getBookingRevenueByIds, saveDayCapacity, saveDerivedLabor, getGpsVisitSpans, gsOpDedupeKeyExists } from "@/lib/db/repo";
 import { captureEventSnapshot, logChange, getLatestSnapshotDates } from "@/lib/history/store";
 import { getCrewForDateSafe, getUnavailabilityForDate, connecteamConfigured, connecteamDownReason, getPayRates, rateForUserOn, type CrewShift, type CrewRole } from "@/lib/connecteam";
 import { getSettings } from "@/lib/settings";
@@ -37,6 +37,9 @@ import { settleTransitions, formatRiskUpdate, updateLines, type PendingMap } fro
 import { getJson, setJson } from "@/lib/kv";
 import type { EngineRoute, EngineShift, RiskFinding } from "./types";
 import type { Stop } from "@/lib/types";
+import { gasRefillFindings } from "./gasRefillRule";
+import { DEFAULT_GAS_REFILL, isRefillStop } from "@/lib/dispatch/gasRefill";
+import { truckLabelFor } from "@/lib/dispatch/gasRefillApply";
 
 function shiftsForRole(crew: CrewShift[], role: CrewRole): EngineShift[] {
   const out: EngineShift[] = [];
@@ -317,7 +320,8 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
       gsEnd: r.gsEnd,
       driverId: r.driverId,
       driverName: r.driverName,
-      stops: r.stops.map((s) => ({
+      // The gas refill stop is ours, not a customer's: keep it out of the customer-stop rules.
+      stops: r.stops.filter((s) => !isRefillStop(s)).map((s) => ({
         sequence: s.sequence,
         custName: s.custName,
         kind: s.kind,
@@ -362,6 +366,10 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
       now,
     });
     allFindings.push(...dayFindings);
+    // Gas tank refill check: a heater tank pickup needs the refill stop or the next-day task.
+    allFindings.push(
+      ...gasRefillFindings(rawRoutes, (getSettings().gasRefill ?? DEFAULT_GAS_REFILL).keywords, (key) => gsOpDedupeKeyExists("create_gs_task", key), truckLabelFor),
+    );
 
     // Capacity verdict for the day (surface-only). Peak simultaneous routes = min drivers needed.
     const windows = routes.map((r) => routeWindow(r, DEFAULT_RISK_CONFIG)).filter((w): w is NonNullable<typeof w> => Boolean(w));

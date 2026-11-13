@@ -18,13 +18,14 @@ import { downscaleImage, uploadPhotos } from "@/lib/media/photo";
 import type { CloseoutResult, Stop } from "@/lib/types";
 import { IncompleteStopsResolver, type IncompleteStopRef } from "@/components/IncompleteStopsResolver";
 import { unresolvedStops, type CloseResolutionInput } from "@/lib/dispatch/onTime";
+import { isRefillStop } from "@/lib/dispatch/gasRefill";
 
 // The mandatory Driver Route Closeout. Fired on "Arrived at Warehouse": the driver walks each
 // item, anything unconfirmed needs a reason (flagged to the office), and a final "anything to
 // report?" question can capture an issue with a note + optional photo. It is a control, not a
 // blind click-through — but per the exception-handling rule the driver can still submit with a
 // reason so a truck is never stuck outside the app.
-type CloKey = Exclude<keyof CloseoutResult, "overrideReason" | "hasIssue" | "issueNote">;
+type CloKey = Exclude<keyof CloseoutResult, "overrideReason" | "hasIssue" | "issueNote" | "gasTanksRefilled">;
 
 const ITEMS: { key: CloKey; label: string; hint: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: "refueled", label: "Refueled the truck", hint: "Fuel meets the end-of-day requirement. If it's low, refuel before parking.", icon: Fuel },
@@ -88,6 +89,9 @@ export function ReturnChecklistDialog({
   const stopsMissing = unresolvedStops(openStops.map((s) => s.stopId), stopResolutions);
 
   const [checks, setChecks] = useState<Record<CloKey, boolean>>(EMPTY);
+  // Gas tank refill question: only on a route that had a refill stop (dispatch/gasRefill.ts).
+  const hasRefill = (serverStops ?? routeStops).some(isRefillStop);
+  const [tanks, setTanks] = useState(false);
   const [reason, setReason] = useState("");
   const [hasIssue, setHasIssue] = useState<boolean | null>(null);
   const [issueNote, setIssueNote] = useState("");
@@ -96,7 +100,7 @@ export function ReturnChecklistDialog({
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const allChecked = ITEMS.every((i) => checks[i.key]);
+  const allChecked = ITEMS.every((i) => checks[i.key]) && (!hasRefill || tanks);
   const needsReason = !allChecked;
   const canConfirm =
     !saving &&
@@ -118,6 +122,7 @@ export function ReturnChecklistDialog({
 
   function reset() {
     setChecks(EMPTY);
+    setTanks(false);
     setReason("");
     setHasIssue(null);
     setIssueNote("");
@@ -152,6 +157,7 @@ export function ReturnChecklistDialog({
         overrideReason: needsReason ? reason.trim() : undefined,
         hasIssue: Boolean(hasIssue),
         issueNote: hasIssue ? issueNote.trim() : undefined,
+        gasTanksRefilled: hasRefill ? tanks : undefined,
       },
       photoIds,
       openStops.length > 0 ? stopResolutions.filter((r) => openStops.some((s) => s.stopId === r.stopId)) : undefined,
@@ -193,6 +199,25 @@ export function ReturnChecklistDialog({
               </label>
             );
           })}
+
+          {hasRefill && (
+            <label
+              className={`flex items-start gap-3 rounded-lg border p-4 text-left transition-colors active:bg-accent ${
+                tanks ? "border-primary/40 bg-primary/[0.06]" : "border-white/10"
+              }`}
+            >
+              <Checkbox checked={tanks} onCheckedChange={() => setTanks((v) => !v)} className="mt-0.5 size-6" />
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2 text-lg font-medium">
+                  <Fuel className="size-5 shrink-0 text-primary" />
+                  Gas tanks refilled
+                </span>
+                <span className="mt-0.5 block text-sm text-muted-foreground">
+                  The heater tanks picked up today were filled at the refill stop. If not, say why below.
+                </span>
+              </span>
+            </label>
+          )}
 
           {needsReason && (
             <div className="space-y-2 rounded-lg border border-amber-400/30 bg-amber-400/[0.06] p-3">

@@ -10,6 +10,7 @@
 
 import { getDb } from "@/lib/db";
 import { DEFAULT_HEAVY_ITEM_KEYWORDS } from "@/lib/crewRules";
+import { DEFAULT_GAS_REFILL, type GasRefillSettings } from "@/lib/dispatch/gasRefill";
 import {
   DEFAULT_INVENTORY_PARTNERS,
   DEFAULT_ZOE_CATEGORIES,
@@ -93,6 +94,9 @@ export interface AppSettings {
    *  rules floor the event's required crew at 2 (see crewRules.ts). Default matches the Antique Rustic Solid
    *  Pine Folding Farm Table; the in-code default (DEFAULT_HEAVY_ITEM_KEYWORDS) is the floor before any edit. */
   heavyItemKeywords: string[];
+  /** Gas tank refill (dispatch/gasRefill.ts): where heater tanks get filled, its closing time (24h, Eastern),
+   *  and the line-item keywords that mean a pickup brings a gas tank back. Team editable in /admin. */
+  gasRefill: GasRefillSettings;
   /** Optional override for the NON-FINANCIAL "current operating year" boundary (see
    *  dates.ts:currentOperatingYearStart). A bare year ("2026") or a full date ("2026-01-01"); null/unset
    *  means "compute Jan 1 of the current year dynamically". Financial paths ignore this entirely. */
@@ -231,6 +235,7 @@ export function defaultSettings(): AppSettings {
     premiumWindowKeywords: envJson<string[]>(process.env.PREMIUM_WINDOW_KEYWORDS, DEFAULT_PREMIUM_WINDOW_KEYWORDS),
     eventReadinessKeywords: envJson<string[]>(process.env.EVENT_READINESS_KEYWORDS, DEFAULT_EVENT_READINESS_KEYWORDS),
     heavyItemKeywords: envJson<string[]>(process.env.HEAVY_ITEM_KEYWORDS, DEFAULT_HEAVY_ITEM_KEYWORDS),
+    gasRefill: { ...DEFAULT_GAS_REFILL, ...envJson<Partial<GasRefillSettings>>(process.env.GAS_REFILL_JSON, {}) },
     operatingYearStart: process.env.OPERATING_YEAR_START || null,
     monitorUrls: envUrlList(process.env.MONITOR_URLS, DEFAULT_MONITOR_URLS),
     businessHours: sanitizeSchedule(envJson<BusinessHoursSchedule>(process.env.BUSINESS_HOURS_JSON, DEFAULT_BUSINESS_HOURS)),
@@ -334,6 +339,7 @@ function merge(base: AppSettings, over: Partial<AppSettings> | null): AppSetting
     premiumWindowKeywords: over.premiumWindowKeywords ?? base.premiumWindowKeywords,
     eventReadinessKeywords: over.eventReadinessKeywords ?? base.eventReadinessKeywords,
     heavyItemKeywords: over.heavyItemKeywords ?? base.heavyItemKeywords,
+    gasRefill: { ...base.gasRefill, ...(over.gasRefill ?? {}) },
     monitorUrls: over.monitorUrls ?? base.monitorUrls,
     businessHours: over.businessHours ? sanitizeSchedule(over.businessHours) : base.businessHours,
     inventoryPartners: over.inventoryPartners

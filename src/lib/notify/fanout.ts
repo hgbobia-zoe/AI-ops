@@ -13,6 +13,7 @@ import { formatClockTime, todayInOpsTz } from "@/lib/dates";
 import { mintEtaLinkForStop } from "@/lib/eta/mint";
 import { chooseDepartureLink, IGNITION_ETALINK_ORIGIN, etaLinkFallbackAlert, type EtaLinkMintReason } from "@/lib/eta/etaLinkMint";
 import { syncTouchpointNote, type DispatchAction } from "@/lib/comms/noteSync";
+import { isRefillStop } from "@/lib/dispatch/gasRefill";
 
 export interface FanoutCtx {
   action: ActionType;
@@ -250,6 +251,11 @@ export async function runFanout(ctx: FanoutCtx): Promise<void> {
     switch (ctx.action) {
       case "LEAVING_WAREHOUSE": {
         if (!cur) break;
+        // The gas refill stop (dispatch/gasRefill.ts) has no customer: no text, no tracking link.
+        if (isRefillStop(cur)) {
+          await slack(`🚚 ${truck} departed → ${cur.custName}`);
+          break;
+        }
         // Real Ignition live-map link (office-machine mint) if available, else our /track link (see trackingLink).
         const link = await trackingLink(ctx, cur, s);
         const sent = await sms(cur, onWayText(s, cur, truck, link));
@@ -260,6 +266,10 @@ export async function runFanout(ctx: FanoutCtx): Promise<void> {
       }
       case "ARRIVED": {
         if (!cur) break;
+        if (isRefillStop(cur)) {
+          await slack(`📍 ${truck} arrived at the gas refill stop`);
+          break;
+        }
         const sent = await sms(cur, arrivedText(s, cur, truck));
         noteDispatchSms(cur, "arrived", sent);
         await smsCoordinator(cur, coordinatorArrivedText(s, cur, truck));
@@ -271,7 +281,9 @@ export async function runFanout(ctx: FanoutCtx): Promise<void> {
           expireTracking(cur.stopId);
           await slack(`✅ ${truck} completed ${cur.custName}`);
         }
-        if (ctx.nextStop) {
+        if (ctx.nextStop && isRefillStop(ctx.nextStop)) {
+          await slack(`🚚 ${truck} heading to ${ctx.nextStop.custName}`);
+        } else if (ctx.nextStop) {
           const link = await trackingLink(ctx, ctx.nextStop, s);
           const sent = await sms(ctx.nextStop, onWayText(s, ctx.nextStop, truck, link));
           noteDispatchSms(ctx.nextStop, "on_the_way", sent, link);
@@ -302,13 +314,17 @@ export async function runFanout(ctx: FanoutCtx): Promise<void> {
           after: { ...closeout, photoIds },
         });
         const missing = CLOSEOUT_LABELS.filter(([k]) => !closeout[k]).map(([, label]) => label);
+        // Gas tank refill (asked only on a route with a refill stop): a "no" is flagged like any unconfirmed item.
+        if (closeout.gasTanksRefilled === false) missing.push("Refill the gas tanks");
+        const tanksLine = closeout.gasTanksRefilled === true ? " Gas tanks refilled ✓" : "";
         const flagged = missing.length > 0 || closeout.hasIssue;
         if (!flagged) {
-          await slack(`🏁 ${truck} back at the warehouse — route complete. Closeout clean ✓`);
+          await slack(`🏁 ${truck} back at the warehouse — route complete. Closeout clean ✓${tanksLine}`);
           break;
         }
         // Something couldn't be confirmed, or the driver reported an issue → flag the office.
         const lines = [`⚠️ ${truck} route closeout needs attention`];
+        if (closeout.gasTanksRefilled === true) lines.push("• Gas tanks refilled ✓");
         if (missing.length) {
           lines.push(`• Not confirmed: ${missing.join(", ")}`);
           if (closeout.overrideReason) lines.push(`• Reason: ${closeout.overrideReason}`);

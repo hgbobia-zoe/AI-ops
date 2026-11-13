@@ -27,6 +27,7 @@ import type { AvailableAction } from "@/lib/stateMachine";
 import type { ActionType, ChecklistResult, CloseoutResult, ExceptionType, Stop } from "@/lib/types";
 import type { RoutePhase, StopNotif } from "@/lib/useRouteMachine";
 import type { CloseResolutionInput } from "@/lib/dispatch/onTime";
+import { isRefillStop } from "@/lib/dispatch/gasRefill";
 
 // Shared square-tile styles for the action grid.
 const TILE_CLASS =
@@ -343,6 +344,7 @@ export function CurrentStopView({
         onOpenChange={(o) => !o && setChecklistFor(null)}
         onConfirm={handleChecklistConfirm}
         confirmLabel={checklistFor?.label ?? "Confirm"}
+        refill={Boolean(activeStop && isRefillStop(activeStop))}
       />
       <ExceptionDialog
         open={exceptionOpen}

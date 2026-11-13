@@ -6,7 +6,7 @@
 // is verified server-side. No secrets live here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2, Users, Globe, Clock3, Boxes, Plus, X, UserCheck } from "lucide-react";
+import { Loader2, Save, Check, ShieldCheck, MessageSquareText, Radio, Building2, KeyRound, LogIn, PlugZap, Search, CalendarRange, Truck, Timer, Trash2, Users, Globe, Clock3, Boxes, Plus, X, UserCheck, Fuel } from "lucide-react";
 import type { BusinessHoursSchedule, DayHours } from "@/lib/businessHours";
 import { isSlackUserId, type SlackApprover } from "@/lib/slack/approvers";
 import { isKiosk, switchGoodshuffleLoginViaKiosk, switchIgnitionLoginViaKiosk } from "@/lib/kioskBridge";
@@ -43,6 +43,7 @@ interface Settings {
   premiumWindowKeywords: string[];
   eventReadinessKeywords: string[];
   heavyItemKeywords: string[];
+  gasRefill?: { address: string; closeTime: string; keywords: string[] };
   monitorUrls: string[];
   businessHours: BusinessHoursSchedule;
   zoeCategories: ZoeCategory[];
@@ -435,6 +436,35 @@ export default function AdminPage() {
               hint='Default "folding farm table" catches the Antique Rustic Solid Pine Folding Farm Table (96 inch, big and heavy) without tripping on a plain table. Add other heavy items as needed.'
               value={s.heavyItemKeywords ?? []}
               onChange={(v) => setS({ ...s, heavyItemKeywords: v })}
+            />
+          </Section>
+
+          {/* Gas tank refill: heater tanks picked up on a route get filled before the truck returns. */}
+          <Section icon={<Fuel className="size-4" />} title="Gas tank refill">
+            <p className="text-sm text-muted-foreground">
+              A route that picks up a patio heater or tent heater tank gets a refill stop here as its last stop
+              before the warehouse. If the truck would get here at or after closing time, there is no stop: the
+              office gets a Goodshuffle task to refill the tanks the next day, and the dispatch Slack channel hears
+              about it.
+            </p>
+            <Field label="Refill address" hint="Where the tanks get filled.">
+              <TextInput
+                value={s.gasRefill?.address ?? ""}
+                onChange={(v) => setS({ ...s, gasRefill: { address: v, closeTime: s.gasRefill?.closeTime ?? "20:00", keywords: s.gasRefill?.keywords ?? [] } })}
+              />
+            </Field>
+            <Field label="Closes at" hint="24 hour time, Eastern. 20:00 is 8:00 PM.">
+              <TextInput
+                value={s.gasRefill?.closeTime ?? ""}
+                placeholder="20:00"
+                onChange={(v) => setS({ ...s, gasRefill: { address: s.gasRefill?.address ?? "", closeTime: v, keywords: s.gasRefill?.keywords ?? [] } })}
+              />
+            </Field>
+            <KeywordList
+              label="Gas tank items"
+              hint="Pickup line items whose name contains one of these bring a tank back. Case-insensitive, any part of the name."
+              value={s.gasRefill?.keywords ?? []}
+              onChange={(v) => setS({ ...s, gasRefill: { address: s.gasRefill?.address ?? "", closeTime: s.gasRefill?.closeTime ?? "20:00", keywords: v } })}
             />
           </Section>
 

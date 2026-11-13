@@ -17,6 +17,7 @@ import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { syncActiveLeadTextThreads } from "@/lib/comms/openphoneSync";
 import type { Stop } from "@/lib/types";
 import { routeTimes } from "@/lib/gsRouteTimes";
+import { applyGasRefill } from "@/lib/dispatch/gasRefillApply";
 
 export const dynamic = "force-dynamic";
 
@@ -173,6 +174,14 @@ export async function POST(req: Request): Promise<NextResponse> {
       stops = applyBookingWindows(stops, date);
     } catch (e) {
       console.error("[route/import] applyBookingWindows failed (saving without windows)", routeId, e);
+    }
+    // Gas tank refill (dispatch/gasRefill.ts): a route that picks up a heater tank gets the refill stop as
+    // its last stop, re-placed on every pull (the write deletes any stop it doesn't carry), or a next-day
+    // office task when the truck can't get there before closing. Guarded: never fails the save.
+    try {
+      stops = await applyGasRefill({ routeId, date, truckId, stops });
+    } catch (e) {
+      console.error("[route/import] applyGasRefill failed (saving without the refill stop)", routeId, e);
     }
     const gsTimes = routeTimes(body.gsStart, body.gsEnd);
     writeRoute({ routeId, date, truckId, status, gsRouteId: body.gsRouteId, ...gsTimes, stops });
