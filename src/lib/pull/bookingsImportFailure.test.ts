@@ -59,3 +59,15 @@ describe("recordBookingsImportFailure (mirrors recordInstaworkProbe)", () => {
     expect(a).not.toMatch(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/u);
   });
 });
+
+describe("short sweep alert", () => {
+  it("says the full pull came up short and points at the extension update, deduped like the rest", () => {
+    recordBookingsImportFailure(true, "ok", t("2026-11-13T10:00:00Z"));
+    const a = recordBookingsImportFailure(false, "orphan cleanup skipped: the pull saw 2950 projects, 419 short of Goodshuffle's count (3369)", t("2026-11-13T11:00:00Z"), "short_sweep");
+    const text = statusText(a.alert!);
+    expect(text).toMatch(/came up short, so orphan cleanup was skipped/);
+    expect(text).toMatch(/419 short/);
+    expect(text).toMatch(/Update the Auto-Pull extension/);
+    expect(recordBookingsImportFailure(false, "again", t("2026-11-13T12:00:00Z"), "short_sweep").alert).toBeNull(); // 2h cool-off
+  });
+});
