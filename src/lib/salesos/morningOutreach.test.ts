@@ -163,7 +163,8 @@ describe("gateLead", () => {
     expect(gateLead(gate({ timeline: tl, daysToEvent: 120 })).reason).toContain("Every 21 days");
     const far = gateLead(gate({ timeline: tl, daysToEvent: 221 }));
     expect(far.reason).toContain("Every 30 days with the event 221 days out, so next on Nov 27");
-    expect(gateLead(gate({ timeline: tl, daysToEvent: null })).reason).toContain("Every 14 days when there is no event date");
+    // No event date never sends (hard gate, 2026-11-13); it used to fall back to every 14 days.
+    expect(gateLead(gate({ timeline: tl, daysToEvent: null }))).toEqual({ send: false, kind: "no_date", reason: "No event date on the project, a person should check it." });
   });
 
   it("the cadence counts the team's touches too, any channel", () => {
@@ -203,5 +204,34 @@ describe("recap", () => {
     expect(c.sections?.[1]).toContain("Sales Bot would have sent this* (text at 9:14:37 AM, as Jessie)");
     expect(c.subtitle).toContain("Sales lead: Jessie Medalla");
     expect(projectCard({ ...row, send: false, draft: null, reason: "No phone number on file." }).sections?.[1]).toContain("would not text this one");
+  });
+});
+
+describe("hard gate (2026-11-13: archived 2023 quotes were texted)", () => {
+  const block = (kind: "archived" | "closed" | "no_date" | "past_event") => ({ kind, reason: `blocked: ${kind}` });
+
+  it("never sends to an archived or lost project, even when every other check would send", () => {
+    for (const kind of ["archived", "closed", "no_date"] as const) {
+      const r = gateLead(gate({ block: block(kind) }));
+      expect(r.send, kind).toBe(false);
+      expect(r.kind, kind).toBe(kind);
+      expect(r.lose, kind).toBeFalsy(); // held for a person, never auto marked lost
+    }
+  });
+
+  it("an archived project with a past event is held, not queued to be marked lost again", () => {
+    const r = gateLead(gate({ daysToEvent: -900, block: block("archived") }));
+    expect(r).toMatchObject({ send: false, kind: "archived" });
+    expect(r.lose).toBeFalsy();
+  });
+
+  it("an open, unarchived quote whose event passed still goes to the mark lost rule, never a text", () => {
+    const r = gateLead(gate({ daysToEvent: -2, block: block("past_event") }));
+    expect(r.send).toBe(false);
+    expect(r.lose).toBe(true);
+  });
+
+  it("no event date holds even with no block passed in", () => {
+    expect(gateLead(gate({ daysToEvent: null })).kind).toBe("no_date");
   });
 });

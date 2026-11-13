@@ -23,6 +23,7 @@ import { buildMorningPlan, isSendDay, clockLabel, type MorningPlanRow } from "./
 import { buildLeadTimeline } from "./timeline";
 import { sendLeadSms } from "./smsSend";
 import { queueMarkLost } from "./markLost";
+import { outreachBlock } from "./outreachEligibility";
 
 export const PLAN_FROM_MIN = 8 * 60 + 15; // 8:15 AM ET
 export const SEND_UNTIL_MIN = 11 * 60; //    catch up a missed send until 11 AM ET, never later
@@ -179,6 +180,10 @@ export async function sendRow(ymd: string, leadId: string): Promise<LiveStatus> 
     const b = getBookingById(leadId);
     if (!b) return finish("skipped", "The project is gone from Goodshuffle.");
     if (b.signed) return finish("skipped", "The contract was signed since the plan.");
+    // The hard gate again, on the project as stored right now: archived, lost, no event date or a past event
+    // never gets a text, whatever the plan said.
+    const block = outreachBlock(b, todayInOpsTz());
+    if (block) return finish("skipped", block.reason);
     await ensureLeadThreadSynced(leadId, b.clientPhone);
     const since = Date.parse(d.plannedAt ?? d.startedAt);
     const replied = buildLeadTimeline(leadId).some((e) => e.direction === "in" && (e.channel === "sms" || e.channel === "email" || e.channel === "call") && e.at && Date.parse(e.at) > since);
