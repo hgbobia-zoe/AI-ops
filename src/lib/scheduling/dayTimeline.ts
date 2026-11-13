@@ -145,10 +145,11 @@ export function buildDayTimeline(input: DayTimelineInput): DayTimeline {
   const publishedIds = new Set<string>();
 
   // 1. App shifts: one bar per assigned person, plus an "unassigned" bar while seats are open. A cancelled
-  //    shift is not on the schedule (its Connecteam id still counts, so the old copy isn't shown either).
+  //    shift is not on the schedule. If its Connecteam copy is still there, step 2 shows that copy as a
+  //    plain Connecteam shift, because crew still see it until someone removes it in Connecteam.
   for (const s of input.appShifts) {
-    if (s.connecteamShiftId) publishedIds.add(s.connecteamShiftId);
     if (s.status === "cancelled") continue;
+    if (s.connecteamShiftId) publishedIds.add(s.connecteamShiftId);
     const gap = Math.max(0, input.gapByShift[s.id] ?? s.headcount - s.assignees.length);
     const filled = Math.max(0, s.headcount - gap);
     const title = shiftTitle(s, input);

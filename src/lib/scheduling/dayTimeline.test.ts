@@ -78,16 +78,26 @@ describe("buildDayTimeline", () => {
     expect(t.people.every((r) => r.bars.length === 0)).toBe(true);
   });
 
-  it("leaves cancelled shifts off the schedule, including their Connecteam copy", () => {
+  it("leaves cancelled shifts off the schedule", () => {
     const t = buildDayTimeline(
       input({
-        appShifts: [shift({ id: "S1", assignees: [1], status: "cancelled", connecteamShiftId: "CT1" }), shift({ id: "S2", windowKnown: false, startTime: null, status: "cancelled" })],
-        connecteamShifts: [ct({ id: "CT1", assignees: [roster[0]] })],
+        appShifts: [shift({ id: "S1", headcount: 2, assignees: [1], status: "cancelled" }), shift({ id: "S2", windowKnown: false, startTime: null, status: "cancelled" })],
+        gapByShift: { S1: 1 },
       }),
     );
     expect(t.people.find((r) => r.userId === 1)!.bars).toHaveLength(0);
     expect(t.unassigned.bars).toHaveLength(0);
     expect(t.untimed).toHaveLength(0);
+  });
+
+  it("still shows a cancelled shift's Connecteam copy while it is in Connecteam, as a Connecteam shift", () => {
+    const t = buildDayTimeline(
+      input({
+        appShifts: [shift({ id: "S1", assignees: [1], status: "cancelled", connecteamShiftId: "CT1" })],
+        connecteamShifts: [ct({ id: "CT1", assignees: [roster[0]] })],
+      }),
+    );
+    expect(t.people.find((r) => r.userId === 1)!.bars).toEqual([expect.objectContaining({ kind: "connecteam", id: "ct:CT1:1" })]);
   });
 
   it("widens the visible hours to fit an early shift, defaulting to 6am to 10pm", () => {
