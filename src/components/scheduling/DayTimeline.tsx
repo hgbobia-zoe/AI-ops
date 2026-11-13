@@ -40,10 +40,13 @@ function fmtHours(h: number): string {
   return `${String(whole).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
 }
 
+// Owner ask (2026-11-13): white on blue and white on red, so bars read at a glance in both themes. Tokens
+// live in globals.css (--shift, --shift-open, --unavailable, --on-fill), each AA or better under white.
 function barClass(b: TimelineBar): string {
-  if (b.kind === "unavailable") return "bg-status-blocked/10 text-status-blocked border border-status-blocked/20";
+  if (b.kind === "unavailable") return "bg-unavailable text-on-fill";
   if (b.kind === "connecteam") return "bg-foreground text-background";
-  return b.published ? "bg-info text-background" : "border border-dashed border-info bg-info/15 text-foreground";
+  // Not in Connecteam yet (or an open seat): a muted blue with a dashed white edge, so it reads as an open slot.
+  return b.published ? "bg-shift text-on-fill" : "border border-dashed border-on-fill/70 bg-shift-open text-on-fill";
 }
 
 export function DayTimeline({
@@ -118,9 +121,9 @@ export function DayTimeline({
         <div className="flex items-center justify-between gap-1 text-[11.5px] font-semibold leading-tight">
           <span className="truncate">{b.allDay ? b.title : b.timeLabel}</span>
           {b.override && <span className="shrink-0 rounded-sm bg-background/80 px-1 text-[9.5px] font-semibold uppercase tracking-[0.04em] text-attention">Override</span>}
-          {b.total != null && <span className="shrink-0 tabular-nums opacity-80">{b.filled}/{b.total}</span>}
+          {b.total != null && <span className="shrink-0 tabular-nums">{b.filled}/{b.total}</span>}
         </div>
-        <div className="truncate text-[11px] leading-tight opacity-90">{b.allDay ? "All day" : b.title}</div>
+        <div className="truncate text-[11px] font-medium leading-tight">{b.allDay ? "All day" : b.title}</div>
       </>
     );
     const cls = `absolute overflow-hidden rounded px-2 py-1 text-left ${barClass(b)} ${b.kind === "unavailable" ? "text-center" : ""}`;
@@ -244,10 +247,10 @@ export function DayTimeline({
       )}
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border px-4 py-2 text-[11.5px] text-meta">
-        <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-sm bg-info" />Dispatch shift, in Connecteam</span>
-        <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-sm border border-dashed border-info bg-info/15" />Dispatch shift, not in Connecteam yet</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-sm bg-shift" />Dispatch shift, in Connecteam</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-sm border border-dashed border-on-fill/70 bg-shift-open" />Dispatch shift, not in Connecteam yet</span>
         <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-sm bg-foreground" />Entered in Connecteam</span>
-        <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-sm border border-status-blocked/20 bg-status-blocked/10" />Unavailable or time off</span>
+        <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-sm bg-unavailable" />Unavailable or time off</span>
       </div>
 
       {editing && (
