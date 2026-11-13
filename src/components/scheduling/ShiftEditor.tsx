@@ -222,6 +222,13 @@ export function ShiftEditor({
     const payRate = draft.payRate.trim() === "" ? null : Number(draft.payRate);
     const status = nextStatus ?? draft.status;
     const insta = effectiveInsta;
+    // Cancelling a shift that is in Connecteam also takes it down there (the crew are notified once).
+    if (!isNew && status === "cancelled" && shift?.status !== "cancelled" && shift?.connecteamShiftId) {
+      if (!window.confirm("Cancel this shift? It also comes off Connecteam, and the assigned crew are notified.")) {
+        setSaving(false);
+        return;
+      }
+    }
     try {
       let res: Response;
       if (isNew) {
@@ -266,7 +273,8 @@ export function ShiftEditor({
         });
       }
       if (!res.ok) {
-        setError("Couldn't save — try again.");
+        const j = (await res.json().catch(() => null)) as { message?: string } | null;
+        setError(j?.message || "Couldn't save — try again.");
         return;
       }
       onClose();
@@ -346,12 +354,20 @@ export function ShiftEditor({
   }
 
   async function remove(): Promise<void> {
-    if (isNew || !window.confirm("Delete this shift?")) return;
+    const prompt = shift?.connecteamShiftId ? "Delete this shift? It also comes off Connecteam, and the assigned crew are notified." : "Delete this shift?";
+    if (isNew || !window.confirm(prompt)) return;
     setSaving(true);
     try {
-      await fetch(`/api/scheduling/shift/${shift!.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/scheduling/shift/${shift!.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as { message?: string } | null;
+        setError(j?.message || "Couldn't delete — try again.");
+        return;
+      }
       onClose();
       router.refresh();
+    } catch {
+      setError("Couldn't delete — try again.");
     } finally {
       setSaving(false);
     }

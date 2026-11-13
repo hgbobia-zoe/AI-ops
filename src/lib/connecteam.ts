@@ -1640,6 +1640,19 @@ export async function updatePublishedShift(input: PublishShiftInput & { shiftId:
   return { ok: true, shiftId: input.shiftId };
 }
 
+/** Take a shift down in Connecteam (DELETE /scheduler/v1/schedulers/{schedulerId}/shifts/{shiftId}).
+ *  Owner rule 2026-11-13: "Cancelled shifts should be pulled". notifyUsers defaults to true, so the
+ *  assigned crew hear once that it's off (Connecteam's normal behavior for a published shift). A 404 means
+ *  it is already gone there, which is the outcome we want, so it counts as ok. Never throws. */
+export async function deletePublishedShift(input: { schedulerId: number; shiftId: string }, opts?: PublishOpts): Promise<{ ok: boolean; gone?: boolean; error?: string }> {
+  if (!connecteamConfigured()) return { ok: false, error: "Connecteam not configured" };
+  const path = `/scheduler/v1/schedulers/${input.schedulerId}/shifts/${encodeURIComponent(input.shiftId)}?notifyUsers=${notifyParam(opts)}`;
+  const r = await ctWrite("DELETE", path);
+  if (r.status === 404) return { ok: true, gone: true };
+  if (r.status !== 200 && r.status !== 204) return { ok: false, error: extractErr(r.json) || `Connecteam HTTP ${r.status || "error"}` };
+  return { ok: true };
+}
+
 export interface SetPayRateResult {
   ok: boolean;
   status?: number;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPublishedShift, updatePublishedShift } from "./connecteam";
+import { createPublishedShift, deletePublishedShift, updatePublishedShift } from "./connecteam";
 
 const BASE_INPUT = {
   schedulerId: 42,
@@ -94,5 +94,22 @@ describe("updatePublishedShift", () => {
     const r = await updatePublishedShift({ ...BASE_INPUT, shiftId: "999" });
     expect(r.ok).toBe(false);
     expect(r.error).toBe("shift not found");
+  });
+});
+
+describe("deletePublishedShift (cancelled shifts are pulled)", () => {
+  it("DELETEs the one shift on its scheduler, id encoded, crew notified", async () => {
+    const fn = mockFetch(200, { data: {} });
+    expect(await deletePublishedShift({ schedulerId: 42, shiftId: "6af6:d923" })).toEqual({ ok: true });
+    const [url, init] = fn.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("DELETE");
+    expect(String(url)).toContain("/scheduler/v1/schedulers/42/shifts/6af6%3Ad923?notifyUsers=true");
+  });
+
+  it("already gone (404) is ok; any other failure is honest", async () => {
+    mockFetch(404, { message: "not found" });
+    expect(await deletePublishedShift({ schedulerId: 42, shiftId: "x" })).toEqual({ ok: true, gone: true });
+    mockFetch(400, { message: "locked" });
+    expect(await deletePublishedShift({ schedulerId: 42, shiftId: "x" })).toEqual({ ok: false, error: "locked" });
   });
 });
