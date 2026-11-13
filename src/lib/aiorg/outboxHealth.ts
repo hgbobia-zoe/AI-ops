@@ -30,6 +30,7 @@ export const KNOWN_DRAINABLE_OPS: ReadonlySet<string> = new Set([
   "create_project",
   "remove_waypoint",
   "gs_status",
+  "refill_stop",
   "disable_esignature",
   "mark_lost",
 ]);

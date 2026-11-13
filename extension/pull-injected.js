@@ -285,7 +285,9 @@ function zoePull(apiBase, tier) {
       })
       .catch(() => {});
     return Promise.all([pI, pR]).then(() => out); }
-  function extractStops(route) { const wps = (route.waypoints || []).filter((w) => !w.isOriginWarehouse && !w.isDestinationWarehouse); wps.sort((a, b) => (a.waypointIndex || 0) - (b.waypointIndex || 0));
+  // Our own gas refill waypoint (queued by Dispatch, src/lib/dispatch/gasRefill.ts) is skipped: Dispatch keeps
+  // its own refill stop, so reading it back would show a blank stop next to it.
+  function extractStops(route) { const wps = (route.waypoints || []).filter((w) => !w.isOriginWarehouse && !w.isDestinationWarehouse && !(w.waypointType === "CUSTOM" && /^gas refill/i.test(w.name || ""))); wps.sort((a, b) => (a.waypointIndex || 0) - (b.waypointIndex || 0));
     return wps.map((w) => { const tl = (w.logisticRelation && w.logisticRelation.targetLocation) || {}; const tx = w.transaction || {}; const line = [tl.streetAddressLine1, tl.streetAddressLine2].filter(Boolean).join(" "); const cs = [tl.city, tl.state].filter(Boolean).join(", "); const address = [line, cs, tl.zipCode].filter(Boolean).join(", "); const r = tx.renter || {}; const sv = r.smsValidation || {}; const name = tl.contactName || (tx.eventName ? String(tx.eventName).split(" - ")[0].trim() : "") || r.name; const doc = tx.dayOfContact || null;
       const s = { custName: name || "", custFirstName: r.firstName || undefined, custLastName: r.lastName || undefined, kind: (w.waypointType === "PICK_UP" ? "pickup" : "delivery"), custPhone: sv.e164PhoneNumber || r.phone || tl.contactPhoneNumber || "", address, plannedWindow: w.scheduledArrivalTime || undefined, eta: w.scheduledArrivalTime || undefined, windowStart: w.earliestRequiredArrivalTime || undefined, windowEnd: w.latestRequiredArrivalTime || undefined, plannedOnSiteMin: (typeof w.scheduledLoiterMinutes === "number" ? w.scheduledLoiterMinutes : undefined), plannedTransitMin: (w.transitMinutes && typeof w.transitMinutes.left === "number" ? w.transitMinutes.left : undefined) };
       if (doc) { s.dayOfName = doc.name || doc.fullName || undefined; s.dayOfPhone = doc.phoneNumber || doc.phone || undefined; }
@@ -444,12 +446,12 @@ function gsFillAmount(html, amount) {
       const provOps = all.filter((o) => (o.op === "provision_user" || o.op === "revoke_user") && o.payload && o.payload.system);
       const esignOps = all.filter((o) => o.op === "disable_esignature" && o.transactionId);
       const lostOps = all.filter((o) => o.op === "mark_lost" && o.transactionId);
-      const routeOps = all.filter((o) => (o.op === "gs_status" || o.op === "remove_waypoint") && o.gsRouteId && (o.op === "remove_waypoint" || (o.payload && o.payload.status)));
+      const routeOps = all.filter((o) => (o.op === "gs_status" || o.op === "remove_waypoint" || o.op === "refill_stop") && o.gsRouteId && (o.op !== "gs_status" || (o.payload && o.payload.status)));
       // Ops this content-script drainer can't action (e.g. create_project, which needs a popup created
       // from a real user gesture — a timer-driven content script has none, so the office bookmarklet or a
       // Playwright runner drains those). Surfaced in the result so they're VISIBLE, never silently
       // ignored forever. Keep this set in sync with the handlers below + gsPull.ts.
-      const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, email_template: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1, disable_esignature: 1, mark_lost: 1, gs_status: 1, remove_waypoint: 1 };
+      const HANDLED = { photo_upload: 1, note_append: 1, add_team_member: 1, set_delivery_fee: 1, email_send: 1, email_template: 1, create_gs_task: 1, provision_user: 1, revoke_user: 1, disable_esignature: 1, mark_lost: 1, gs_status: 1, remove_waypoint: 1, refill_stop: 1 };
       const unhandledOps = all.filter((o) => !HANDLED[o.op]);
       const emailSender = (j && j.emailSender) || null;
       let senderOk = !emailSender, emailsHeld = 0;
@@ -621,8 +623,36 @@ function gsFillAmount(html, amount) {
       const routeCache = {};
       const loadRoute = (id) => (routeCache[id] = routeCache[id] || fetch("/app/routing/getRoute?routeID=" + encodeURIComponent(id) + "&includeAttributes=true", GJ).then((r) => { if (!r.ok) throw "route_" + r.status; return r.json(); }));
       const pickWp = (route, o) => { const want = o.payload && o.payload.waypointType; const c = ((route && route.waypoints) || []).filter((w) => !w.isOriginWarehouse && !w.isDestinationWarehouse && String(w.transactionID) === String(o.transactionId)); return (want && c.filter((w) => w.waypointType === want)[0]) || c[0] || null; };
+      // refill_stop: the gas refill stop mirrored onto the Goodshuffle route (src/lib/dispatch/gasRefill.ts).
+      // Captured live 2026-11-13 on past route 66192 and fully restored: saveNewLocation (form) → saveWaypoint
+      // (an unscheduled custom stop) → scheduleWaypoint onto the route; remove = unscheduleWaypoint + GET
+      // deleteUnscheduledCustomStop. Idempotent: a refill custom stop already on the route is left as it is.
+      const isRefillWp = (w) => w.waypointType === "CUSTOM" && /^gas refill/i.test(w.name || "");
+      const postJsonRead = (path, body) => fetch(path, { method: "POST", headers: { "content-type": "application/json", "x-requested-with": "XMLHttpRequest", accept: "application/json, text/plain, */*" }, credentials: "include", body: JSON.stringify(body) }).then((r) => (r.ok ? r.json() : null));
+      const dropCustom = (id) => fetch("/app/routing/deleteUnscheduledCustomStop?waypointID=" + encodeURIComponent(id), GJ).then((r) => r.ok);
+      const refillStop = (route, o) => {
+        const p = o.payload || {};
+        const cur = ((route && route.waypoints) || []).filter(isRefillWp)[0] || null;
+        if (p.action === "remove") {
+          if (!cur) return Promise.resolve("");
+          return postJson("/app/routing/unscheduleWaypoint", { waypointID: cur.id }).then((ok) => { if (!ok) return "unschedule_failed"; delete routeCache[o.gsRouteId]; return dropCustom(cur.id).then((d) => (d ? "" : "delete_failed")); });
+        }
+        if (cur) return Promise.resolve(""); // already on the route
+        const a = p.address || {};
+        const form = new URLSearchParams({ streetAddress: a.street || "", streetAddress_city: a.city || "", streetAddress_state: a.state || "", streetAddress_zipCode: a.zip || "", streetAddress_country: a.country || "US" });
+        return fetch("/app/location/saveNewLocation", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-requested-with": "XMLHttpRequest", accept: "application/json, text/plain, */*" }, credentials: "include", body: form.toString() })
+          .then((r) => (r.ok ? r.json() : null)).then((loc) => {
+            if (!loc || !loc.locationID) return "location_failed";
+            return postJsonRead("/app/routing/saveWaypoint", { locationID: loc.locationID, name: p.name, arrivalTime: p.arrivalTime, departureTime: p.departureTime, notes: "" }).then((wp) => {
+              if (!wp || !wp.id) return "waypoint_failed";
+              return postJson("/app/routing/scheduleWaypoint", { vehicleID: route.vehicleID, routeID: route.id, routeColor: route.color, waypointID: wp.id, logisticID: null, arrivalTime: p.arrivalTime, departureTime: p.departureTime })
+                .then((ok) => { if (ok) { delete routeCache[o.gsRouteId]; return ""; } return dropCustom(wp.id).then(() => "schedule_failed"); }); // never leave an orphan custom stop
+            });
+          });
+      };
       routeOps.forEach((o) => { chain = chain.then(() => loadRoute(o.gsRouteId).then((route) => {
         const p = o.payload || {};
+        if (o.op === "refill_stop") return refillStop(route, o);
         if (o.op === "remove_waypoint") {
           const w = pickWp(route, o); if (!w) return ""; // already off the route
           return postJson("/app/routing/unscheduleWaypoint", { waypointID: w.id }).then((ok) => { if (ok) delete routeCache[o.gsRouteId]; return ok ? "" : "unschedule_failed"; });

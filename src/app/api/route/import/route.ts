@@ -179,7 +179,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     // its last stop, re-placed on every pull (the write deletes any stop it doesn't carry), or a next-day
     // office task when the truck can't get there before closing. Guarded: never fails the save.
     try {
-      stops = await applyGasRefill({ routeId, date, truckId, stops });
+      stops = await applyGasRefill({ routeId, date, truckId, stops, gsRouteId: body.gsRouteId, previous: existing?.stops });
     } catch (e) {
       console.error("[route/import] applyGasRefill failed (saving without the refill stop)", routeId, e);
     }

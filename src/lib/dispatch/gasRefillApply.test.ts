@@ -11,16 +11,25 @@ const pickupAt = (hm: string, txId: string | null = "T1"): Stop => ({
   items: [{ name: "Patio Heater", quantity: 2 }],
 });
 
-function deps(over: Partial<GasRefillDeps> = {}): GasRefillDeps & { queued: unknown[]; posts: string[] } {
+function deps(over: Partial<GasRefillDeps> = {}): GasRefillDeps & { queued: unknown[]; posts: string[]; gs: Array<{ dedupeKey: string; payload: Record<string, unknown> }> } {
   const queued: unknown[] = [];
   const posts: string[] = [];
+  const gs: Array<{ dedupeKey: string; payload: Record<string, unknown> }> = [];
   const keys = new Set<string>();
   return {
     queued,
     posts,
+    gs,
     settings: () => DEFAULT_GAS_REFILL,
     driveMinutes: async () => 20,
     taskExists: (k) => keys.has(k),
+    taskExistsFor: (_op, k) => keys.has(k),
+    queueGsStop: (op) => {
+      if (keys.has(op.dedupeKey)) return false;
+      keys.add(op.dedupeKey);
+      gs.push(op);
+      return true;
+    },
     queueTask: (t) => {
       keys.add(t.dedupeKey);
       queued.push(t);
@@ -77,5 +86,53 @@ describe("applyGasRefill on a route import", () => {
     } finally {
       delete process.env.GAS_REFILL;
     }
+  });
+});
+
+describe("the refill stop is mirrored onto the Goodshuffle route (captured on past route 66192)", () => {
+  it("queues one add with the parsed address and times, never twice", async () => {
+    const d = deps();
+    for (let i = 0; i < 3; i++) await applyGasRefill({ routeId: R, date: D, truckId: "NPR-1", gsRouteId: "7", stops: [pickupAt("14:00")] }, d);
+    expect(d.gs).toHaveLength(1);
+    expect(d.gs[0]).toMatchObject({
+      dedupeKey: `gas-refill-gs:${R}:add`,
+      payload: {
+        action: "add",
+        name: "Gas refill: Patio Heater x2",
+        address: { street: "12025 Parklawn Dr", city: "Rockville", state: "MD", zip: "20852", country: "US" },
+        arrivalTime: "2031-01-06T20:05:00.000Z", // leave 2:45 PM + 20 min drive = 3:05 PM ET
+        departureTime: "2031-01-06T20:25:00.000Z",
+      },
+    });
+  });
+
+  it("queues one remove when Dispatch drops the stop after it was added", async () => {
+    const d = deps();
+    await applyGasRefill({ routeId: R, date: D, truckId: "NPR-1", gsRouteId: "7", stops: [pickupAt("14:00")] }, d);
+    const noHeaters = { ...pickupAt("14:00"), items: [{ name: "Round Table" }] };
+    await applyGasRefill({ routeId: R, date: D, truckId: "NPR-1", gsRouteId: "7", stops: [noHeaters] }, d);
+    await applyGasRefill({ routeId: R, date: D, truckId: "NPR-1", gsRouteId: "7", stops: [noHeaters] }, d);
+    expect(d.gs.map((o) => o.payload.action)).toEqual(["add", "remove"]);
+  });
+
+  it("no Goodshuffle route id (manual import) or GAS_REFILL_GS=false: Dispatch only", async () => {
+    const d = deps();
+    await applyGasRefill({ routeId: R, date: D, truckId: "NPR-1", stops: [pickupAt("14:00")] }, d);
+    process.env.GAS_REFILL_GS = "false";
+    try {
+      await applyGasRefill({ routeId: R, date: D, truckId: "NPR-1", gsRouteId: "7", stops: [pickupAt("14:00")] }, d);
+    } finally {
+      delete process.env.GAS_REFILL_GS;
+    }
+    expect(d.gs).toHaveLength(0);
+  });
+
+  it("drops the blank stop an older puller brings back for our Goodshuffle refill waypoint", async () => {
+    const d = deps();
+    const first = await applyGasRefill({ routeId: R, date: D, truckId: "NPR-1", gsRouteId: "7", stops: [pickupAt("14:00")] }, d);
+    const gasAt = first.find(isRefillStop)!.plannedWindow!;
+    const echo: Stop = { stopId: `${R}-S2`, routeId: R, customerId: "", sequence: 2, state: "Waiting", custName: "", custPhone: "", address: "", plannedWindow: gasAt };
+    const again = await applyGasRefill({ routeId: R, date: D, truckId: "NPR-1", gsRouteId: "7", stops: [pickupAt("14:00"), echo], previous: first }, d);
+    expect(again.map((s) => s.custName)).toEqual(["Jones Wedding", "Gas refill: Patio Heater x2"]);
   });
 });

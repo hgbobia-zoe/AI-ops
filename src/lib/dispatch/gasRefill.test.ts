@@ -4,6 +4,7 @@ import {
   DEFAULT_GAS_REFILL,
   closeLabel,
   coerceGasRefill,
+  parseUsAddress,
   gasStopId,
   gasTriggers,
   isRefillStop,
@@ -90,5 +91,13 @@ describe("the admin setting", () => {
     expect(coerceGasRefill({ address: "  ", closeTime: "25:00", keywords: [" Patio Heater ", "patio heater", ""] }, DEFAULT_GAS_REFILL)).toEqual({ ...DEFAULT_GAS_REFILL, keywords: ["patio heater"] });
     expect(coerceGasRefill({ closeTime: "7:45" }, DEFAULT_GAS_REFILL).closeTime).toBe("07:45");
     expect(coerceGasRefill(null, DEFAULT_GAS_REFILL)).toBe(DEFAULT_GAS_REFILL);
+  });
+});
+
+describe("Goodshuffle address parts", () => {
+  it("splits street, city, state, zip", () => {
+    expect(parseUsAddress("12025 Parklawn Dr, Rockville, MD 20852")).toEqual({ street: "12025 Parklawn Dr", city: "Rockville", state: "MD", zip: "20852", country: "US" });
+    expect(parseUsAddress("Suite 4, 1 Main St, Bethesda, md 20814-1234")).toMatchObject({ street: "Suite 4, 1 Main St", state: "MD", zip: "20814" });
+    expect(parseUsAddress("12025 Parklawn Dr Rockville")).toBeNull();
   });
 });

@@ -179,3 +179,43 @@ export function coerceGasRefill(v: unknown, current: GasRefillSettings): GasRefi
     : current.keywords;
   return { address, closeTime, keywords };
 }
+
+// ── Goodshuffle side (captured live 2026-11-13 on past route 66192, then fully restored) ──────────────
+// Adding a stop to a Goodshuffle route is three calls from a logged-in session: saveNewLocation (form:
+// streetAddress, _city, _state, _zipCode, _country → locationID), saveWaypoint ({locationID, name,
+// arrivalTime, departureTime, notes} → an UNSCHEDULED custom waypoint), scheduleWaypoint ({vehicleID,
+// routeID, routeColor, waypointID, logisticID: null, arrivalTime, departureTime}). Removing it is
+// unscheduleWaypoint {waypointID} then GET deleteUnscheduledCustomStop?waypointID=. The extension drains
+// the "refill_stop" op; the pull skips our own refill waypoint (its name starts with REFILL_NAME_PREFIX).
+
+export const REFILL_NAME_PREFIX = "Gas refill";
+
+export interface GsAddress {
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+  country: string;
+}
+
+/** "12025 Parklawn Dr, Rockville, MD 20852" → its parts, or null when it isn't "street, city, ST zip". */
+export function parseUsAddress(address: string): GsAddress | null {
+  const parts = address.split(",").map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 3) return null;
+  const m = /^([A-Za-z]{2})\s+(\d{5})(?:-\d{4})?$/.exec(parts[parts.length - 1]);
+  if (!m) return null;
+  const city = parts[parts.length - 2];
+  const street = parts.slice(0, parts.length - 2).join(", ");
+  if (!street || !city) return null;
+  return { street, city, state: m[1].toUpperCase(), zip: m[2], country: "US" };
+}
+
+/** What a pull of the Goodshuffle route brings back for our refill waypoint when the puller doesn't know to
+ *  skip it (an older extension, the kiosk): a stop with no project, no name and no address, at the time we
+ *  scheduled. Dropped so the route never shows a blank stop next to the real refill stop. */
+export function isEchoOfRefill(s: Stop, refillAt: string | undefined): boolean {
+  if (isRefillStop(s) || s.txId || s.custName.trim() || s.address.trim() || !refillAt) return false;
+  const a = Date.parse(s.plannedWindow ?? s.eta ?? "");
+  const b = Date.parse(refillAt);
+  return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 2 * 60_000;
+}
