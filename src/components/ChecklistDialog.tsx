@@ -37,11 +37,14 @@ export function ChecklistDialog({
   onOpenChange,
   onConfirm,
   confirmLabel = "Confirm",
+  refill = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: (result: ChecklistResult, proof?: ProofRefs) => void;
   confirmLabel?: string;
+  /** The gas refill stop (dispatch/gasRefill.ts): no customer, so one question instead of the delivery list. */
+  refill?: boolean;
 }) {
   const [checks, setChecks] = useState<Record<CheckKey, boolean>>({ equipment: false, signed: false, siteClean: false });
   const [photos, setPhotos] = useState<string[]>([]); // data URLs
@@ -50,7 +53,8 @@ export function ChecklistDialog({
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const allChecked = checks.equipment && checks.signed && checks.siteClean && photos.length > 0;
+  // Refill stop: the only question is whether the tanks were filled (kept in `equipment`).
+  const allChecked = refill ? checks.equipment : checks.equipment && checks.signed && checks.siteClean && photos.length > 0;
   const needsReason = !allChecked;
   const canConfirm = !saving && (allChecked || reason.trim().length > 0);
 
@@ -89,10 +93,10 @@ export function ChecklistDialog({
 
     onConfirm(
       {
-        signed: checks.signed,
-        photos: photos.length > 0,
+        signed: refill ? true : checks.signed,
+        photos: refill ? true : photos.length > 0,
         equipment: checks.equipment,
-        siteClean: checks.siteClean,
+        siteClean: refill ? true : checks.siteClean,
         overrideReason: needsReason ? reason.trim() : undefined,
       },
       photoIds ? { photoIds } : undefined,
@@ -111,7 +115,14 @@ export function ChecklistDialog({
         </DialogHeader>
 
         <div className="space-y-4 py-2">
+          {refill && (
+            <label className="flex items-center gap-3 rounded-lg border p-4 text-lg active:bg-accent">
+              <Checkbox checked={checks.equipment} onCheckedChange={() => toggle("equipment")} className="size-6" />
+              <span>Gas tanks refilled</span>
+            </label>
+          )}
           {/* Delivery photos — captured right here, required (or a reason). */}
+          {!refill && (
           <div className="rounded-lg border p-4">
             <div className="flex items-center justify-between gap-3">
               <span className="flex items-center gap-3 text-lg">
@@ -155,8 +166,9 @@ export function ChecklistDialog({
               </div>
             )}
           </div>
+          )}
 
-          {ITEMS.map((item) => (
+          {!refill && ITEMS.map((item) => (
             <label
               key={item.key}
               className="flex items-center gap-3 rounded-lg border p-4 text-lg active:bg-accent"

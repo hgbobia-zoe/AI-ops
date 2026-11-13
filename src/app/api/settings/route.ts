@@ -9,6 +9,7 @@ import { getSettings, saveSettings, type AppSettings } from "@/lib/settings";
 import { sanitizeSchedule } from "@/lib/businessHours";
 import { coerceInventoryPartners, coerceZoeCategories } from "@/lib/inventory/partners";
 import { coerceSlackApprovers } from "@/lib/slack/approvers";
+import { coerceGasRefill } from "@/lib/dispatch/gasRefill";
 
 export const dynamic = "force-dynamic";
 
@@ -82,6 +83,9 @@ function coerce(body: unknown, current: AppSettings): AppSettings {
     eventReadinessKeywords: strList(b.eventReadinessKeywords, current.eventReadinessKeywords),
     // Heavy-item keywords for the crew-size floor (crewRules): any match floors required crew at 2.
     heavyItemKeywords: strList(b.heavyItemKeywords, current.heavyItemKeywords),
+    // Gas tank refill place: address + closing time (24h HH:MM, Eastern) + tank keywords. A missing or bad
+    // field keeps the current value, so a save that omits the section never wipes it.
+    gasRefill: coerceGasRefill(b.gasRefill, current.gasRefill),
     // Not edited from the /admin settings form — preserve the operating-year override as-is.
     operatingYearStart: current.operatingYearStart ?? null,
     // Website uptime monitor targets (case-preserving, de-duped). A missing/non-array field keeps the

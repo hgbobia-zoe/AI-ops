@@ -66,6 +66,9 @@ export interface CloseoutResult {
   overrideReason?: string; // required when any item is unchecked (flagged to office)
   hasIssue: boolean; // "Did anything happen today dispatch/management needs to know about?"
   issueNote?: string; // required when hasIssue
+  /** Asked only when the route had a gas refill stop (dispatch/gasRefill.ts): were the heater tanks refilled?
+   *  Undefined on routes without one. A "no" flags the closeout to the office. */
+  gasTanksRefilled?: boolean;
 }
 
 /** Payload shapes keyed by action. Kept permissive; the intake validates. */
