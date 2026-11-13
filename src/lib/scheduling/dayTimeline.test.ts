@@ -90,6 +90,12 @@ describe("buildDayTimeline", () => {
     expect(t.untimed).toHaveLength(0);
   });
 
+  it("widens the visible hours to fit an early shift, defaulting to 6am to 10pm", () => {
+    expect(buildDayTimeline(input())).toMatchObject({ startHour: 6, endHour: 22 });
+    const t = buildDayTimeline(input({ appShifts: [shift({ id: "S1", startTime: iso(4, 30), endTime: iso(23, 15), assignees: [1] })] }));
+    expect(t).toMatchObject({ startHour: 4, endHour: 24 });
+  });
+
   it("places bars by the Eastern wall clock on a DST switch day (Nov 1 2026, fall back)", () => {
     const nov1 = Date.parse("2026-11-01T04:00:00Z"); // Eastern midnight, still EDT
     const t = buildDayTimeline(
@@ -99,12 +105,6 @@ describe("buildDayTimeline", () => {
       }),
     );
     expect(t.people.find((r) => r.userId === 1)!.bars[0]).toMatchObject({ startMin: 480, endMin: 720 });
-  });
-
-  it("widens the visible hours to fit an early shift, defaulting to 6am to 10pm", () => {
-    expect(buildDayTimeline(input())).toMatchObject({ startHour: 6, endHour: 22 });
-    const t = buildDayTimeline(input({ appShifts: [shift({ id: "S1", startTime: iso(4, 30), endTime: iso(23, 15), assignees: [1] })] }));
-    expect(t).toMatchObject({ startHour: 4, endHour: 24 });
   });
 });
 
