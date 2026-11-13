@@ -194,3 +194,49 @@ describe("POST /api/gs/projects — date drift guard", () => {
     expect(row("C-2").event_date).toBe("2026-12-01");
   });
 });
+
+describe("POST /api/gs/projects — short sweep never prunes", () => {
+  const full = (n: number, extra: Record<string, unknown> = {}) => pullBody(n, { scope: "full", ...extra });
+
+  it("a sweep short of Goodshuffle's count skips the prune and says why", async () => {
+    seedOrphans(5);
+    const res = await POST(req(full(100, { totalReported: 120 })));
+    const json = (await res.json()) as { pruned: number; partial: boolean; pruneSkipped: string | null };
+    expect(json.pruned).toBe(0);
+    expect(json.partial).toBe(true);
+    expect(json.pruneSkipped).toContain("20 short of Goodshuffle's count (120)");
+    expect(activeCount()).toBe(105); // the 5 "orphans" were only missed, not deleted: still active
+  });
+
+  it("a sweep that reaches Goodshuffle's count prunes the real orphans", async () => {
+    seedOrphans(5);
+    const res = await POST(req(full(100, { totalReported: 100 })));
+    expect(((await res.json()) as { pruned: number }).pruned).toBe(5);
+    expect(activeCount()).toBe(100);
+  });
+
+  it("the cap of 15 still holds on a complete sweep", async () => {
+    seedOrphans(16);
+    const res = await POST(req(full(100, { totalReported: 100 })));
+    expect(((await res.json()) as { pruned: number }).pruned).toBe(0);
+    expect(activeCount()).toBe(116);
+  });
+
+  it("an older pull build that sends no total: a sweep far short of this week's projects skips the prune", async () => {
+    // 200 projects pulled this week, then a one sort sweep that only sees 150 of them (and finds 10 of the
+    // missing ones still active in our table).
+    const seen: BookingRecord[] = [];
+    for (let i = 1; i <= 200; i++) seen.push({ bookingId: `PULL-${i}`, eventName: `Live ${i}`, statusLabel: "Quote", archived: i > 10 && i <= 150 ? false : i > 150 && i <= 160 ? false : true });
+    saveBookings(seen);
+    const res = await POST(req(full(150)));
+    const json = (await res.json()) as { pruned: number; pruneSkipped: string | null };
+    expect(json.pruned).toBe(0);
+    expect(json.pruneSkipped).toContain("50 short of the 200 seen this week");
+  });
+
+  it("an older pull build with a normal sweep still prunes a real deletion", async () => {
+    seedOrphans(3);
+    const res = await POST(req(full(100)));
+    expect(((await res.json()) as { pruned: number }).pruned).toBe(3);
+  });
+});

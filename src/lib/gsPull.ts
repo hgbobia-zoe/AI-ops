@@ -153,6 +153,43 @@ export function selectWindowCaptureIds(
   return out.slice(0, cap);
 }
 
+
+/** Sort orders the project sweep walks, in order. Goodshuffle caps searchProjects at 100 rows a page and its
+ *  pages overlap (verified live 2026-11-13: one walk saw about 2,950 of 3,369 projects; these three together
+ *  saw all of them). Inlined into both pull scripts. */
+export const SWEEP_SORTS: readonly string[] = [
+  "logistics_start_date&sortDirection=desc",
+  "date_created&sortDirection=asc",
+  "logistics_start_date&sortDirection=asc",
+];
+
+export interface SweepPage {
+  results: { id: string | number }[];
+  totalResultCount?: number;
+}
+
+/** PURE reference of the sweep both pull scripts run: walk each sort order page by page until an empty page,
+ *  dedupe by id, stop once the unique count reaches Goodshuffle's total. A fetch error (null) stops the sweep
+ *  and marks it failed. `page(sort, n)` returns one searchProjects page. */
+export async function sweepProjects<T extends { id: string | number }>(
+  page: (sort: string, n: number) => Promise<{ results: T[]; totalResultCount?: number } | null>,
+  maxPages = 60,
+): Promise<{ projects: Map<string, T>; total: number | null; failed: boolean }> {
+  const projects = new Map<string, T>();
+  let total: number | null = null;
+  for (const sort of SWEEP_SORTS) {
+    for (let n = 0; n <= maxPages; n++) {
+      const p = await page(sort, n);
+      if (!p) return { projects, total, failed: true };
+      if (total == null && typeof p.totalResultCount === "number") total = p.totalResultCount;
+      for (const r of p.results) if (r && r.id != null && !projects.has(String(r.id))) projects.set(String(r.id), r);
+      if (p.results.length === 0) break;
+    }
+    if (total != null && projects.size >= total) break;
+  }
+  return { projects, total, failed: false };
+}
+
 /** Build the office pull IIFE. `apiBase` is the absolute Zoe Ops origin (e.g. https://zoe-dispatch.fly.dev).
  *  `publishToken` (when the KIOSK_PUBLISH_TOKEN secret is set) is sent as x-publish-token so the
  *  now-gated ingest endpoints accept the write — only logged-in users can see /admin/pull, so the
@@ -188,17 +225,17 @@ ${GS_TEMPLATE_JS}
     function pullProjects(mode){
       var FULL=(mode!=="active"); // default to full for any unexpected value (back-compat / safety)
       var all={}, pErr=false;
-      // searchProjects paginates ?page=N (0-indexed). allProjects=true is the archive-inclusive flag
-      // the new GS UI uses — it returns the FULL history (won + archived + lost, all years), not just
-      // the ~88 active projects. The FULL lane walks pages until one returns nothing (end), big pageSize
-      // to keep it to a handful of requests; the ACTIVE lane drops allProjects and reads a single page
-      // (~88 active fit well under pageSize=500). A FETCH ERROR (not an empty page) marks the pull
-      // partial (full lane only). We do NOT send totalReported: the count query over-reports vs the
-      // paginated set, which would falsely flag every complete pull as partial.
-      function url(pg){ return "/app/project/searchProjects?page="+pg+"&pageSize=500"+(FULL?"&allProjects=true":"")+"&sortColumn=logistics_start_date&sortDirection=desc&useV2DateHandling=true"; }
-      function fetchPage(pg){ return fetch(url(pg),H).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(b){ var ps=b&&b.projectSearch; if(!ps)return {count:0}; var res=ps.results||[]; res.forEach(function(p){ if(p&&p.id!=null&&!all[p.id])all[p.id]=p; }); return {count:res.length}; }).catch(function(){ pErr=true; return {count:0}; }); }
-      function loop(pg){ return fetchPage(pg).then(function(r){ if(FULL && !pErr && r.count>0 && pg<60) return loop(pg+1); return null; }); }
-      return loop(0).then(function(){
+      // searchProjects paginates ?page=N (0-indexed); allProjects=true is the archive-inclusive history.
+      // Goodshuffle caps it at 100 rows a page (pageSize is ignored) and its pages OVERLAP (an unstable sort),
+      // so one walk misses about one project in eight. Walk up to three sort orders (SWEEP_SORTS), deduped by
+      // id, and stop once we hold Goodshuffle's own count (totalResultCount). The FULL POST carries that count
+      // as totalReported, so a short sweep is partial and never prunes. A FETCH ERROR marks it partial too.
+      // MIRRORS sweepProjects() above (unit-tested) and the extension's pullProjects.
+      var SORTS=${JSON.stringify(SWEEP_SORTS)}; var total=null;
+      function url(sort,pg){ return "/app/project/searchProjects?page="+pg+"&pageSize=100"+(FULL?"&allProjects=true":"")+"&sortColumn="+sort+"&useV2DateHandling=true"; }
+      function fetchPage(sort,pg){ return fetch(url(sort,pg),H).then(function(r){ if(!r.ok) throw 0; return r.json(); }).then(function(b){ var ps=b&&b.projectSearch; if(!ps)return {count:0}; if(total==null&&typeof ps.totalResultCount==="number") total=ps.totalResultCount; var res=ps.results||[]; res.forEach(function(p){ if(p&&p.id!=null&&!all[p.id])all[p.id]=p; }); return {count:res.length}; }).catch(function(){ pErr=true; return {count:0}; }); }
+      function walk(si,pg){ return fetchPage(SORTS[si],pg).then(function(r){ if(!pErr && r.count>0 && pg<60) return walk(si,pg+1); if(pErr || si+1>=SORTS.length || (total!=null && Object.keys(all).length>=total)) return null; return walk(si+1,0); }); }
+      return walk(0,0).then(function(){
         function d2(s){ try{ if(!s) return null; var dt=new Date(s); if(isNaN(dt)) return null; return new Date(dt.getTime()-dt.getTimezoneOffset()*60000).toISOString().slice(0,10); }catch(e){ return null; } }
         // Goodshuffle dates: *_millis + *_zone since Nov 2026, the old *_date strings before. MIRRORS gsYmd / gsWindowTime above.
         function gsYmd(old,ms,zone){ if(old) return d2(old); if(ms==null||ms===""||isNaN(Number(ms))) return null; try{ return new Intl.DateTimeFormat("en-CA",{timeZone:zone||"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date(Number(ms))); }catch(e){ return d2(new Date(Number(ms)).toISOString()); } }
@@ -295,7 +332,7 @@ ${GS_TEMPLATE_JS}
         // partial flag. No notes/emails here (those ride the fast ACTIVE lane). ACTIVE lane:
         // scope:"active" (never prunes) + the open-lead notes/emails capture.
         if(FULL){
-          return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr,scope:"full"})}).then(function(r){return r.json();}).then(function(j){ return pullWindows(windowIds(true)).catch(function(){ return {windows:0}; }).then(function(wj){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:0, windows:(wj&&wj.windows)||0 }; }); }).catch(function(){ return { saved:0, partial:true }; });
+          return fetch(API+"/api/gs/projects",{method:"POST",headers:POSTH(),body:JSON.stringify({projects:recs,partial:pErr,scope:"full",totalReported:(total==null?undefined:total)})}).then(function(r){return r.json();}).then(function(j){ return pullWindows(windowIds(true)).catch(function(){ return {windows:0}; }).then(function(wj){ return { saved:(j&&j.saved)||recs.length, partial:pErr||!!(j&&j.partial), notes:0, windows:(wj&&wj.windows)||0 }; }); }).catch(function(){ return { saved:0, partial:true }; });
         }
         // Offline payment confirmation: the server names projects whose amount paid went up; read each one's payment
         // history (one at a time, 250ms apart) and post ONLY its offline charges. MIRRORS extension/pull-injected.js.

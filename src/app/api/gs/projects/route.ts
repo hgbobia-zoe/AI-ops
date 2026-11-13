@@ -29,6 +29,7 @@ import {
   saveBookings,
   enqueueWarehouseTeamAdds,
   archiveBookingsNotIn,
+  countBookingsSeenSince,
   saveBookingRevenueComponents,
   saveBookingTimelineWindows,
   syncStopWindowsFromBookings,
@@ -339,10 +340,29 @@ export async function POST(req: Request): Promise<NextResponse> {
   const eligible = !partial && records.length >= 100;
   const forced = eligible && consumeBookingsForcePrune(); // one-shot: reads AND clears, only when it can act
   let prune: { archived: number; skipped: boolean; candidates: number } = { archived: 0, skipped: false, candidates: 0 };
-  if (eligible) {
-    // Forced: lift the cap for this one complete pull. Unarmed: the conservative cap of 15.
-    prune = archiveBookingsNotIn(records.map((r) => r.bookingId), forced ? records.length : 15);
+  // Short sweep guard. Goodshuffle pages overlap, so a pull build that walks one sort order and sends no total
+  // (extension 1.22.4 and older) misses about one project in eight, and the cap of 15 would still archive the
+  // live ones it missed. Without a total, compare against the projects pulls have written this past week: a
+  // sweep more than PRUNE_CAP short of that was cut short, so skip the unarmed prune. The armed force prune is
+  // a human's call after a bulk deletion (those rows were seen this week too), so it is not held back here.
+  const PRUNE_CAP = 15;
+  const seenThisWeek = typeof body.totalReported === "number" ? null : countBookingsSeenSince(new Date(Date.now() - 7 * 86_400_000).toISOString());
+  const shortSweep = seenThisWeek != null && records.length + PRUNE_CAP < seenThisWeek;
+  if (eligible && !forced && shortSweep) {
+    prune = { archived: 0, skipped: true, candidates: 0 };
+  } else if (eligible) {
+    // Forced: lift the cap for this one complete pull. Unarmed: the conservative cap.
+    prune = archiveBookingsNotIn(records.map((r) => r.bookingId), forced ? records.length : PRUNE_CAP);
   }
+  // Why the prune did not run on this full pull, for the import ledger and the status alert.
+  const shortBy = partial && typeof body.totalReported === "number" ? body.totalReported - records.length : shortSweep && seenThisWeek != null ? seenThisWeek - records.length : 0;
+  const pruneSkipReason = shortBy > 0
+    ? `orphan cleanup skipped: the pull saw ${records.length} projects, ${shortBy} short of ${partial ? `Goodshuffle's count (${body.totalReported})` : `the ${seenThisWeek} seen this week`}`
+    : body.partial
+      ? "orphan cleanup skipped: the pull hit a Goodshuffle error"
+      : prune.skipped
+        ? `orphan cleanup skipped: ${prune.candidates} active projects missing, more than the cap of ${PRUNE_CAP}`
+        : null;
   if (forced) {
     // Human-confirmed bulk deletion swept. Log it as a SUCCESS with an explicit audited detail.
     logImport("bookings", true, {
@@ -350,18 +370,22 @@ export async function POST(req: Request): Promise<NextResponse> {
       rowsWritten: records.length,
       detail: `force-prune: archived ${prune.archived} orphans (human-confirmed bulk deletion)`,
     });
-  } else if (prune.skipped) {
-    logImport("bookings", false, { rowsIn: projects.length, rowsWritten: records.length, detail: "prune skipped — too many orphans, likely a truncated pull" });
+  } else if (pruneSkipReason) {
+    logImport("bookings", false, { rowsIn: projects.length, rowsWritten: records.length, detail: pruneSkipReason });
   }
   const pruned = prune.archived;
 
   // Sustained-failure alert (the loud signal the import ledger alone didn't fire). Only evaluate on an
   // eligible (complete, full) pull: a skip pages a human to decide (truncated pull, or arm Force-archive),
   // a clean/forced prune clears it. Wrapped so a Slack hiccup NEVER breaks the ingest write.
-  if (eligible) {
-    const probe = prune.skipped
-      ? recordBookingsImportFailure(false, `${prune.candidates} active projects missing from the pull`)
-      : recordBookingsImportFailure(true, forced ? `${prune.archived} orphans archived (forced)` : `${prune.archived} orphans archived`);
+  // A short sweep (fewer projects than Goodshuffle says it has) alerts too, so a pull that keeps coming up
+  // short gets noticed instead of silently never cleaning up.
+  if (eligible || shortBy > 0) {
+    const probe = shortBy > 0
+      ? recordBookingsImportFailure(false, pruneSkipReason, new Date(), "short_sweep")
+      : prune.skipped
+        ? recordBookingsImportFailure(false, `${prune.candidates} active projects missing from the pull`)
+        : recordBookingsImportFailure(true, forced ? `${prune.archived} orphans archived (forced)` : `${prune.archived} orphans archived`);
     if (probe.alert) {
       try {
         void postStatus(probe.alert);
@@ -375,7 +399,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   // so the warehouse tablet/workstation sees signed work. The office extension drains these ops.
   const wdQueued = records.length > 0 ? enqueueWarehouseTeamAdds() : 0;
 
-  return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial, wdQueued, pruned, blankDraftAlerts, paymentWatched }, { headers: CORS });
+  return NextResponse.json({ ok: true, saved: records.length, savedComponents, scope, partial, wdQueued, pruned, pruneSkipped: pruneSkipReason, blankDraftAlerts, paymentWatched }, { headers: CORS });
 }
 
 /** Threshold for the blank-draft guard. GS_BLANK_DRAFT_ALERT_THRESHOLD overrides the default of 5. */
