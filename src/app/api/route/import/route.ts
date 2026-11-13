@@ -16,6 +16,7 @@ import { consumeForceResync } from "@/lib/ingest/forceResync";
 import { runEtaPreMintTick } from "@/lib/eta/preMintTick";
 import { syncActiveLeadTextThreads } from "@/lib/comms/openphoneSync";
 import type { Stop } from "@/lib/types";
+import { routeTimes } from "@/lib/gsRouteTimes";
 
 export const dynamic = "force-dynamic";
 
@@ -105,6 +106,9 @@ export async function POST(req: Request): Promise<NextResponse> {
       truckId?: string;
       date?: string;
       gsRouteId?: string;
+      /** Goodshuffle route startDate / endDate (warehouse out, warehouse back): the crew window source. */
+      gsStart?: string;
+      gsEnd?: string;
       stops?: Array<Partial<Stop>>;
     };
     try {
@@ -170,7 +174,8 @@ export async function POST(req: Request): Promise<NextResponse> {
     } catch (e) {
       console.error("[route/import] applyBookingWindows failed (saving without windows)", routeId, e);
     }
-    writeRoute({ routeId, date, truckId, status, gsRouteId: body.gsRouteId, stops });
+    const gsTimes = routeTimes(body.gsStart, body.gsEnd);
+    writeRoute({ routeId, date, truckId, status, gsRouteId: body.gsRouteId, ...gsTimes, stops });
 
     // NOTE: revenue is NOT written here. The single source of truth is the `bookings` feed
     // (searchProjects), keyed by the same id as the stop's txId — see getBookingRevenueByIds.

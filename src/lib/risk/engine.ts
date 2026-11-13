@@ -11,6 +11,7 @@
 // from the route driver.
 
 import { crewForRoute } from "@/lib/crewRules";
+import { gsRouteSpanMs } from "@/lib/gsRouteTimes";
 import {
   type EngineRoute,
   type EngineShift,
@@ -41,9 +42,22 @@ export interface RouteWindow {
   known: boolean;
 }
 
-/** The driver's operational window: load buffer before the first stop → return buffer after the last. */
+/** The driver's operational window. When Goodshuffle's own route start and end are known (leaving the
+ *  warehouse → back at the warehouse, which already includes loading, time on site and the drive back),
+ *  that IS the window (owner rule 2026-11-13: crew shifts match the Goodshuffle route). Otherwise it is
+ *  estimated from the stops: load buffer before the first stop → return buffer after the last. */
 export function routeWindow(route: EngineRoute, cfg: RiskConfig): RouteWindow | null {
   const times = route.stops.map(stopUnix).filter((t): t is number => t != null);
+  const gs = gsRouteSpan(route);
+  if (gs) {
+    return {
+      startUnix: gs.start,
+      endUnix: gs.end,
+      rawStart: times.length ? Math.min(...times) : gs.start,
+      rawEnd: times.length ? Math.max(...times) : gs.end,
+      known: true,
+    };
+  }
   if (times.length === 0) return null;
   const first = Math.min(...times);
   const last = Math.max(...times);
@@ -54,6 +68,12 @@ export function routeWindow(route: EngineRoute, cfg: RiskConfig): RouteWindow | 
     rawEnd: last,
     known: true,
   };
+}
+
+/** Goodshuffle route start/end in unix seconds, when both parse, end is after start, and under a day. */
+function gsRouteSpan(route: EngineRoute): { start: number; end: number } | null {
+  const span = gsRouteSpanMs(route.gsStart, route.gsEnd);
+  return span ? { start: Math.floor(span.start / 1000), end: Math.floor(span.end / 1000) } : null;
 }
 
 function overlaps(a: RouteWindow, b: RouteWindow): boolean {

@@ -109,7 +109,7 @@ describe("buildDemand", () => {
 });
 
 describe("buildDemand: crew start on the quarter hour", () => {
-  it("rounds an odd minute start to the nearest quarter and leaves the end (9:03 first stop → 8:00 crew start)", () => {
+  it("rounds an odd minute start and end to the nearest quarter (9:03 first stop → 8:00 crew start)", () => {
     // Nov 14 2026 is EST: 14:03Z = 9:03 AM first stop, so the 60 min load buffer puts the raw start at 8:03.
     const r = route({
       date: "2026-11-14",
@@ -120,7 +120,7 @@ describe("buildDemand: crew start on the quarter hour", () => {
     });
     const driver = buildDemand([r]).find((s) => s.role === "driver")!;
     expect(driver.startTime).toBe("2026-11-14T13:00:00.000Z"); // 8:00 AM, not 8:03
-    expect(driver.endTime).toBe("2026-11-14T18:33:00.000Z"); // last stop + 60 min, not moved, not rounded
+    expect(driver.endTime).toBe("2026-11-14T18:30:00.000Z"); // last stop + 60 min = 1:33 PM, rounded to 1:30 PM
   });
 });
 

@@ -313,6 +313,8 @@ async function doScan(opts: { horizonDays?: number; force?: boolean }): Promise<
       date: r.date,
       status: r.status,
       gsRouteId: r.gsRouteId,
+      gsStart: r.gsStart,
+      gsEnd: r.gsEnd,
       driverId: r.driverId,
       driverName: r.driverName,
       stops: r.stops.map((s) => ({

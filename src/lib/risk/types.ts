@@ -81,6 +81,9 @@ export interface EngineRoute {
   date: string; // YYYY-MM-DD
   status: string; // "ready" | "active" | "done" | ...
   gsRouteId?: string;
+  /** Goodshuffle route start and end (ISO), warehouse out to warehouse back. Preferred over stop times. */
+  gsStart?: string;
+  gsEnd?: string;
   /** Connecteam userId of the driver assigned to this route (in Dispatch), if any. */
   driverId?: string;
   driverName?: string;

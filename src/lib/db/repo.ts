@@ -70,6 +70,8 @@ interface RouteRow {
   driver_name: string | null;
   status: string;
   gs_route_id: string | null;
+  gs_start?: string | null;
+  gs_end?: string | null;
   updated_at: string;
   auto_finalized_at?: string | null;
   handoff_flag?: string | null;
@@ -139,6 +141,8 @@ function buildRoute(row: RouteRow): Route {
     driverName: row.driver_name ?? undefined,
     status: row.status as RouteStatus,
     gsRouteId: row.gs_route_id ?? undefined,
+    gsStart: row.gs_start ?? undefined,
+    gsEnd: row.gs_end ?? undefined,
     autoFinalizedAt: row.auto_finalized_at ?? undefined,
     handoffFlag: row.handoff_flag ?? undefined,
     stops,
@@ -479,24 +483,30 @@ export function upsertRoute(r: {
   driverName?: string;
   status: RouteStatus;
   gsRouteId?: string;
+  gsStart?: string;
+  gsEnd?: string;
 }): void {
   // driver_id/driver_name and gs_route_id are PRESERVED on re-pull (COALESCE) — a route pull
-  // carries no driver, so it must not wipe the Dispatch-assigned driver.
+  // carries no driver, so it must not wipe the Dispatch-assigned driver. gs_start/gs_end are kept too
+  // when a pull does not send them (an older extension or the kiosk); a pull that sends them overwrites.
   getDb()
     .prepare(
-      `INSERT INTO routes (route_id, truck_id, date, driver_id, driver_name, status, gs_route_id, updated_at)
-       VALUES (@routeId, @truckId, @date, @driverId, @driverName, @status, @gsRouteId, @now)
+      `INSERT INTO routes (route_id, truck_id, date, driver_id, driver_name, status, gs_route_id, gs_start, gs_end, updated_at)
+       VALUES (@routeId, @truckId, @date, @driverId, @driverName, @status, @gsRouteId, @gsStart, @gsEnd, @now)
        ON CONFLICT(route_id) DO UPDATE SET
          truck_id=@truckId, date=@date, status=@status,
          driver_id=COALESCE(@driverId, driver_id),
          driver_name=COALESCE(@driverName, driver_name),
-         gs_route_id=COALESCE(@gsRouteId, gs_route_id), updated_at=@now`,
+         gs_route_id=COALESCE(@gsRouteId, gs_route_id),
+         gs_start=COALESCE(@gsStart, gs_start), gs_end=COALESCE(@gsEnd, gs_end), updated_at=@now`,
     )
     .run({
       ...r,
       driverId: r.driverId ?? null,
       driverName: r.driverName ?? null,
       gsRouteId: r.gsRouteId ?? null,
+      gsStart: r.gsStart ?? null,
+      gsEnd: r.gsEnd ?? null,
       now: new Date().toISOString(),
     });
 }
@@ -3397,6 +3407,8 @@ export function writeRoute(route: Route): void {
       driverId: rt.driverId,
       status: rt.status,
       gsRouteId: rt.gsRouteId,
+      gsStart: rt.gsStart,
+      gsEnd: rt.gsEnd,
     });
     // Per-stop UPSERT (not DELETE-all + INSERT): a re-pull must NEVER wipe proof-of-delivery. POD
     // (photos_ref / signature_ref) is written separately via setStopProof AFTER a stop completes, so a

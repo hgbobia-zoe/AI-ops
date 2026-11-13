@@ -295,7 +295,7 @@ function zoePull(apiBase, tier) {
           if (!rdate) return;
           const daysOut = Math.round((Date.parse(rdate + "T00:00:00Z") - Date.parse(todayYmd + "T00:00:00Z")) / 86400000);
           const p = daysOut >= 0 && daysOut <= ENRICH ? attachItems(stops) : Promise.resolve(stops);
-          return p.then((st) => { const key = tid + "|" + rdate + "|" + rt.id; if (!groups[key]) groups[key] = { truckId: tid, date: rdate, stops: [], gsRouteId: String(rt.id) }; groups[key].stops = groups[key].stops.concat(st);
+          return p.then((st) => { const key = tid + "|" + rdate + "|" + rt.id; if (!groups[key]) groups[key] = { truckId: tid, date: rdate, stops: [], gsRouteId: String(rt.id), gsStart: full.startDate || rt.startDate || undefined, gsEnd: full.endDate || rt.endDate || undefined }; groups[key].stops = groups[key].stops.concat(st);
             // Stage 3: collect each enriched stop's revenue component breakdown (CENTS), deduped by tx.
             st.forEach((x) => { if (x && x.revComponents && x.revComponents.bookingId) revAcc[x.revComponents.bookingId] = x.revComponents; }); });
         }); }); });
@@ -305,7 +305,7 @@ function zoePull(apiBase, tier) {
         // Stage 3: push the enriched revenue component breakdown to the bookings SoT ingest (components-only
         // POST — no projects[], so it never touches the bookings upsert/prune). Best-effort; never fails the pull.
         const postComponents = () => { const vals = Object.keys(revAcc).map((k) => revAcc[k]); if (!vals.length) return Promise.resolve(); return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ components: vals }) }).then(() => {}).catch(() => {}); };
-        return Promise.all(keys.map((k) => { const g = groups[k]; totalStops += g.stops.length; return fetch(API + "/api/route/import", { method: "POST", headers: POSTH, body: JSON.stringify({ truckId: g.truckId, date: g.date, stops: g.stops, gsRouteId: g.gsRouteId }) }).then((r) => { if (!r.ok) failed++; }).catch(() => { failed++; }); })).then(postComponents).then(() => {
+        return Promise.all(keys.map((k) => { const g = groups[k]; totalStops += g.stops.length; return fetch(API + "/api/route/import", { method: "POST", headers: POSTH, body: JSON.stringify({ truckId: g.truckId, date: g.date, stops: g.stops, gsRouteId: g.gsRouteId, gsStart: g.gsStart, gsEnd: g.gsEnd }) }).then((r) => { if (!r.ok) failed++; }).catch(() => { failed++; }); })).then(postComponents).then(() => {
           // Sanitize: after a FULL clean sweep, drop any of OUR routes GS no longer has. Never on a partial pull.
           if (failed !== 0 || keys.length === 0) return result();
           const keepRouteIds = keys.map((k) => { const g = groups[k]; return "R-" + g.date + "-" + g.truckId + "-" + g.gsRouteId; });
