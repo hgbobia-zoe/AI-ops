@@ -78,6 +78,13 @@ describe("computeCoverage (explicit assignments only — no Connecteam-schedule 
     expect(cov.byShift.f1.scheduledCredit).toBe(0);
   });
 
+  it("a cancelled shift needs nobody: gap 0, and it adds nothing to the day's totals", () => {
+    const c = computeCoverage([shift({ id: "x", role: "driver", headcount: 2, status: "cancelled" }), shift({ id: "y", role: "field", assignees: [7], status: "cancelled" })]);
+    expect(c.byShift.x).toMatchObject({ gap: 0, covered: 0 });
+    expect(c.byShift.y).toMatchObject({ gap: 0, covered: 0 });
+    expect(c).toMatchObject({ gapTotal: 0, internalTotal: 0 });
+  });
+
   it("an OFFICE/admin shift is non-crew: excluded from coverage entirely (no byShift entry, no gap/total)", () => {
     const cov = computeCoverage([
       shift({ id: "d1", role: "driver", assignees: [1] }),
