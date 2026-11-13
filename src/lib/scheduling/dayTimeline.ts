@@ -38,6 +38,8 @@ export interface TimelineBar {
   override?: boolean;
   /** Stacking lane inside its row (bars that overlap in time sit on separate lanes). */
   lane: number;
+  /** A shift's real length in minutes (an overnight shift is not cut at midnight). Used by the week totals. */
+  minutes?: number;
 }
 
 export interface TimelineRow {
@@ -172,6 +174,7 @@ export function buildDayTimeline(input: DayTimelineInput): DayTimeline {
       published: Boolean(s.connecteamShiftId),
       override: Boolean(s.routeOverride),
       lane: 0,
+      minutes: Math.round((endMs - startMs) / 60000),
     };
     for (const uid of s.assignees) rowFor(uid, `User ${uid}`).bars.push({ ...base, id: `${s.id}:${uid}` });
     if (gap > 0) unassigned.push({ ...base, id: `${s.id}:open`, filled, total: s.headcount });
@@ -189,6 +192,7 @@ export function buildDayTimeline(input: DayTimelineInput): DayTimeline {
       timeLabel: range(startMs, endMs),
       title: cs.title || cs.schedulerName || "Connecteam shift",
       lane: 0,
+      minutes: Math.round((endMs - startMs) / 60000),
     };
     if (cs.assignees.length === 0) {
       unassigned.push({ ...bar, id: `ct:${cs.id}:open`, filled: 0, total: 1 });

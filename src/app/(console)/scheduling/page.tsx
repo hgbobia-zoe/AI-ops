@@ -17,6 +17,7 @@ import { DatePicker } from "@/components/DatePicker";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { SchedulingViews } from "@/components/scheduling/SchedulingViews";
 import { DayTimeline } from "@/components/scheduling/DayTimeline";
+import { WeekSchedulePage } from "@/components/scheduling/WeekSchedulePage";
 import { buildDayTimeline, TIMELINE_ROLE_LABEL } from "@/lib/scheduling/dayTimeline";
 import {
   RouteStaffBoard,
@@ -163,6 +164,9 @@ export default async function SchedulingPage({
   const focus = typeof sp?.focus === "string" ? sp.focus : null;
   // A Dispatch deep link (?focus=<routeId>) or ?view=routes lands on the route board; otherwise the day schedule.
   const initialView = focus || sp?.view === "routes" ? "routes" : "schedule";
+  // The Week schedule (Connecteam style, Monday to Sunday) is its own server render: it loads the seven days
+  // and nothing the day needs.
+  if (sp?.view === "week") return <WeekSchedulePage date={date} today={today} />;
   const isToday = date === today;
   const dayBefore = shiftYmd(date, -1);
   const nextDay = shiftYmd(date, 1);
@@ -603,6 +607,7 @@ export default async function SchedulingPage({
       {/* ── The schedule: Day schedule (default) or By route, under one toolbar like Connecteam's. ── */}
       <SchedulingViews
         initial={initialView}
+        weekHref={`/scheduling?view=week${isToday ? "" : `&date=${date}`}`}
         dateNav={<DateNav date={date} today={today} />}
         actions={<SchedulingHeaderActions date={date} roster={roster} eligibilityData={eligibilityData} routeOptions={routeOptions} />}
         summary={

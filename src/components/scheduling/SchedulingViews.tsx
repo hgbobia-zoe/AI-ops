@@ -7,8 +7,9 @@
 // Both views are server rendered and kept mounted; switching only toggles `hidden`, so a queue row or the
 // Auto staff button can reveal a section in the other view (see reveal.ts) without a page load.
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { CalendarDays, Truck } from "lucide-react";
+import { CalendarDays, CalendarRange, Truck } from "lucide-react";
 import { VIEW_EVENT } from "@/components/scheduling/reveal";
 
 export type SchedulingView = "schedule" | "routes";
@@ -20,6 +21,7 @@ const TABS: { id: SchedulingView; label: string; icon: React.ReactNode }[] = [
 
 export function SchedulingViews({
   initial,
+  weekHref,
   dateNav,
   actions,
   summary,
@@ -28,6 +30,8 @@ export function SchedulingViews({
   routes,
 }: {
   initial: SchedulingView;
+  /** The Week schedule is its own page render (seven days of data), so its tab is a link. */
+  weekHref?: string;
   dateNav: React.ReactNode;
   actions: React.ReactNode;
   summary: React.ReactNode;
@@ -65,6 +69,11 @@ export function SchedulingViews({
                 {t.icon} {t.label}
               </button>
             ))}
+            {weekHref && (
+              <Link role="tab" aria-selected={false} href={weekHref} className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12.5px] text-tertiary-text transition-colors hover:text-foreground">
+                <CalendarRange className="size-3.5" /> Week
+              </Link>
+            )}
           </div>
           {dateNav}
         </div>
