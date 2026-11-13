@@ -18,6 +18,7 @@ import { ShiftEditor, type NewShiftPrefill } from "@/components/scheduling/Shift
 import type { CrewMember } from "@/lib/connecteam";
 import type { CrewRecommendation } from "@/lib/scheduling/availability";
 import type { StaffShift } from "@/lib/scheduling/types";
+import { opsWallTimeToMs } from "@/lib/dates";
 import type { WorkerDayEligibilityData } from "@/components/scheduling/RouteStaffBoard";
 import type { DayTimeline as Timeline, TimelineBar } from "@/lib/scheduling/dayTimeline";
 
@@ -47,7 +48,6 @@ function barClass(b: TimelineBar): string {
 export function DayTimeline({
   timeline,
   date,
-  dayStartMs,
   shifts,
   roster,
   eligibilityData,
@@ -55,7 +55,6 @@ export function DayTimeline({
 }: {
   timeline: Timeline;
   date: string;
-  dayStartMs: number;
   shifts: StaffShift[];
   roster: CrewMember[];
   eligibilityData: WorkerDayEligibilityData;
@@ -94,7 +93,8 @@ export function DayTimeline({
     const rect = e.currentTarget.getBoundingClientRect();
     const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
     const hour = Math.min(endHour - 1, Math.floor(startHour + frac * (endHour - startHour)));
-    const startMs = dayStartMs + hour * 3600000;
+    // Eastern wall clock hour on this day (dayStartMs + hour * 1h is an hour off on the two DST switch days).
+    const startMs = opsWallTimeToMs(date, hour);
     setAdding({ assignees, startIso: new Date(startMs).toISOString(), endIso: new Date(startMs + 4 * 3600000).toISOString() });
   }
 

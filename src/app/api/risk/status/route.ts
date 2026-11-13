@@ -7,6 +7,7 @@ import { NextResponse } from "next/server";
 import { setRiskStatus, getRiskById } from "@/lib/risk/store";
 import { logChange } from "@/lib/history/store";
 import { historyActor } from "@/lib/history/actor";
+import { todayInOpsTz } from "@/lib/dates";
 import type { RiskStatus } from "@/lib/risk/types";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +31,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   // Record the human decision (acknowledge/dismiss/resolve) in Operational History — only
   // scan-driven transitions were logged before, so management decisions left no trace.
   if (before && before.status !== body.status) {
-    const dayKey = new Date().toISOString().slice(0, 10);
+    const dayKey = todayInOpsTz(); // Eastern day (the UTC date flips at 7 or 8 PM ET)
     logChange({
       source: "dispatch",
       entity: "risk",

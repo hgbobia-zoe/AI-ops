@@ -10,6 +10,7 @@
 
 import { postStatus } from "@/lib/notify/status";
 import { getJson, setJson } from "@/lib/kv";
+import { DISPLAY_TZ, opsYmdOfMs } from "@/lib/dates";
 
 const BASE = (process.env.CONNECTEAM_BASE_URL || "https://api.connecteam.com").replace(/\/$/, "");
 
@@ -1227,12 +1228,11 @@ function ymdOf(v: unknown): string | null {
     const m = v.match(/^(\d{4}-\d{2}-\d{2})/);
     if (m) return m[1];
     const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    return Number.isNaN(d.getTime()) ? null : opsYmdOfMs(d.getTime(), DISPLAY_TZ); // Eastern day, not UTC
   }
   if (typeof v === "number" && Number.isFinite(v)) {
     const ms = v < 1e12 ? v * 1000 : v;
-    const d = new Date(ms);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    return Number.isNaN(new Date(ms).getTime()) ? null : opsYmdOfMs(ms, DISPLAY_TZ); // a 9 PM ET punch stays on its day
   }
   return null;
 }

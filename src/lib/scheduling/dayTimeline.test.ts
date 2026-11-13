@@ -105,6 +105,17 @@ describe("buildDayTimeline", () => {
     const t = buildDayTimeline(input({ appShifts: [shift({ id: "S1", startTime: iso(4, 30), endTime: iso(23, 15), assignees: [1] })] }));
     expect(t).toMatchObject({ startHour: 4, endHour: 24 });
   });
+
+  it("places bars by the Eastern wall clock on a DST switch day (Nov 1 2026, fall back)", () => {
+    const nov1 = Date.parse("2026-11-01T04:00:00Z"); // Eastern midnight, still EDT
+    const t = buildDayTimeline(
+      input({
+        dayStartMs: nov1,
+        appShifts: [shift({ id: "S1", date: "2026-11-01", startTime: "2026-11-01T13:00:00.000Z", endTime: "2026-11-01T17:00:00.000Z", assignees: [1] })], // 8 AM to noon EST
+      }),
+    );
+    expect(t.people.find((r) => r.userId === 1)!.bars[0]).toMatchObject({ startMin: 480, endMin: 720 });
+  });
 });
 
 describe("stackLanes", () => {

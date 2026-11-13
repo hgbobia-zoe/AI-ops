@@ -9,6 +9,11 @@ import {
   isBusinessDay,
   businessDaysUntil,
   isWithinBusinessDays,
+  opsMinutesIntoDay,
+  opsOffsetMinutes,
+  opsWallTimeToMs,
+  opsYmdOfMs,
+  tzOffsetMinutes as tzOff,
 } from "./dates";
 
 describe("ymdInTz", () => {
@@ -132,5 +137,48 @@ describe("business-day helpers", () => {
     expect(isWithinBusinessDays("2026-10-23", 3, mon)).toBe(false); // 4 biz days
     expect(isWithinBusinessDays("2026-10-26", 3, mon)).toBe(false); // 5 biz days out
     expect(isWithinBusinessDays("2026-10-16", 3, mon)).toBe(false); // in the past
+  });
+});
+
+// ── The shared Eastern time helper, on BOTH sides of the DST switch ─────────────────────────────────────
+// 2026: EDT (UTC-4) until Sun Nov 1 2:00 AM, then EST (UTC-5). Spring forward was Sun Mar 8.
+
+describe("Eastern time helper across DST", () => {
+  const NY = "America/New_York";
+
+  it("knows the real offset: -240 in EDT, -300 in EST (never a fixed -04:00)", () => {
+    expect(opsOffsetMinutes(Date.UTC(2026, 9, 31, 16, 0), NY)).toBe(-240); // Oct 31, EDT
+    expect(opsOffsetMinutes(Date.UTC(2026, 10, 14, 16, 0), NY)).toBe(-300); // Nov 14, EST
+    expect(tzOff(NY, new Date(Date.UTC(2026, 10, 14, 16, 0, 0, 999)))).toBe(-300); // whole minutes, ms ignored
+  });
+
+  it("turns an Eastern wall time into the right instant on an EDT day and an EST day", () => {
+    expect(new Date(opsWallTimeToMs("2026-10-31", 8, 0, NY)).toISOString()).toBe("2026-10-31T12:00:00.000Z");
+    expect(new Date(opsWallTimeToMs("2026-11-14", 8, 0, NY)).toISOString()).toBe("2026-11-14T13:00:00.000Z");
+    expect(new Date(opsWallTimeToMs("2026-11-14", 8, 40, NY)).toISOString()).toBe("2026-11-14T13:40:00.000Z"); // first stop 8:40 AM EST
+    expect(new Date(opsWallTimeToMs("2026-07-04", 21, 30, NY)).toISOString()).toBe("2026-07-05T01:30:00.000Z");
+    expect(new Date(opsWallTimeToMs("2026-11-14", 21, 30, NY)).toISOString()).toBe("2026-11-15T02:30:00.000Z"); // 9:30 PM EST
+  });
+
+  it("gets the switch days themselves right (Nov 1 fall back, Mar 8 spring forward)", () => {
+    expect(new Date(opsWallTimeToMs("2026-11-01", 0, 0, NY)).toISOString()).toBe("2026-11-01T04:00:00.000Z"); // midnight still EDT
+    expect(new Date(opsWallTimeToMs("2026-11-01", 8, 0, NY)).toISOString()).toBe("2026-11-01T13:00:00.000Z"); // 8 AM already EST
+    expect(new Date(opsWallTimeToMs("2026-03-08", 8, 0, NY)).toISOString()).toBe("2026-03-08T12:00:00.000Z"); // 8 AM already EDT
+    // Wall clock minutes into the day: 8:00 AM is 480 even though only 7 or 9 real hours passed since midnight.
+    expect(opsMinutesIntoDay(Date.parse("2026-11-01T13:00:00Z"), "2026-11-01", NY)).toBe(480);
+    expect(opsMinutesIntoDay(Date.parse("2026-03-08T12:00:00Z"), "2026-03-08", NY)).toBe(480);
+    expect(opsMinutesIntoDay(Date.parse("2026-11-14T13:00:00Z"), "2026-11-14", NY)).toBe(480);
+  });
+
+  it("puts an evening instant on its Eastern day, not the next UTC day", () => {
+    expect(opsYmdOfMs(Date.parse("2026-11-15T02:30:00Z"), NY)).toBe("2026-11-14"); // 9:30 PM EST Nov 14
+    expect(opsYmdOfMs(Date.parse("2026-07-05T01:30:00Z"), NY)).toBe("2026-07-04"); // 9:30 PM EDT Jul 4
+  });
+
+  it("round trips the Add shift form on both sides of the switch", () => {
+    expect(opsLocalInputToIso("2026-10-31T08:00")).toBe("2026-10-31T12:00:00.000Z");
+    expect(opsLocalInputToIso("2026-11-14T08:00")).toBe("2026-11-14T13:00:00.000Z");
+    expect(isoToOpsLocalInput("2026-11-14T13:00:00.000Z")).toBe("2026-11-14T08:00");
+    expect(isoToOpsLocalInput("2026-10-31T12:00:00.000Z")).toBe("2026-10-31T08:00");
   });
 });
