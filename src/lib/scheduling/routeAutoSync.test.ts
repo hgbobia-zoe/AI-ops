@@ -265,6 +265,13 @@ describe("applyRouteWindowRatchet: shifts match the route unless someone overrid
     await run("rMove", stopsRoute("rMove", "14:03", "18:00")); // 8:00 AM to 2:00 PM
     expect(await run("rMove", stopsRoute("rMove", "16:00", "17:00"))).toBe(1); // route now 10:00 AM to 1:00 PM
     expect(m.getShiftById(s.id)).toMatchObject({ startTime: `${DATE}T15:00:00.000Z`, endTime: `${DATE}T18:00:00.000Z` });
+    // The crew change is visible: the Slack card says it got shorter, with the old and new times and hours.
+    const card = announces[announces.length - 1];
+    expect(card.title).toBe("Shift shortened with the route");
+    expect(card.fields).toEqual(expect.arrayContaining([
+      { label: "New time", value: expect.stringMatching(/ to .*\(3h\)$/) },
+      { label: "Was", value: expect.stringMatching(/ to .*\(6h\)$/) },
+    ]));
   });
 
   it("never moves an overridden shift, even when the route changes", async () => {

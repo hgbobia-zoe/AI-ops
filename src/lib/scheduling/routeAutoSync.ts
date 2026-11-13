@@ -641,6 +641,20 @@ function hhmm(iso: string | null): string {
   }
 }
 
+/** PURE. Title + hour labels for the "shift moved with the route" card: Shortened / Lengthened / Moved. */
+export function shiftChangeCard(oldStart: string | null, oldEnd: string | null, newStart: string, newEnd: string): { title: string; oldHours: string | null; newHours: string | null } {
+  const dur = (a: string | null, b: string | null): number | null => {
+    const x = a ? Date.parse(a) : NaN;
+    const y = b ? Date.parse(b) : NaN;
+    return Number.isFinite(x) && Number.isFinite(y) && y > x ? Math.round((y - x) / 60000) : null;
+  };
+  const label = (m: number | null): string | null => (m == null ? null : m % 60 === 0 ? `${m / 60}h` : `${Math.floor(m / 60)}h ${m % 60}m`);
+  const before = dur(oldStart, oldEnd);
+  const after = dur(newStart, newEnd);
+  const title = before != null && after != null && after < before ? "Shift shortened with the route" : before != null && after != null && after > before ? "Shift lengthened with the route" : "Shift moved with the route";
+  return { title, oldHours: label(before), newHours: label(after) };
+}
+
 /**
  * ROUTE MATCH (owner rule 2026-11-12: "Shifts have to match the route unless someone overrides it."). For each
  * route shift, routeMatch.routeMatchDecision says what to do:
@@ -720,14 +734,17 @@ export async function applyRouteWindowRatchet(deps: {
       if (d.kind === "correct") continue; // not published yet: audited, no Slack card for a draft tidy up
       const who = shift.assignees.map((u) => deps.nameOf(u) || `#${u}`).join(", ") || "the crew";
       const truck = shift.truckId ? deps.truckNameOf(shift.truckId) : "the route";
+      // A shorter route shortens the shift (owner's call, 2026-11-12: the old "never auto shrink" rule is
+      // retired), so the card says so plainly with the old and new times and hours.
+      const card = shiftChangeCard(shift.startTime, shift.endTime, out.start, out.end);
       void botAnnounce("scheduling", {
         emoji: "🗓️",
-        title: "Shift moved with the route",
+        title: card.title,
         fields: [
           { label: "Who", value: who },
           { label: "Truck", value: truck },
-          { label: "New window", value: `${hhmm(out.start)} to ${hhmm(out.end)}` },
-          { label: "Was", value: `${hhmm(shift.startTime)} to ${hhmm(shift.endTime)}` },
+          { label: "New time", value: `${hhmm(out.start)} to ${hhmm(out.end)}${card.newHours ? ` (${card.newHours})` : ""}` },
+          { label: "Was", value: `${hhmm(shift.startTime)} to ${hhmm(shift.endTime)}${card.oldHours ? ` (${card.oldHours})` : ""}` },
         ],
         body: `*Why:* ${reason}.${shift.connecteamShiftId ? " Updated Connecteam so their hours and pay reflect it." : ""} Change the time in Dispatch to keep a different one.`,
         link: { text: "View in Scheduling", url: appUrl("/scheduling") },
