@@ -245,6 +245,8 @@ export function routeAssignWindow(route: Route, routeShifts: StaffShift[]): { st
     date: route.date,
     status: route.status,
     gsRouteId: route.gsRouteId,
+    gsStart: route.gsStart,
+    gsEnd: route.gsEnd,
     driverId: route.driverId,
     driverName: route.driverName,
     stops: route.stops.map((s) => ({ sequence: s.sequence, custName: s.custName, kind: s.kind, plannedWindow: s.plannedWindow, eta: s.eta, items: s.items })),

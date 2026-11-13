@@ -7,8 +7,9 @@
 // 7:54 → 8:00, 7:52 → 7:45, 7:53 → 8:00, 7:40 → 7:45. So a start can move up to 7 minutes LATER than the
 // computed crew start (the owner chose nearest over always earlier).
 //
-// Only the start is rounded. The END stays exactly as the route sets it (it is not moved and not rounded).
-// If rounding would put the start at or after the end (a very short shift), the original start is kept.
+// Owner rule (2026-11-13): the END is rounded to the nearest quarter hour the same way, so a Goodshuffle
+// route that runs 9:35 AM to 1:32 PM gives a 9:30 to 1:30 shift. If rounding would leave the shift empty
+// (a very short one), the original times are kept.
 // Customer facing stop windows and ETAs are untouched: this only shapes CREW shift windows.
 
 import { DISPLAY_TZ, opsOffsetMinutes } from "@/lib/dates";
@@ -30,10 +31,11 @@ export function roundToNearestQuarterHour(ms: number, tz: string = DISPLAY_TZ): 
   return rounded - off;
 }
 
-/** The CREW window for a route: start rounded to the nearest quarter hour, end left exactly as the route
- *  sets it. Keeps the original start if rounding would reach the end. Raw stop times are untouched. Pure. */
+/** The CREW window for a route: start and end each rounded to the nearest quarter hour. Keeps the original
+ *  times if rounding would leave the shift empty. Raw stop times are untouched. Pure. */
 export function crewWindow(w: RouteWindow, tz: string = DISPLAY_TZ): RouteWindow {
   const startUnix = Math.round(roundToNearestQuarterHour(w.startUnix * 1000, tz) / 1000);
-  if (startUnix >= w.endUnix) return w;
-  return { ...w, startUnix };
+  const endUnix = Math.round(roundToNearestQuarterHour(w.endUnix * 1000, tz) / 1000);
+  if (startUnix >= endUnix) return w;
+  return { ...w, startUnix, endUnix };
 }

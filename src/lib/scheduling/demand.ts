@@ -34,6 +34,8 @@ function toEngineRoute(r: Route): EngineRoute {
     date: r.date,
     status: r.status,
     gsRouteId: r.gsRouteId,
+    gsStart: r.gsStart,
+    gsEnd: r.gsEnd,
     driverId: r.driverId,
     driverName: r.driverName,
     stops: r.stops.map((s) => ({

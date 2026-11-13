@@ -2430,6 +2430,8 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "stops", column: "cust_last_name", type: "TEXT" }, // customer's real last name (renter), for "First Last" display
   { table: "stops", column: "contact_id", type: "TEXT" }, // Goodshuffle client contactID — stable customer identity (MVP6)
   { table: "routes", column: "gs_route_id", type: "TEXT" }, // Goodshuffle routeID (write-back target)
+  { table: "routes", column: "gs_start", type: "TEXT" }, // Goodshuffle route startDate (warehouse out), crew window source
+  { table: "routes", column: "gs_end", type: "TEXT" }, // Goodshuffle route endDate (warehouse back), crew window source
   { table: "routes", column: "driver_name", type: "TEXT" }, // Dispatch-assigned driver name (Connecteam person)
   { table: "event_readiness", column: "route_id", type: "TEXT" }, // route the event's stops sit on (readiness detail matching)
   { table: "stops", column: "day_of_name", type: "TEXT" },

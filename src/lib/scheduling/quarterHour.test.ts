@@ -46,7 +46,7 @@ describe("roundToNearestQuarterHour", () => {
 });
 
 describe("crewWindow", () => {
-  it("rounds only the start and leaves the end exactly where the route put it", () => {
+  it("rounds the start to the nearest quarter hour and keeps an on quarter end", () => {
     const w = { startUnix: est(7, 40) / 1000, endUnix: est(17, 0) / 1000, rawStart: est(8, 40) / 1000, rawEnd: est(16, 0) / 1000, known: true };
     const c = crewWindow(w, TZ);
     expect(hm(c.startUnix * 1000)).toBe("7:45");
@@ -54,13 +54,17 @@ describe("crewWindow", () => {
     expect(c.rawStart).toBe(w.rawStart);
   });
 
-  it("does not round an off quarter end", () => {
+  it("rounds the end to the nearest quarter hour too (owner rule 2026-11-13)", () => {
     const w = { startUnix: est(8, 3) / 1000, endUnix: est(15, 40) / 1000, rawStart: 0, rawEnd: 0, known: true };
-    expect(hm(crewWindow(w, TZ).endUnix * 1000)).toBe("15:40");
+    expect(hm(crewWindow(w, TZ).endUnix * 1000)).toBe("15:45");
+    // Lisa's Nov 19 Isuzu route: Goodshuffle 9:35 AM to 1:32 PM → a 9:30 to 1:30 shift.
+    const nov19 = { startUnix: est(9, 35, 0, 19) / 1000, endUnix: est(13, 32, 0, 19) / 1000, rawStart: 0, rawEnd: 0, known: true };
+    const c = crewWindow(nov19, TZ);
+    expect([hm(c.startUnix * 1000), hm(c.endUnix * 1000)]).toEqual(["9:30", "13:30"]);
   });
 
-  it("keeps the original start when rounding would reach the end (very short shift)", () => {
+  it("keeps the original times when rounding would leave the shift empty (very short shift)", () => {
     const w = { startUnix: est(8, 10) / 1000, endUnix: est(8, 14) / 1000, rawStart: 0, rawEnd: 0, known: true };
-    expect(crewWindow(w, TZ)).toEqual(w); // 8:10 would round to 8:15, past the 8:14 end
+    expect(crewWindow(w, TZ)).toEqual(w); // both would round to 8:15
   });
 });

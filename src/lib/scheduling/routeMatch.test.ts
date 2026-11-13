@@ -108,8 +108,8 @@ describe("Add shift follows the route", () => {
 
   it("offers each route with its crew window (the real Nov 14 day: 8:40 AM first stop → 7:45 AM)", () => {
     const opts = buildRouteOptions([route("night", "22:30", "22:30"), route("day", "08:40", "14:40")], () => "Isuzu NPR 1");
-    expect(opts.map((o) => o.label)).toEqual(["Isuzu NPR 1, 7:45 AM to 3:40 PM", "Isuzu NPR 1, 9:30 PM to 11:30 PM"]);
-    expect(opts[0]).toMatchObject({ routeId: "day", start: z("12:45"), end: z("20:40") });
+    expect(opts.map((o) => o.label)).toEqual(["Isuzu NPR 1, 7:45 AM to 3:45 PM", "Isuzu NPR 1, 9:30 PM to 11:30 PM"]);
+    expect(opts[0]).toMatchObject({ routeId: "day", start: z("12:45"), end: z("20:45") }); // 3:40 PM end rounds to 3:45
   });
 
   it("a tap opens on the route nearest the tap, and a day with no routes gives no time at all", () => {
