@@ -10,6 +10,7 @@ import type { DayCoverage } from "./coverage";
 import type { ShiftAssignment, StaffShift } from "./types";
 import type { UnavailabilityBlock } from "@/lib/connecteam";
 import { isLiveAssignment } from "./lifecycle";
+import { unavailabilityWindow } from "./unavailabilityLabel";
 
 export type ExceptionSeverity = "RED" | "YELLOW";
 
@@ -146,7 +147,7 @@ export function scanShiftExceptions(input: ScanInput): ShiftException[] {
         if (!clash) continue;
         const who = a.displayName ?? `#${a.connecteamUserId}`;
         const kind = clash.kind === "timeOff" ? "time off" : "unavailable";
-        const because = clash.reason ? ` (${clash.reason})` : "";
+        const because = `${unavailabilityWindow(clash, { day: s.date })}${clash.reason ? ` (${clash.reason})` : ""}`;
         const red = startMs - now < DAY_MS; // escalate inside T-1d
         out.push({
           signature: `${s.id}:assignee_unavailable:${a.connecteamUserId}`,
@@ -155,7 +156,7 @@ export function scanShiftExceptions(input: ScanInput): ShiftException[] {
           code: "assignee_unavailable",
           severity: red ? "RED" : "YELLOW",
           title: "Assignee unavailable",
-          detail: `${who} is assigned here but is marked ${kind}${because} and can no longer cover this window.`,
+          detail: `${who} is assigned here but is marked ${kind} ${because} and can no longer cover this window.`,
           fixLabel: "Reassign",
           rank: red ? 0 : 1,
         });

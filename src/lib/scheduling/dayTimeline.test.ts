@@ -72,6 +72,22 @@ describe("buildDayTimeline", () => {
     expect(t.people.map((r) => r.userId)).toEqual([2, 1, 3]); // unavailable before people with nothing
   });
 
+  it("a partial day block says until or after, never all day (team report 2026-11-13)", () => {
+    const t = buildDayTimeline(
+      input({
+        unavailability: [
+          { userId: 1, kind: "unavailability", startUnix: at(0) / 1000, endUnix: at(14) / 1000 }, // until 2 PM
+          { userId: 2, kind: "unavailability", startUnix: at(15) / 1000, endUnix: at(23, 59) / 1000 }, // after 3 PM
+          { userId: 3, kind: "timeOff", startUnix: at(14, 30) / 1000, endUnix: at(15, 30) / 1000 },
+        ],
+      }),
+    );
+    const bar = (id: number): TimelineBar => t.people.find((r) => r.userId === id)!.bars[0];
+    expect(bar(1)).toMatchObject({ allDay: false, timeLabel: "Until 14h", startMin: 0, endMin: 840 });
+    expect(bar(2)).toMatchObject({ allDay: false, timeLabel: "After 15h" });
+    expect(bar(3)).toMatchObject({ allDay: false, timeLabel: "14.5h to 15.5h", title: "Time off" });
+  });
+
   it("lists a shift with no known time instead of inventing one", () => {
     const t = buildDayTimeline(input({ appShifts: [shift({ id: "S9", windowKnown: false, startTime: null, endTime: null, assignees: [3] })] }));
     expect(t.untimed).toEqual([{ shiftId: "S9", title: "Field, Ford E450", people: ["Cindy Gbobia"], filled: 1, total: 1 }]);

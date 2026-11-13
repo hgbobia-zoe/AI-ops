@@ -354,7 +354,7 @@ export function AddWorkerPanel({
                       </span>
                       <span className="flex shrink-0 items-center gap-2 text-[10.5px] uppercase tracking-[0.06em] text-meta">
                         {m.role}
-                        {!added && <span className={`rounded border px-1 py-px normal-case ${ELIG_BADGE[view.tone]}`}>{view.state.replace("_", " ").toLowerCase()}</span>}
+                        {!added && <span className={`rounded border px-1 py-px normal-case ${ELIG_BADGE[view.tone]}`}>{view.badge}</span>}
                         {added && <span className="text-positive">added ✓</span>}
                       </span>
                     </button>
