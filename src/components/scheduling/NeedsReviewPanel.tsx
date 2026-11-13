@@ -8,7 +8,7 @@
 // em-dashes as punctuation, no emoji.
 
 import { AlertTriangle } from "lucide-react";
-import { formatClockTime } from "@/lib/dates";
+import { DISPLAY_TZ, formatClockTime } from "@/lib/dates";
 import { ResolveSyncButtons } from "@/components/scheduling/ResolveSyncButtons";
 import type { ConflictSide, SyncConflictView } from "@/lib/scheduling/needsReview";
 
@@ -23,7 +23,7 @@ function editedLabel(iso: string | null): string {
   if (!iso) return "edit time unknown";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "edit time unknown";
-  return `edited ${d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+  return `edited ${d.toLocaleString("en-US", { timeZone: DISPLAY_TZ, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
 }
 
 function SideColumn({ side, label, newer }: { side: ConflictSide; label: string; newer: boolean }): React.JSX.Element {

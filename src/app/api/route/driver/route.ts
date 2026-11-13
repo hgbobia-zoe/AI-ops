@@ -7,6 +7,7 @@ import { NextResponse } from "next/server";
 import { setRouteDriver } from "@/lib/db/repo";
 import { logChange } from "@/lib/history/store";
 import { historyActor } from "@/lib/history/actor";
+import { todayInOpsTz } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   // Operational History: record a genuine driver change (Dispatch-side staffing decision).
   const prev = previousName ?? null;
   if (prev !== newName) {
-    const dayKey = new Date().toISOString().slice(0, 10);
+    const dayKey = todayInOpsTz(); // Eastern day (the UTC date flips at 7 or 8 PM ET)
     logChange({
       source: "dispatch",
       entity: "route",

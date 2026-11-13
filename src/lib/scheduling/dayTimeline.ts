@@ -11,6 +11,7 @@
 
 import type { CrewMember, CrewShift, UnavailabilityBlock } from "@/lib/connecteam";
 import type { ShiftRole, StaffShift } from "@/lib/scheduling/types";
+import { opsMinutesIntoDay, opsYmdOfMs } from "@/lib/dates";
 
 export type TimelineBarKind = "app" | "connecteam" | "unavailable";
 
@@ -118,7 +119,10 @@ function shiftTitle(s: StaffShift, input: DayTimelineInput): string {
 
 export function buildDayTimeline(input: DayTimelineInput): DayTimeline {
   const { dayStartMs } = input;
-  const minOf = (ms: number): number => Math.round((ms - dayStartMs) / 60000);
+  // Minutes past Eastern midnight by the WALL CLOCK, so bars sit on the right hour on the two DST switch
+  // days too (a plain ms difference would put an 8:00 AM shift at 7:00 or 9:00 on those days).
+  const dayYmd = opsYmdOfMs(dayStartMs);
+  const minOf = (ms: number): number => opsMinutesIntoDay(ms, dayYmd);
   const clip = (m: number): number => Math.min(DAY_MIN, Math.max(0, m));
   const range = (startMs: number, endMs: number): string => `${input.clock(startMs)} to ${input.clock(endMs)}`;
 

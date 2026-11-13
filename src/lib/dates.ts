@@ -102,9 +102,15 @@ export function formatClockTime(value?: string | null): string {
   }).format(d);
 }
 
-/** Minutes to add to a UTC instant to get the wall-clock time in `tz` at that instant (e.g. -240 for
- *  America/New_York in summer). Used to resolve a local wall time to a real UTC instant. */
-function tzOffsetMinutes(tz: string, date: Date): number {
+// ── Eastern time: the ONE shared helper ───────────────────────────────────────────────────────────────
+// Every shift and route time is an absolute instant, shown and entered on the Eastern wall clock
+// (America/New_York via DISPLAY_TZ). Never hard code -04:00 / -05:00 and never use the host clock (Fly runs
+// in UTC, browsers can be anywhere): DST moves the offset twice a year (EDT -4 until the first Sunday of
+// November, then EST -5). These helpers ask Intl for the real offset at the instant in question.
+
+/** Minutes to add to a UTC instant to get the wall-clock time in `tz` at that instant (-240 in EDT,
+ *  -300 in EST for America/New_York). Whole minutes (sub-second parts of `date` are ignored). */
+export function tzOffsetMinutes(tz: string, date: Date): number {
   const dtf = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     hour12: false,
@@ -117,18 +123,43 @@ function tzOffsetMinutes(tz: string, date: Date): number {
   });
   const parts = Object.fromEntries(dtf.formatToParts(date).map((p) => [p.type, p.value]));
   const asUTC = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour === 24 ? 0 : +parts.hour, +parts.minute, +parts.second);
-  return (asUTC - date.getTime()) / 60000;
+  return Math.round((asUTC - Math.floor(date.getTime() / 1000) * 1000) / 60000);
+}
+
+/** The Eastern (operating tz) UTC offset in minutes at instant `ms`: -240 in EDT, -300 in EST. */
+export function opsOffsetMinutes(ms: number, tz: string = DISPLAY_TZ): number {
+  return tzOffsetMinutes(tz, new Date(ms));
+}
+
+/** Eastern wall clock time on calendar day `ymd` (`hour` 0 to 24, `minute`) → the real epoch ms. DST
+ *  correct on both sides of the switch: the offset is taken at the resulting instant, not at a guess or at
+ *  "now", so 8:00 on an EDT day is 12:00Z and 8:00 on an EST day is 13:00Z. Hour 24 is the next midnight. */
+export function opsWallTimeToMs(ymd: string, hour: number, minute = 0, tz: string = DISPLAY_TZ): number {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const guess = Date.UTC(y, m - 1, d, hour, minute, 0, 0);
+  const first = guess - tzOffsetMinutes(tz, new Date(guess)) * 60000;
+  const off = tzOffsetMinutes(tz, new Date(first));
+  return guess - off * 60000;
+}
+
+/** `YYYY-MM-DD` of instant `ms` on the Eastern calendar (never the UTC date, which flips at 7 or 8 PM ET). */
+export function opsYmdOfMs(ms: number, tz: string = DISPLAY_TZ): string {
+  return ymdInTz(tz, new Date(ms));
+}
+
+/** Minutes past Eastern midnight of day `ymd` for instant `ms`, by the wall clock (so on the two DST switch
+ *  days 8:00 AM is still 480, not 420 or 540). Can be negative or past 1440 for instants on other days. */
+export function opsMinutesIntoDay(ms: number, ymd: string, tz: string = DISPLAY_TZ): number {
+  const midnight = opsWallTimeToMs(ymd, 0, 0, tz);
+  const wall = (t: number): number => t + tzOffsetMinutes(tz, new Date(t)) * 60000;
+  return Math.round((wall(ms) - wall(midnight)) / 60000);
 }
 
 /** The last instant (23:59:59.999 local) of calendar day `ymd` in the operating timezone, as a UTC ISO
  *  string. A safe end-of-day window bound when a stop has no scheduled time (never fabricates a time). */
 export function endOfOpsDayISO(ymd: string): string {
   const tz = process.env.ETA_TIMEZONE || DEFAULT_TZ;
-  const [y, m, d] = ymd.split("-").map(Number);
-  // Guess the instant as if 23:59:59.999 were UTC, then correct by the tz offset at that instant.
-  const guess = Date.UTC(y, m - 1, d, 23, 59, 59, 999);
-  const offsetMin = tzOffsetMinutes(tz, new Date(guess));
-  return new Date(guess - offsetMin * 60000).toISOString();
+  return new Date(opsWallTimeToMs(shiftYmd(ymd, 1), 0, 0, tz) - 1).toISOString();
 }
 
 /**
@@ -223,13 +254,5 @@ export function opsLocalInputToIso(local: string | null): string | null {
   if (!local || !local.trim()) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(local.trim());
   if (!m) return null;
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const da = Number(m[3]);
-  const h = Number(m[4]);
-  const mi = Number(m[5]);
-  // Guess the instant as if the wall time were UTC, then correct by the tz offset at that instant.
-  const guess = Date.UTC(y, mo - 1, da, h, mi, 0, 0);
-  const offsetMin = tzOffsetMinutes(DISPLAY_TZ, new Date(guess));
-  return new Date(guess - offsetMin * 60000).toISOString();
+  return new Date(opsWallTimeToMs(`${m[1]}-${m[2]}-${m[3]}`, Number(m[4]), Number(m[5]))).toISOString();
 }

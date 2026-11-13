@@ -34,6 +34,7 @@ import { buildStaffingQueue, type ScheduledUnroutedLite, type RouteMeta, type Sh
 import { StaffingReadinessQueue } from "@/components/scheduling/StaffingReadinessQueue";
 import { SchedulingHeaderActions } from "@/components/scheduling/SchedulingHeaderActions";
 import { computeCoverage } from "@/lib/scheduling/coverage";
+import { dedupeRosterByName } from "@/lib/scheduling/roster";
 import { recommendCrew, type CrewRecommendation, type RecommendContext } from "@/lib/scheduling/availability";
 import { assignmentWindowsFromShifts, getDayAvailabilityCached } from "@/lib/scheduling/eligibilityInputs";
 import type { WorkerDayEligibilityData } from "@/components/scheduling/RouteStaffBoard";
@@ -174,9 +175,12 @@ export default async function SchedulingPage({
   const commsWired = shiftCommsEnabled();
 
   const configured = connecteamConfigured();
-  const [coverage, roster, rates, crewPrev, crewNext] = configured
+  const [coverage, rosterAll, rates, crewPrev, crewNext] = configured
     ? await Promise.all([getCrewForDateSafe(date), getUsersList(), getPayRates(date, date), getCrewForDate(dayBefore), getCrewForDate(nextDay)])
     : [{ ok: false, shifts: [] as CrewShift[] }, [] as CrewMember[], new Map<number, PayRate[]>(), [] as CrewShift[], [] as CrewShift[]];
+  // One row per person: Connecteam can hold two records with the same name (an owner login plus a regular
+  // user). Anyone actually on a shift today is always kept. See roster.ts.
+  const roster = dedupeRosterByName(rosterAll, [...shifts.flatMap((s) => s.assignees), ...coverage.shifts.flatMap((cs) => cs.assignees.map((a) => a.userId))]);
 
   // Accurate, role-agnostic mirror of the whole Connecteam schedule for the day (every role, including the
   // catch-all "other" — the old headline counted only driver + prep, so office/unusual-title crew Lisa put
@@ -607,7 +611,6 @@ export default async function SchedulingPage({
           <DayTimeline
             timeline={timeline}
             date={date}
-            dayStartMs={dayStartMs}
             shifts={shifts}
             roster={roster}
             eligibilityData={eligibilityData}

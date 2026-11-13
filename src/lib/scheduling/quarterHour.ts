@@ -11,38 +11,17 @@
 // If rounding would put the start at or after the end (a very short shift), the original start is kept.
 // Customer facing stop windows and ETAs are untouched: this only shapes CREW shift windows.
 
-import { DISPLAY_TZ } from "@/lib/dates";
+import { DISPLAY_TZ, opsOffsetMinutes } from "@/lib/dates";
 import type { RouteWindow } from "@/lib/risk/engine";
 
 const MIN_MS = 60 * 1000;
 const QUARTER_MS = 15 * MIN_MS;
 
-/** Minutes to add to a UTC instant to get wall clock time in `tz` at that instant (e.g. -300 in EST). */
-function offsetMinutes(tz: string, ms: number): number {
-  const p = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      hourCycle: "h23",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    })
-      .formatToParts(new Date(ms))
-      .filter((x) => x.type !== "literal")
-      .map((x) => [x.type, Number(x.value)]),
-  ) as Record<string, number>;
-  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
-  return Math.round((asUtc - Math.floor(ms / 1000) * 1000) / 60000);
-}
-
 /** Round an instant to the NEAREST quarter hour on the wall clock in `tz` (Eastern by default), judged on
  *  whole minutes past the quarter: 0 to 7 rounds down, 8 to 14 rounds up (seconds are dropped first, so
  *  7:52:59 is still 7:52 → 7:45). Rolls over the hour and the date (11:53 PM → 12:00 AM next day). Pure. */
 export function roundToNearestQuarterHour(ms: number, tz: string = DISPLAY_TZ): number {
-  const off = offsetMinutes(tz, ms) * MIN_MS;
+  const off = opsOffsetMinutes(ms, tz) * MIN_MS;
   const local = ms + off;
   const intoQuarter = ((local % QUARTER_MS) + QUARTER_MS) % QUARTER_MS;
   const down = local - intoQuarter;
