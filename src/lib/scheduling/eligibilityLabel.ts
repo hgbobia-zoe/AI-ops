@@ -6,6 +6,7 @@
 
 import { eligibilityFor, type AssignmentWindow, type EligibilityResult } from "./eligibility";
 import type { CrewShift, UnavailabilityBlock } from "@/lib/connecteam";
+import { unavailabilityLabel } from "./unavailabilityLabel";
 
 /** The day's eligibility ingredients, passed from the server so panels don't re-pull anything. */
 export interface WorkerDayEligibilityData {
@@ -27,6 +28,9 @@ export interface EligibilityView {
   preferred: boolean;
   tone: EligibilityTone;
   text: string;
+  /** Short badge for the worker pickers. For UNAVAILABLE it carries the hours ("unavailable until 2:00 PM"),
+   *  so a partial block never reads as the whole day. */
+  badge: string;
 }
 
 /** The ops timezone to render block/schedule windows in (Connecteam carries it per shift). */
@@ -56,30 +60,27 @@ function clock(unix: number, tz: string): string {
   return new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit" }).format(new Date(unix * 1000));
 }
 
-function cap(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
 /** Format the classifier's result into the board's short label + tone. */
 export function eligibilityView(elig: EligibilityResult, tz: string): EligibilityView {
   const unver = elig.availabilityKnown ? "" : " · availability unverified";
-  const base = { state: elig.state, eligible: elig.eligible, preferred: elig.preferred };
+  const base = { state: elig.state, eligible: elig.eligible, preferred: elig.preferred, badge: elig.state.replace("_", " ").toLowerCase() };
 
   switch (elig.state) {
     case "UNAVAILABLE": {
-      const kind = elig.block?.kind === "timeOff" ? "time off" : "marked unavailable";
-      const win = elig.block ? ` ${clock(elig.block.start, tz)}–${clock(elig.block.end, tz)}` : "";
-      const reason = elig.block?.reason ? ` (${elig.block.reason})` : "";
-      return { ...base, tone: "unavailable", text: `${cap(kind)}${win}${reason}` };
+      if (!elig.block) return { ...base, tone: "unavailable", text: "Unavailable" };
+      const b = { kind: elig.block.kind, startUnix: elig.block.start, endUnix: elig.block.end };
+      const text = unavailabilityLabel({ ...b, reason: elig.block.reason }, { tz });
+      const short = unavailabilityLabel(b, { tz });
+      return { ...base, tone: "unavailable", text, badge: short.charAt(0).toLowerCase() + short.slice(1) };
     }
     case "ASSIGNED":
       return { ...base, tone: "assigned", text: `On another route this window${unver}` };
     case "SCHEDULED_UNASSIGNED": {
-      const win = elig.scheduleWindow ? ` ${clock(elig.scheduleWindow.start, tz)}–${clock(elig.scheduleWindow.end, tz)}` : "";
+      const win = elig.scheduleWindow ? ` ${clock(elig.scheduleWindow.start, tz)} to ${clock(elig.scheduleWindow.end, tz)}` : "";
       return { ...base, tone: "preferred", text: `On the schedule${win}, not yet on a route${unver}` };
     }
     case "SCHEDULE_CONFLICT": {
-      const win = elig.scheduleWindow ? ` ${clock(elig.scheduleWindow.start, tz)}–${clock(elig.scheduleWindow.end, tz)}` : "";
+      const win = elig.scheduleWindow ? ` ${clock(elig.scheduleWindow.start, tz)} to ${clock(elig.scheduleWindow.end, tz)}` : "";
       return { ...base, tone: "conflict", text: `Scheduled${win}, does not fully cover this route${unver}` };
     }
     default:

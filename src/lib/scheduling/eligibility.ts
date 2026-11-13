@@ -20,6 +20,7 @@
 // narrates the deterministic `reasons[]` after the fact.
 
 import type { CrewShift, UnavailabilityBlock, UnavailabilityKind } from "@/lib/connecteam";
+import { unavailabilityWindow } from "./unavailabilityLabel";
 
 export type WorkerEligibility =
   | "AVAILABLE" // free this window, nothing scheduled
@@ -123,7 +124,8 @@ export function eligibilityFor(input: EligibilityInput): EligibilityResult {
   const block = unavailability.find((b) => overlaps(start, end, b.startUnix, b.endUnix));
   if (block) {
     const label = block.kind === "timeOff" ? "time off" : "marked unavailable";
-    reasons.push(block.reason ? `${label}: ${block.reason}` : label);
+    const when = unavailabilityWindow(block);
+    reasons.push(block.reason ? `${label} ${when}: ${block.reason}` : `${label} ${when}`);
     return {
       ...base,
       state: "UNAVAILABLE",

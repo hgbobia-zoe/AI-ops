@@ -12,6 +12,7 @@
 import type { CrewMember, CrewShift, UnavailabilityBlock } from "@/lib/connecteam";
 import type { ShiftRole, StaffShift } from "@/lib/scheduling/types";
 import { opsMinutesIntoDay, opsYmdOfMs } from "@/lib/dates";
+import { unavailabilityWindow } from "./unavailabilityLabel";
 
 export type TimelineBarKind = "app" | "connecteam" | "unavailable";
 
@@ -203,13 +204,23 @@ export function buildDayTimeline(input: DayTimelineInput): DayTimeline {
     if (endMin <= startMin) continue;
     const row = byUser.get(b.userId);
     if (!row) continue;
-    const allDay = startMin === 0 && endMin === DAY_MIN;
+    // Same wording as the worker pickers (unavailabilityLabel.ts): a block from midnight reads "Until 2:00p",
+    // one running to the end of the day "After 3:00p", so a partial day never looks like the whole day.
+    const when = unavailabilityWindow(b, { day: dayYmd });
+    const allDay = when === "all day";
+    const timeLabel = allDay
+      ? "All day"
+      : when.startsWith("until ")
+        ? `Until ${input.clock(b.endUnix * 1000)}`
+        : when.startsWith("after ")
+          ? `After ${input.clock(b.startUnix * 1000)}`
+          : range(b.startUnix * 1000, b.endUnix * 1000);
     row.bars.push({
       id: `un:${b.userId}:${b.startUnix}`,
       kind: "unavailable",
       startMin,
       endMin,
-      timeLabel: allDay ? "All day" : range(b.startUnix * 1000, b.endUnix * 1000),
+      timeLabel,
       title: b.kind === "timeOff" ? "Time off" : "Unavailable",
       allDay,
       lane: 0,
