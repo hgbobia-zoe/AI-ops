@@ -55,15 +55,28 @@ function zoePull(apiBase, tier) {
   function pullProjects(mode) {
     const FULL = mode !== "active"; // default to full for any unexpected value (back-compat / safety)
     const all = {}; let pErr = false;
-    function url(pg) { return "/app/project/searchProjects?page=" + pg + "&pageSize=500" + (FULL ? "&allProjects=true" : "") + "&sortColumn=logistics_start_date&sortDirection=desc&useV2DateHandling=true"; }
-    function fetchPage(pg) {
-      return fetch(url(pg), H)
+    // Goodshuffle caps searchProjects at 100 rows a page (pageSize is ignored) and its pages OVERLAP (an
+    // unstable sort), so one walk misses about one project in eight. Walk up to three sort orders, deduped by
+    // id, and stop as soon as we hold Goodshuffle's own count (totalResultCount). The FULL POST carries that
+    // count as totalReported, so a short sweep is partial and never prunes. MIRRORS SWEEP_SORTS and
+    // sweepProjects in src/lib/gsPull.ts (unit-tested).
+    const SORTS = ["logistics_start_date&sortDirection=desc", "date_created&sortDirection=asc", "logistics_start_date&sortDirection=asc"];
+    let total = null;
+    function url(sort, pg) { return "/app/project/searchProjects?page=" + pg + "&pageSize=100" + (FULL ? "&allProjects=true" : "") + "&sortColumn=" + sort + "&useV2DateHandling=true"; }
+    function fetchPage(sort, pg) {
+      return fetch(url(sort, pg), H)
         .then((r) => { if (!r.ok) throw 0; return r.json(); })
-        .then((b) => { const ps = b && b.projectSearch; if (!ps) return { count: 0 }; const res = ps.results || []; res.forEach((p) => { if (p && p.id != null && !all[p.id]) all[p.id] = p; }); return { count: res.length }; })
+        .then((b) => { const ps = b && b.projectSearch; if (!ps) return { count: 0 }; if (total == null && typeof ps.totalResultCount === "number") total = ps.totalResultCount; const res = ps.results || []; res.forEach((p) => { if (p && p.id != null && !all[p.id]) all[p.id] = p; }); return { count: res.length }; })
         .catch(() => { pErr = true; return { count: 0 }; });
     }
-    function loop(pg) { return fetchPage(pg).then((r) => { if (FULL && !pErr && r.count > 0 && pg < 60) return loop(pg + 1); return null; }); }
-    return loop(0).then(() => {
+    function walk(si, pg) {
+      return fetchPage(SORTS[si], pg).then((r) => {
+        if (!pErr && r.count > 0 && pg < 60) return walk(si, pg + 1);
+        if (pErr || si + 1 >= SORTS.length || (total != null && Object.keys(all).length >= total)) return null;
+        return walk(si + 1, 0);
+      });
+    }
+    return walk(0, 0).then(() => {
       const recs = Object.keys(all).map((id) => { const p = all[id];
         return { bookingId: String(p.id), eventName: p.eventName || "", eventDate: evYmd(p), statusLabel: p.statusLabel || "", signed: !!p.signed, archived: !!p.archived, grandTotalCents: p.grand_total, contractTotalCents: p.contract_subtotal, amountPaidCents: p.amount_paid, amountDueCents: p.amount_due, clientName: p.client_name || "", clientEmail: p.client_email || "", clientPhone: p.client_phone || "", quoteSentDate: gsYmd(p.quote_sent_date, p.quote_sent_millis, p.quote_sent_zone), dateCreated: gsYmd(p.date_created, p.date_created_millis, p.date_created_zone), venue: p.venueLabel || "", location: p.cityStateZipCounty || "", salesLead: p.salesLeadName || "", logisticsStartTime: gsTime(p), streetAddress: [p.streetLine1, p.streetLine2].filter(Boolean).join(", ") };
       });
@@ -207,7 +220,7 @@ function zoePull(apiBase, tier) {
         return one(0).then(() => (out.length ? fetch(API + "/api/gs/logistics", { method: "POST", headers: POSTH, body: JSON.stringify({ logistics: out }) }).then((r) => r.json()).catch(() => ({ updated: 0 })) : { updated: 0 }));
       }
       if (FULL) {
-        return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, partial: pErr, scope: "full" }) }).then((r) => r.json()).then((j) => pullLogistics().catch(() => null).then(() => pullWindows(windowIds(true)).catch(() => ({ windows: 0 }))).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: pErr || !!(j && j.partial), notes: 0, windows: (wj && wj.windows) || 0 }))).catch(() => ({ saved: 0, partial: true }));
+        return fetch(API + "/api/gs/projects", { method: "POST", headers: POSTH, body: JSON.stringify({ projects: recs, partial: pErr, scope: "full", totalReported: total == null ? undefined : total }) }).then((r) => r.json()).then((j) => pullLogistics().catch(() => null).then(() => pullWindows(windowIds(true)).catch(() => ({ windows: 0 }))).then((wj) => ({ saved: (j && j.saved) || recs.length, partial: pErr || !!(j && j.partial), notes: 0, windows: (wj && wj.windows) || 0 }))).catch(() => ({ saved: 0, partial: true }));
       }
       // Offline payment confirmation: the server names projects whose amount paid went up. Read each one's payment
       // history (one at a time, 250ms apart) and post ONLY its offline charges (no card details leave Goodshuffle).

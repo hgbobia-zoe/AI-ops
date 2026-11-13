@@ -371,7 +371,13 @@ export function recordInstaworkProbe(ok: boolean, detail: string | null, now: Da
  *  on recovery (only if we had alerted). Honest: a cold-start first-ever observation never pages, and a
  *  failing prune is never reported as OK. `detail` carries the missing-orphan count for the alert copy.
  *  Returns `alert` = the message to send, or null. */
-export function recordBookingsImportFailure(ok: boolean, detail: string | null, now: Date = new Date()): { alert: StatusAlert | null } {
+export function recordBookingsImportFailure(
+  ok: boolean,
+  detail: string | null,
+  now: Date = new Date(),
+  /** "short_sweep": the pull saw fewer projects than Goodshuffle has, so cleanup was held back. */
+  kind: "orphans" | "short_sweep" = "orphans",
+): { alert: StatusAlert | null } {
   const s = getPullState();
   const seenBefore = s.bookingsImportOk !== undefined; // don't page on a cold-start first glance (no known baseline)
   let alert: StatusAlert | null = null;
@@ -381,15 +387,26 @@ export function recordBookingsImportFailure(ok: boolean, detail: string | null, 
     const alertedAgo = s.bookingsAlertedAt ? now.getTime() - Date.parse(s.bookingsAlertedAt) : Infinity;
     if (seenBefore && alertedAgo > ALERT_COOLOFF_MS) {
       // House comms style: no em-dashes, no emoji, natural and short.
-      alert = {
-        system: "Goodshuffle bookings pull",
-        level: "degraded",
-        title: "The bookings pull keeps skipping orphan cleanup",
-        impact: "Projects deleted in Goodshuffle stay in the app, so counts and lists can be off.",
-        fix: "If you deliberately deleted a batch in Goodshuffle, arm Force-archive in /admin. Otherwise the pull may be cut short, so check the office browser.",
-        since: s.bookingsFailingSince,
-        detail,
-      };
+      alert =
+        kind === "short_sweep"
+          ? {
+              system: "Goodshuffle bookings pull",
+              level: "degraded",
+              title: "The full bookings pull came up short, so orphan cleanup was skipped",
+              impact: "No live project gets archived by mistake, but projects deleted in Goodshuffle stay in the app until a full pull completes.",
+              fix: "Update the Auto-Pull extension to the latest version. If it keeps happening, Goodshuffle may have changed its project list again.",
+              since: s.bookingsFailingSince,
+              detail,
+            }
+          : {
+              system: "Goodshuffle bookings pull",
+              level: "degraded",
+              title: "The bookings pull keeps skipping orphan cleanup",
+              impact: "Projects deleted in Goodshuffle stay in the app, so counts and lists can be off.",
+              fix: "If you deliberately deleted a batch in Goodshuffle, arm Force-archive in /admin. Otherwise the pull may be cut short, so check the office browser.",
+              since: s.bookingsFailingSince,
+              detail,
+            };
       s.bookingsAlertedAt = now.toISOString();
     }
   } else {

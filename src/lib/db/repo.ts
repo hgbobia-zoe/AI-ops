@@ -1675,6 +1675,13 @@ export function getPipelineBreakdown(today: string): PipelineBreakdown {
 // `candidates` = how many active (non-archived) bookings are missing from the pulled set. It is always
 // reported (even when the archive proceeds) so the ingest route can state "NN projects missing" in its
 // sustained-failure alert without a second query. Backward-compatible: existing callers ignore it.
+/** How many bookings a pull has written since `sinceIso` (every pull stamps updated_at on each row it carries).
+ *  A full sweep that delivers far fewer than this was cut short; projects Goodshuffle deleted drop out after
+ *  the window. Used to keep the orphan prune off a short sweep from a pull build that sends no total. */
+export function countBookingsSeenSince(sinceIso: string): number {
+  return (getDb().prepare("SELECT COUNT(*) AS c FROM bookings WHERE updated_at >= ?").get(sinceIso) as { c: number }).c;
+}
+
 export function archiveBookingsNotIn(keepIds: string[], maxArchive: number): { archived: number; skipped: boolean; candidates: number } {
   if (keepIds.length === 0) return { archived: 0, skipped: false, candidates: 0 };
   const db = getDb();
