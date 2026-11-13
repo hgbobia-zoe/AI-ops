@@ -35,6 +35,7 @@ import { StaffingReadinessQueue } from "@/components/scheduling/StaffingReadines
 import { SchedulingHeaderActions } from "@/components/scheduling/SchedulingHeaderActions";
 import { computeCoverage } from "@/lib/scheduling/coverage";
 import { dedupeRosterByName } from "@/lib/scheduling/roster";
+import { buildRouteOptions } from "@/lib/scheduling/routeOptions";
 import { recommendCrew, type CrewRecommendation, type RecommendContext } from "@/lib/scheduling/availability";
 import { assignmentWindowsFromShifts, getDayAvailabilityCached } from "@/lib/scheduling/eligibilityInputs";
 import type { WorkerDayEligibilityData } from "@/components/scheduling/RouteStaffBoard";
@@ -142,6 +143,7 @@ function syntheticShift(date: string, role: ShiftRole, win: { start: string | nu
     connecteamContentHash: null, connecteamSyncedAt: null, connecteamLastModified: null, syncStatus: null, syncNote: null,
     instaworkGigId: null, instaworkPostedAt: null,
     lifecycleState: null, supervisorUserId: null, reportLocation: null, reportTime: null, equipment: [], instructions: null,
+    routeOverride: null, routeWindowStart: null, routeWindowEnd: null,
     createdAt: "", updatedAt: "",
   } satisfies StaffShift;
 }
@@ -244,6 +246,8 @@ export default async function SchedulingPage({
   // day-before prep shift, manual shifts) fall into "other". Instawork gigs are matched to each route by
   // day + role + time-overlap (a gig can match several routes — it isn't truck-specific).
   const truckName = (id: string): string => trucks.find((t) => t.truckId === id)?.name ?? id;
+  // The day's routes with their crew windows: Add shift asks for the route first and takes its time.
+  const routeOptions = buildRouteOptions(routes, truckName);
   const routeIds = new Set(routes.map((r) => r.routeId));
 
   // Per route+role availability for the Add-worker flow: who's FREE for the route window + role (excludes
@@ -595,7 +599,7 @@ export default async function SchedulingPage({
       <SchedulingViews
         initial={initialView}
         dateNav={<DateNav date={date} today={today} />}
-        actions={<SchedulingHeaderActions date={date} roster={roster} eligibilityData={eligibilityData} />}
+        actions={<SchedulingHeaderActions date={date} roster={roster} eligibilityData={eligibilityData} routeOptions={routeOptions} />}
         summary={
           <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px]">
             {summary.map((f) => (
@@ -612,6 +616,7 @@ export default async function SchedulingPage({
             timeline={timeline}
             date={date}
             shifts={shifts}
+            routeOptions={routeOptions}
             roster={roster}
             eligibilityData={eligibilityData}
             recommendations={recommendations}
@@ -639,6 +644,7 @@ export default async function SchedulingPage({
                 instawork={iwByRole}
                 iwConfigured={iwOn}
                 hasRoutes={routes.length > 0}
+                routeOptions={routeOptions}
               />
             </div>
             {/* Proposed staffing plan (from Auto staff): a decision point, kept apart from committed assignments. */}

@@ -33,6 +33,8 @@ export interface TimelineBar {
   published?: boolean;
   /** Unavailable for the whole visible day. */
   allDay?: boolean;
+  /** Route shift whose time a person set on purpose (not the route's). */
+  override?: boolean;
   /** Stacking lane inside its row (bars that overlap in time sit on separate lanes). */
   lane: number;
 }
@@ -166,6 +168,7 @@ export function buildDayTimeline(input: DayTimelineInput): DayTimeline {
       title,
       shiftId: s.id,
       published: Boolean(s.connecteamShiftId),
+      override: Boolean(s.routeOverride),
       lane: 0,
     };
     for (const uid of s.assignees) rowFor(uid, `User ${uid}`).bars.push({ ...base, id: `${s.id}:${uid}` });

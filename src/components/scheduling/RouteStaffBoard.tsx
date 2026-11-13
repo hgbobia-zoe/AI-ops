@@ -34,6 +34,7 @@ import type { WorkerDayEligibilityData } from "@/lib/scheduling/eligibilityLabel
 import type { InstaworkRoleSummary } from "@/lib/instawork/reconcile";
 import type { RouteStaffingState } from "@/lib/scheduling/routeStaffing";
 import type { RoleCount } from "@/lib/scheduling/preCheck";
+import type { RouteOption } from "@/lib/scheduling/routeOptions";
 
 export type { WorkerDayEligibilityData } from "@/lib/scheduling/eligibilityLabel";
 
@@ -158,6 +159,7 @@ export function RouteStaffBoard({
   instawork,
   iwConfigured,
   hasRoutes,
+  routeOptions = [],
 }: {
   date: string;
   routeCards: RouteCardData[];
@@ -177,6 +179,7 @@ export function RouteStaffBoard({
   moveEligibilityByPerson: Record<number, Record<string, MoveEligibility>>;
   instawork: Record<ShiftRole, InstaworkRoleSummary> | null;
   iwConfigured: boolean;
+  routeOptions?: RouteOption[];
   hasRoutes: boolean;
 }): React.JSX.Element {
   const [editing, setEditing] = useState<StaffShift | null>(null);
@@ -295,6 +298,7 @@ export function RouteStaffBoard({
             eligibilityData={eligibilityData}
             recommendations={recommendations[editing.id] ?? []}
             onClose={() => setEditing(null)}
+            routeOptions={routeOptions}
           />
         </SidePanelOverlay>
       )}

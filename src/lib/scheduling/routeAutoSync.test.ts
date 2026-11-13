@@ -233,98 +233,55 @@ describe("driver seniority routing → real assignment (DB)", () => {
   });
 });
 
-describe("applyRouteWindowRatchet (shift follows the route; hours never auto-shrink)", () => {
-  // A route whose stops span 9:00–17:00, so its own window is well past a short shift's 12:00 end.
-  const wideRoute = (routeId: string): Route =>
+describe("applyRouteWindowRatchet: shifts match the route unless someone overrides it", () => {
+  // Dec 10 is EST. Stops at 9:03 AM and 1:00 PM → crew window 8:00 AM (8:03 rounded) to 2:00 PM = 13:00Z to 19:00Z.
+  const stopsRoute = (routeId: string, firstZ: string, lastZ: string): Route =>
     ({
       routeId,
       date: DATE,
       truckId: "E450",
       status: "planned",
       stops: [
-        { sequence: 1, custName: "A", kind: "delivery", plannedWindow: `${DATE}T09:00:00.000Z` },
-        { sequence: 2, custName: "B", kind: "delivery", plannedWindow: `${DATE}T17:00:00.000Z` },
+        { sequence: 1, custName: "A", kind: "delivery", plannedWindow: `${DATE}T${firstZ}:00.000Z` },
+        { sequence: 2, custName: "B", kind: "delivery", plannedWindow: `${DATE}T${lastZ}:00.000Z` },
       ],
     }) as unknown as Route;
-
-  it("expands an unlinked route shift when the route runs longer, and announces it", async () => {
-    const m = await mods();
+  const run = async (routeId: string, r: Route): Promise<number> => {
     const { applyRouteWindowRatchet } = await import("./routeAutoSync");
-    const short = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T10:00:00.000Z`, endTime: `${DATE}T12:00:00.000Z`, windowKnown: true, routeId: "rGrow", truckId: "E450", assignees: [10], source: "manual" });
+    return applyRouteWindowRatchet({ date: DATE, routesById: new Map([[routeId, r]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" });
+  };
 
-    const n = await applyRouteWindowRatchet({ date: DATE, routesById: new Map([["rGrow", wideRoute("rGrow")]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" });
-    expect(n).toBe(1);
-    const after = m.getShiftById(short.id)!;
-    expect(Date.parse(after.endTime!)).toBeGreaterThan(Date.parse(`${DATE}T12:00:00.000Z`)); // grew to cover the longer route
+  it("puts a route shift on the route's crew window by default, and is idempotent", async () => {
+    const m = await mods();
+    const s = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T10:00:00.000Z`, endTime: `${DATE}T12:00:00.000Z`, windowKnown: true, routeId: "rDef", truckId: "E450", assignees: [10], source: "manual" });
+    expect(await run("rDef", stopsRoute("rDef", "14:03", "18:00"))).toBe(1);
+    expect(m.getShiftById(s.id)).toMatchObject({ startTime: `${DATE}T13:00:00.000Z`, endTime: `${DATE}T19:00:00.000Z`, routeWindowStart: `${DATE}T13:00:00.000Z`, routeWindowEnd: `${DATE}T19:00:00.000Z` });
+    expect(await run("rDef", stopsRoute("rDef", "14:03", "18:00"))).toBe(0);
   });
 
-  it("HOLDS a shift that already covers the route (never shrinks)", async () => {
+  it("follows a Goodshuffle route change both ways, including a shorter route", async () => {
     const m = await mods();
-    const { applyRouteWindowRatchet } = await import("./routeAutoSync");
-    const wide = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T06:00:00.000Z`, endTime: `${DATE}T23:00:00.000Z`, windowKnown: true, routeId: "rHold", truckId: "E450", assignees: [11], source: "manual" });
-
-    const n = await applyRouteWindowRatchet({ date: DATE, routesById: new Map([["rHold", wideRoute("rHold")]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" });
-    expect(n).toBe(0);
-    const after = m.getShiftById(wide.id)!;
-    expect(after.endTime).toBe(`${DATE}T23:00:00.000Z`); // unchanged
-    expect(after.startTime).toBe(`${DATE}T06:00:00.000Z`);
+    const s = m.createShift({ date: DATE, role: "field", headcount: 1, windowKnown: false, routeId: "rMove", truckId: "E450", assignees: [11], source: "derived" });
+    await run("rMove", stopsRoute("rMove", "14:03", "18:00")); // 8:00 AM to 2:00 PM
+    expect(await run("rMove", stopsRoute("rMove", "16:00", "17:00"))).toBe(1); // route now 10:00 AM to 1:00 PM
+    expect(m.getShiftById(s.id)).toMatchObject({ startTime: `${DATE}T15:00:00.000Z`, endTime: `${DATE}T18:00:00.000Z` });
   });
 
-  it("MOVES a shift later (keeps its hours) when Goodshuffle slid the route later", async () => {
+  it("never moves an overridden shift, even when the route changes", async () => {
     const m = await mods();
-    const { applyRouteWindowRatchet } = await import("./routeAutoSync");
-    // A route whose stops now sit in the late afternoon — well after a morning shift's 13:00 end.
-    const laterRoute = (routeId: string): Route =>
-      ({
-        routeId,
-        date: DATE,
-        truckId: "E450",
-        status: "planned",
-        stops: [
-          { sequence: 1, custName: "A", kind: "delivery", plannedWindow: `${DATE}T15:00:00.000Z` },
-          { sequence: 2, custName: "B", kind: "delivery", plannedWindow: `${DATE}T18:00:00.000Z` },
-        ],
-      }) as unknown as Route;
-    const s = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T09:00:00.000Z`, endTime: `${DATE}T13:00:00.000Z`, windowKnown: true, routeId: "rLater", truckId: "E450", assignees: [12], source: "manual" });
-    const beforeDur = Date.parse(s.endTime!) - Date.parse(s.startTime!);
-
-    const n = await applyRouteWindowRatchet({ date: DATE, routesById: new Map([["rLater", laterRoute("rLater")]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" });
-    expect(n).toBe(1);
-    const after = m.getShiftById(s.id)!;
-    // The block slid later to follow the route…
-    expect(Date.parse(after.startTime!)).toBeGreaterThan(Date.parse(`${DATE}T09:00:00.000Z`));
-    // …and the worker's hours were preserved, never auto-cut.
-    expect(Date.parse(after.endTime!) - Date.parse(after.startTime!)).toBeGreaterThanOrEqual(beforeDur);
+    const s = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T13:00:00.000Z`, endTime: `${DATE}T22:00:00.000Z`, windowKnown: true, routeId: "rOver", truckId: "E450", assignees: [12], source: "manual" });
+    m.updateShift(s.id, { routeOverride: { by: "Lisa", at: "2026-12-01T12:00:00.000Z", source: "dispatch", routeStart: `${DATE}T13:00:00.000Z`, routeEnd: `${DATE}T19:00:00.000Z` } });
+    expect(await run("rOver", stopsRoute("rOver", "14:03", "18:00"))).toBe(0);
+    expect(await run("rOver", stopsRoute("rOver", "16:00", "17:00"))).toBe(0);
+    expect(m.getShiftById(s.id)).toMatchObject({ startTime: `${DATE}T13:00:00.000Z`, endTime: `${DATE}T22:00:00.000Z` });
   });
-});
 
-describe("applyRouteWindowRatchet: crew start on the quarter hour", () => {
-  // Dec 10 is EST: stops at 9:03 AM and 5:03 PM → raw crew window 8:03 AM to 6:03 PM (13:03Z to 23:03Z).
-  const oddRoute = (routeId: string): Route =>
-    ({
-      routeId,
-      date: DATE,
-      truckId: "E450",
-      status: "planned",
-      stops: [
-        { sequence: 1, custName: "A", kind: "delivery", plannedWindow: `${DATE}T14:03:00.000Z` },
-        { sequence: 2, custName: "B", kind: "delivery", plannedWindow: `${DATE}T22:03:00.000Z` },
-      ],
-    }) as unknown as Route;
-
-  it("rounds an unpublished route derived 8:03 start to 8:00, keeps the end, and leaves a typed time alone", async () => {
+  it("holds a shift already in Connecteam that differs for an old reason (nothing published moves silently)", async () => {
     const m = await mods();
-    const { applyRouteWindowRatchet } = await import("./routeAutoSync");
-    const derived = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T13:03:00.000Z`, endTime: `${DATE}T23:03:00.000Z`, windowKnown: true, routeId: "rQ1", truckId: "E450", assignees: [20], source: "derived" });
-    const typed = m.createShift({ date: DATE, role: "field", headcount: 1, startTime: `${DATE}T12:50:00.000Z`, endTime: `${DATE}T23:10:00.000Z`, windowKnown: true, routeId: "rQ1", truckId: "E450", assignees: [21], source: "manual" });
-
-    const n = await applyRouteWindowRatchet({ date: DATE, routesById: new Map([["rQ1", oddRoute("rQ1")]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" });
-    expect(n).toBe(1);
-    expect(m.getShiftById(derived.id)).toMatchObject({ startTime: `${DATE}T13:00:00.000Z`, endTime: `${DATE}T23:03:00.000Z` });
-    expect(m.getShiftById(typed.id)).toMatchObject({ startTime: `${DATE}T12:50:00.000Z`, endTime: `${DATE}T23:10:00.000Z` });
-
-    // Idempotent: a second pass finds nothing to do.
-    expect(await applyRouteWindowRatchet({ date: DATE, routesById: new Map([["rQ1", oddRoute("rQ1")]]), scheduler: null, truckNameOf: () => "Truck", nameOf: () => "Al", actor: "test" })).toBe(0);
+    const s = m.createShift({ date: DATE, role: "driver", headcount: 1, startTime: `${DATE}T12:40:00.000Z`, endTime: `${DATE}T22:00:00.000Z`, windowKnown: true, routeId: "rPub", truckId: "E450", assignees: [13], source: "manual" });
+    m.updateShift(s.id, { connecteamShiftId: "ct-pub", status: "sent" });
+    expect(await run("rPub", stopsRoute("rPub", "14:03", "18:00"))).toBe(0);
+    expect(m.getShiftById(s.id)).toMatchObject({ startTime: `${DATE}T12:40:00.000Z`, endTime: `${DATE}T22:00:00.000Z`, routeWindowStart: `${DATE}T13:00:00.000Z` });
   });
 });
 

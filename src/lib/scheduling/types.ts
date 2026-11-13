@@ -90,8 +90,25 @@ export interface StaffShift {
   reportTime: string | null;
   equipment: string[];
   instructions: string | null;
+  /** A person set this route shift's time on purpose (not the route's). null = it follows the route. */
+  routeOverride: RouteTimeOverride | null;
+  /** The route crew window this shift was last matched to (ISO). null = never matched yet. */
+  routeWindowStart: string | null;
+  routeWindowEnd: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Owner rule (2026-11-12): "Shifts have to match the route unless someone overrides it." An override is
+ *  explicit and sticks: the route follow job never moves an overridden shift. Reset to route clears it. */
+export interface RouteTimeOverride {
+  /** Who set it: a person's name, or "Connecteam" when the time was changed there. */
+  by: string;
+  at: string; // ISO
+  source: "dispatch" | "connecteam" | "kept";
+  /** The route crew window at the moment of the override (what "Reset to route" would have restored then). */
+  routeStart: string | null;
+  routeEnd: string | null;
 }
 
 /** The unfilled remainder of a shift = headcount minus internal assignees (never below 0). */

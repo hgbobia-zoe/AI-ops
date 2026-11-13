@@ -4,7 +4,7 @@
 
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/db";
-import type { DemandShift, ShiftStatus, StaffShift } from "./types";
+import type { DemandShift, RouteTimeOverride, ShiftStatus, StaffShift } from "./types";
 
 interface Row {
   id: string;
@@ -41,6 +41,9 @@ interface Row {
   report_time: string | null;
   equipment: string | null;
   instructions: string | null;
+  route_override: string | null;
+  route_window_start: string | null;
+  route_window_end: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -52,6 +55,16 @@ function parseArr<T>(s: string | null): T[] {
     return Array.isArray(v) ? (v as T[]) : [];
   } catch {
     return [];
+  }
+}
+
+function parseOverride(s: string | null): RouteTimeOverride | null {
+  if (!s) return null;
+  try {
+    const v = JSON.parse(s) as RouteTimeOverride;
+    return v && typeof v === "object" && typeof v.by === "string" ? v : null;
+  } catch {
+    return null;
   }
 }
 
@@ -91,6 +104,9 @@ function toStaffShift(r: Row): StaffShift {
     reportTime: r.report_time,
     equipment: parseArr<string>(r.equipment),
     instructions: r.instructions,
+    routeOverride: parseOverride(r.route_override ?? null),
+    routeWindowStart: r.route_window_start ?? null,
+    routeWindowEnd: r.route_window_end ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -285,6 +301,11 @@ export interface ShiftPatch {
   syncNote?: string | null;
   instaworkGigId?: string | null;
   instaworkPostedAt?: string | null;
+  routeId?: string | null;
+  truckId?: string | null;
+  routeOverride?: RouteTimeOverride | null;
+  routeWindowStart?: string | null;
+  routeWindowEnd?: string | null;
 }
 
 const COLS: Record<keyof ShiftPatch, string> = {
@@ -310,6 +331,11 @@ const COLS: Record<keyof ShiftPatch, string> = {
   syncNote: "sync_note",
   instaworkGigId: "instawork_gig_id",
   instaworkPostedAt: "instawork_posted_at",
+  routeId: "route_id",
+  truckId: "truck_id",
+  routeOverride: "route_override",
+  routeWindowStart: "route_window_start",
+  routeWindowEnd: "route_window_end",
 };
 
 export function updateShift(id: string, patch: ShiftPatch): StaffShift | null {
@@ -321,6 +347,9 @@ export function updateShift(id: string, patch: ShiftPatch): StaffShift | null {
     if (key === "windowKnown") {
       sets.push(`${col} = @${col}`);
       params[col] = v ? 1 : 0;
+    } else if (key === "routeOverride") {
+      sets.push(`${col} = @${col}`);
+      params[col] = v ? JSON.stringify(v) : null;
     } else if (key === "assignees") {
       sets.push(`${col} = @${col}`);
       params[col] = JSON.stringify(v ?? []);

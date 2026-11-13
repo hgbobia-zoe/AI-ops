@@ -130,3 +130,64 @@ describe("runConnecteamImportTick — honest when not configured", () => {
     expect(r.created).toBe(0);
   });
 });
+
+describe("one shift, one record (re-link, merge, stale flags) and Connecteam edits as overrides", () => {
+  const D2 = "2026-12-06";
+  const S2 = Math.floor(Date.parse(`${D2}T14:00:00.000Z`) / 1000);
+  const E2 = Math.floor(Date.parse(`${D2}T18:00:00.000Z`) / 1000);
+  const ct = (id: string, people: number[], over: Partial<CrewShift> = {}): CrewShift => ({ ...crewShift({ id, startUnix: S2, endUnix: E2, assignees: people.map(member) }), ...over });
+
+  it("re-links a shift whose Connecteam id changed (same person, same time) instead of importing a copy, and clears its flag", async () => {
+    const m = await mods();
+    const s = m.createShift({ date: D2, role: "driver", headcount: 1, startTime: `${D2}T14:00:00.000Z`, endTime: `${D2}T18:00:00.000Z`, windowKnown: true, routeId: "R-x", assignees: [301], source: "manual" });
+    m.updateShift(s.id, { connecteamShiftId: "base1:old", connecteamSyncedAt: "2026-12-01T00:00:00.000Z", syncStatus: "needs_review", syncNote: m.VANISHED_NOTE, status: "sent" });
+    const plan = m.planReconcile({ date: D2, connecteam: { ok: true, shifts: [ct("base1:new", [301])] }, appShifts: m.getShiftsForDate(D2) });
+    expect(plan.creates).toHaveLength(0);
+    expect(plan.relinks.map((r) => r.appShiftId)).toEqual([s.id]);
+    const r = m.applyReconcilePlan(plan, "test", () => ({ start: null, end: null, known: false }));
+    expect(r.relinked).toBe(1);
+    expect(m.getShiftById(s.id)).toMatchObject({ connecteamShiftId: "base1:new", syncStatus: "synced", syncNote: null });
+  });
+
+  it("never re-links to a Connecteam shift for a different person at the same time", async () => {
+    const m = await mods();
+    const s = m.createShift({ date: D2, role: "driver", headcount: 1, startTime: `${D2}T14:00:00.000Z`, endTime: `${D2}T18:00:00.000Z`, windowKnown: true, assignees: [302], source: "manual" });
+    m.updateShift(s.id, { connecteamShiftId: "base2:old", connecteamSyncedAt: "2026-12-01T00:00:00.000Z", status: "sent" });
+    const plan = m.planReconcile({ date: D2, connecteam: { ok: true, shifts: [ct("base2:new", [999])] }, appShifts: m.getShiftsForDate(D2).filter((x) => x.id === s.id) });
+    expect(plan.relinks).toHaveLength(0);
+    expect(plan.flags.map((f) => f.reason)).toEqual(["connecteam_copy_vanished"]);
+  });
+
+  it("merges a route copy and an imported copy of one Connecteam shift: keeps the route copy on Connecteam's time as an override", async () => {
+    const m = await mods();
+    const D3 = "2026-12-07";
+    const route = m.createShift({ date: D3, role: "field", headcount: 1, startTime: `${D3}T12:45:00.000Z`, endTime: `${D3}T22:00:00.000Z`, windowKnown: true, routeId: "R-y", assignees: [303], source: "derived" });
+    m.updateShift(route.id, { connecteamShiftId: "ctDup", status: "sent", connecteamSyncedAt: "2026-12-01T00:00:00.000Z" });
+    const imported = m.createIngestedShift({ date: D3, role: "prep", headcount: 1, startTime: `${D3}T13:00:00.000Z`, endTime: `${D3}T22:00:00.000Z`, windowKnown: true, location: null, eventLabel: null, assignees: [303], connecteamShiftId: "ctDup", connecteamSchedulerId: 7, connecteamContentHash: "h", connecteamLastModified: null, connecteamSyncedAt: "2026-12-01T00:00:00.000Z" });
+    const live = crewShift({ id: "ctDup", startUnix: Date.parse(`${D3}T13:00:00.000Z`) / 1000, endUnix: Date.parse(`${D3}T22:00:00.000Z`) / 1000, assignees: [member(303)] });
+    const plan = m.planReconcile({ date: D3, connecteam: { ok: true, shifts: [live] }, appShifts: m.getShiftsForDate(D3) });
+    expect(plan.merges).toEqual([expect.objectContaining({ keepId: route.id, dropId: imported.id })]);
+    const crew = { start: `${D3}T12:45:00.000Z`, end: `${D3}T22:00:00.000Z`, known: true };
+    m.applyReconcilePlan(plan, "test", () => crew);
+    expect(m.getShiftById(imported.id)).toMatchObject({ status: "cancelled", connecteamShiftId: null });
+    const kept = m.getShiftById(route.id)!;
+    expect(kept).toMatchObject({ startTime: `${D3}T13:00:00.000Z`, connecteamShiftId: "ctDup" });
+    expect(kept.routeOverride).toMatchObject({ by: "Connecteam", source: "connecteam", routeStart: crew.start });
+    // Idempotent: the next pass finds one record and nothing to merge.
+    const again = m.planReconcile({ date: D3, connecteam: { ok: true, shifts: [live] }, appShifts: m.getShiftsForDate(D3) });
+    expect(again.merges).toHaveLength(0);
+    expect(again.creates).toHaveLength(0);
+  });
+
+  it("a time edited in Connecteam on a route shift becomes an override", async () => {
+    const m = await mods();
+    const D4 = "2026-12-08";
+    const s = m.createShift({ date: D4, role: "driver", headcount: 1, startTime: `${D4}T12:45:00.000Z`, endTime: `${D4}T22:00:00.000Z`, windowKnown: true, routeId: "R-z", assignees: [304], source: "derived" });
+    m.updateShift(s.id, { connecteamShiftId: "ctEdit", status: "sent", connecteamContentHash: "old-hash", connecteamSyncedAt: new Date(Date.now() + 60_000).toISOString() });
+    const edited = crewShift({ id: "ctEdit", startUnix: Date.parse(`${D4}T13:00:00.000Z`) / 1000, endUnix: Date.parse(`${D4}T22:00:00.000Z`) / 1000, assignees: [member(304)] });
+    const plan = m.planReconcile({ date: D4, connecteam: { ok: true, shifts: [edited] }, appShifts: m.getShiftsForDate(D4) });
+    expect(plan.updates).toEqual([expect.objectContaining({ appShiftId: s.id, applyContent: true })]);
+    m.applyReconcilePlan(plan, "test", () => ({ start: `${D4}T12:45:00.000Z`, end: `${D4}T22:00:00.000Z`, known: true }));
+    expect(m.getShiftById(s.id)!.routeOverride).toMatchObject({ by: "Connecteam", source: "connecteam" });
+  });
+});

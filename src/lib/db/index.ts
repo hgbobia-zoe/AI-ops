@@ -2587,6 +2587,13 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Connecteam shift-notes sync (debrief → shift notes). Content hash of the app-generated debrief block we
   // last wrote into the shift, so a re-sync is idempotent and only a MATERIAL change triggers an update.
   { table: "staff_shifts", column: "connecteam_debrief_hash", type: "TEXT" },
+  // Route crew shifts match the route unless someone overrides it (owner rule 2026-11-12). route_override =
+  // JSON {by, at, source, routeStart, routeEnd} when a person (in Dispatch or Connecteam) set a time that is
+  // not the route's; route_window_start/end = the route crew window the shift was last matched to, so a real
+  // Goodshuffle route change can be told apart from an old difference. All NULL by default.
+  { table: "staff_shifts", column: "route_override", type: "TEXT" },
+  { table: "staff_shifts", column: "route_window_start", type: "TEXT" },
+  { table: "staff_shifts", column: "route_window_end", type: "TEXT" },
   // Payroll worker exclusion (permanent). Default 0 → existing rows are NOT excluded, behavior unchanged.
   { table: "hr_workers", column: "excluded", type: "INTEGER NOT NULL DEFAULT 0" },
   { table: "hr_workers", column: "exclude_reason", type: "TEXT" },

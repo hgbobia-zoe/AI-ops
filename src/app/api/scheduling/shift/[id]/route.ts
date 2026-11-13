@@ -2,7 +2,9 @@
 // /api/*). Next.js 16: `params` is a Promise, so it's awaited.
 
 import { NextResponse } from "next/server";
-import { updateShift, deleteShift, type ShiftPatch } from "@/lib/scheduling/store";
+import { updateShift, deleteShift, getShiftById, type ShiftPatch } from "@/lib/scheduling/store";
+import { overrideAfterEdit } from "@/lib/scheduling/routeMatch";
+import { crewWindowForRoute } from "@/lib/scheduling/routeCrewWindow";
 import { syncInternalAssignments, getAssignmentsForShift, updateAssignment, logShiftEvent } from "@/lib/scheduling/assignments";
 import { isLiveAssignment } from "@/lib/scheduling/lifecycle";
 import { currentActor } from "@/lib/auth/getSession";
@@ -12,7 +14,11 @@ export const dynamic = "force-dynamic";
 
 /** The PATCH body is a ShiftPatch, plus an optional dispatcher-override reason. A manual assignment
  *  change ALWAYS wins (the optimizer never auto-runs to fight it); overrideReason records WHY, for audit. */
-type PatchBody = ShiftPatch & { overrideReason?: string };
+type PatchBody = ShiftPatch & {
+  overrideReason?: string;
+  /** "reset" = Reset to route (route time, override cleared). "keep" = Keep this time (record an override). */
+  routeTimeAction?: "reset" | "keep";
+};
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<NextResponse> {
   const { id } = await params;
@@ -22,7 +28,34 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
-  const { overrideReason, ...patch } = body;
+  const { overrideReason, routeTimeAction, ...rawPatch } = body;
+  // Route bookkeeping is server owned: a client never writes the override or the route window directly.
+  const { routeOverride: _o, routeWindowStart: _s, routeWindowEnd: _e, ...patch } = rawPatch;
+  void _o; void _s; void _e;
+
+  // Shifts match the route unless someone overrides it (routeMatch.ts): a person changing a route shift's
+  // time here is an explicit override (who, when, the route time it replaced). Setting it back to the
+  // route's time clears it.
+  const before = getShiftById(id);
+  if (!before) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  if (routeTimeAction === "reset" || routeTimeAction === "keep") {
+    const crew = crewWindowForRoute(before.routeId);
+    if (!before.routeId || !crew.known || !crew.start || !crew.end) return NextResponse.json({ error: "no_route_time", message: "This shift's route has no stop times yet." }, { status: 400 });
+    const actor = (await currentActor()).label;
+    const now = new Date().toISOString();
+    // Reset puts the shift back on the route here in Dispatch. A shift already in Connecteam is sent there by the
+    // usual Publish button (owner/admin), so nothing published changes without a person sending it.
+    const result = routeTimeAction === "reset"
+      ? updateShift(id, { startTime: crew.start, endTime: crew.end, windowKnown: true, routeOverride: null, routeWindowStart: crew.start, routeWindowEnd: crew.end })
+      : updateShift(id, { routeOverride: { by: actor, at: now, source: "kept", routeStart: crew.start, routeEnd: crew.end }, routeWindowStart: crew.start, routeWindowEnd: crew.end });
+    logShiftEvent({ shiftId: id, actor, kind: routeTimeAction === "reset" ? "route_time_reset" : "route_time_kept", field: "time", toValue: routeTimeAction === "reset" ? `${crew.start} to ${crew.end}` : `${before.startTime} to ${before.endTime}`, changeKey: `${id}:route_time:${Date.now()}` });
+    return NextResponse.json({ ok: true, shift: result });
+  }
+  if (("startTime" in patch || "endTime" in patch) && before.routeId) {
+    const next = { startTime: "startTime" in patch ? patch.startTime ?? null : before.startTime, endTime: "endTime" in patch ? patch.endTime ?? null : before.endTime };
+    const ov = overrideAfterEdit(before, next, crewWindowForRoute(before.routeId), (await currentActor()).label, new Date().toISOString());
+    if (ov) Object.assign(patch, ov);
+  }
   const shift = updateShift(id, patch);
   if (!shift) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
