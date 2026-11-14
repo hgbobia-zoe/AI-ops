@@ -1066,7 +1066,7 @@ export function saveLeadNotes(items: LeadNotesRecord[]): number {
   const now = new Date().toISOString();
   const up = db.prepare(
     `UPDATE bookings SET internal_notes=@internalNotes, client_notes=@clientNotes,
-       last_sent_date=@lastSentDate,
+       last_sent_date=COALESCE(@lastSentDate, last_sent_date),
        line_items=CASE WHEN @lineItemsProvided=1 THEN @lineItems ELSE line_items END,
        quote_sent_at=COALESCE(@quoteSentAt, quote_sent_at),
        quote_opened_at=COALESCE(@quoteOpenedAt, quote_opened_at),
