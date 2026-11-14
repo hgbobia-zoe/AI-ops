@@ -50,6 +50,8 @@ interface Row {
   delivery_flexible: string | null;
   delivery_tier: string | null;
   dropoff_time: string | null;
+  dropoff_tier: string | null;
+  pickup_tier: string | null;
   pickup_time: string | null;
   setup_required: string | null;
   pickup_required: string | null;
@@ -104,6 +106,8 @@ function toIntake(r: Row): Intake {
     deliveryTier: (r.delivery_tier as Intake["deliveryTier"]) ?? "",
     dropoffTime: r.dropoff_time ?? "",
     pickupTime: r.pickup_time ?? "",
+    dropoffTier: (r.dropoff_tier as Intake["dropoffTier"]) ?? "",
+    pickupTier: (r.pickup_tier as Intake["pickupTier"]) ?? "",
     setupRequired: (r.setup_required as Intake["setupRequired"]) ?? "",
     pickupRequired: (r.pickup_required as Intake["pickupRequired"]) ?? "",
     accessNotes: parseAccess(r.access_notes),
@@ -146,6 +150,8 @@ const COLS: { [K in keyof IntakePatch]-?: { col: string; enc?: (v: NonNullable<I
   deliveryTier: { col: "delivery_tier" },
   dropoffTime: { col: "dropoff_time" },
   pickupTime: { col: "pickup_time" },
+  dropoffTier: { col: "dropoff_tier" },
+  pickupTier: { col: "pickup_tier" },
   setupRequired: { col: "setup_required" },
   pickupRequired: { col: "pickup_required" },
   accessNotes: { col: "access_notes", enc: (v) => JSON.stringify(v) },

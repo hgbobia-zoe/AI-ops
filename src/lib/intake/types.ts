@@ -4,6 +4,9 @@
 
 export type TriState = "yes" | "no" | "not_sure" | ""; // '' = unanswered
 export type DeliveryTier = "standard" | "premium" | "exact" | ""; // window upgrade over base delivery: standard 9a-8p (no upgrade), premium 2hr $100, exact $150
+// The window for ONE leg (owner, 2026-11-14): a customer can time just one leg, e.g. an Exact drop-off and a
+// Standard pick-up. Charged per timed leg: premium +$100, exact +$150, elite (after 10 PM) +$200.
+export type LegTier = "standard" | "premium" | "exact" | "elite" | "";
 export type IntakeEventType = "wedding" | "corporate" | "social" | "other" | ""; // reuse Sales OS EventType
 // The single delivery class, replacing the old customerType + locationType pair. It maps 1:1 onto the
 // dispatch guardrail's AddressClass (commercial ≈ "business"): commercial is an office building, the ONLY
@@ -54,6 +57,8 @@ export interface Intake {
   deliveryTier: DeliveryTier; // the chosen delivery type: standard (flexible day-before, 9AM–8PM, free) | premium | exact
   dropoffTime: string; // HH:MM same-day drop-off time — required for premium/exact
   pickupTime: string; // HH:MM same-day pick-up time — required for premium/exact
+  dropoffTier: LegTier; // the drop-off leg's window ('' = not chosen; older intakes fall back to deliveryTier)
+  pickupTier: LegTier; //  the pick-up leg's window
   setupRequired: TriState; // wants setup help → Event Readiness
   pickupRequired: TriState; // repurposed: wants BREAKDOWN help (gather chairs, cushions…) → Event Readiness
   accessNotes: AccessNotes;

@@ -45,6 +45,33 @@ export const DELIVERY_WINDOW_ITEMS: Record<string, GsAddItem | null> = {
   exact: { itemID: 1206113729, inventoryTypeStr: "SERVICE", rateType: "FLAT_FEE", unitPrice: 0, quantity: 1, label: "Exact Time — $150" },
 };
 
+/** Elite Hour (a leg after 10 PM, +$200 per leg, owner 2026-11-14). Its Goodshuffle item id comes from
+ *  ELITE_HOUR_ITEM_ID until the item is confirmed in Goodshuffle; with no id the intake notes tell the rep
+ *  to add the line by hand instead. */
+export function eliteHourItem(env: Record<string, string | undefined> = process.env): GsAddItem | null {
+  const id = Number(env.ELITE_HOUR_ITEM_ID);
+  return Number.isFinite(id) && id > 0 ? { itemID: id, inventoryTypeStr: "SERVICE", rateType: "FLAT_FEE", unitPrice: 0, quantity: 1, label: "Elite Hour (after 10 PM) — $200" } : null;
+}
+
+type LegTierStr = "standard" | "premium" | "exact" | "elite" | "";
+
+/** Each leg's window. A leg tier set on the intake wins; older intakes used one deliveryTier for both legs,
+ *  timed only where a time was entered. PURE. */
+export function legTiers(intake: IntakeSlice): { drop: LegTierStr; pick: LegTierStr } {
+  if (intake.deliveryRequired === "no") return { drop: "", pick: "" };
+  const legacy = (time: string | undefined): LegTierStr => {
+    const t = intake.deliveryTier;
+    if (t === "premium" || t === "exact") return time ? t : "standard";
+    return t === "standard" ? "standard" : "";
+  };
+  return {
+    drop: (intake.dropoffTier as LegTierStr) || legacy(intake.dropoffTime),
+    pick: (intake.pickupTier as LegTierStr) || legacy(intake.pickupTime),
+  };
+}
+
+const isTimed = (t: LegTierStr): t is "premium" | "exact" | "elite" => t === "premium" || t === "exact" || t === "elite";
+
 // ── LOGISTICS legs (Logistics group, need a geocoded delivery location) ──────────────────────────────
 
 // Base delivery = the calculated mileage charge. Added as-is at the $25 base flat fee (mileage = 0 for now).
@@ -62,7 +89,7 @@ export const BASE_PICKUP_LEG: GsLogisticsLeg = { itemID: 392868144, title: "Deli
 // for now, pricing logic to follow).
 export const EVENT_READINESS_LEG: GsLogisticsLeg = { itemID: 481935095, title: "Event Readiness Service", rateType: "FLAT_FEE_WITH_MILEAGE", eventTimeLineMarker: "DROP_OFF", label: "Event Readiness Service" };
 
-type IntakeSlice = { setupRequired: string; deliveryTier: string; deliveryRequired: string; pickupRequired?: string; dropoffTime?: string; pickupTime?: string };
+type IntakeSlice = { setupRequired: string; deliveryTier: string; deliveryRequired: string; pickupRequired?: string; dropoffTime?: string; pickupTime?: string; dropoffTier?: string; pickupTier?: string };
 
 // YYYY-MM-DD → M/D/YYYY (no leading zeros) — the format Goodshuffle's saveLineItemGroupEdits expects for
 // a line-item group's from/to dates (captured live 2026-09-23). Empty when the date is missing/malformed.
@@ -84,24 +111,61 @@ const WINDOW_UPGRADE_GROUP = "Delivery Timing";
 
 export interface GsWindowUpgrade {
   groupName: string; // the secondary line-item group to create (saveLineItemGroupEdits)
-  item: GsAddItem; // the premium/exact upgrade service
+  item: GsAddItem; // the upgrade line the drainers add to the group (quantity = timed legs that share it)
+  /** Every upgrade line, one per distinct window (the drainers today add only `item`; extra lines go in the
+   *  create's addItems, see extraUpgradeItems). */
+  items: GsAddItem[];
+  /** Timed legs we could not add a line for (Elite with no ELITE_HOUR_ITEM_ID): the rep adds them by hand. */
+  missing: ("dropoff" | "pickup")[];
   dropoffTime: string; // HH:MM, for the line-item internal note
   pickupTime: string; // HH:MM
 }
 
-/** The premium/exact delivery-window upgrade, placed in the SECONDARY line-item group — returned only when
- *  delivery is wanted, the tier carries an upgrade (premium/exact, not the free standard window), AND a
- *  same-day drop-off OR pick-up time was captured ("if either of the two are present"). Null otherwise. */
-export function windowUpgradeGroup(intake: IntakeSlice): GsWindowUpgrade | null {
+/** The delivery-window upgrade lines, placed in the SECONDARY line-item group. Charged PER TIMED LEG (owner,
+ *  2026-11-14): a leg is timed when its window is premium, exact or elite AND it has a same-day time. One
+ *  timed leg = one charge, the other leg can stay Standard. Two legs on the same window share one line with
+ *  quantity 2. Null when no leg is timed. */
+export function windowUpgradeGroup(intake: IntakeSlice, env: Record<string, string | undefined> = process.env): GsWindowUpgrade | null {
   if (intake.deliveryRequired === "no") return null;
-  const item = DELIVERY_WINDOW_ITEMS[intake.deliveryTier];
-  if (!item) return null; // standard / flexible → no upgrade, no separate group
+  const tiers = legTiers(intake);
   const dropoffTime = intake.dropoffTime || "";
   const pickupTime = intake.pickupTime || "";
-  if (!dropoffTime && !pickupTime) return null;
-  // Per leg (owner rule, 2026-11-14): a same-day drop-off AND a same-day pick-up are two charges.
-  const legs = (dropoffTime ? 1 : 0) + (pickupTime ? 1 : 0);
-  return { groupName: WINDOW_UPGRADE_GROUP, item: { ...item, quantity: legs }, dropoffTime, pickupTime };
+  const legs: { leg: "dropoff" | "pickup"; tier: LegTierStr; time: string }[] = [
+    { leg: "dropoff", tier: tiers.drop, time: dropoffTime },
+    { leg: "pickup", tier: tiers.pick, time: pickupTime },
+  ];
+  const items: GsAddItem[] = [];
+  const missing: ("dropoff" | "pickup")[] = [];
+  for (const l of legs) {
+    if (!isTimed(l.tier) || !l.time) continue;
+    const base = l.tier === "elite" ? eliteHourItem(env) : DELIVERY_WINDOW_ITEMS[l.tier];
+    if (!base) {
+      missing.push(l.leg);
+      continue;
+    }
+    const same = items.find((i) => i.itemID === base.itemID);
+    if (same) same.quantity = (same.quantity ?? 1) + 1;
+    else items.push({ ...base, quantity: 1 });
+  }
+  if (!items.length) return null; // nothing to add (a hand-added Elite leg shows in missingUpgradeLegs)
+  return { groupName: WINDOW_UPGRADE_GROUP, item: items[0], items, missing, dropoffTime, pickupTime };
+}
+
+/** Timed legs with no Goodshuffle line to add (Elite with no ELITE_HOUR_ITEM_ID): the rep adds them by
+ *  hand, so the intake notes call them out. PURE. */
+export function missingUpgradeLegs(intake: IntakeSlice, env: Record<string, string | undefined> = process.env): ("dropoff" | "pickup")[] {
+  if (intake.deliveryRequired === "no" || eliteHourItem(env)) return [];
+  const t = legTiers(intake);
+  const out: ("dropoff" | "pickup")[] = [];
+  if (t.drop === "elite" && intake.dropoffTime) out.push("dropoff");
+  if (t.pick === "elite" && intake.pickupTime) out.push("pickup");
+  return out;
+}
+
+/** Upgrade lines beyond the first (two legs on different windows). The drainers add only `item` to the
+ *  Delivery Timing group, so these go on the create as plain add items (same charge, rental group). PURE. */
+export function extraUpgradeItems(wu: GsWindowUpgrade | null): GsAddItem[] {
+  return wu ? wu.items.slice(1) : [];
 }
 
 /** LOGISTICS legs for the Logistics group — added only when we have a geocoded delivery location (the drainer

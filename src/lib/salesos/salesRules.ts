@@ -11,10 +11,20 @@ export const FINAL_SAY = "Hermann or Cindy";
 export const OFFLINE_PAYMENT_MIN_DAYS = 10;
 /** Signed within this many days of the event = the full balance is due at signing (Goodshuffle does it). */
 export const FULL_BALANCE_AT_SIGNING_DAYS = 7;
-/** Same-day delivery window upgrades, charged PER LEG (drop-off and pick-up each count). */
-export const WINDOW_PRICE_PER_LEG = { premium: 100, exact: 150 } as const;
-/** Elite Hour: a delivery or pick-up after this hour (24h clock). Price not set yet. */
+/** Same-day delivery window upgrades, charged PER TIMED LEG. A customer can time just one leg (e.g. Exact
+ *  drop-off, Standard pick-up). Elite Hour is a leg after 10 PM. */
+export const WINDOW_PRICE_PER_LEG = { premium: 100, exact: 150, elite: 200 } as const;
+/** Elite Hour: a delivery or pick-up after this hour (24h clock). */
 export const ELITE_HOUR_FROM = 22;
+/** Changes inside this many days of the event carry no fee. */
+export const FREE_CHANGE_DAYS = 7;
+/** No changes inside this many days of the event (we load trucks before the day-before delivery). */
+export const NO_CHANGE_DAYS = 3;
+
+/** Can a change request be accepted this many days before the event? PURE. */
+export function changeAllowed(daysToEvent: number | null): boolean {
+  return daysToEvent == null || daysToEvent > NO_CHANGE_DAYS;
+}
 
 /** Can this payment method be used for an event this many days out? PURE. */
 export function offlinePaymentAllowed(daysToEvent: number | null): boolean {
@@ -43,7 +53,9 @@ export const SALES_RULES_PROMPT = [
   `- Anything past ${STANDARD_DISCOUNT_PCT}% needs ${FINAL_SAY}. Never promise it; say you will check.`,
   `- ACH and check payments need ${OFFLINE_PAYMENT_MIN_DAYS} or more days before the event. Closer than that, payment is by credit card.`,
   `- A contract signed within ${FULL_BALANCE_AT_SIGNING_DAYS} days of the event pays the full balance at signing (Goodshuffle handles it).`,
-  `- Same-day delivery windows are per leg: Premium is +$${WINDOW_PRICE_PER_LEG.premium} and Exact is +$${WINDOW_PRICE_PER_LEG.exact} for each drop-off and each pick-up.`,
-  `- Elite Hour is a delivery or pick-up after 10 PM. Its price is not set, so never quote one; say ${FINAL_SAY} will confirm.`,
+  `- Delivery windows are charged per timed leg: Premium +$${WINDOW_PRICE_PER_LEG.premium}, Exact +$${WINDOW_PRICE_PER_LEG.exact}, Elite Hour (after 10 PM) +$${WINDOW_PRICE_PER_LEG.elite}. A customer can time just one leg and keep the free Standard window on the other.`,
+  `- Changes to an order inside ${FREE_CHANGE_DAYS} days of the event carry no fee.`,
+  `- No changes are accepted within ${NO_CHANGE_DAYS} days of the event, including during the event, because trucks are loaded before the day-before delivery. The only exception is when we already have to go back to that location for another reason, and ${FINAL_SAY} decide that case by case. Never agree to a late change yourself.`,
+  "- An unsigned quote is marked lost when the event is 3 days away, unless the customer is waiting on us.",
   `- Sunday events are an exception only, with no surcharge. The final yes comes from ${FINAL_SAY}, so never confirm a Sunday yourself.`,
 ].join("\n");
