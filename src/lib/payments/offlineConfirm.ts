@@ -1,6 +1,6 @@
-// Offline payment confirmation (owner rule, 2026-11-11). When a check or ACH payment clears, the project's
-// lead salesperson records it in Goodshuffle, then confirms receipt to the customer by EMAIL (a Goodshuffle
-// template) AND by TEXT. Checks: Lisa deposits; Lisa, Hermann or Cindy announce clearing. Full payment is
+// Offline payment confirmation (owner rule, 2026-11-11; checks only and automatic since 2026-11-14). When a
+// check clears, it is recorded in Goodshuffle, then receipt is confirmed to the customer by EMAIL (a
+// Goodshuffle template) AND by TEXT. Goodshuffle confirms ACH payments itself, so ACH is never confirmed here. Checks: Lisa deposits; Lisa, Hermann or Cindy announce clearing. Full payment is
 // due 7 days before the event.
 //
 // This file is the PURE core (no DB, no network): it reads Goodshuffle payment events, decides which ones
@@ -8,8 +8,9 @@
 // The flow around it (src/lib/payments/offlineConfirmService.ts):
 //   1. The fast pull notices a project's amount paid went up and asks the browser to read its payment
 //      history (GET /app/vendorPayment/loadPaymentHistoryAndContractTotals).
-//   2. Each new offline charge (paymentEvents[].offlinePayment === true, type "charge") raises ONE
-//      approve-first card, idempotent per Goodshuffle payment id.
+//   2. Each new offline CHECK charge (paymentEvents[].offlinePayment === true, type "charge") raises ONE
+//      card, idempotent per Goodshuffle payment id, approved at once by "Zoe automation"
+//      (OFFLINE_PAYMENT_AUTO_SEND=false leaves it for a person).
 //   3. On approve: the template email is queued to Goodshuffle, the text goes out through Quo, and a note
 //      on the project records it and names who approved.
 //
@@ -229,9 +230,11 @@ export function buildConfirmCard(c: ConfirmContext, tplName: string): ApprovalCa
     : "no matching bank deposit seen yet";
   return {
     what: `Send ${who} the "${tplName}" email and a text confirming their ${paidLabel(p)} of ${usd(p.amount)} cleared.`,
-    why: `${recorded} a ${p.methodLabel} payment of ${usd(p.amount)} on ${paidOn(p)} in Goodshuffle. The lead salesperson confirms every cleared check or ACH payment by email and text.`,
+    why: p.paymentId.startsWith("deposit:")
+      ? `A check of ${usd(p.amount)} cleared in the bank on ${paidOn(p)} and matched this project${c.bank ? ` by ${c.bank.how}` : ""}. Every cleared check is confirmed to the customer by email and text (Goodshuffle confirms ACH on its own).`
+      : `${recorded} a ${p.methodLabel} payment of ${usd(p.amount)} on ${paidOn(p)} in Goodshuffle. Every cleared check is confirmed to the customer by email and text (Goodshuffle confirms ACH on its own).`,
     dataUsed: `Goodshuffle payment ${p.paymentId} (${p.methodLabel}, ${usd(p.amount)}, ${paidOn(p)}); project ${c.bookingId}; remaining balance ${balance}; ${bank}.`,
-    expectedOutcome: "The customer gets the Goodshuffle template email with the amount filled in and a short text. A note on the project records both and who approved.",
+    expectedOutcome: "The customer gets the Goodshuffle template email with the amount filled in and a short text. A note on the project records both and who approved (Zoe automation when it sent on its own).",
     risk: c.bank
       ? "Low. Goes to the customer on file. Check the amount before approving."
       : "Low. Goes to the customer on file. No matching bank deposit was seen yet, so make sure the payment really cleared before approving.",
@@ -263,6 +266,7 @@ export function buildConfirmNote(input: {
   const word = methodWord(p.method);
   const what = `${word ? `${word} ` : ""}payment of ${usd(p.amount)}${p.paidAt ? ` (${longDate(p.paidAt.slice(0, 10))})` : ""}${p.recordedBy ? `, recorded by ${p.recordedBy}` : ""}`;
   const email = input.emailQueued ? `email "${input.tplName}" queued` : "email not queued";
-  const comment = `Payment confirmation approved by ${input.approver}: ${what}. ${email}, ${input.smsOutcome}.`;
+  const lead = input.approver === "Zoe automation" ? "Payment confirmation sent automatically" : `Payment confirmation approved by ${input.approver}`;
+  const comment = `${lead}: ${what}. ${email}, ${input.smsOutcome}.`;
   return salesOsNoteLine(initialsOf(input.approver), humanize(comment), input.todayYmd);
 }

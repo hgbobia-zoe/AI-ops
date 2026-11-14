@@ -14,7 +14,7 @@ const cand = (id: string, grandTotal: number, amountDue: number | null, over: Pa
 describe("normalizeDeposit", () => {
   it("reads Mercury's fields and joins the memo text", () => {
     const d = normalizeDeposit({ transactionId: "m-1", amount: "1,026.51", postedAt: "2026-11-06T14:00:00Z", note: "Project 231812125", counterpartyName: "Check Deposit", accountName: "Check Deposit", status: "sent" });
-    expect(d).toEqual({ depositId: "m-1", amount: 1026.51, postedAt: "2026-11-06T14:00:00.000Z", description: "Project 231812125 | Check Deposit", account: "Check Deposit", status: "sent" });
+    expect(d).toEqual({ depositId: "m-1", amount: 1026.51, postedAt: "2026-11-06T14:00:00.000Z", description: "Project 231812125 | Check Deposit", account: "Check Deposit", status: "sent", kind: null, accountId: null });
   });
 });
 

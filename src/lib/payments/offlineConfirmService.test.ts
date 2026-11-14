@@ -88,7 +88,8 @@ describe("watch list", () => {
 });
 
 describe("ingest → card → approve → email + text + note", () => {
-  it("raises one card per new offline payment and runs the follow up on approve", async () => {
+  it("with automatic sending off, raises one card per new check and runs the follow up on approve", async () => {
+    vi.stubEnv("OFFLINE_PAYMENT_AUTO_SEND", "false");
     saveBookings([booking(TX)]);
     watchPaidIncreases([{ bookingId: TX, amountPaid: 1026.51 }]);
     const history = { bookingId: TX, ok: true, grandTotalCents: 205301, paidCents: 102651, events: [charge(1143998117, 102651, "2026-11-10T05:00:00Z")] };
@@ -126,6 +127,61 @@ describe("ingest → card → approve → email + text + note", () => {
     expect(line).toContain("text sent");
     const row = getDb().prepare("SELECT state, approved_by, sms_status FROM gs_offline_payments WHERE payment_id = ?").get("1143998117");
     expect(row).toEqual({ state: "proposed", approved_by: "Hermann Gbobia", sms_status: "sent" });
+    vi.unstubAllEnvs();
+  });
+
+  it("sends a check confirmation on its own: email queued, text sent, note and Slack record", async () => {
+    saveBookings([booking(TX)]);
+    const history = { bookingId: TX, ok: true, grandTotalCents: 205301, paidCents: 102651, events: [charge(1143998117, 102651, "2026-11-10T05:00:00Z")] };
+    const r = ingestPaymentHistories([history], NOW);
+    expect(r).toMatchObject({ newPayments: 1, cardsRaised: 1, autoSent: [{ paymentId: "1143998117", outcome: "executed_queued" }] });
+    expect(listPendingApprovals().filter((a) => a.actionType === "confirm_payment")).toHaveLength(0); // nobody has to approve
+    const [email] = ops("email_template");
+    expect(email.payload).toMatchObject({ templateId: "61182", fillAmount: "1,026.51", dedupeKey: "offline-payment:1143998117" });
+    await tick();
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toMatchObject({ id: TX, userId: "US-JESSIE", occasion: "reply" });
+    expect(texts[0].body).toContain("We received your check payment of $1,026.51");
+    const line = String((ops("note_append")[0].payload as { line: string }).line);
+    expect(line).toContain("Payment confirmation sent automatically");
+    expect(line).toContain("text sent");
+    // One Slack record per payment that says what went out (the generic "Approved" post is skipped).
+    expect(announced).toHaveLength(1);
+    const rec = announced[0] as { title: string; sections?: string[]; fields: { label: string; value: string }[] };
+    expect(rec.title).toBe("Check payment confirmed to the customer");
+    expect(rec.sections?.[0]).toContain("We received your check payment of $1,026.51");
+    expect(rec.fields.find((f) => f.label === "Sales lead")?.value).toBe("Jessie Medalla");
+    // Re-posting the history never sends again.
+    expect(ingestPaymentHistories([history], NOW)).toMatchObject({ newPayments: 0, autoSent: [] });
+    await tick();
+    expect(texts).toHaveLength(1);
+  });
+
+  it("never confirms an ACH payment: Goodshuffle already does", async () => {
+    saveBookings([booking(TX)]);
+    const ach = charge(77, 50000, "2026-11-10T05:00:00Z", { paymentType: "ACH", label: "Offline - ACH" });
+    const r = ingestPaymentHistories([{ bookingId: TX, ok: true, events: [ach] }], NOW);
+    expect(r).toMatchObject({ newPayments: 1, cardsRaised: 0, autoSent: [], skipped: [{ paymentId: "77", reason: "not_check" }] });
+    await tick();
+    expect(texts).toHaveLength(0);
+    expect(ops("email_template")).toHaveLength(0);
+    expect(announced).toHaveLength(0);
+    const row = getDb().prepare("SELECT state FROM gs_offline_payments WHERE payment_id = '77'").get();
+    expect(row).toEqual({ state: "not_check" });
+  });
+
+  it("holds the send, and says so in Slack, while the email gate is off", async () => {
+    vi.stubEnv("EMAIL_SEND_ENABLED", "false");
+    try {
+      saveBookings([booking(TX)]);
+      const r = ingestPaymentHistories([{ bookingId: TX, ok: true, events: [charge(88, 1000, "2026-11-10T05:00:00Z")] }], NOW);
+      expect(r.autoSent).toEqual([{ paymentId: "88", outcome: "held_gate_off" }]);
+      await tick();
+      expect(texts).toHaveLength(0);
+      expect((announced[0] as { title: string }).title).toBe("Check payment confirmation held");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("records old offline history without raising a card", () => {
@@ -148,15 +204,18 @@ describe("ingest → card → approve → email + text + note", () => {
 });
 
 describe("bank deposits", () => {
-  it("matches by project number, is idempotent, and shows on the next card", () => {
+  it("matches by project number, is idempotent, and shows on the next card (a non-check deposit never confirms)", () => {
     saveBookings([booking(TX)]);
-    const first = recordBankDeposit({ transactionId: "mx-1", amount: 1026.51, postedAt: "2026-11-06T15:00:00Z", note: `Project ${TX}`, accountName: "Check Deposit" }, NOW);
+    const first = recordBankDeposit({ transactionId: "mx-1", amount: 1026.51, postedAt: "2026-11-06T15:00:00Z", note: `Project ${TX}`, accountName: "Check Deposit", kind: "externalTransfer" }, NOW);
+    expect(first.confirm).toBeUndefined();
     expect(first).toMatchObject({ ok: true, depositId: "mx-1", match: { bookingId: TX, kind: "project_number" } });
     expect(recordBankDeposit({ transactionId: "mx-1", amount: 1026.51 }, NOW)).toMatchObject({ duplicate: true });
 
+    vi.stubEnv("OFFLINE_PAYMENT_AUTO_SEND", "false");
     ingestPaymentHistories([{ bookingId: TX, ok: true, events: [charge(7, 102651, "2026-11-10T05:00:00Z")] }], NOW);
     const [card] = listPendingApprovals();
     expect(card.card.dataUsed).toContain("bank deposit of $1,026.51 on November 6 (Check Deposit) matched by project number in the memo");
+    vi.unstubAllEnvs();
   });
 
   it("matches a unique 50% deposit and ignores money out", () => {
@@ -179,5 +238,77 @@ describe("helpers", () => {
     expect(bankTokenOk(h("x-bank-token", "a"), { BANK_WEBHOOK_TOKEN: "a" })).toBe(true);
     expect(bankTokenOk(h("x-bank-token", "b"), { BANK_WEBHOOK_TOKEN: "a" })).toBe(false);
     expect(bankTokenOk(h("x-wire-token", "w"), { WIRE_WEBHOOK_TOKEN: "w" })).toBe(true);
+  });
+});
+
+describe("check confirmation from the bank (owner, 2026-11-14)", () => {
+  const dep = (id: string, over: Record<string, unknown> = {}) => ({ transactionId: id, amount: 1026.51, postedAt: "2026-11-09T15:00:00Z", note: `Project ${TX}`, account: "Revenue - Check Deposit", kind: "checkDeposit", ...over });
+
+  it("a cleared check matched by project number confirms on its own, and the later Goodshuffle payment does not confirm again", async () => {
+    saveBookings([booking(TX, { amountDue: 2053.01 })]);
+    const r = recordBankDeposit(dep("chk-1"), NOW);
+    expect(r.confirm).toMatchObject({ state: "sent" });
+    expect(listPendingApprovals().filter((a) => a.actionType === "confirm_payment")).toHaveLength(0);
+    const [email] = ops("email_template");
+    expect(email.payload).toMatchObject({ templateId: "61182", fillAmount: "1,026.51", dedupeKey: "offline-payment:deposit:chk-1" });
+    await tick();
+    expect(texts).toHaveLength(1);
+    expect(texts[0].body).toContain("We received your check payment of $1,026.51");
+    expect(texts[0].body).toContain("Your remaining balance of $1,026.50 is due by December 5.");
+    expect((announced[0] as { title: string }).title).toBe("Check payment confirmed to the customer");
+
+    // The team records it in Goodshuffle by hand; the pull links it to the deposit instead of confirming twice.
+    const g = ingestPaymentHistories([{ bookingId: TX, ok: true, grandTotalCents: 205301, paidCents: 102651, events: [charge(9001, 102651, "2026-11-10T05:00:00Z")] }], NOW);
+    expect(g).toMatchObject({ newPayments: 1, cardsRaised: 0, skipped: [{ paymentId: "9001", reason: "confirmed_by_deposit" }] });
+    await tick();
+    expect(texts).toHaveLength(1);
+    expect(ops("email_template")).toHaveLength(1);
+    expect(getDb().prepare("SELECT gs_payment_id, confirm_state FROM bank_deposits WHERE deposit_id = 'chk-1'").get()).toEqual({ gs_payment_id: "9001", confirm_state: "sent" });
+  });
+
+  it("a check Goodshuffle already confirmed is not confirmed again when the deposit posts", async () => {
+    saveBookings([booking(TX)]);
+    ingestPaymentHistories([{ bookingId: TX, ok: true, events: [charge(9002, 102651, "2026-11-10T05:00:00Z")] }], NOW);
+    await tick();
+    expect(texts).toHaveLength(1);
+    const r = recordBankDeposit(dep("chk-2", { postedAt: "2026-11-11T15:00:00Z" }), NOW);
+    expect(r.confirm).toMatchObject({ state: "already_confirmed" });
+    await tick();
+    expect(texts).toHaveLength(1);
+    expect(ops("email_template")).toHaveLength(1);
+  });
+
+  it("two equal checks on one project (deposit and balance) each get one confirmation", async () => {
+    saveBookings([booking(TX)]);
+    recordBankDeposit(dep("chk-a", { postedAt: "2026-10-20T15:00:00Z" }), NOW);
+    ingestPaymentHistories([{ bookingId: TX, ok: true, events: [charge(9003, 102651, "2026-10-21T05:00:00Z")] }], NOW);
+    recordBankDeposit(dep("chk-b", { postedAt: "2026-11-10T15:00:00Z" }), NOW);
+    ingestPaymentHistories([{ bookingId: TX, ok: true, events: [charge(9003, 102651, "2026-10-21T05:00:00Z"), charge(9004, 102651, "2026-11-11T05:00:00Z")] }], NOW);
+    await tick();
+    expect(texts).toHaveLength(2);
+    expect(ops("email_template")).toHaveLength(2);
+  });
+
+  it("never fires for ACH, wires or an ambiguous match", async () => {
+    saveBookings([booking(TX, { grandTotal: 3000 }), booking("231812126", { grandTotal: 3000 })]);
+    expect(recordBankDeposit(dep("ach-1", { kind: "externalTransfer" }), NOW).confirm).toBeUndefined();
+    expect(recordBankDeposit(dep("wire-1", { kind: "incomingDomesticWire" }), NOW).confirm).toBeUndefined();
+    const amb = recordBankDeposit({ transactionId: "chk-amb", amount: 1500, kind: "checkDeposit", account: "Revenue - Check Deposit" }, NOW);
+    expect(amb.match?.kind).toBe("ambiguous");
+    expect(amb.confirm).toBeUndefined();
+    await tick();
+    expect(texts).toHaveLength(0);
+    expect(ops("email_template")).toHaveLength(0);
+  });
+
+  it("the kill switch stops the bank side too", () => {
+    vi.stubEnv("OFFLINE_PAYMENT_CONFIRM", "false");
+    try {
+      saveBookings([booking(TX)]);
+      expect(recordBankDeposit(dep("chk-off"), NOW).confirm).toMatchObject({ state: "skipped" });
+      expect(ops("email_template")).toHaveLength(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

@@ -378,7 +378,8 @@ export function decideApproval(
   id: string,
   decision: ApprovalDecision,
   actor: string,
-  opts: { note?: string; editedPayload?: Record<string, unknown> } = {},
+  // announce: false skips the "Approved" Slack post (a caller that posts its own record, e.g. automation)
+  opts: { note?: string; editedPayload?: Record<string, unknown>; announce?: boolean } = {},
 ): DecisionResult {
   const db = getDb();
   const current = getApproval(id);
@@ -476,7 +477,7 @@ export function decideApproval(
   }
   // Confirm the send in the owning bot's channel (owner rule: no silent AI actions). Honest: it's QUEUED and
   // goes out on the next office sync, not confirmed delivered yet.
-  void botAnnounce(botForAgent(current.agentId), {
+  if (opts.announce !== false) void botAnnounce(botForAgent(current.agentId), {
     emoji: "✅",
     title: "Approved — going out next sync",
     fields: [
