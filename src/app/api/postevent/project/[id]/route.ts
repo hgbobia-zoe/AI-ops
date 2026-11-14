@@ -5,7 +5,7 @@
 
 import { NextResponse } from "next/server";
 import { getProject, listContacts, listReviews, listIssues, getTransitions, getConfig, setDisposition, setAssignee, setNextAction } from "@/lib/postevent/store";
-import { projectFacts, buildTimeline, deriveNextAction } from "@/lib/postevent/engine";
+import { projectFacts, buildTimeline, deriveNextAction, lastAttemptOf } from "@/lib/postevent/engine";
 import { openIssueCounts } from "@/lib/postevent/store";
 import { DISPOSITION_ORDER, type Disposition } from "@/lib/postevent/types";
 
@@ -46,6 +46,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   // Recompute next action after any disposition change.
   const fresh = getProject(id)!;
-  setNextAction(id, deriveNextAction(fresh.state, fresh.disposition, openIssueCounts().get(id) ?? 0));
+  setNextAction(id, deriveNextAction(fresh.state, fresh.disposition, openIssueCounts().get(id) ?? 0, lastAttemptOf(id)));
   return NextResponse.json({ ok: true, project: getProject(id) });
 }

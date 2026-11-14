@@ -28,7 +28,7 @@ import {
   openIssueCounts,
   getConfig,
 } from "@/lib/postevent/store";
-import { deriveNextAction, projectFacts } from "@/lib/postevent/engine";
+import { deriveNextAction, lastAttemptOf, projectFacts } from "@/lib/postevent/engine";
 import { currentActor } from "@/lib/auth/getSession";
 import { humanize } from "@/lib/salesos/outreach";
 import { slackNotify } from "@/lib/notify/slack";
@@ -64,7 +64,7 @@ interface Body {
 
 function recomputeNext(id: string): void {
   const p = getProject(id)!;
-  setNextAction(id, deriveNextAction(p.state, p.disposition, openIssueCounts().get(id) ?? 0));
+  setNextAction(id, deriveNextAction(p.state, p.disposition, openIssueCounts().get(id) ?? 0, lastAttemptOf(id)));
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<NextResponse> {

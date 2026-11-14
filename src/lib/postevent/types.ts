@@ -89,7 +89,7 @@ export type NextAction =
 
 export const NEXT_ACTION_LABEL: Record<NextAction, string> = {
   call: "Call",
-  sms: "SMS",
+  sms: "Text now",
   await_response: "Await response",
   review_feedback: "Review feedback",
   escalate: "Escalate",
@@ -105,7 +105,7 @@ export const CONTACT_CHANNEL_ORDER: ContactChannel[] = ["phone", "voicemail", "s
 export const CONTACT_CHANNEL_LABEL: Record<ContactChannel, string> = {
   phone: "Phone",
   voicemail: "Voicemail",
-  sms: "SMS",
+  sms: "Text now",
   email: "Email",
   other: "Other",
 };
@@ -169,7 +169,7 @@ export interface ContactInput {
 export type ReviewRequestChannel = "sms" | "email" | "in_person" | "other";
 export const REVIEW_REQUEST_CHANNELS: ReviewRequestChannel[] = ["sms", "email", "in_person", "other"];
 export const REVIEW_REQUEST_CHANNEL_LABEL: Record<ReviewRequestChannel, string> = {
-  sms: "SMS",
+  sms: "Text now",
   email: "Email",
   in_person: "In person",
   other: "Other",
