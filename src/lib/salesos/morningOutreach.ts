@@ -29,6 +29,7 @@ import { todayInOpsTz, shiftYmd, opsLocalInputToIso, DISPLAY_TZ } from "@/lib/da
 import { getJson, setJson } from "@/lib/kv";
 import { getBookingById } from "@/lib/db/repo";
 import { outreachBlock, type OutreachBlock } from "./outreachEligibility";
+import { getWaitingMark, openAsks } from "./waitingOnUs";
 
 // ── Send time ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,10 @@ export interface GateInput {
   now: number;
   /** The hard gate (outreachEligibility): archived / lost / no event date / past event. Checked first. */
   block?: OutreachBlock | null;
+  /** A rep marked the lead "waiting on us" (who and when). Pauses auto lost and holds the text. */
+  waitingMark?: { markedBy: string; markedAt: string; note: string | null } | null;
+  /** The customer's open asks we have not answered (customer asks detector). Pause auto lost too. */
+  openAsks?: { summary: string; quote: string }[];
 }
 
 export interface GateResult {
@@ -177,17 +182,25 @@ export function gateLead(g: GateInput): GateResult {
   // an open objection, ready to book) is held too, but labelled as the board flag, not as a client waiting.
   const wroteLast = latest?.dir === "in";
   const boardFlag = !wroteLast && g.subStatus === "action_needed" && !closedByThanks;
-  const waiting = wroteLast || boardFlag;
+  // Owner (2026-11-14): a rep can mark it waiting on us, and an ask the customer raised that we have not
+  // answered counts too. Any of these pauses auto lost and holds the text for a person.
+  const marked = g.waitingMark ?? null;
+  const ask = (g.openAsks ?? [])[0] ?? null;
+  const waiting = wroteLast || boardFlag || !!marked || !!ask;
   const saidRow = wroteLast ? list.find((x) => x.dir === "in" && x.detail && x.channel !== "call" && !isBareThanks(x)) : undefined;
-  const said = saidRow ? clip(saidRow.detail, 90) : undefined;
-  const waitingWhy = wroteLast
-    ? `The client is waiting on us${said ? ` (their last message: "${said}")` : ""}`
-    : "The Sales board flags this one Action Needed (a fresh reply, an open objection or ready to book)";
+  const said = saidRow ? clip(saidRow.detail, 90) : ask ? clip(ask.quote, 90) : undefined;
+  const waitingWhy = marked
+    ? `${marked.markedBy} marked it waiting on us${marked.note ? ` (${clip(marked.note, 80)})` : ""}`
+    : wroteLast
+      ? `The client is waiting on us${said ? ` (their last message: "${said}")` : ""}`
+      : ask
+        ? `The client asked "${clip(ask.quote, 90)}" and it has not been answered`
+        : "The Sales board flags this one Action Needed (a fresh reply, an open objection or ready to book)";
 
   // 3 days out (or less, or past) with the quote still unsigned: the lead is lost. Never auto close a lead
   // whose client is waiting on an answer; a person decides that one.
   if (g.daysToEvent != null && g.daysToEvent <= LOSE_AT_DAYS) {
-    if (waiting) return { send: false, kind: "lose_waiting", said, reason: `The event ${inDays(g.daysToEvent)} and ${waitingWhy.charAt(0).toLowerCase()}${waitingWhy.slice(1)}. A person should answer before it is marked lost.` };
+    if (waiting) return { send: false, kind: "lose_waiting", said, reason: `The event ${inDays(g.daysToEvent)} and ${marked ? waitingWhy : waitingWhy.charAt(0).toLowerCase() + waitingWhy.slice(1)}. A person should answer before it is marked lost.` };
     return { send: false, lose: true, kind: "lose", reason: `The event ${inDays(g.daysToEvent)} and the quote is not signed. Mark it lost and archive it.` };
   }
 
@@ -197,7 +210,7 @@ export function gateLead(g: GateInput): GateResult {
   if (stop) return { send: false, kind: "opt_out", said: clip(stop.detail, 90), reason: `The client asked us to stop: "${clip(stop.detail, 90)}".` };
   const done = inboundTexts.find((e) => DONE_RE.test(e.detail ?? ""));
   if (done) return { send: false, kind: "client_done", said: clip(done.detail, 90), reason: `The client said: "${clip(done.detail, 110)}".` };
-  if (waiting) return { send: false, kind: wroteLast ? "waiting" : "board_flag", said, reason: `${waitingWhy}. A person should ${wroteLast ? "answer" : "handle it"}.` };
+  if (waiting) return { send: false, kind: boardFlag && !marked && !ask ? "board_flag" : "waiting", said, reason: `${waitingWhy}. A person should ${boardFlag && !marked && !ask ? "handle it" : "answer"}.` };
 
   // Cadence: the further out the event, the longer between follow ups (bot or team, any channel).
   const every = followUpEveryDays(g.daysToEvent);
@@ -370,7 +383,7 @@ async function planLead(card: LeadCard, numbers: QuoNumber[], sendDay: string, n
   // Read the stored project, not the card: archived and the status label live on the booking.
   const booking = getBookingById(card.id);
   const block = outreachBlock(booking ?? { eventDate: card.eventDate, statusLabel: card.statusLabel }, todayInOpsTz(new Date(now)));
-  const gate = gateLead({ hasPhone: phone.trim().length > 0, daysToEvent, subStatus, timeline, liveCalls, now, block });
+  const gate = gateLead({ hasPhone: phone.trim().length > 0, daysToEvent, subStatus, timeline, liveCalls, now, block, waitingMark: getWaitingMark(card.id), openAsks: openAsks(card.id) });
 
   let draft: string | null = null;
   let caution: string | null = null;

@@ -23,6 +23,7 @@ import { buildMorningPlan, isSendDay, clockLabel, type MorningPlanRow } from "./
 import { buildLeadTimeline } from "./timeline";
 import { sendLeadSms } from "./smsSend";
 import { queueMarkLost } from "./markLost";
+import { getWaitingMark, markLine } from "./waitingOnUs";
 import { outreachBlock } from "./outreachEligibility";
 
 export const PLAN_FROM_MIN = 8 * 60 + 15; // 8:15 AM ET
@@ -184,6 +185,8 @@ export async function sendRow(ymd: string, leadId: string): Promise<LiveStatus> 
     // never gets a text, whatever the plan said.
     const block = outreachBlock(b, todayInOpsTz());
     if (block) return finish("skipped", block.reason);
+    const mark = getWaitingMark(leadId);
+    if (mark) return finish("skipped", `${markLine(mark)}. A person should answer.`);
     await ensureLeadThreadSynced(leadId, b.clientPhone);
     const since = Date.parse(d.plannedAt ?? d.startedAt);
     const replied = buildLeadTimeline(leadId).some((e) => e.direction === "in" && (e.channel === "sms" || e.channel === "email" || e.channel === "call") && e.at && Date.parse(e.at) > since);

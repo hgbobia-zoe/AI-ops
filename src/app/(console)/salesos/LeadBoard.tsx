@@ -11,6 +11,8 @@ import { OutreachPanel } from "@/components/OutreachPanel";
 import { ConversationFeed } from "@/components/ConversationFeed";
 import { CopyButton } from "@/components/CopyButton";
 import { LeadAsk } from "@/components/LeadAsk";
+import { WaitingOnUsToggle } from "@/components/WaitingOnUsToggle";
+import { getWaitingMark, openAsks } from "@/lib/salesos/waitingOnUs";
 import { buildConversationFeed, emailFeedItems, conversationCommsForLead } from "@/lib/coach/feed";
 import { LeadTabs } from "./LeadTabs";
 import { LeadCoachingInsight } from "./LeadCoachingInsight";
@@ -56,6 +58,9 @@ export async function LeadBoard({ id }: { id: string }): Promise<React.JSX.Eleme
   if (!lead) notFound();
 
   await logLeadView(id); // audit trail: who viewed this lead (deduped per actor/30min)
+  const waitingMark = getWaitingMark(id);
+  const firstAsk = openAsks(id)[0];
+  const waitingDetected = firstAsk ? `The customer asked "${firstAsk.quote.slice(0, 120)}" and it has not been answered yet.` : null;
   const activity = leadActivity(id, 30);
   const conversation = await conversationCommsForLead(id, lead.clientPhone, 60); // stored + live Quo texts
 
@@ -242,6 +247,7 @@ export async function LeadBoard({ id }: { id: string }): Promise<React.JSX.Eleme
           {!s.hasPhone && !s.hasEmail && <span className="text-xs text-amber-200">No phone or email on file — add contact details in Goodshuffle.</span>}
           <a href={GS_PROJECT(lead.id)} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 border border-white/15 px-3 py-1.5 text-sm hover:bg-white/5"><ExternalLink className="size-4" /> Open in Goodshuffle</a>
         </div>
+        <WaitingOnUsToggle id={lead.id} initial={waitingMark} detected={waitingDetected} />
       </header>
 
       {/* Conversation — calls (with inline AI summaries) + texts, chronological (Quo-style hero) */}
