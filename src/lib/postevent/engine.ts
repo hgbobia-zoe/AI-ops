@@ -117,12 +117,43 @@ export function computeEligible(): EligibleEvent[] {
 }
 
 // ── Next action (deterministic, per state + disposition + open issues) ───────────────────────────────
-export function deriveNextAction(state: PostEventState, disposition: Disposition | null, openIssues: number): NextAction {
+
+/** The latest contact attempt on a project (channel, outcome, notes), or null. */
+export interface LastAttempt {
+  channel: ContactChannel | null;
+  outcome: ContactOutcome | null;
+  direction: "inbound" | "outbound" | null;
+  notes: string | null;
+  occurredAt: string | null;
+}
+
+/** Owner rule (2026-11-14): the review follow up is call, voicemail, then the text goes out RIGHT AWAY. So a
+ *  voicemail as the latest attempt means the next step is the text, due now, not "await response". PURE. */
+export function isVoicemailAttempt(a: LastAttempt | null | undefined): boolean {
+  if (!a || a.direction === "inbound") return false;
+  return a.channel === "voicemail" || a.outcome === "left_voicemail" || (a.channel === "phone" && /voicemail/i.test(a.notes ?? ""));
+}
+
+export function lastAttemptOf(bookingId: string): LastAttempt | null {
+  const r = getDb()
+    .prepare("SELECT channel, outcome, direction, notes, occurred_at FROM postevent_contacts WHERE booking_id = ? ORDER BY occurred_at DESC, created_at DESC LIMIT 1")
+    .get(bookingId) as { channel: string | null; outcome: string | null; direction: string | null; notes: string | null; occurred_at: string | null } | undefined;
+  if (!r) return null;
+  return {
+    channel: (r.channel as ContactChannel) ?? null,
+    outcome: (r.outcome as ContactOutcome) ?? null,
+    direction: r.direction === "inbound" ? "inbound" : r.direction === "outbound" ? "outbound" : null,
+    notes: r.notes,
+    occurredAt: r.occurred_at,
+  };
+}
+
+export function deriveNextAction(state: PostEventState, disposition: Disposition | null, openIssues: number, last: LastAttempt | null = null): NextAction {
   switch (state) {
     case "needs_follow_up":
-      return "call";
+      return isVoicemailAttempt(last) ? "sms" : "call";
     case "follow_up_in_progress":
-      return "await_response";
+      return isVoicemailAttempt(last) ? "sms" : "await_response";
     case "customer_responded":
       return "review_feedback";
     case "experience_confirmed":
@@ -210,7 +241,7 @@ export function syncPostEvent(): SyncResult {
 
     // Recompute + cache the next action.
     const fresh = getProject(p.bookingId)!;
-    const next = deriveNextAction(fresh.state, fresh.disposition, openIssues.get(p.bookingId) ?? 0);
+    const next = deriveNextAction(fresh.state, fresh.disposition, openIssues.get(p.bookingId) ?? 0, lastAttemptOf(p.bookingId));
     if (fresh.nextAction !== next) setNextAction(p.bookingId, next);
   }
 
@@ -315,8 +346,15 @@ function toCard(
   const daysInStage = daysSince(p.stageEnteredAt, today);
   const sla = slaDays[p.state] ?? 0;
   const active = p.state !== "closed";
-  // Next action is "due" at stage-entry + the state's SLA days. No SLA (0) → no due date.
-  const dueAt = active && sla > 0 && p.stageEnteredAt ? addDaysYmd(p.stageEnteredAt.slice(0, 10), sla) : null;
+  // Next action is "due" at stage-entry + the state's SLA days. No SLA (0) → no due date. The text after a
+  // voicemail is due the day of the voicemail (right away, owner rule), never after an SLA wait.
+  const dueAt = !active
+    ? null
+    : p.nextAction === "sms" && st.lastAt
+      ? st.lastAt.slice(0, 10)
+      : sla > 0 && p.stageEnteredAt
+        ? addDaysYmd(p.stageEnteredAt.slice(0, 10), sla)
+        : null;
   return {
     bookingId: p.bookingId,
     state: p.state,
