@@ -2400,6 +2400,16 @@ CREATE TABLE IF NOT EXISTS gs_offline_payments (
   first_seen_at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gs_offline_payments_booking ON gs_offline_payments(booking_id);
+-- "Waiting on us" marks (owner, 2026-11-14): a rep says the customer is waiting on us, which pauses the
+-- 3 day auto lost. One row per lead; cleared rows keep who cleared it. See src/lib/salesos/waitingOnUs.ts.
+CREATE TABLE IF NOT EXISTS sales_waiting_on_us (
+  lead_id    TEXT PRIMARY KEY,
+  marked_by  TEXT NOT NULL,
+  marked_at  TEXT NOT NULL,
+  note       TEXT,
+  cleared_by TEXT,
+  cleared_at TEXT
+);
 -- Deposits into the "Check Deposit" bank account, posted by a Zapier zap (/api/payments/bank-deposit) and
 -- matched to a project (project number in the memo, else a unique 50% deposit / amount due / total match).
 CREATE TABLE IF NOT EXISTS bank_deposits (

@@ -8,14 +8,17 @@
 
 import { getDb } from "@/lib/db";
 import { enqueueGsOp, getBookingById } from "@/lib/db/repo";
+import { getWaitingMark } from "./waitingOnUs";
 
-export type MarkLostResult = { queued: true; opId: string } | { queued: false; reason: "unknown_project" | "signed" | "already_lost" | "already_queued" };
+export type MarkLostResult = { queued: true; opId: string } | { queued: false; reason: "unknown_project" | "signed" | "already_lost" | "already_queued" | "waiting_on_us" };
 
 export function queueMarkLost(leadId: string, why: string): MarkLostResult {
   const b = getBookingById(leadId);
   if (!b) return { queued: false, reason: "unknown_project" };
   if (b.signed) return { queued: false, reason: "signed" };
   if (/lost|cancel|dead/i.test(b.statusLabel)) return { queued: false, reason: "already_lost" };
+  // A rep marked it waiting on us since the plan was built: never auto close it (owner, 2026-11-14).
+  if (getWaitingMark(leadId)) return { queued: false, reason: "waiting_on_us" };
   const seen = getDb().prepare("SELECT 1 FROM gs_outbox WHERE op = 'mark_lost' AND transaction_id = ? AND status != 'failed' LIMIT 1").get(leadId);
   if (seen) return { queued: false, reason: "already_queued" };
   const op = enqueueGsOp({
