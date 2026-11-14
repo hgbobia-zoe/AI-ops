@@ -4,12 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // (Part C) it routes through the central domain map notify("sales", ...) — we assert the DOMAIN here so the
 // routing is covered, not just the text.
 const slackPosts: { domain: string; message: unknown }[] = [];
+let nextPost: { ok: boolean; error?: string } = { ok: true };
 vi.mock("@/lib/notify/channels", () => ({
   notify: async (domain: string, message: unknown) => {
     slackPosts.push({ domain, message });
-    return { ok: true } as const;
+    return nextPost;
   },
 }));
+const statusPosts: unknown[] = [];
+vi.mock("@/lib/notify/status", () => ({ postStatus: async (a: unknown) => { statusPosts.push(a); return { ok: true }; } }));
 // The alert's "is Slack reachable at all" gate reads these; keep both on so the fixtures fire.
 vi.mock("@/lib/notify/slack", () => ({
   slackBotConfigured: () => true,
@@ -17,7 +20,8 @@ vi.mock("@/lib/notify/slack", () => ({
 }));
 
 import { saveBookings, saveLeadNotes, pendingQuoteOpenAlerts, markQuoteOpenAlerted } from "@/lib/db/repo";
-import { runQuoteOpenAlerts } from "@/lib/salesos/quoteOpenAlert";
+import { runQuoteOpenAlerts, quoteOpenTrace, quoteOpenWhyNot } from "@/lib/salesos/quoteOpenAlert";
+import { getDb } from "@/lib/db";
 
 // DATABASE_PATH is ":memory:" (vitest.config.ts).
 // sentDate = Goodshuffle's AUTHORITATIVE quote-sent marker (quote_sent_date). A genuine send has one; an
@@ -118,7 +122,7 @@ describe("runQuoteOpenAlerts", () => {
     expect(sent).toBe(1);
     expect(slackPosts.length).toBe(1);
     expect(slackPosts[0].domain).toBe("sales"); // routed to sales-ai, not customer-alerts
-    expect(String(slackPosts[0].message)).toContain("Jane Doe just opened their quote (3h after we sent it)");
+    expect(String(slackPosts[0].message)).toContain("Jane Doe just opened their quote (3h after we sent it). Good time to reach out.");
     // Dedup — a second run with no newer open must not re-post.
     const again = await runQuoteOpenAlerts(now);
     expect(again).toBe(0);
@@ -154,5 +158,57 @@ describe("runQuoteOpenAlerts", () => {
     const sentMon = await runQuoteOpenAlerts(mondayNow);
     expect(sentMon).toBe(1);
     expect(slackPosts.length).toBe(1);
+  });
+});
+
+describe("quote opened alerts: no silent loss (2026-11-14)", () => {
+  const now = Date.parse("2026-01-05T17:00:00.000Z"); // Monday 12 PM ET
+  const iso = (ms: number): string => new Date(ms).toISOString();
+  const ymd = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+  beforeEach(() => {
+    for (const c of pendingQuoteOpenAlerts()) markQuoteOpenAlerted(c.bookingId, c.quoteOpenedAt);
+    slackPosts.length = 0;
+    statusPosts.length = 0;
+    nextPost = { ok: true };
+  });
+
+  it("a capture that arrives 45 minutes late still alerts and says how long ago", async () => {
+    const sentMs = now - 5 * 3600_000;
+    seed("LATE-1", { sentDate: ymd(sentMs), sentAt: iso(sentMs), openedAt: iso(now - 45 * 60_000) });
+    expect(await runQuoteOpenAlerts(now)).toBe(1);
+    expect(String(slackPosts[0].message)).toContain("Jane Doe opened their quote 45 min ago (4h after we sent it)");
+    expect(quoteOpenTrace()[0]).toMatchObject({ bookingId: "LATE-1", decision: "posted", ageMin: 45 });
+  });
+
+  it("an open older than 2 hours is seeded, and the trace says stale", async () => {
+    const sentMs = now - 30 * 3600_000;
+    seed("OLD-1", { sentDate: ymd(sentMs), sentAt: iso(sentMs), openedAt: iso(now - 3 * 3600_000) });
+    expect(await runQuoteOpenAlerts(now)).toBe(0);
+    expect(quoteOpenTrace()[0]).toMatchObject({ bookingId: "OLD-1", decision: "stale", ageMin: 180 });
+  });
+
+  it("a failed Slack post is traced and reported to ai-ops-status, never silent", async () => {
+    nextPost = { ok: false, error: "post: not_in_channel" };
+    const sentMs = now - 5 * 3600_000;
+    seed("FAIL-1", { sentDate: ymd(sentMs), sentAt: iso(sentMs), openedAt: iso(now - 60_000) });
+    expect(await runQuoteOpenAlerts(now)).toBe(0);
+    expect(quoteOpenTrace()[0]).toMatchObject({ bookingId: "FAIL-1", decision: "post_failed", detail: "post: not_in_channel" });
+    expect(statusPosts).toHaveLength(1);
+    expect(statusPosts[0]).toMatchObject({ system: "Quote opened alerts", detail: "post: not_in_channel" });
+  });
+
+  it("explains why an open would not alert", () => {
+    const base = { quote_sent_at: "2026-01-05T10:00:00.000Z", quote_sent_date: "2026-01-05", last_sent_date: null, quote_opened_at: "2026-01-05T12:00:00.000Z", quote_open_alerted_at: null };
+    expect(quoteOpenWhyNot(base)).toBeNull();
+    expect(quoteOpenWhyNot({ ...base, quote_sent_date: null })).toContain("honesty gate");
+    expect(quoteOpenWhyNot({ ...base, quote_opened_at: "2026-01-05T10:20:00.000Z" })).toContain("less than an hour");
+    expect(quoteOpenWhyNot({ ...base, quote_open_alerted_at: "2026-01-05T12:00:00.000Z" })).toBe("already handled");
+  });
+
+  it("the notes pull no longer wipes the Goodshuffle last sent date", () => {
+    seed("LSD-1", { sentDate: null });
+    getDb().prepare("UPDATE bookings SET last_sent_date = '2026-01-02' WHERE booking_id = 'LSD-1'").run();
+    saveLeadNotes([{ bookingId: "LSD-1", lastSentDate: null, quoteOpenedAt: null }]);
+    expect(getDb().prepare("SELECT last_sent_date FROM bookings WHERE booking_id = 'LSD-1'").get()).toEqual({ last_sent_date: "2026-01-02" });
   });
 });
