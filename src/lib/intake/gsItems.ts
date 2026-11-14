@@ -99,7 +99,9 @@ export function windowUpgradeGroup(intake: IntakeSlice): GsWindowUpgrade | null 
   const dropoffTime = intake.dropoffTime || "";
   const pickupTime = intake.pickupTime || "";
   if (!dropoffTime && !pickupTime) return null;
-  return { groupName: WINDOW_UPGRADE_GROUP, item, dropoffTime, pickupTime };
+  // Per leg (owner rule, 2026-11-14): a same-day drop-off AND a same-day pick-up are two charges.
+  const legs = (dropoffTime ? 1 : 0) + (pickupTime ? 1 : 0);
+  return { groupName: WINDOW_UPGRADE_GROUP, item: { ...item, quantity: legs }, dropoffTime, pickupTime };
 }
 
 /** LOGISTICS legs for the Logistics group — added only when we have a geocoded delivery location (the drainer

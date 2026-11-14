@@ -47,7 +47,7 @@ const MAP: Record<CustomerState, Omit<NextBestAction, "reason">> = {
   CONTACTED: { action: "FOLLOW_UP", objective: "Confirm they received the quote and invite questions.", doNot: "Don't push hard yet — it's early." },
   QUOTED: { action: "FOLLOW_UP", objective: "Re-open the conversation and surface any hesitation.", doNot: "Don't assume silence means no." },
   EVALUATING: { action: "CALL_NOW", objective: "Understand their decision criteria and what they're weighing.", doNot: "Don't discount before you know the real question." },
-  PRICE_OBJECTION: { action: "HANDLE_OBJECTION", objective: "Find out whether price is the true blocker, then reframe value (reliability, execution).", doNot: "Do NOT reflexively discount — Zoe sells on execution, not price." },
+  PRICE_OBJECTION: { action: "HANDLE_OBJECTION", objective: "Find out whether price is the true blocker, then reframe value (reliability, execution). If it still is, you can offer up to 20% off the rental subtotal.", doNot: "Don't open with the discount, never stack it, and never go past 20% without Hermann or Cindy." },
   LOGISTICS_OBJECTION: { action: "CONFIRM_LOGISTICS", objective: "Clarify the logistics concern (timing/access/delivery) and resolve it concretely.", doNot: "Don't promise a time or availability you can't verify." },
   PRODUCT_UNCERTAINTY: { action: "ASK_DISCOVERY", objective: "Clarify what they need and match it to the right products.", doNot: "Don't oversell items that don't fit the event." },
   COMPETITOR_COMPARISON: { action: "CALL_NOW", objective: "Learn what they're comparing and establish Zoe's operational advantage.", doNot: "Don't drop price to 'win' — differentiate on reliability first." },

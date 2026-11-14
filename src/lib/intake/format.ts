@@ -6,6 +6,7 @@
 
 import type { Intake, TriState } from "./types";
 import type { GeoResult } from "./geocode";
+import { isEliteHour, isSunday } from "@/lib/salesos/salesRules";
 
 // The delivery-location payload carried in the create_project op. The drainer uses it two ways: to set the
 // project venue (saveDefaultEventLocation) and to embed the address+coords in each logistics leg's add
@@ -106,8 +107,8 @@ const LOCATION_CLASS_LABEL: Record<string, string> = { residential: "Residential
 // are same-day paid windows). Built into a single "Delivery timing" note line with any captured target time.
 const DELIVERY_TYPE_META: Record<string, { label: string; window: string; price: string }> = {
   standard: { label: "Flexible (day before / pickup day after)", window: "9AM–8PM", price: "no charge" },
-  premium: { label: "Premium window", window: "same-day 2-hour", price: "+$100" },
-  exact: { label: "Exact time", window: "same-day 30-minute", price: "+$150" },
+  premium: { label: "Premium window", window: "same-day 2-hour", price: "+$100 per leg" },
+  exact: { label: "Exact time", window: "same-day 30-minute", price: "+$150 per leg" },
 };
 // Same-day window from a START time + the option's duration (premium 2h / exact 30m): "10:00 AM–12:00 PM".
 function deliveryWindow(hhmm: string, tier: string): string {
@@ -182,6 +183,7 @@ export function formatIntakeNotes(i: Intake): string {
     `Type: ${eventTypeLabel(i)}`,
     `Guests: ${guests(i)}`,
     `Date: ${i.eventDate || "Not set"}`,
+    ...(isSunday(i.eventDate) ? ["SUNDAY: an exception only, no surcharge. Hermann or Cindy gives the final yes before we confirm."] : []),
     `Time: ${i.eventStartTime || "—"}${i.eventEndTime ? ` to ${i.eventEndTime}` : ""}`,
     "",
     "-- LOCATION --",
@@ -193,6 +195,7 @@ export function formatIntakeNotes(i: Intake): string {
     "-- LOGISTICS --",
     `Delivery: ${tri(i.deliveryRequired)}`,
     ...(i.deliveryTier ? [`Delivery timing: ${deliveryTimingLine(i)}`] : []),
+    ...(isEliteHour(i.dropoffTime) || isEliteHour(i.pickupTime) ? ["ELITE HOUR: a drop-off or pick-up after 10 PM. The price is not set, so Hermann or Cindy confirms it."] : []),
     `Setup help: ${tri(i.setupRequired)}`,
     `Breakdown help: ${tri(i.pickupRequired)}`,
     ...(access.length ? ["Access:", ...access.map((x) => `  • ${x}`)] : []),

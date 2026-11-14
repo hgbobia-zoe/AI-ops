@@ -9,6 +9,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { VIKTOR_TOOLS, executeViktorTool, type ToolOutcome, type ViktorToolContext } from "@/lib/ai/viktor/tools";
 import type { TranscriptTurn } from "@/lib/ai/threadContext";
+import { SALES_RULES_PROMPT } from "@/lib/salesos/salesRules";
 
 export const DEFAULT_VIKTOR_MODEL = "claude-opus-5-5";
 /** Hard cap on model turns per instruction, so a confused loop can never run up cost. */
@@ -58,6 +59,8 @@ export const VIKTOR_SYSTEM = [
   "- When money fields are missing from tool results, the person is not cleared to see financials. Do not guess",
   "  amounts; say you cannot share figures.",
   "- Safety and readiness gates close only on their real condition. Never offer to silence or mark one done.",
+  "",
+  SALES_RULES_PROMPT,
   "",
   "Style: write like a helpful coworker in Slack. Short, plain, warm, direct. Use a short list only when it",
   "truly helps. Never use a dash as punctuation (no em dash, no en dash, no spaced hyphen); use a comma, a",

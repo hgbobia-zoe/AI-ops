@@ -9,6 +9,7 @@
 import { getLead } from "./service";
 import { buildLeadTimeline } from "./timeline";
 import { STAGE_LABEL, type SalesStage } from "./calc";
+import { SALES_RULES_PROMPT } from "./salesRules";
 import { summarizeComms, templateOutreach, humanize, renderConversationContext, type CommsSummary, type ConversationContext, type OutreachDraft, type OutreachLead } from "./outreach";
 import { chat, llmConfigured, llmModel } from "@/lib/llm";
 import { formatYmdLong } from "@/lib/dates";
@@ -66,7 +67,9 @@ const SYSTEM =
   "signature, so any closing you add would be a duplicate. End at your last real sentence. " +
   "The rep will review and send it themselves, so never imply it was already sent. " +
   'Output RAW JSON ONLY, no markdown/fences: {"sms": string, "callStrategy": string, "cadence": string, "caution": string}. ' +
-  "sms <= 320 characters. caution = one short heads-up drawn from the history, or empty string if none.";
+  "sms <= 320 characters. caution = one short heads-up drawn from the history, or empty string if none.
+" +
+  SALES_RULES_PROMPT;
 
 function extractJson(text: string): unknown {
   let s = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();

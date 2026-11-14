@@ -43,8 +43,8 @@ type StepId =
 // paid windows. Order = how we present them: recommended first.
 const DELIVERY_TYPES: { v: Exclude<Intake["deliveryTier"], "">; label: string; window: string; price: string; note: string; recommended?: boolean }[] = [
   { v: "standard", label: "Flexible — day before, pick up day after", window: "9AM–8PM", price: "No charge", recommended: true, note: "Our recommendation. We deliver the day before and grab it the day after, so we can work around other jobs — and it keeps their cost down. Most homeowners are fine with this unless they don't own the home or the site has a restriction." },
-  { v: "premium", label: "Premium — 2-hour window", window: "Same day · 2-hour window", price: "+$100", note: "Same-day delivery inside a 2-hour window." },
-  { v: "exact", label: "Exact time — 30-minute window", window: "Same day · 30-minute window", price: "+$150", note: "For venues that require a precise load-in time." },
+  { v: "premium", label: "Premium — 2-hour window", window: "Same day · 2-hour window", price: "+$100 per leg", note: "Same-day delivery inside a 2-hour window. Charged for the drop-off and again for the pick-up." },
+  { v: "exact", label: "Exact time — 30-minute window", window: "Same day · 30-minute window", price: "+$150 per leg", note: "For venues that require a precise load-in time. Charged for the drop-off and again for the pick-up." },
 ];
 
 // Section grouping for the progress rail — the familiar project mental model a Goodshuffle user already
