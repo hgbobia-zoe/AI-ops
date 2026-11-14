@@ -52,15 +52,69 @@ export function nextSendDay(now: Date = new Date()): string {
   return day;
 }
 
-/** A random instant inside the send window on `day` (Eastern), to the second. `rng` is injectable for tests. */
-export function randomSendTime(day: string, rng: () => number = Math.random): string {
-  const span = (SEND_WINDOW.toMin - SEND_WINDOW.fromMin + 1) * 60; // seconds in the window
-  const s = Math.min(span - 1, Math.floor(rng() * span));
-  const total = SEND_WINDOW.fromMin * 60 + s;
+/** Owner (2026-11-14): never send in the 9:15 minute, a round time looks scheduled. */
+export const AVOID_MIN = 9 * 60 + 15;
+
+/** Seconds after midnight (Eastern) a text may go out: 9:12:00 to 9:17:59, minus 9:15:00 to 9:15:59. */
+const ALLOWED_SECONDS: readonly number[] = (() => {
+  const out: number[] = [];
+  for (let m = SEND_WINDOW.fromMin; m <= SEND_WINDOW.toMin; m++) {
+    if (m === AVOID_MIN) continue;
+    for (let s = 0; s < 60; s++) out.push(m * 60 + s);
+  }
+  return out;
+})();
+
+/** The instant on `day` (Eastern) for a seconds-after-midnight value. */
+function etInstant(day: string, total: number): string {
   const hh = String(Math.floor(total / 3600)).padStart(2, "0");
   const mm = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
   const base = opsLocalInputToIso(`${day}T${hh}:${mm}`);
   return new Date(Date.parse(base ?? `${day}T14:00:00Z`) + (total % 60) * 1000).toISOString();
+}
+
+/** A random instant inside the send window on `day` (Eastern), to the second, never in the 9:15 minute.
+ *  `rng` is injectable for tests. */
+export function randomSendTime(day: string, rng: () => number = Math.random): string {
+  const i = Math.min(ALLOWED_SECONDS.length - 1, Math.floor(rng() * ALLOWED_SECONDS.length));
+  return etInstant(day, ALLOWED_SECONDS[i]);
+}
+
+/** `n` send times on `day`, spread so texts do not bunch. The allowed minutes (9:12, 9:13, 9:14, 9:16, 9:17)
+ *  share the texts evenly, so five or fewer each get their own minute; inside a minute each text lands at a
+ *  random second in the middle of its own slice, so no two are within about two seconds. Never 9:15.
+ *  Returned in a random order so the plan's order is not the sending order. PURE given `rng`. */
+export function spreadSendTimes(day: string, n: number, rng: () => number = Math.random): string[] {
+  if (n <= 0) return [];
+  const minutes: number[] = [];
+  for (let m = SEND_WINDOW.fromMin; m <= SEND_WINDOW.toMin; m++) if (m !== AVOID_MIN) minutes.push(m);
+  // How many texts each minute takes: an even share, the remainder on randomly picked minutes.
+  const per = minutes.map(() => Math.floor(n / minutes.length));
+  const order = minutes.map((_, k) => k);
+  for (let k = order.length - 1; k > 0; k--) {
+    const j = Math.floor(rng() * (k + 1));
+    [order[k], order[j]] = [order[j], order[k]];
+  }
+  for (let r = 0; r < n % minutes.length; r++) per[order[r]]++;
+  const times: string[] = [];
+  minutes.forEach((m, k) => {
+    const c = per[k];
+    const slice = 60 / Math.max(1, c);
+    for (let q = 0; q < c; q++) times.push(etInstant(day, m * 60 + Math.min(59, Math.floor(q * slice + slice * (0.1 + 0.8 * rng())))));
+  });
+  for (let k = times.length - 1; k > 0; k--) {
+    const j = Math.floor(rng() * (k + 1));
+    [times[k], times[j]] = [times[j], times[k]];
+  }
+  return times;
+}
+
+/** Is this instant in the 9:15 minute, Eastern? PURE. */
+export function inAvoidMinute(at: Date): boolean {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: DISPLAY_TZ, hour: "numeric", minute: "numeric", hourCycle: "h23" }).formatToParts(at);
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+  return h * 60 + m === AVOID_MIN;
 }
 
 /** "9:14:37 AM" in Eastern. */
@@ -420,6 +474,9 @@ export async function buildMorningPlan(opts: { limit?: number; now?: Date; repFi
   const repFirstName = opts.repFirstName ?? (process.env.MORNING_OUTREACH_REP_NAME?.trim() || null);
   const rows: MorningPlanRow[] = [];
   for (const c of cards) rows.push(await planLead(c, numbers, sendDay, now.getTime(), repFirstName));
+  // Spread the texts across the window (no bunching, never 9:15) instead of one random time each.
+  const sending = rows.filter((r) => r.send);
+  spreadSendTimes(sendDay, sending.length).forEach((t, k) => (sending[k].sendAt = t));
   rows.sort((a, b) => Number(b.send) - Number(a.send) || Number(b.lose) - Number(a.lose) || (a.sendAt ?? "").localeCompare(b.sendAt ?? ""));
   return { dryRun: true, generatedAt: new Date().toISOString(), sendDay, rows, posted: false };
 }

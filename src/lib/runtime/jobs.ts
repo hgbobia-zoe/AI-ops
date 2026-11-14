@@ -452,7 +452,7 @@ export const RUNTIME_JOBS: RuntimeJob[] = [
     label: "Morning outreach (Sales Bot follow up texts)",
     bucket: "server",
     configured: morningLiveEnabled, // on by default; MORNING_OUTREACH_LIVE=false is the kill switch
-    note: "Monday to Saturday. From 8:15 AM ET it plans every open quote (same gate, cadence by days to the event, and drafter as the dry run), then texts each one that is due at its own random second between 9:12 and 9:17 AM as the project's sales lead, through the sanctioned Sales OS sender (SMS_SEND_ENABLED, dedupe, timeline, audit) with a 'Sales Bot texted' Goodshuffle note. Quotes 3 days or less from an unsigned event are queued to be marked lost and archived. Once per lead per day, a recheck right before sending (a client who wrote back or a contract signed since the plan is skipped), a daily cap (MORNING_OUTREACH_MAX, default 25). Posts the recap to the Sales Bot channel when done.",
+    note: "Monday to Saturday. From 8:15 AM ET it plans every open quote (same gate, cadence by days to the event, and drafter as the dry run), then texts each one that is due at its own random second between 9:12 and 9:17 AM (never in the 9:15 minute, spread so texts do not bunch) as the project's sales lead, through the sanctioned Sales OS sender (SMS_SEND_ENABLED, dedupe, timeline, audit) with a 'Sales Bot texted' Goodshuffle note. Quotes 3 days or less from an unsigned event are queued to be marked lost and archived. Once per lead per day, a recheck right before sending (a client who wrote back or a contract signed since the plan is skipped), a daily cap (MORNING_OUTREACH_MAX, default 25). Posts the recap to the Sales Bot channel when done.",
     run: async () => runMorningOutreachTick(),
   },
   {

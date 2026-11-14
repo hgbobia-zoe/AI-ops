@@ -19,7 +19,7 @@ import { getBookingById } from "@/lib/db/repo";
 import { ensureLeadThreadSynced } from "@/lib/comms/openphoneSync";
 import { getOpenphoneUsers } from "@/lib/comms/openphone";
 import { botAnnounce, appUrl, type BotCard } from "@/lib/notify/aiBots";
-import { buildMorningPlan, isSendDay, clockLabel, type MorningPlanRow } from "./morningOutreach";
+import { buildMorningPlan, isSendDay, clockLabel, spreadSendTimes, inAvoidMinute, type MorningPlanRow } from "./morningOutreach";
 import { buildLeadTimeline } from "./timeline";
 import { sendLeadSms } from "./smsSend";
 import { queueMarkLost } from "./markLost";
@@ -80,9 +80,15 @@ export function etMinutes(now: Date): number {
 
 /** Turn the plan into today's live rows: texts up to the daily cap (earliest send time first), the rest
  *  held; lose rows wait for the mark lost queue; everything else is a hold with the gate's reason. Pure. */
-export function rowsFromPlan(rows: MorningPlanRow[], max: number): LiveRow[] {
+export function rowsFromPlan(rows: MorningPlanRow[], max: number, rng: () => number = Math.random): LiveRow[] {
   const sendable = rows.filter((r) => r.send && r.draft && r.sendAt).sort((a, b) => a.sendAt!.localeCompare(b.sendAt!));
-  const within = new Set(sendable.slice(0, max).map((r) => r.leadId));
+  const kept = sendable.slice(0, max);
+  const within = new Set(kept.map((r) => r.leadId));
+  // Re-spread the texts that will really go out over the whole window (the cap could leave them bunched
+  // early). Never 9:15, random seconds, each in its own slice.
+  const day = kept[0]?.sendAt ? todayInOpsTz(new Date(kept[0].sendAt)) : null;
+  const times = day ? spreadSendTimes(day, kept.length, rng) : [];
+  const respread = new Map(kept.map((r, k) => [r.leadId, times[k] ?? r.sendAt!]));
   return rows.map((r) => {
     const base = {
       leadId: r.leadId, eventName: r.eventName, clientName: r.clientName, value: r.value, whereWeAre: r.whereWeAre, signedAs: r.signedAs, reason: r.reason,
@@ -91,7 +97,7 @@ export function rowsFromPlan(rows: MorningPlanRow[], max: number): LiveRow[] {
     };
     if (r.send && r.draft && r.sendAt) {
       return within.has(r.leadId)
-        ? { ...base, draft: r.draft, sendAt: r.sendAt, status: "pending" as const }
+        ? { ...base, draft: r.draft, sendAt: respread.get(r.leadId) ?? r.sendAt, status: "pending" as const }
         : { ...base, draft: r.draft, status: "held" as const, reason: `Daily cap of ${max} texts reached, next morning instead.` };
     }
     if (r.lose) return { ...base, status: "lost_skipped" as const }; // becomes lost_queued once queued
@@ -172,6 +178,8 @@ export async function sendRow(ymd: string, leadId: string): Promise<LiveStatus> 
   const row = d?.rows.find((r) => r.leadId === leadId);
   if (!d || !row || row.status !== "pending" || !row.draft) return row?.status ?? "skipped";
   patchRow(ymd, leadId, { status: "sending" }); // claim: a timer and a catch up tick never both send
+  // Never in the 9:15 minute (owner): a catch up or a late timer waits until 9:16 plus a few random seconds.
+  if (inAvoidMinute(new Date())) await holdPastAvoidMinute();
   const finish = (status: LiveStatus, detail: string | null = null): LiveStatus => {
     patchRow(ymd, leadId, { status, detail, doneAt: new Date().toISOString() });
     return status;
@@ -363,4 +371,11 @@ export async function runMorningOutreachTick(now: Date = new Date()): Promise<{ 
 
 export function getMorningLiveDay(ymd: string = todayInOpsTz()): LiveDay | null {
   return load(ymd);
+}
+
+/** Wait out the 9:15 minute: until the next whole minute plus 5 to 40 random seconds. */
+async function holdPastAvoidMinute(now: Date = new Date()): Promise<void> {
+  const toNextMinute = 60_000 - (now.getTime() % 60_000);
+  const extra = 5_000 + Math.floor(Math.random() * 35_000);
+  await new Promise((r) => setTimeout(r, toNextMinute + extra));
 }
