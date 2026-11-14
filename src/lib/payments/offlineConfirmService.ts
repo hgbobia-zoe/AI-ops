@@ -3,16 +3,23 @@
 //
 //   watchPaidIncreases   the pull saw a project's amount paid go up → put it on the watch list
 //   paymentWatchIds      the fast pull asks which projects' payment histories to read
-//   ingestPaymentHistories   the pull posts those histories → each NEW offline charge raises one card
+//   ingestPaymentHistories   the pull posts those histories → each NEW check payment is confirmed
 //   afterConfirmApproved     approvals.ts calls this once the template email is queued → text + note
 //   recordBankDeposit        the Zapier "Check Deposit" zap posts a deposit → stored + matched to a project
 //
-// Kill switch: OFFLINE_PAYMENT_CONFIRM=false (detection stops raising cards; nothing else changes).
+// Owner rules (2026-11-14): PHYSICAL CHECKS ONLY. Goodshuffle already confirms ACH payments to the customer
+// on its own, so an ACH (or any non-check) payment is recorded as not_check and never confirmed here. A check
+// confirmation comes from automation, so nobody approves it: the card is created as the audit record and
+// approved at once by "Zoe automation", which queues the email, sends the text and logs the note. The Sales
+// bot posts what went out.
+//
+// Kill switches: OFFLINE_PAYMENT_CONFIRM=false stops all of it. OFFLINE_PAYMENT_AUTO_SEND=false keeps the
+// detection but goes back to an approve-first card for a person.
 
 import { getDb } from "@/lib/db";
 import { enqueueGsOp, gsNoteOpExists, getBookingById, insertAudit } from "@/lib/db/repo";
-import { createApproval, approvalExistsByKey, getApproval } from "@/lib/aiorg/approvals";
-import { botAnnounce, botForAgent, appUrl } from "@/lib/notify/aiBots";
+import { createApproval, approvalExistsByKey, getApproval, decideApproval } from "@/lib/aiorg/approvals";
+import { botAnnounce, botForAgent, appUrl, type BotCard } from "@/lib/notify/aiBots";
 import { sendLeadSms } from "@/lib/salesos/smsSend";
 import { getOpenphoneUsers } from "@/lib/comms/openphone";
 import { initialsOf } from "@/lib/salesos/noteFormat";
@@ -38,6 +45,9 @@ import {
 import { normalizeDeposit, matchDeposit, projectNumbersIn, MATCH_LABEL, type DepositCandidate, type DepositMatch, type MatchKind } from "./bankDeposit";
 
 export const OFFLINE_PAYMENT_CONFIRM_ENV = "OFFLINE_PAYMENT_CONFIRM";
+export const OFFLINE_PAYMENT_AUTO_SEND_ENV = "OFFLINE_PAYMENT_AUTO_SEND";
+/** Who approves an automatic confirmation (shows on the card, the note and the audit). */
+export const AUTO_ACTOR = "Zoe automation";
 /** The AI employee the cards belong to (Sales bot channel). The card's owner is the project's sales lead. */
 export const CONFIRM_AGENT_ID = "outreach";
 const WATCH_CAP = 25;
@@ -46,6 +56,16 @@ const BANK_LOOKBACK_DAYS = 30; // a deposit up to 30 days before the payment was
 
 export function offlineConfirmEnabled(): boolean {
   return flagOn(OFFLINE_PAYMENT_CONFIRM_ENV);
+}
+
+/** Check confirmations send on their own unless OFFLINE_PAYMENT_AUTO_SEND=false. */
+export function offlineAutoSendEnabled(): boolean {
+  return flagOn(OFFLINE_PAYMENT_AUTO_SEND_ENV);
+}
+
+/** Only a physical check is confirmed by us; Goodshuffle confirms ACH itself (owner, 2026-11-14). PURE. */
+export function isCheckPayment(p: Pick<OfflinePayment, "method">): boolean {
+  return p.method.toUpperCase() === "CHECK";
 }
 
 // ── Watch list ───────────────────────────────────────────────────────────────────────────────────────
@@ -127,6 +147,8 @@ export interface IngestResult {
   newPayments: number;
   cardsRaised: number;
   skipped: { paymentId: string; reason: string }[];
+  /** Check confirmations approved by automation in this ingest, with the approve outcome. */
+  autoSent: { paymentId: string; outcome: string }[];
 }
 
 interface PaymentRow {
@@ -150,15 +172,17 @@ function getPaymentRow(paymentId: string): PaymentRow | null {
 }
 
 /** Store the payment histories the pull read. Every offline charge is recorded once (by Goodshuffle payment
- *  id); a NEW one recorded inside the look-back raises one approve-first card for the sales lead. Older
- *  history is recorded as too_old so it is never confirmed. Idempotent: re-posting changes nothing. */
+ *  id). A NEW check recorded inside the look-back is confirmed: sent at once by automation, or an
+ *  approve-first card when OFFLINE_PAYMENT_AUTO_SEND=false. ACH and other non-check payments are recorded as
+ *  not_check, older history as too_old; neither is ever confirmed. Idempotent: re-posting changes nothing. */
 export function ingestPaymentHistories(items: InPaymentHistory[], nowMs = Date.now()): IngestResult {
   const db = getDb();
-  const res: IngestResult = { histories: 0, offlineSeen: 0, newPayments: 0, cardsRaised: 0, skipped: [] };
+  const res: IngestResult = { histories: 0, offlineSeen: 0, newPayments: 0, cardsRaised: 0, skipped: [], autoSent: [] };
   const enabled = offlineConfirmEnabled();
   const days = lookbackDays();
   const nowIso = new Date(nowMs).toISOString();
-  const fresh: { title: string; owner: string; bookingId: string }[] = [];
+  const auto = offlineAutoSendEnabled();
+  const fresh: Raised[] = [];
   for (const h of items) {
     const bookingId = h.bookingId == null ? "" : String(h.bookingId).trim();
     if (!bookingId) continue;
@@ -174,6 +198,7 @@ export function ingestPaymentHistories(items: InPaymentHistory[], nowMs = Date.n
       let state = "proposed";
       if (!booking) state = "no_booking";
       else if (!enabled) state = "disabled";
+      else if (!isCheckPayment(p)) state = "not_check";
       else if (!isRecent(p.paidAt, nowMs, days)) state = "too_old";
       db.prepare(
         `INSERT OR IGNORE INTO gs_offline_payments (payment_id, booking_id, amount, method, method_label, recorded_by, paid_at, remaining_balance, state, first_seen_at)
@@ -190,16 +215,61 @@ export function ingestPaymentHistories(items: InPaymentHistory[], nowMs = Date.n
       }
     }
   }
-  if (fresh.length) {
+  if (fresh.length && auto) {
+    for (const f of fresh) {
+      const r = autoConfirm(f.approvalId);
+      res.autoSent.push({ paymentId: f.paymentId, outcome: r.outcome });
+      void botAnnounce(botForAgent(CONFIRM_AGENT_ID), autoRecordCard(f, r, templateName())).catch(() => {});
+    }
+  } else if (fresh.length) {
     void botAnnounce(botForAgent(CONFIRM_AGENT_ID), {
-      title: fresh.length === 1 ? "Offline payment to confirm" : `${fresh.length} offline payments to confirm`,
+      title: fresh.length === 1 ? "Check payment to confirm" : `${fresh.length} check payments to confirm`,
       fields: fresh.slice(0, 6).map((f) => ({ label: f.owner, value: f.title })),
-      body: "A check or ACH payment was recorded in Goodshuffle. Approve to send the customer the payment email and a text.",
+      body: "A check payment was recorded in Goodshuffle. Approve to send the customer the payment email and a text.",
       link: { text: "Review in AI Org", url: appUrl("/ai-org/approvals") },
-      context: "Nothing sends until a person approves it.",
+      context: "Automatic sending is off (OFFLINE_PAYMENT_AUTO_SEND=false), so nothing sends until a person approves it.",
     }).catch(() => {});
   }
   return res;
+}
+
+interface Raised {
+  title: string;
+  owner: string;
+  bookingId: string;
+  approvalId: string;
+  paymentId: string;
+  text: string;
+}
+
+/** Approve a just raised check confirmation as automation: the same path a person's approve takes (email
+ *  queued behind EMAIL_SEND_ENABLED, then the text and the note in afterConfirmApproved). Never throws. */
+function autoConfirm(approvalId: string): { outcome: string; message: string } {
+  try {
+    const d = decideApproval(approvalId, "approve", AUTO_ACTOR, { note: "Sent automatically (check payment).", announce: false });
+    return { outcome: d.outcome, message: d.message };
+  } catch (e) {
+    return { outcome: "failed", message: e instanceof Error ? e.message : "approve failed" };
+  }
+}
+
+/** The Slack record of an automatic confirmation: what went to the customer, or why it did not. PURE. */
+export function autoRecordCard(f: Pick<Raised, "title" | "owner" | "bookingId" | "text">, r: { outcome: string; message: string }, tplName: string): BotCard {
+  const queued = r.outcome === "executed_queued";
+  return {
+    emoji: queued ? "✅" : "⚠️",
+    title: queued ? "Check payment confirmed to the customer" : "Check payment confirmation held",
+    fields: [
+      { label: "Payment", value: f.title },
+      { label: "Sales lead", value: f.owner },
+      { label: "Email", value: queued ? `"${tplName}", goes out on the next Goodshuffle sync` : "not sent" },
+      { label: "Text", value: queued ? "sending now through Quo" : "not sent" },
+    ],
+    sections: f.text ? [`>${f.text.replace(/\n/g, "\n>")}`] : undefined,
+    body: queued ? "Sent automatically, nobody needed to approve it." : `Nothing went to the customer: ${r.message}`,
+    link: { text: "Open the lead", url: appUrl(`/salesos/${encodeURIComponent(f.bookingId)}`) },
+    context: "OFFLINE_PAYMENT_AUTO_SEND=false goes back to approve first",
+  };
 }
 
 /** A matched bank deposit for this payment (same amount, same project, posted up to 30 days before it was
@@ -219,7 +289,7 @@ export function bankMatchFor(bookingId: string, amount: number, paidAt: string |
   return { depositId: r.deposit_id, amount: r.amount, postedAt: r.posted_at, account: r.account, how: MATCH_LABEL[r.match_kind as MatchKind] ?? r.match_kind };
 }
 
-function raiseConfirmCard(p: OfflinePayment, bookingId: string, remaining: number | null, nowMs: number): { title: string; owner: string; bookingId: string } | null {
+function raiseConfirmCard(p: OfflinePayment, bookingId: string, remaining: number | null, nowMs: number): Raised | null {
   const b = getBookingById(bookingId);
   if (!b) return null;
   const key = confirmKey(p.paymentId);
@@ -229,6 +299,7 @@ function raiseConfirmCard(p: OfflinePayment, bookingId: string, remaining: numbe
   const ctx = { payment: p, bookingId, clientName: b.clientName, salesLead: b.salesLead ?? null, eventDate: b.eventDate, remainingBalance: remaining, todayYmd: todayInOpsTz(new Date(nowMs)), bank };
   const owner = b.salesLead?.trim() || "Sales";
   const title = confirmTitle(ctx);
+  const text = buildConfirmSms(ctx);
   const a = createApproval({
     agentId: CONFIRM_AGENT_ID,
     owner,
@@ -244,13 +315,13 @@ function raiseConfirmCard(p: OfflinePayment, bookingId: string, remaining: numbe
       // A same-subject email sent after this payment was seen means someone already confirmed by hand.
       sentAfter: new Date(nowMs).toISOString(),
       dedupeKey: key,
-      body: buildConfirmSms(ctx), // the text; editable on the card
+      body: text, // the text; editable on the card
     },
     card: buildConfirmCard(ctx, tpl),
     idempotencyKey: key,
   });
   getDb().prepare("UPDATE gs_offline_payments SET approval_id = ?, bank_deposit_id = ? WHERE payment_id = ?").run(a.id, bank?.depositId ?? null, p.paymentId);
-  return { title, owner, bookingId };
+  return { title, owner, bookingId, approvalId: a.id, paymentId: p.paymentId, text };
 }
 
 // ── After approve ────────────────────────────────────────────────────────────────────────────────────
