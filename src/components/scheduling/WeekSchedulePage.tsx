@@ -9,7 +9,10 @@ import { WeekSchedule } from "@/components/scheduling/WeekSchedule";
 import { buildWeekGrid, weekDayLabel, weekStartOf, type WeekDayInput } from "@/lib/scheduling/weekGrid";
 import { getShiftsForDateRange } from "@/lib/scheduling/store";
 import { dedupeRosterByName } from "@/lib/scheduling/roster";
-import { getDayAvailabilityCached } from "@/lib/scheduling/eligibilityInputs";
+import { assignmentWindowsFromShifts, getDayAvailabilityCached } from "@/lib/scheduling/eligibilityInputs";
+import { buildRouteOptions } from "@/lib/scheduling/routeOptions";
+import type { WeekEditDay } from "@/components/scheduling/WeekSchedule";
+import type { Route } from "@/lib/types";
 import { connecteamConfigured, getCrewForDateSafe, getUsersList, type CrewMember, type CrewShift } from "@/lib/connecteam";
 import { getActiveVehicles } from "@/lib/vehicles";
 import { getRoutesForDate } from "@/lib/db/repo";
@@ -26,7 +29,16 @@ export async function WeekSchedulePage({ date, today }: { date: string; today: s
   const shifts = getShiftsForDateRange(start, end).filter((s) => s.status !== "cancelled");
   const trucks = getActiveVehicles();
   const truckOfRoute = new Map<string, string>();
-  for (const d of days) for (const t of trucks) for (const r of getRoutesForDate(t.truckId, d)) truckOfRoute.set(r.routeId, t.name || t.truckId);
+  const routesByDay = new Map<string, Route[]>();
+  for (const d of days) {
+    const list: Route[] = [];
+    for (const t of trucks) for (const r of getRoutesForDate(t.truckId, d)) {
+      truckOfRoute.set(r.routeId, t.name || t.truckId);
+      if (r.status !== "done") list.push(r);
+    }
+    routesByDay.set(d, list);
+  }
+  const truckName = (id: string): string => trucks.find((t) => t.truckId === id)?.name ?? id;
 
   const configured = connecteamConfigured();
   const crews: Array<{ ok: boolean; shifts: CrewShift[] }> = configured ? await Promise.all(days.map((d) => getCrewForDateSafe(d))) : days.map(() => ({ ok: false, shifts: [] }));
@@ -44,6 +56,21 @@ export async function WeekSchedulePage({ date, today }: { date: string; today: s
     connecteamShifts: crews[i].shifts.filter((cs) => opsYmdOfMs(cs.startUnix * 1000) === d),
     unavailability: [...avail[i].byUser.values()].flat(),
   }));
+  // Inline editing: what the shift editor needs for each day (the same inputs the Day schedule gives it).
+  const editDays: Record<string, WeekEditDay> = Object.fromEntries(
+    days.map((d, i) => [
+      d,
+      {
+        routeOptions: buildRouteOptions(routesByDay.get(d) ?? [], truckName),
+        eligibilityData: {
+          dayShifts: crews[i].shifts,
+          assignments: assignmentWindowsFromShifts(inputs[i].appShifts),
+          unavailability: inputs[i].unavailability,
+          availabilityKnown: avail[i].ok,
+        },
+      },
+    ]),
+  );
   const clockFmt = new Intl.DateTimeFormat("en-US", { timeZone: DISPLAY_TZ, hour: "numeric", minute: "2-digit" });
   const grid = buildWeekGrid({
     days: inputs,
@@ -94,12 +121,12 @@ export async function WeekSchedulePage({ date, today }: { date: string; today: s
               )}
             </div>
           </div>
-          <p className="text-[12.5px] text-meta">Click a day or a shift to open that day, where shifts are added and edited.</p>
+          <p className="text-[12.5px] text-meta">Click a shift to edit it, or an empty spot in a person&apos;s day to add one. Click a day to open it.</p>
         </div>
         {unverified && (
           <p className="border-b border-border px-4 py-2 text-[12.5px] text-status-warning">Connecteam did not answer for part of this week, so some Connecteam shifts or unavailability may be missing.</p>
         )}
-        <WeekSchedule grid={grid} />
+        <WeekSchedule grid={grid} shifts={shifts} roster={roster} editDays={editDays} />
       </section>
     </main>
   );
