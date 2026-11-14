@@ -66,7 +66,7 @@ describe("morning outreach live", () => {
     expect(listPendingGsOps().filter((o) => o.op === "mark_lost").map((o) => o.transactionId)).toEqual(["L2"]);
     expect(send).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(Date.parse(`${DAY}T14:14:38Z`) - Date.now()); // the timer fires at 9:14:37
+    await vi.advanceTimersByTimeAsync(Date.parse(getMorningLiveDay(DAY)!.rows[0].sendAt!) - Date.now() + 1000); // the timer fires at its random time
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledWith({ id: "L1", body: expect.stringContaining("this is Jessie"), userId: "USjm", initials: "Sales Bot" });
 
@@ -85,7 +85,7 @@ describe("morning outreach live", () => {
     await runMorningOutreachTick(at("08:20"));
     await awaitPlanning();
     (buildLeadTimeline as unknown as Mock).mockReturnValue([{ at: `${DAY}T14:00:00Z`, channel: "sms", direction: "in", detail: "Can we add chairs?" }]);
-    await vi.advanceTimersByTimeAsync(Date.parse(`${DAY}T14:14:38Z`) - Date.now());
+    await vi.advanceTimersByTimeAsync(Date.parse(getMorningLiveDay(DAY)!.rows[0].sendAt!) - Date.now() + 1000);
     expect(send).not.toHaveBeenCalled();
     expect(getMorningLiveDay(DAY)!.rows[0]).toMatchObject({ status: "skipped", detail: expect.stringContaining("reached out since the plan") });
   });
@@ -105,7 +105,7 @@ describe("morning outreach live", () => {
       await awaitPlanning();
       // The plan said send; the project changed before 9:14 (an archived quote whose date a pull blanked).
       saveBookings([{ bookingId: "L1", eventName: "Chang Party", eventDate: "2027-05-01", statusLabel: "Quote Sent", signed: false, grandTotal: 2000, clientName: "Holly Chang", clientPhone: "+13015550111", ...over }]);
-      await vi.advanceTimersByTimeAsync(Date.parse(`${DAY}T14:14:38Z`) - Date.now());
+      await vi.advanceTimersByTimeAsync(Date.parse(getMorningLiveDay(DAY)!.rows[0].sendAt!) - Date.now() + 1000);
       expect(send, name).not.toHaveBeenCalled();
       expect(getMorningLiveDay(DAY)!.rows[0], name).toMatchObject({ status: "skipped", detail: expect.stringContaining(why) });
     }
