@@ -6,6 +6,8 @@
 
 import type { Intake, TriState } from "./types";
 import type { GeoResult } from "./geocode";
+import { isEliteHour, isSunday, WINDOW_PRICE_PER_LEG } from "@/lib/salesos/salesRules";
+import { legTiers, missingUpgradeLegs } from "./gsItems";
 
 // The delivery-location payload carried in the create_project op. The drainer uses it two ways: to set the
 // project venue (saveDefaultEventLocation) and to embed the address+coords in each logistics leg's add
@@ -106,8 +108,8 @@ const LOCATION_CLASS_LABEL: Record<string, string> = { residential: "Residential
 // are same-day paid windows). Built into a single "Delivery timing" note line with any captured target time.
 const DELIVERY_TYPE_META: Record<string, { label: string; window: string; price: string }> = {
   standard: { label: "Flexible (day before / pickup day after)", window: "9AM–8PM", price: "no charge" },
-  premium: { label: "Premium window", window: "same-day 2-hour", price: "+$100" },
-  exact: { label: "Exact time", window: "same-day 30-minute", price: "+$150" },
+  premium: { label: "Premium window", window: "same-day 2-hour", price: "+$100 per leg" },
+  exact: { label: "Exact time", window: "same-day 30-minute", price: "+$150 per leg" },
 };
 // Same-day window from a START time + the option's duration (premium 2h / exact 30m): "10:00 AM–12:00 PM".
 function deliveryWindow(hhmm: string, tier: string): string {
@@ -119,15 +121,31 @@ function deliveryWindow(hhmm: string, tier: string): string {
   const end = `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
   return `${gsTime(hhmm)}–${gsTime(end)}`;
 }
+// One leg's window, priced per timed leg (owner, 2026-11-14).
+const LEG_META: Record<string, { label: string; price: string }> = {
+  standard: { label: "Standard 9AM–8PM", price: "no charge" },
+  premium: { label: "Premium 2-hour window", price: `+$${WINDOW_PRICE_PER_LEG.premium}` },
+  exact: { label: "Exact 30-minute window", price: `+$${WINDOW_PRICE_PER_LEG.exact}` },
+  elite: { label: "Elite Hour (after 10 PM)", price: `+$${WINDOW_PRICE_PER_LEG.elite}` },
+};
+function legLine(name: string, tier: string, time: string): string {
+  const m = LEG_META[tier];
+  if (!m) return `${name}: not set`;
+  if (tier === "standard") return `${name}: ${m.label}, ${m.price}`;
+  const win = time ? (tier === "elite" ? gsTime(time) : deliveryWindow(time, tier)) : "time not set";
+  return `${name}: ${m.label} ${win}, ${m.price}`;
+}
 function deliveryTimingLine(i: Intake): string {
-  const m = DELIVERY_TYPE_META[i.deliveryTier];
-  if (!m) return i.deliveryTier || "Not set";
-  if (i.deliveryTier === "standard") return `${m.label} · ${m.window} · ${m.price}`;
-  const times: string[] = [];
-  if (i.dropoffTime) times.push(`drop-off ${deliveryWindow(i.dropoffTime, i.deliveryTier)}`);
-  if (i.pickupTime) times.push(`pick-up ${deliveryWindow(i.pickupTime, i.deliveryTier)}`);
-  const t = times.length ? ` · ${times.join(", ")} (own line-item group)` : "";
-  return `${m.label} · ${m.window} · ${m.price}${t}`;
+  if (i.deliveryFlexible === "yes" || (i.deliveryTier === "standard" && !i.dropoffTier && !i.pickupTier)) {
+    const m = DELIVERY_TYPE_META.standard;
+    return `${m.label} · ${m.window} · ${m.price}`;
+  }
+  const t = legTiers(i);
+  if (!t.drop && !t.pick) return i.deliveryTier || "Not set";
+  return `${legLine("Drop-off", t.drop, i.dropoffTime)} · ${legLine("Pick-up", t.pick, i.pickupTime)} (timed legs are their own line items)`;
+}
+function hasDeliveryTiming(i: Intake): boolean {
+  return !!(i.deliveryTier || i.dropoffTier || i.pickupTier);
 }
 
 export function eventTypeLabel(i: Intake): string {
@@ -182,6 +200,7 @@ export function formatIntakeNotes(i: Intake): string {
     `Type: ${eventTypeLabel(i)}`,
     `Guests: ${guests(i)}`,
     `Date: ${i.eventDate || "Not set"}`,
+    ...(isSunday(i.eventDate) ? ["SUNDAY: an exception only, no surcharge. Hermann or Cindy gives the final yes before we confirm."] : []),
     `Time: ${i.eventStartTime || "—"}${i.eventEndTime ? ` to ${i.eventEndTime}` : ""}`,
     "",
     "-- LOCATION --",
@@ -192,7 +211,8 @@ export function formatIntakeNotes(i: Intake): string {
     "",
     "-- LOGISTICS --",
     `Delivery: ${tri(i.deliveryRequired)}`,
-    ...(i.deliveryTier ? [`Delivery timing: ${deliveryTimingLine(i)}`] : []),
+    ...(hasDeliveryTiming(i) ? [`Delivery timing: ${deliveryTimingLine(i)}`] : []),
+    ...eliteNotes(i),
     `Setup help: ${tri(i.setupRequired)}`,
     `Breakdown help: ${tri(i.pickupRequired)}`,
     ...(access.length ? ["Access:", ...access.map((x) => `  • ${x}`)] : []),
@@ -202,4 +222,21 @@ export function formatIntakeNotes(i: Intake): string {
     "NOTE: rental inventory to be added in Goodshuffle. This shell was created from the guided sales intake.",
   ];
   return lines.filter((l) => l !== null && l !== undefined).join("\n");
+}
+
+/** Elite Hour lines for the notes (owner, 2026-11-14: +$200 per leg after 10 PM). An Elite leg with no
+ *  Goodshuffle item configured must be added by hand; a Premium or Exact time at 10 PM or later is really an
+ *  Elite Hour leg, so the rep should check it. */
+function eliteNotes(i: Intake): string[] {
+  const out: string[] = [];
+  const missing = missingUpgradeLegs(i);
+  const names = { dropoff: "drop-off", pickup: "pick-up" } as const;
+  for (const leg of missing) out.push(`ELITE HOUR: add the Elite Hour line by hand for the ${names[leg]}, +$${WINDOW_PRICE_PER_LEG.elite}.`);
+  const t = legTiers(i);
+  const late = [
+    t.drop !== "elite" && isEliteHour(i.dropoffTime) ? "drop-off" : "",
+    t.pick !== "elite" && isEliteHour(i.pickupTime) ? "pick-up" : "",
+  ].filter(Boolean);
+  if (late.length) out.push(`ELITE HOUR: the ${late.join(" and ")} is after 10 PM, which is Elite Hour (+$${WINDOW_PRICE_PER_LEG.elite} per leg). Check the window.`);
+  return out;
 }

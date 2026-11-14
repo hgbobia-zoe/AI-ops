@@ -2491,6 +2491,9 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   // Intake: split same-day window into explicit drop-off + pick-up times.
   { table: "sales_intake", column: "dropoff_time", type: "TEXT" },
   { table: "sales_intake", column: "pickup_time", type: "TEXT" },
+  // Intake: a window per leg (owner, 2026-11-14): standard | premium | exact | elite, charged per timed leg.
+  { table: "sales_intake", column: "dropoff_tier", type: "TEXT" },
+  { table: "sales_intake", column: "pickup_tier", type: "TEXT" },
   // Web lead → Slack: when Viktor replied in the lead's #new-leads thread (once per lead) + which post.
   { table: "sales_intake", column: "slack_reply_at", type: "TEXT" },
   { table: "sales_intake", column: "slack_reply_ts", type: "TEXT" },

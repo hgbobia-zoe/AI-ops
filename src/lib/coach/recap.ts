@@ -10,6 +10,7 @@
 // RULES CALCULATE, AI INTERPRETS: the recap is INFERENCE over what was said; it never invents facts.
 
 import { chat, llmConfigured } from "@/lib/llm";
+import { SALES_RULES_PROMPT } from "@/lib/salesos/salesRules";
 
 export interface CallRecap {
   /** 1-2 paragraph summary of what was discussed (80-200 words). */
@@ -53,10 +54,10 @@ const SYSTEM =
   "- The follow-up email must read like the rep wrote it, paste-ready, no 'Dear valued customer'. " +
   "Friendly and direct.\n" +
   "- Action items are things THE REP committed to do, not what the customer will do.\n" +
-  "- Zoe wins on reliability and execution, not price — never suggest discounting as the next step.\n" +
+  "- Zoe wins on reliability and execution, not price. Lead with value, and never suggest a discount beyond the rules below.\n" +
   "- objections: for each real concern the customer raised (price, timing, competitor, fit, authority), " +
-  "output {objection: what they raised, in their terms, response: a specific, non-discounting way to " +
-  "handle it, grounded in Zoe's reliability/execution and in what was actually said}. Empty array if none.\n" +
+  "output {objection: what they raised, in their terms, response: a specific way to handle it, grounded in " +
+  "Zoe's reliability/execution and in what was actually said, offering a discount only as the rules below allow}. Empty array if none.\n" +
   "- coachingNotes: put on your SALES-COACH hat. Give 2-5 specific, kind, actionable notes on what " +
   "the rep could have done better — a sharper discovery question, a stronger way to handle an " +
   "objection the customer actually raised, a clearer next-step ask. Ground each note in what actually " +
@@ -67,7 +68,8 @@ const SYSTEM =
   "Output RAW JSON ONLY, no prose, no code fences, exactly this shape: " +
   '{"executive": string, "keyPoints": string[], "actionItems": string[], "customerConcerns": string[], ' +
   '"objections": [{"objection": string, "response": string}], "followUpEmail": string, ' +
-  '"coachingNotes": string[], "nextStep": string}';
+  '"coachingNotes": string[], "nextStep": string}\n' +
+  SALES_RULES_PROMPT;
 
 function extractJson(text: string): unknown {
   let s = text.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();

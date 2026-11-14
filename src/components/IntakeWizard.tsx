@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { FolderPlus, ArrowLeft, ArrowRight, Check, ExternalLink, Loader2, AlertTriangle, RefreshCw } from "lucide-react";
-import type { Intake, IntakePatch, TriState } from "@/lib/intake/types";
+import type { Intake, IntakePatch, LegTier, TriState } from "@/lib/intake/types";
 import { missingRequired } from "@/lib/intake/types";
 import { nudgeCreateNow } from "@/lib/extensionNudge";
 
@@ -43,9 +43,22 @@ type StepId =
 // paid windows. Order = how we present them: recommended first.
 const DELIVERY_TYPES: { v: Exclude<Intake["deliveryTier"], "">; label: string; window: string; price: string; note: string; recommended?: boolean }[] = [
   { v: "standard", label: "Flexible — day before, pick up day after", window: "9AM–8PM", price: "No charge", recommended: true, note: "Our recommendation. We deliver the day before and grab it the day after, so we can work around other jobs — and it keeps their cost down. Most homeowners are fine with this unless they don't own the home or the site has a restriction." },
-  { v: "premium", label: "Premium — 2-hour window", window: "Same day · 2-hour window", price: "+$100", note: "Same-day delivery inside a 2-hour window." },
-  { v: "exact", label: "Exact time — 30-minute window", window: "Same day · 30-minute window", price: "+$150", note: "For venues that require a precise load-in time." },
+  { v: "premium", label: "Premium — 2-hour window", window: "Same day · 2-hour window", price: "+$100 per leg", note: "Same-day delivery inside a 2-hour window. Charged for the drop-off and again for the pick-up." },
+  { v: "exact", label: "Exact time — 30-minute window", window: "Same day · 30-minute window", price: "+$150 per leg", note: "For venues that require a precise load-in time. Charged for the drop-off and again for the pick-up." },
 ];
+
+// The window for EACH leg (owner, 2026-11-14): a customer can time just one leg and keep Standard on the
+// other. Charged per timed leg. Elite Hour is a leg after 10 PM.
+type TimedLeg = "premium" | "exact" | "elite";
+const LEG_TIERS: { v: Exclude<LegTier, "">; label: string; price: string; note: string }[] = [
+  { v: "standard", label: "Standard", price: "No charge", note: "Same day, any time 9AM to 8PM." },
+  { v: "premium", label: "Premium", price: "+$100", note: "A 2-hour window." },
+  { v: "exact", label: "Exact", price: "+$150", note: "A 30-minute window, for venues with a set load-in." },
+  { v: "elite", label: "Elite Hour", price: "+$200", note: "After 10 PM." },
+];
+const isTimedLeg = (t: LegTier): t is TimedLeg => t === "premium" || t === "exact" || t === "elite";
+const anyTimedLeg = (i: Intake): boolean => isTimedLeg(i.dropoffTier) || isTimedLeg(i.pickupTier);
+const legTimeOk = (tier: LegTier, time: string): boolean => !isTimedLeg(tier) || (!!time && (tier !== "elite" || Number(time.slice(0, 2)) >= 22));
 
 // Section grouping for the progress rail — the familiar project mental model a Goodshuffle user already
 // carries: Customer → Event → Schedule → Location → Logistics → Notes. Purely presentational; the STEPS
@@ -80,8 +93,8 @@ const STEPS: StepDef[] = [
   { id: "location", title: "Where's the event?", canNext: () => true },
   { id: "delivery", title: "Will they need delivery?", canNext: () => true },
   { id: "deliveryFlexible", title: "Can we deliver the day before and pick up the day after?", subtitle: "Ask this first. We prefer it — it's no extra cost and gives us room to work around other jobs. Usually fine for a home unless they don't own it or the site restricts access. Yes sets the standard 9AM–8PM window; No means we pin down a same-day window next.", when: wantsDelivery, canNext: (i) => !!i.deliveryFlexible },
-  { id: "deliveryType", title: "Which same-day delivery window do they need?", subtitle: "They can't take the free day-before window, so walk them through the same-day options and their cost.", when: (i) => wantsDelivery(i) && i.deliveryFlexible !== "" && i.deliveryFlexible !== "yes", canNext: (i) => i.deliveryTier === "premium" || i.deliveryTier === "exact" },
-  { id: "deliveryTime", title: "What times do they need?", subtitle: "They chose a same-day window, so lock in both the drop-off and the pick-up time we'll build it around. Both are required.", when: (i) => wantsDelivery(i) && (i.deliveryTier === "premium" || i.deliveryTier === "exact"), canNext: (i) => !!i.dropoffTime && !!i.pickupTime },
+  { id: "deliveryType", title: "Which window does each leg need?", subtitle: "They can't take the free day-before window. Pick the drop-off and the pick-up window separately: they can time just one leg and keep Standard on the other. Each timed leg is charged.", when: (i) => wantsDelivery(i) && i.deliveryFlexible !== "" && i.deliveryFlexible !== "yes", canNext: (i) => !!i.dropoffTier && !!i.pickupTier },
+  { id: "deliveryTime", title: "What times do they need?", subtitle: "Lock in the time for each timed leg. Elite Hour times are 10 PM or later.", when: (i) => wantsDelivery(i) && anyTimedLeg(i), canNext: (i) => legTimeOk(i.dropoffTier, i.dropoffTime) && legTimeOk(i.pickupTier, i.pickupTime) },
   { id: "setup", title: "Do they want setup help?", subtitle: "Setting up rental equipment on site → Event Readiness Service.", canNext: () => true },
   { id: "pickup", title: "Do they want breakdown help?", subtitle: "Helping tear down after — gathering chairs, removing cushions, etc. → Event Readiness Service.", canNext: () => true },
   { id: "access", title: "A quick logistics check", subtitle: "Just the basics — the full survey happens later.", when: (i) => i.deliveryRequired !== "no" || i.setupRequired !== "no" || i.pickupRequired !== "no", canNext: () => true },
@@ -256,8 +269,8 @@ function StepBody({ step, intake, set }: { step: StepDef; intake: Intake; set: (
       <TriChoice
         value={intake.deliveryFlexible}
         onChange={(v) => set(v === "yes"
-          ? { deliveryFlexible: "yes", deliveryTier: "standard", dropoffTime: "", pickupTime: "" } // yes → default flexible 9AM–8PM window
-          : { deliveryFlexible: v, ...(intake.deliveryTier === "standard" ? { deliveryTier: "" } : {}) })} // no/not sure → pick a same-day window next
+          ? { deliveryFlexible: "yes", deliveryTier: "standard", dropoffTier: "standard", pickupTier: "standard", dropoffTime: "", pickupTime: "" } // yes → default flexible 9AM–8PM window
+          : { deliveryFlexible: v, ...(intake.deliveryFlexible === "yes" ? { deliveryTier: "", dropoffTier: "", pickupTier: "" } : {}) })} // no/not sure → pick each leg's window next
       />
     );
     case "deliveryType": return <DeliveryTypeStep intake={intake} set={set} />;
@@ -332,58 +345,78 @@ function LocationClassStep({ intake, set }: { intake: Intake; set: (p: IntakePat
   );
 }
 
-// Shown only when they CAN'T do the flexible day-before window (deliveryFlexible !== "yes"): the same-day
-// paid options (premium/exact) with prices, so the rep walks the customer through the choice. The flexible
-// "standard" option lives in the day-before question, not here.
+// Shown only when they CAN'T do the flexible day-before window: a window per leg (owner, 2026-11-14), so a
+// customer can time just one leg. Each timed leg is its own charge.
 function DeliveryTypeStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) => void }): React.JSX.Element {
+  const legs: { key: "dropoffTier" | "pickupTier"; label: string }[] = [
+    { key: "dropoffTier", label: "Drop-off" },
+    { key: "pickupTier", label: "Pick-up" },
+  ];
+  const pick = (key: "dropoffTier" | "pickupTier", v: Exclude<LegTier, "">): void => {
+    const other = key === "dropoffTier" ? intake.pickupTier : intake.dropoffTier;
+    const tiers = [v, other];
+    // deliveryTier stays as a one word summary for older readers: the strongest timed window, else standard.
+    const summary = tiers.includes("exact") ? "exact" : tiers.some((t) => t === "premium" || t === "elite") ? "premium" : "standard";
+    const clear = key === "dropoffTier" ? (isTimedLeg(v) ? {} : { dropoffTime: "" }) : isTimedLeg(v) ? {} : { pickupTime: "" };
+    set({ [key]: v, deliveryTier: summary, ...clear } as IntakePatch);
+  };
   return (
-    <div className="space-y-2.5">
-      {DELIVERY_TYPES.filter((t) => t.v !== "standard").map((t) => {
-        const on = intake.deliveryTier === t.v;
-        return (
-          <button
-            key={t.v}
-            onClick={() => set({ deliveryTier: t.v })}
-            className={`w-full rounded border px-4 py-3.5 text-left transition-colors ${on ? "border-foreground/70 bg-foreground/[0.08]" : "border-border hover:bg-[var(--row-hover)]"}`}
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              {on && <Check className="size-4 shrink-0" />}
-              <span className="text-[15px] font-medium">{t.label}</span>
-              {t.recommended && <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-emerald-300">Recommended</span>}
-              <span className="ml-auto text-[12.5px] tabular-nums text-meta">{t.window} · {t.price}</span>
-            </div>
-            <div className="mt-1 text-[12.5px] text-meta">{t.note}</div>
-          </button>
-        );
-      })}
+    <div className="space-y-4">
+      {legs.map((leg) => (
+        <div key={leg.key}>
+          <div className="mb-1.5 text-[11px] uppercase tracking-[0.08em] text-meta">{leg.label}</div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {LEG_TIERS.map((t) => {
+              const on = intake[leg.key] === t.v;
+              return (
+                <button
+                  key={t.v}
+                  onClick={() => pick(leg.key, t.v)}
+                  className={`rounded border px-3 py-2.5 text-left transition-colors ${on ? "border-foreground/70 bg-foreground/[0.08]" : "border-border hover:bg-[var(--row-hover)]"}`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    {on && <Check className="size-3.5 shrink-0" />}
+                    <span className="text-[14px] font-medium">{t.label}</span>
+                    <span className="ml-auto text-[12px] tabular-nums text-meta">{t.price}</span>
+                  </div>
+                  <div className="mt-0.5 text-[11.5px] text-meta">{t.note}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+      <p className="text-[11px] text-meta">Premium, Exact and Elite are charged per timed leg. Standard on both legs costs nothing extra.</p>
     </div>
   );
 }
 
-// Only for premium/exact: the rep enters the START of each same-day window (drop-off + pick-up); the END is
-// auto-computed to match the option — Premium = +2 hours, Exact = +30 minutes — and shown live. Both required.
+// The time for each TIMED leg only. Premium shows its 2-hour window, Exact its 30 minutes; Elite Hour is a
+// single time at 10 PM or later.
 function DeliveryTimeStep({ intake, set }: { intake: Intake; set: (p: IntakePatch) => void }): React.JSX.Element {
-  const mins = intake.deliveryTier === "exact" ? 30 : 120;
-  const width = intake.deliveryTier === "exact" ? "30-minute" : "2-hour";
-  const dropWin = windowLabel(intake.dropoffTime, mins);
-  const pickWin = windowLabel(intake.pickupTime, mins);
+  const legs = [
+    { tier: intake.dropoffTier, time: intake.dropoffTime, key: "dropoffTime" as const, label: "Drop-off" },
+    { tier: intake.pickupTier, time: intake.pickupTime, key: "pickupTime" as const, label: "Pick-up" },
+  ].filter((l) => isTimedLeg(l.tier));
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-2 gap-3">
-        <label className="block">
-          <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">Drop-off — window start</span>
-          <input type="time" value={intake.dropoffTime} onChange={(e) => set({ dropoffTime: e.target.value })} autoFocus
-            className="w-full rounded border border-border bg-[var(--row)] px-3 py-3 text-[16px] outline-none focus:border-foreground/40" />
-          <span className="mt-1 block text-[12px] text-foreground/80">{dropWin ? `Window: ${dropWin}` : `Enter a time → ${width} window`}</span>
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">Pick-up — window start</span>
-          <input type="time" value={intake.pickupTime} onChange={(e) => set({ pickupTime: e.target.value })}
-            className="w-full rounded border border-border bg-[var(--row)] px-3 py-3 text-[16px] outline-none focus:border-foreground/40" />
-          <span className="mt-1 block text-[12px] text-foreground/80">{pickWin ? `Window: ${pickWin}` : `Enter a time → ${width} window`}</span>
-        </label>
+        {legs.map((l, n) => {
+          const mins = l.tier === "exact" ? 30 : 120;
+          const hint = l.tier === "elite"
+            ? (l.time && Number(l.time.slice(0, 2)) < 22 ? "Elite Hour is 10 PM or later" : l.time ? `Elite Hour at ${to12(l.time)}` : "Enter a time, 10 PM or later")
+            : (windowLabel(l.time, mins) ? `Window: ${windowLabel(l.time, mins)}` : `Enter a time → ${l.tier === "exact" ? "30-minute" : "2-hour"} window`);
+          return (
+            <label key={l.key} className="block">
+              <span className="mb-1 block text-[11px] uppercase tracking-[0.08em] text-meta">{l.label} · {LEG_TIERS.find((t) => t.v === l.tier)?.label}</span>
+              <input type="time" value={l.time} onChange={(e) => set({ [l.key]: e.target.value } as IntakePatch)} autoFocus={n === 0}
+                className="w-full rounded border border-border bg-[var(--row)] px-3 py-3 text-[16px] outline-none focus:border-foreground/40" />
+              <span className="mt-1 block text-[12px] text-foreground/80">{hint}</span>
+            </label>
+          );
+        })}
       </div>
-      <p className="text-[11px] text-meta">Enter the start of each window; we auto-fill the end to match the {width} option. This adds the {intake.deliveryTier === "exact" ? "exact-time" : "premium"} timing as its own line item in Goodshuffle.</p>
+      <p className="text-[11px] text-meta">Each timed leg goes on the quote as its own line item. A Standard leg needs no time.</p>
     </div>
   );
 }
@@ -550,7 +583,7 @@ function ReviewScreen({ intake, onEdit, onBack, onCreate, error }: { intake: Int
         <ReviewSection title="Customer" onEdit={() => onEdit("customer")} rows={[["Name", [intake.firstName, intake.lastName].filter(Boolean).join(" ")], ["Phone", intake.phone], ["Email", intake.email]]} />
         <ReviewSection title="Event" onEdit={() => onEdit("eventType")} rows={[["Type", intake.eventType === "other" ? intake.eventTypeOther || "Other" : intake.eventType || "—"], ["Guests", intake.guestCount != null ? String(intake.guestCount) : intake.guestCountUnknown ? "Unknown" : "Not asked"], ["Date", intake.eventDate || "—"], ["Time", intake.eventStartTime ? `${intake.eventStartTime}${intake.eventEndTime ? ` – ${intake.eventEndTime}` : ""}` : "—"]]} />
         <ReviewSection title="Location" onEdit={() => onEdit("locationClass")} rows={[["Setting", LOCATION_CLASSES.find((c) => c.v === intake.locationClass)?.label ?? "—"], ["Venue", intake.venueName || "—"], ["Address", [intake.streetAddress, intake.city, intake.state, intake.zip].filter(Boolean).join(", ") || "—"]]} />
-        <ReviewSection title="Logistics" onEdit={() => onEdit("delivery")} rows={[["Delivery", triLabel(intake.deliveryRequired)], ...(intake.deliveryTier ? [["Timing", deliveryTimingSummary(intake)] as [string, string]] : []), ["Setup help", triLabel(intake.setupRequired)], ["Breakdown help", triLabel(intake.pickupRequired)]]} />
+        <ReviewSection title="Logistics" onEdit={() => onEdit("delivery")} rows={[["Delivery", triLabel(intake.deliveryRequired)], ...(intake.deliveryTier || intake.dropoffTier || intake.pickupTier ? [["Timing", deliveryTimingSummary(intake)] as [string, string]] : []), ["Setup help", triLabel(intake.setupRequired)], ["Breakdown help", triLabel(intake.pickupRequired)]]} />
         <ReviewSection title="Notes" onEdit={() => onEdit("notes")} rows={[["Sales notes", intake.salesNotes || "—"]]} />
       </div>
 
@@ -783,15 +816,18 @@ function windowLabel(start: string, mins: number): string {
   return `${to12(start)} – ${to12(end)}`;
 }
 
-// Review-row summary of the chosen delivery type (+ computed windows for same-day options).
+// Review-row summary: the flexible window, or each leg's window and time (charged per timed leg).
 function deliveryTimingSummary(i: Intake): string {
-  const t = DELIVERY_TYPES.find((x) => x.v === i.deliveryTier);
-  if (!t) return "—";
-  if (i.deliveryTier === "standard") return `${t.label} (${t.window}, ${t.price})`;
-  const mins = i.deliveryTier === "exact" ? 30 : 120;
-  const parts: string[] = [];
-  if (i.dropoffTime) parts.push(`drop-off ${windowLabel(i.dropoffTime, mins)}`);
-  if (i.pickupTime) parts.push(`pick-up ${windowLabel(i.pickupTime, mins)}`);
-  const times = parts.length ? `, ${parts.join(" / ")}` : "";
-  return `${t.label} (${t.window}, ${t.price}${times})`;
+  if (i.deliveryFlexible === "yes") {
+    const t = DELIVERY_TYPES.find((x) => x.v === "standard")!;
+    return `${t.label} (${t.window}, ${t.price})`;
+  }
+  const leg = (name: string, tier: LegTier, time: string): string => {
+    const t = LEG_TIERS.find((x) => x.v === tier);
+    if (!t) return `${name} not set`;
+    if (!isTimedLeg(tier)) return `${name} ${t.label}`;
+    const when = tier === "elite" ? (time ? to12(time) : "time not set") : windowLabel(time, tier === "exact" ? 30 : 120) || "time not set";
+    return `${name} ${t.label} ${when} (${t.price})`;
+  };
+  return `${leg("drop-off", i.dropoffTier, i.dropoffTime)} / ${leg("pick-up", i.pickupTier, i.pickupTime)}`;
 }
