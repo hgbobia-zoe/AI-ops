@@ -4,15 +4,29 @@
 // side, Monday to Sunday across, each day's shifts and unavailability as cards, the day's hours, shifts and
 // people in its header, and a weekly summary at the bottom. Same colors as the Day schedule.
 //
-//   Click a day header or a card → that day's Day schedule, where shifts are edited and added.
+//   Click a Dispatch shift card   → edit it right here (the same ShiftEditor as the Day schedule).
+//   Click an empty spot in a day  → Add shift for that person and day (Unassigned row: nobody yet).
+//   Click a day header, a Connecteam-only card or unavailability → that day's Day schedule.
 //
 // The model is src/lib/scheduling/weekGrid.ts (built from the same day model as the Day schedule).
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { Clock, Layers, Search, Users } from "lucide-react";
+import { Clock, Layers, Plus, Search, Users } from "lucide-react";
+import { SidePanelOverlay } from "@/components/SidePanelOverlay";
+import { ShiftEditor, type NewShiftPrefill } from "@/components/scheduling/ShiftEditor";
+import type { WorkerDayEligibilityData } from "@/components/scheduling/RouteStaffBoard";
+import type { CrewMember } from "@/lib/connecteam";
+import type { RouteOption } from "@/lib/scheduling/routeOptions";
+import type { StaffShift } from "@/lib/scheduling/types";
 import type { WeekCard, WeekGrid } from "@/lib/scheduling/weekGrid";
 import { hoursLabel } from "@/lib/scheduling/weekGrid";
+
+/** What the shift editor needs for one day of the week (same inputs the Day schedule gives it). */
+export interface WeekEditDay {
+  eligibilityData: WorkerDayEligibilityData;
+  routeOptions: RouteOption[];
+}
 
 const NAME_COL = "w-[220px] min-w-[220px]";
 
@@ -22,25 +36,63 @@ function cardClass(c: WeekCard): string {
   return c.published ? "bg-shift text-on-fill" : "border border-dashed border-on-fill/70 bg-shift-open text-on-fill";
 }
 
-function Card({ c, href }: { c: WeekCard; href: string }): React.JSX.Element {
+function Card({ c, href, onEdit }: { c: WeekCard; href: string; onEdit?: () => void }): React.JSX.Element {
   const unavailable = c.kind === "unavailable";
   const tip = `${c.title}, ${c.timeLabel}${c.override ? ". Override: not the route time" : ""}${c.kind === "app" && !c.published ? ". Not in Connecteam yet" : ""}${c.kind === "connecteam" ? ". Entered in Connecteam" : ""}`;
-  return (
-    <Link href={href} title={`${tip}. Open the day`} className={`block rounded px-2 py-1 text-left transition-opacity hover:opacity-85 ${cardClass(c)} ${unavailable ? "text-center" : ""}`}>
+  const cls = `block w-full rounded px-2 py-1 text-left transition-opacity hover:opacity-85 ${cardClass(c)} ${unavailable ? "text-center" : ""}`;
+  const body = (
+    <>
       <div className="flex items-center justify-between gap-1 text-[11.5px] font-semibold leading-tight">
         <span className="truncate">{unavailable ? c.title : c.timeLabel}</span>
         {c.override && <span className="shrink-0 rounded-sm bg-background/80 px-1 text-[9px] font-semibold uppercase tracking-[0.04em] text-attention">Override</span>}
         {c.total != null && <span className="shrink-0 tabular-nums">{c.filled}/{c.total}</span>}
       </div>
       <div className="truncate text-[11px] font-medium leading-tight">{unavailable ? c.timeLabel : c.title}</div>
+    </>
+  );
+  if (onEdit) {
+    return (
+      <button type="button" data-card onClick={onEdit} title={`${tip}. Click to edit`} className={cls}>
+        {body}
+      </button>
+    );
+  }
+  return (
+    <Link href={href} data-card title={`${tip}. Open the day`} className={cls}>
+      {body}
     </Link>
   );
 }
 
-export function WeekSchedule({ grid }: { grid: WeekGrid }): React.JSX.Element {
+export function WeekSchedule({
+  grid,
+  shifts = [],
+  roster = [],
+  editDays = {},
+}: {
+  grid: WeekGrid;
+  /** The week's Dispatch shifts, so a card opens its shift in the editor. */
+  shifts?: StaffShift[];
+  roster?: CrewMember[];
+  editDays?: Record<string, WeekEditDay>;
+}): React.JSX.Element {
   const [query, setQuery] = useState("");
   const [workingOnly, setWorkingOnly] = useState(false);
+  const [editing, setEditing] = useState<StaffShift | null>(null);
+  const [adding, setAdding] = useState<{ date: string; prefill: NewShiftPrefill } | null>(null);
   const dayHref = (d: string): string => `/scheduling?date=${d}`;
+  const shiftById = (id: string | undefined): StaffShift | null => (id ? shifts.find((s) => s.id === id) ?? null : null);
+  const editFor = (c: WeekCard): (() => void) | undefined => {
+    const s = c.kind === "app" ? shiftById(c.shiftId) : null;
+    return s && editDays[s.date] ? () => setEditing(s) : undefined;
+  };
+  // Click on an empty part of a day: Add shift. Owner rule: shifts match the route, so with exactly one
+  // route that day the form opens on it (its time comes from the route); otherwise the editor asks for it.
+  const addOn = (e: React.MouseEvent<HTMLDivElement>, date: string, assignees: number[]): void => {
+    if ((e.target as HTMLElement).closest("[data-card]") || !editDays[date]) return;
+    const routes = editDays[date].routeOptions;
+    setAdding({ date, prefill: { assignees, routeId: routes.length === 1 ? routes[0].routeId : null } });
+  };
 
   const people = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -90,8 +142,9 @@ export function WeekSchedule({ grid }: { grid: WeekGrid }): React.JSX.Element {
             <div className={`${NAME_COL} flex items-center border-r border-border px-3 py-2 text-[13px] font-medium`}>Unassigned shifts</div>
             <div className="grid flex-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
               {grid.days.map((d) => (
-                <div key={d.date} className="space-y-1 border-l border-[var(--row-rule)] p-1.5">
-                  {(grid.unassigned[d.date] ?? []).map((c) => <Card key={c.id} c={c} href={dayHref(d.date)} />)}
+                <div key={d.date} onClick={(e) => addOn(e, d.date, [])} title="Click an empty spot to add a shift this day" className="group/cell min-h-[40px] cursor-copy space-y-1 border-l border-[var(--row-rule)] p-1.5">
+                  {(grid.unassigned[d.date] ?? []).map((c) => <Card key={c.id} c={c} href={dayHref(d.date)} onEdit={editFor(c)} />)}
+                  <Plus className="pointer-events-none mx-auto size-3.5 text-meta opacity-0 transition-opacity group-hover/cell:opacity-60" aria-hidden />
                 </div>
               ))}
             </div>
@@ -112,8 +165,14 @@ export function WeekSchedule({ grid }: { grid: WeekGrid }): React.JSX.Element {
               </div>
               <div className="grid flex-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
                 {grid.days.map((d) => (
-                  <div key={d.date} className={`min-h-[52px] space-y-1 border-l border-[var(--row-rule)] p-1.5 ${d.isToday ? "bg-shift/[0.04]" : ""}`}>
-                    {(r.cells[d.date] ?? []).map((c) => <Card key={c.id} c={c} href={dayHref(d.date)} />)}
+                  <div
+                    key={d.date}
+                    onClick={(e) => addOn(e, d.date, [r.userId])}
+                    title={`Click an empty spot to add a shift for ${r.name} on ${d.label}`}
+                    className={`group/cell min-h-[52px] cursor-copy space-y-1 border-l border-[var(--row-rule)] p-1.5 ${d.isToday ? "bg-shift/[0.04]" : ""}`}
+                  >
+                    {(r.cells[d.date] ?? []).map((c) => <Card key={c.id} c={c} href={dayHref(d.date)} onEdit={editFor(c)} />)}
+                    <Plus className="pointer-events-none mx-auto size-3.5 text-meta opacity-0 transition-opacity group-hover/cell:opacity-60" aria-hidden />
                   </div>
                 ))}
               </div>
@@ -136,6 +195,34 @@ export function WeekSchedule({ grid }: { grid: WeekGrid }): React.JSX.Element {
           <span className="inline-flex items-center gap-1.5"><span className="inline-block h-2.5 w-4 rounded-sm bg-unavailable" />Unavailable or time off</span>
         </span>
       </div>
+
+      {editing && editDays[editing.date] && (
+        <SidePanelOverlay onClose={() => setEditing(null)}>
+          <ShiftEditor
+            shift={editing}
+            date={editing.date}
+            roster={roster}
+            eligibilityData={editDays[editing.date].eligibilityData}
+            recommendations={[]}
+            routeOptions={editDays[editing.date].routeOptions}
+            onClose={() => setEditing(null)}
+          />
+        </SidePanelOverlay>
+      )}
+      {adding && editDays[adding.date] && (
+        <SidePanelOverlay onClose={() => setAdding(null)}>
+          <ShiftEditor
+            shift={null}
+            date={adding.date}
+            roster={roster}
+            eligibilityData={editDays[adding.date].eligibilityData}
+            recommendations={[]}
+            prefill={adding.prefill}
+            routeOptions={editDays[adding.date].routeOptions}
+            onClose={() => setAdding(null)}
+          />
+        </SidePanelOverlay>
+      )}
     </div>
   );
 }
