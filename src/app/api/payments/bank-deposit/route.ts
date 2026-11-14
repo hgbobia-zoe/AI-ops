@@ -1,8 +1,10 @@
 // "Check Deposit" bank account webhook. A Zapier zap (bank New Transaction trigger, filtered to the Check
 // Deposit account) POSTs each deposit here; we store it and match it to a Goodshuffle project (project
 // number in the memo, else a unique 50% deposit / amount due / full total match). The offline payment
-// confirmation card then shows the matched deposit as proof the money landed. READ ONLY: it never moves
-// money and never messages a customer.
+// confirmation card then shows the matched deposit as proof the money landed. Since 2026-11-14 a cleared
+// CHECK (Mercury kind checkDeposit) matched with confidence also sends the customer the check received email
+// and text on its own (offlineConfirmService.confirmFromDeposit; kill switch OFFLINE_PAYMENT_CONFIRM). It
+// never moves money; ACH, wires and payouts never message anyone.
 //
 // Body (Mercury field names, or plain ones): { transactionId|id, amount, postedAt|date|createdAt, note,
 // externalMemo|memo|description, counterpartyName, bankDescription, accountName|account, status }.

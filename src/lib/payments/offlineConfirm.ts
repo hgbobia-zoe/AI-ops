@@ -230,7 +230,9 @@ export function buildConfirmCard(c: ConfirmContext, tplName: string): ApprovalCa
     : "no matching bank deposit seen yet";
   return {
     what: `Send ${who} the "${tplName}" email and a text confirming their ${paidLabel(p)} of ${usd(p.amount)} cleared.`,
-    why: `${recorded} a ${p.methodLabel} payment of ${usd(p.amount)} on ${paidOn(p)} in Goodshuffle. Every cleared check is confirmed to the customer by email and text (Goodshuffle confirms ACH on its own).`,
+    why: p.paymentId.startsWith("deposit:")
+      ? `A check of ${usd(p.amount)} cleared in the bank on ${paidOn(p)} and matched this project${c.bank ? ` by ${c.bank.how}` : ""}. Every cleared check is confirmed to the customer by email and text (Goodshuffle confirms ACH on its own).`
+      : `${recorded} a ${p.methodLabel} payment of ${usd(p.amount)} on ${paidOn(p)} in Goodshuffle. Every cleared check is confirmed to the customer by email and text (Goodshuffle confirms ACH on its own).`,
     dataUsed: `Goodshuffle payment ${p.paymentId} (${p.methodLabel}, ${usd(p.amount)}, ${paidOn(p)}); project ${c.bookingId}; remaining balance ${balance}; ${bank}.`,
     expectedOutcome: "The customer gets the Goodshuffle template email with the amount filled in and a short text. A note on the project records both and who approved (Zoe automation when it sent on its own).",
     risk: c.bank

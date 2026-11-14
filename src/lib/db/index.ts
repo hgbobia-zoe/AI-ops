@@ -2632,6 +2632,16 @@ const MIGRATIONS: Array<{ table: string; column: string; type: string }> = [
   { table: "bookings", column: "pickup_window", type: "TEXT" },
   { table: "bookings", column: "delivers", type: "INTEGER" },
   { table: "bookings", column: "logistics_at", type: "TEXT" },
+  // Check confirmations from the bank side (owner, 2026-11-14): a cleared CHECK deposit matched to a project
+  // with confidence confirms to the customer on its own. kind/account_id from Mercury; confirm_state =
+  // sent | held | already_confirmed | skipped; confirm_payment_id = the gs_offline_payments row that carries
+  // the confirmation ("deposit:<id>" when the deposit came first); gs_payment_id = the real Goodshuffle
+  // payment linked later, so one check never confirms twice.
+  { table: "bank_deposits", column: "kind", type: "TEXT" },
+  { table: "bank_deposits", column: "account_id", type: "TEXT" },
+  { table: "bank_deposits", column: "confirm_state", type: "TEXT" },
+  { table: "bank_deposits", column: "confirm_payment_id", type: "TEXT" },
+  { table: "bank_deposits", column: "gs_payment_id", type: "TEXT" },
 ];
 
 function migrate(db: DB): void {

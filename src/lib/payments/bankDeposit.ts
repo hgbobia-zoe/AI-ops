@@ -15,6 +15,19 @@ export interface NormalizedDeposit {
   description: string; // memo + counterparty + bank description, joined (for matching and display)
   account: string | null;
   status: string | null;
+  /** Mercury transaction kind ("checkDeposit", "externalTransfer", ...), when the Zap sends it. */
+  kind: string | null;
+  accountId: string | null;
+}
+
+/** Mercury Checking ••4011 "Revenue - Check Deposit", where the team deposits customer checks. */
+export const CHECK_DEPOSIT_ACCOUNT_ID = "37b3d452-c621-11f0-bc68-cb3b7834b0b2";
+
+/** Is this a physical check? Mercury's kind says so; with no kind, the check deposit account does. ACH,
+ *  wires and card payouts never count (Goodshuffle confirms ACH itself). PURE. */
+export function isCheckDeposit(d: Pick<NormalizedDeposit, "kind" | "accountId" | "account">): boolean {
+  if (d.kind) return d.kind === "checkDeposit";
+  return d.accountId === CHECK_DEPOSIT_ACCOUNT_ID || /check deposit/i.test(d.account ?? "");
 }
 
 function str(v: unknown): string | null {
@@ -48,6 +61,8 @@ export function normalizeDeposit(raw: unknown): NormalizedDeposit {
     description: Array.from(new Set(desc)).join(" | "),
     account: str(b.accountName) ?? str(b.account),
     status: str(b.status)?.toLowerCase() ?? null,
+    kind: str(b.kind),
+    accountId: str(b.accountId),
   };
 }
 
