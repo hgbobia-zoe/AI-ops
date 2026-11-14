@@ -67,8 +67,7 @@ const SYSTEM =
   "signature, so any closing you add would be a duplicate. End at your last real sentence. " +
   "The rep will review and send it themselves, so never imply it was already sent. " +
   'Output RAW JSON ONLY, no markdown/fences: {"sms": string, "callStrategy": string, "cadence": string, "caution": string}. ' +
-  "sms <= 320 characters. caution = one short heads-up drawn from the history, or empty string if none.
-" +
+  "sms <= 320 characters. caution = one short heads-up drawn from the history, or empty string if none.\n" +
   SALES_RULES_PROMPT;
 
 function extractJson(text: string): unknown {
